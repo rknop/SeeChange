@@ -244,6 +244,7 @@ class ImageAligner:
             ldac.save_table_as_ldac( astropy.table.Table( targetdat ), targetcat,
                                      imghdr=target_sources.info, overwrite=True )
 
+            import pdb; pdb.set_trace()
             # Scamp it up
             wcs = improc.scamp.solve_wcs_scamp(
                 targetcat,
@@ -255,6 +256,8 @@ class ImageAligner:
                 min_frac_matched=self.pars.min_frac_matched,
                 min_matched=self.pars.min_matched,
                 max_arcsec_residual=self.pars.max_arcsec_residual,
+                sources_regfile='sources.regs',
+                catalog_regfile='catalog.regs'
             )
 
             # Write out the .head file that swarp will use to figure out what to do

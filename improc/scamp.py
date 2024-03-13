@@ -7,15 +7,19 @@ import subprocess
 import astropy.io
 from astropy.wcs import WCS
 
+
 from models.base import FileOnDiskMixin, _logger
 from util import ldac
 from util.exceptions import SubprocessFailure, BadMatchException
+from util import config
 
 
 def solve_wcs_scamp( sources, catalog, crossid_radius=2.,
-                      max_sources_to_use=2000, min_frac_matched=0.1,
-                      min_matched=10, max_arcsec_residual=0.15,
-                      magkey='MAG', magerrkey='MAGERR' ):
+                     max_sources_to_use=2000, min_frac_matched=0.1,
+                     min_matched=10, max_arcsec_residual=0.15,
+                     magkey='MAG', magerrkey='MAGERR',
+                     sources_regfile=None, sources_regxy=True,
+                     catalog_regfile=None, catalog_regxy=False ):
     """Solve for the WCS of image with sourcelist sources, based on catalog.
 
     If scamp does not succeed, will raise a SubprocessFailure
@@ -60,6 +64,24 @@ def solve_wcs_scamp( sources, catalog, crossid_radius=2.,
       magerrkey: str, default MAGERR
         The keyword to use for the magnitude errors in the catalog file.
 
+      sources_regfile: str or Path, default None
+        If non-None, will write out a ds9 region file for debugging purposes.
+        This has the detections from sources.  WARNING: this file will
+        not be deleted automatically.
+
+      sources_regxy: bool, default True
+        If sources_regfile is non-none, write out the ds9 region file in
+        image coordinates; otherwise, world coordinates.        
+
+      catalog_regfile: str or Path, default None
+        If non-None, will write out a ds9 region file for debugging purposes.
+        This has detections from catalog.  WARNING: this file will
+        not be deleted automatically.
+
+      catalog_refxy: bool, default False
+        If catalog_regfile is non-none, write out the ds9 region file in
+        image coordinates; otherwise, world coordinates.
+    
     Returns
     -------
       astropy.wcs.WCS
@@ -71,10 +93,12 @@ def solve_wcs_scamp( sources, catalog, crossid_radius=2.,
     catfile = pathlib.Path( catalog )
     barf = ''.join( random.choices( 'abcdefghijlkmnopqrstuvwxyz', k=10 ) )
     xmlfile = pathlib.Path( FileOnDiskMixin.temp_path ) / f'scamp_{barf}.xml'
+    fulloutcatfile = pathlib.Path( FileOnDiskMixin.temp_path ) / f"scamp_full_{barf}.fits"
+    mergedoutcatfile = pathlib.Path( FileOnDiskMixin.temp_path ) / f"scamp_merged_{barf}.fits"
     # Scamp will have written a file stripping .fits from sourcefile and adding .head
     # I'm sad that there's not an option to scamp to explicitly specify this output filename.
     headfile = sourcefile.parent / f"{sourcefile.name[:-5]}.head"
-
+    
     sourceshdr, sources = ldac.get_table_from_ldac( sourcefile, imghdr_as_header=True )
     cathdr, cat = ldac.get_table_from_ldac( catfile, imghdr_as_header=True )
 
@@ -109,8 +133,14 @@ def solve_wcs_scamp( sources, catalog, crossid_radius=2.,
                     '-XML_NAME', xmlfile,
                     '-CROSSID_RADIUS', str( crossid_radius ),
                     '-ASTREFMAG_KEY', magkey,
-                    '-ASTREFMAGERR_KEY', magerrkey
+                    '-ASTREFMAGERR_KEY', magerrkey,
                    ]
+
+        if ( sources_regfile is not None ) or ( catalog_regfile is not None ):
+            command.extend( [ '-MERGEDOUTCAT_TYPE', 'FITS_LDAC',
+                              '-MERGEDOUTCAT_NAME', mergedoutcatfile,
+                              '-FULLOUTCAT_TYPE', 'FITS_LDAC',
+                              '-FULLOUTCAT_NAME', fulloutcatfile ] )
 
         t0 = time.perf_counter()
         res = subprocess.run( command, capture_output=True )
@@ -153,8 +183,35 @@ def solve_wcs_scamp( sources, catalog, crossid_radius=2.,
         hdr = astropy.io.fits.Header.fromfile( strio, sep='\n', padding=False, endcard=False )
         wcs = WCS( hdr )
 
+        if ( sources_regfile is not None ) or ( catalog_regfile is not None ):
+            # scamp didn't actually write the file we told it to, but something else (sigh)
+            fulloutcatfile = pathlib.Path( FileOnDiskMixin.temp_path ) / f"scamp_full_{barf}_1.fits"
+            mergedoutcatfile = pathlib.Path( FileOnDiskMixin.temp_path ) / f"scamp_merged_{barf}_1.fits"
+            fullouthdr, fulloutcat = ldac.get_table_from_ldac( fulloutcatfile )
+            sourcescat = fulloutcat[ fulloutcat['CATALOG_NUMBER'] == 1 ]
+            catalogcat = fulloutcat[ fulloutcat['CATALOG_NUMBER'] == 2 ]
+
+            for regfile, cat, isxy in zip( [ sources_regfile, catalog_regfile ],
+                                           [ sourcescat, catalogcat ],
+                                           [ sources_regxy, catalog_regxy ] ):
+                if regfile is not None:
+                    with open( regfile, "w" ) as ofp:
+                        for row in cat:
+                            if isxy:
+                                ofp.write( f'image;circle({row["X_IMAGE"]:.2f},{row["Y_IMAGE"]:.2f},10) '
+                                           f'# color=green width=2\n' )
+                            else:
+                                ofp.write( f'icrs;circle({row["X_WORLD"]:.6f},{row["Y_WORLD"]:.6f},3" '
+                                           f'# color=green width=2\n' )
+            
+            import pdb; pdb.set_trace()
+            pass
+        
+        
         return wcs
 
     finally:
         xmlfile.unlink( missing_ok=True )
         headfile.unlink( missing_ok=True )
+        mergedoutcatfile.unlink( missing_ok=True )
+        fulloutcatfile.unlink( missing_ok=True )
