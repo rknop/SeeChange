@@ -40,6 +40,9 @@ from models.enums_and_bitflags import (
 
 import util.config as config
 
+from improc.tools import sigma_clipping
+
+
 # links many-to-many Image to all the Images used to create it
 image_upstreams_association_table = sa.Table(
     'image_upstreams_association',
@@ -152,6 +155,41 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
             return None
         return image[0]
 
+    @new_image.setter
+    def new_image(self, value):
+        if value is None:
+            raise ValueError('Do not assign None to new_image. Simply clear the upstream_images list.')
+        if not isinstance(value, Image):
+            raise ValueError("The new_image must be an Image object.")
+        if len(self.upstream_images) != 2:
+            raise ValueError("This only works for subtractions with exactly two upstream images.")
+
+        if self.upstream_images[0].id == self.ref_image_id:
+            self.upstream_images[1] = value
+        elif self.upstream_images[1].id == self.ref_image_id:
+            self.upstream_images[0] = value
+        else:
+            raise ValueError(f"The ref_image_id ({self.ref_image_id}) is not in the upstream_images list.")
+
+    @property
+    def new_aligned_image(self):
+        """Get the aligned image that is NOT the reference image.
+        This only works on subtractions (with ref+new upstreams).
+        Will lazy-calculate the aligned images, if they are missing.
+        """
+        image = [im for im in self.aligned_images if im.info['original_image_id'] != self.ref_image_id]
+        if len(image) == 0 or len(image) > 1:
+            return None
+        return image[0]
+
+    @property
+    def ref_aligned_image(self):
+        """Get the aligned reference image. Will lazy-calculate the aligned images, if they are missing. """
+        image = [im for im in self.aligned_images if im.info['original_image_id'] == self.ref_image_id]
+        if len(image) == 0:
+            return None
+        return image[0]
+
     is_sub = sa.Column(
         sa.Boolean,
         nullable=False,
@@ -252,8 +290,7 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
 
     @property
     def mid_mjd(self):
-        """
-        Time of the middle of the exposures.
+        """Time of the middle of the exposures.
         For multiple, coadded exposures (e.g., references), this would
         be the middle between the start_mjd and end_mjd, regarless of
         how the exposures are spaced.
@@ -405,17 +442,33 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
         """Get a dict with the allowed values of badness that can be assigned to this object"""
         return image_badness_inverse
 
+    saved_extensions = [
+        'data',
+        'flags',
+        'weight',
+        'background',  # TODO: remove this when adding the Background object (issue #186)
+        'score',  # the matched-filter score of the image (e.g., from ZOGY)
+        'psfflux',  # the PSF-fitted equivalent flux of the image (e.g., from ZOGY)
+        'psffluxerr', # the error in the PSF-fitted equivalent flux of the image (e.g., from ZOGY)
+    ]
+
     def __init__(self, *args, **kwargs):
         FileOnDiskMixin.__init__(self, *args, **kwargs)
         SeeChangeBase.__init__(self)  # don't pass kwargs as they could contain non-column key-values
 
         self.raw_data = None  # the raw exposure pixels (2D float or uint16 or whatever) not saved to disk!
         self._header = None  # the header data taken directly from the FITS file
+
+        # these properties must be added to the saved_extensions list of the Image
         self._data = None  # the underlying pixel data array (2D float array)
         self._flags = None  # the bit-flag array (2D int array)
         self._weight = None  # the inverse-variance array (2D float array)
         self._background = None  # an estimate for the background flux (2D float array)
         self._score = None  # the image after filtering with the PSF and normalizing to S/N units (2D float array)
+        self._psfflux = None  # the PSF-fitted equivalent flux of the image (2D float array)
+        self._psffluxerr = None  # the error in the PSF-fitted equivalent flux of the image (2D float array)
+
+        # additional data products that could go with the Image
         self.sources = None  # the sources extracted from this Image (optionally loaded)
         self.psf = None  # the point-spread-function object (optionally loaded)
         self.wcs = None  # the WorldCoordinates object (optionally loaded)
@@ -423,7 +476,8 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
 
         self._aligner = None  # an ImageAligner object (lazy loaded using the provenance parameters)
         self._aligned_images = None  # a list of Images that are aligned to one image (lazy calculated, not committed)
-        self._combined_filepath = None  # a filepath built from invent_filepath and a hash of the upstream images
+        self._nandata = None  # a copy of the image data, only with NaNs at each flagged point. Lazy calculated.
+        self._nanscore = None  # a copy of the image score, only with NaNs at each flagged point. Lazy calculated.
 
         self._instrument_object = None
         self._bitflag = 0
@@ -452,11 +506,10 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
         FileOnDiskMixin.init_on_load(self)
         self.raw_data = None
         self._header = None
-        self._data = None
-        self._flags = None
-        self._weight = None
-        self._background = None
-        self._score = None
+
+        for att in self.saved_extensions:
+            setattr(self, f'_{att}', None)
+
         self.sources = None
         self.psf = None
         self.wcs = None
@@ -464,7 +517,8 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
 
         self._aligner = None
         self._aligned_images = None
-        self._combined_filepath = None
+        self._nandata = None
+        self._nanscore = None
 
         self._instrument_object = None
         this_object_session = orm.Session.object_session(self)
@@ -483,7 +537,7 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
         Returns the merged image with all its products on the same session.
         """
         new_image = self.safe_merge(session=session)
-        session.flush()
+        session.flush()  # make sure new_image gets an ID
         if self.sources is not None:
             self.sources.image = new_image
             self.sources.image_id = new_image.id
@@ -678,14 +732,9 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
         The filepath is set to None and should be manually set to a new (unique)
         value so as not to overwrite the original.
         """
-        copy_attributes = [
-            'data',
-            'weight',
-            'flags',
-            'score',
-            'background',
-            'info',
+        copy_attributes = cls.saved_extensions + [
             'header',
+            'info',
         ]
         simple_attributes = [
             'ra',
@@ -734,8 +783,7 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
 
     @classmethod
     def from_images(cls, images, index=0):
-        """
-        Create a new Image object from a list of other Image objects.
+        """Create a new Image object from a list of other Image objects.
         This is the first step in making a multi-image (usually a coadd).
         Do not use this to make subtractions!  Use from_ref_and_new instead.
 
@@ -832,8 +880,7 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
 
     @classmethod
     def from_new_and_ref(cls, new_image, ref_image):
-        """
-        Create a new Image object from a reference Image object and a new Image object.
+        """Create a new Image object from a reference Image object and a new Image object.
         This is the first step in making a difference image.
 
         The output image doesn't have any data, and is created with
@@ -1011,8 +1058,42 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
                 self._aligned_images = None
                 return
 
+    def _get_alignment_target_image(self):
+        """Get the image in upstream_images that is the target to which we align all other images. """
+        if self.provenance is None or self.provenance.parameters is None:
+            raise RuntimeError('Cannot get alignment target without a Provenance with legal parameters!')
+        if 'alignment' not in self.provenance.parameters:
+            raise RuntimeError(
+                'Cannot get alignment target without an "alignment" dictionary in the Provenance parameters!'
+            )
+
+        to_index = self.provenance.parameters['alignment'].get('to_index')
+        if to_index == 'first':
+            alignment_target = self.upstream_images[0]
+        elif to_index == 'last':
+            alignment_target = self.upstream_images[-1]
+        elif to_index == 'new':
+            alignment_target = self.new_image
+        elif to_index == 'ref':
+            alignment_target = self.ref_image
+        else:
+            raise RuntimeError(
+                f'Got illegal value for "to_index" ({to_index}) in the Provenance parameters!'
+            )
+
+        return alignment_target
+
+    def coordinates_to_alignment_target(self):
+        """Make sure the coordinates (RA,dec, corners and WCS) all match the alignment target image. """
+        target = self._get_alignment_target_image()
+        for att in ['ra', 'dec', 'wcs',
+                    'ra_corner_00', 'ra_corner_01', 'ra_corner_10', 'ra_corner_11',
+                    'dec_corner_00', 'dec_corner_01', 'dec_corner_10', 'dec_corner_11' ]:
+            self.__setattr__(att, getattr(target, att))
+
     @property
     def aligned_images(self):
+        """A set of images matching the upstream_images, only aligned (warped) to one of the image. """
         self._check_aligned_images()  # possibly destroy the old aligned images
 
         if self._aligned_images is None:
@@ -1038,6 +1119,7 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
 
     @property
     def filter_short(self):
+        """The name of the filtered, shortened for display and for filenames. """
         if self.filter is None:
             return None
         return self.instrument_object.get_short_filter_name(self.filter)
@@ -1245,11 +1327,10 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
             #  this should be configurable and will affect how we make the self.filepath and extensions.
 
             # save the other extensions
-            array_list = ['flags', 'weight', 'background', 'score']
-            # TODO: the list of extensions should be saved somewhere more central
-
             if single_file or ( not only_image ):
-                for array_name in array_list:
+                for array_name in self.saved_extensions:
+                    if array_name == 'data':
+                        continue
                     array = getattr(self, array_name)
                     if array is not None:
                         extpath = save_fits_image_file(
@@ -1290,11 +1371,10 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
                     FileOnDiskMixin.save( self, files_written[ext], ext, **kwargs )
 
     def load(self):
-        """
-        Load the image data from disk.
+        """Load the image data from disk.
         This includes the _data property,
         but can also load the _flags, _weight,
-        _background, _score, and _psf properties.
+        _background, _score, _psfflux and _psffluxerr properties.
 
         """
 
@@ -1309,11 +1389,11 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
             if not os.path.isfile(filename):
                 raise FileNotFoundError(f"Could not find the image file: {filename}")
             self._data, self._header = read_fits_image(filename, ext='image', output='both')
-            self._flags = read_fits_image(filename, ext='flags')
-            self._weight = read_fits_image(filename, ext='weight')
-            self._background = read_fits_image(filename, ext='background')
-            self._score = read_fits_image(filename, ext='score')
-            # TODO: add more if needed!
+            for att in self.saved_extensions:
+                if att == 'data':
+                    continue
+                array = read_fits_image(filename, ext=att)
+                setattr(self, f'_{att}', array)
 
         else:  # load each data array from a separate file
             if self.filepath_extensions is None:
@@ -1324,7 +1404,7 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
                 gotflags = False
                 for extension, filename in zip( self.filepath_extensions, self.get_fullpath(as_list=True) ):
                     if not os.path.isfile(filename):
-                        raise FileNotFoundError(f"Could not find the image file: {filename}")
+                        raise FileNotFoundError(f"Could not find the image extension file: {filename}")
                     if extension == '.image.fits':
                         self._data, self._header = read_fits_image(filename, output='both')
                         gotim = True
@@ -1334,10 +1414,18 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
                     elif extension == '.flags.fits':
                         self._flags = read_fits_image(filename, output='data')
                         gotflags = True
-                    elif extension == '.score.fits':
-                        self._score = read_fits_image(filename, output='data')
-                    else:
-                        raise ValueError( f'Unknown image extension {extension}' )
+                    else:  # other extensions like score and psfflux
+                        stripped_ext = extension
+                        if stripped_ext.startswith('.'):
+                            stripped_ext = stripped_ext[1:]
+                        if stripped_ext.endswith('.fits'):
+                            stripped_ext = stripped_ext[:-5]
+                        if stripped_ext in self.saved_extensions:
+                            # e.g., for extension .score.fits, self._score = read_fits_image(filename, output='data')
+                            setattr(self, f'_{stripped_ext}', read_fits_image(filename, output='data'))
+                        else:
+                            raise ValueError( f'Unknown image extension {extension}' )
+
                 if not ( gotim and gotweight and gotflags ):
                     raise FileNotFoundError( "Failed to load at least one of image, weight, flags" )
 
@@ -1537,8 +1625,7 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
                             im.zp = zps[0]
 
     def get_upstreams(self, session=None):
-        """
-        Get the upstream images and associated products that were used to make this image.
+        """Get the upstream images and associated products that were used to make this image.
         This includes the reference/new image (for subtractions) or the set of images
         used to build a coadd.  Each image will have some products that were generated
         from it (source lists, PSFs, etc.) that also count as upstreams to this image.
@@ -1643,15 +1730,14 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
 
     @property
     def data(self):
-        """
-        The underlying pixel data array (2D float array).
-        """
+        """The underlying pixel data array (2D float array). """
         if self._data is None and self.filepath is not None:
             self.load()
         return self._data
 
     @data.setter
     def data(self, value):
+        self._nandata = None
         self._data = value
 
     @property
@@ -1670,22 +1756,20 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
 
     @property
     def flags(self):
-        """
-        The bit-flag array (2D int array).
-        """
+        """The bit-flag array (2D int array). """
         if self._data is None and self.filepath is not None:
             self.load()
         return self._flags
 
     @flags.setter
     def flags(self, value):
+        self._nandata = None
+        self._nanscore = None
         self._flags = value
 
     @property
     def weight(self):
-        """
-        The inverse-variance array (2D float array).
-        """
+        """The inverse-variance array (2D float array). """
         if self._data is None and self.filepath is not None:
             self.load()
         return self._weight
@@ -1696,9 +1780,7 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
 
     @property
     def background(self):
-        """
-        An estimate for the background flux (2D float array).
-        """
+        """An estimate for the background flux (2D float array). """
         if self._data is None and self.filepath is not None:
             self.load()
         return self._background
@@ -1709,16 +1791,83 @@ class Image(Base, AutoIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, H
 
     @property
     def score(self):
-        """
-        The image after filtering with the PSF and normalizing to S/N units (2D float array).
-        """
+        """The image after filtering with the PSF and normalizing to S/N units (2D float array). """
         if self._data is None and self.filepath is not None:
             self.load()
         return self._score
 
     @score.setter
     def score(self, value):
+        self._nanscore = None
         self._score = value
+
+    @property
+    def psfflux(self):
+        """An array containing an estimate for the (PSF-fitted) flux of each point in the image. """
+        if self._data is None and self.filepath is not None:
+            self.load()
+        return self._psfflux
+
+    @psfflux.setter
+    def psfflux(self, value):
+        self._psfflux = value
+
+    @property
+    def psffluxerr(self):
+        """The error for each pixel of the PSF-fit flux array. """
+        if self._data is None and self.filepath is not None:
+            self.load()
+        return self._psffluxerr
+
+    @psffluxerr.setter
+    def psffluxerr(self, value):
+        self._psffluxerr = value
+
+    @property
+    def nandata(self):
+        """The image data, only masked with NaNs wherever the flag is not zero. """
+        if self._nandata is None:
+            self._nandata = self.data.copy()
+            if self.flags is not None:
+                self._nandata[self.flags != 0] = np.nan
+        return self._nandata
+
+    @nandata.setter
+    def nandata(self, value):
+        self._nandata = value
+
+    @property
+    def nanscore(self):
+        """The image data, only masked with NaNs wherever the flag is not zero. """
+        if self._nanscore is None:
+            self._nanscore = self.score.copy()
+            if self.flags is not None:
+                self._nanscore[self.flags != 0] = np.nan
+        return self._nanscore
+
+    @nanscore.setter
+    def nanscore(self, value):
+        self._nanscore = value
+
+    def show(self, **kwargs):
+        """
+        Display the image using the matplotlib imshow function.
+
+        Parameters
+        ----------
+        **kwargs: passed on to matplotlib.pyplot.imshow()
+            Additional keyword arguments to pass to imshow.
+        """
+        import matplotlib.pyplot as plt
+        mu, sigma = sigma_clipping(self.data)
+        defaults = {
+            'cmap': 'gray',
+            # 'origin': 'lower',
+            'vmin': mu - 3 * sigma,
+            'vmax': mu + 5 * sigma,
+        }
+        defaults.update(kwargs)
+        plt.imshow(self.nandata, **defaults)
 
 
 if __name__ == '__main__':

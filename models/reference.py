@@ -136,7 +136,7 @@ class Reference(Base, AutoIDMixin):
         super().__init__(**kwargs)
 
     def __setattr__(self, key, value):
-        if key == 'image':
+        if key == 'image' and value is not None:
             self.target = value.target
             self.filter = value.filter
             self.section_id = value.section_id

@@ -5,10 +5,13 @@ from collections import defaultdict
 
 from scipy.ndimage import gaussian_filter
 
+from models.base import _logger
+
+
 # import pylandau
 
 from pipeline.parameters import Parameters
-
+from improc.tools import make_gaussian
 
 class SimPars(Parameters):
 
@@ -1799,41 +1802,41 @@ class Simulator:
         if new_sensor or self.sensor is None:
             self.make_sensor()
             if self.pars.show_runtimes:
-                print(f'time to make sensor: {time.time() - t0:.2f}s')
+                _logger.debug(f'time to make sensor: {time.time() - t0:.2f}s')
 
         t0 = time.time()
         if new_camera or self.camera is None:
             self.make_camera()
             if self.pars.show_runtimes:
-                print(f'time to make camera: {time.time() - t0:.2f}s')
+                _logger.debug(f'time to make camera: {time.time() - t0:.2f}s')
 
         t0 = time.time()
         if new_sky or self.sky is None:
             self.make_sky()
             if self.pars.show_runtimes:
-                print(f'time to make sky: {time.time() - t0:.2f}s')
+                _logger.debug(f'time to make sky: {time.time() - t0:.2f}s')
 
         t0 = time.time()
         if new_stars or self.stars is None:
             self.make_stars()
             if self.pars.show_runtimes:
-                print(f'time to make stars: {time.time() - t0:.2f}s')
+                _logger.debug(f'time to make stars: {time.time() - t0:.2f}s')
 
         t0 = time.time()
         if new_galaxies or self.galaxies is None:
             self.make_galaxies()
             if self.pars.show_runtimes:
-                print(f'time to make galaxies: {time.time() - t0:.2f}s')
+                _logger.debug(f'time to make galaxies: {time.time() - t0:.2f}s')
 
         if new_streaks or self.streaks is None:
             self.make_streaks()
             if self.pars.show_runtimes:
-                print(f'time to make streaks: {time.time() - t0:.2f}s')
+                _logger.debug(f'time to make streaks: {time.time() - t0:.2f}s')
 
         if new_cosmic_rays or self.cosmic_rays is None:
             self.make_cosmic_rays()
             if self.pars.show_runtimes:
-                print(f'time to make cosmic rays: {time.time() - t0:.2f}s')
+                _logger.debug(f'time to make cosmic rays: {time.time() - t0:.2f}s')
 
         # make a PSF
         # fwhm = np.sqrt(self.camera.optic_psf_fwhm ** 2 + self.sky.seeing_instance ** 2)
@@ -1865,37 +1868,37 @@ class Simulator:
         t0 = time.time()
         self.make_raw_star_flux_map()  # image of the flux of stars after PSF convolution (no sky, no noise)
         if self.pars.show_runtimes:
-            print(f'time to make raw star flux map: {time.time() - t0:.2f}s')
+            _logger.debug(f'time to make raw star flux map: {time.time() - t0:.2f}s')
 
         t0 = time.time()
         self.add_atmosphere()  # add the transmission and sky background to the image, with oversampling, without noise
         if self.pars.show_runtimes:
-            print(f'time to add atmosphere: {time.time() - t0:.2f}s')
+            _logger.debug(f'time to add atmosphere: {time.time() - t0:.2f}s')
 
         t0 = time.time()
         self.add_camera()
         if self.pars.show_runtimes:
-            print(f'time to add camera: {time.time() - t0:.2f}s')
+            _logger.debug(f'time to add camera: {time.time() - t0:.2f}s')
 
         t0 = time.time()
         self.flux_to_electrons()
         if self.pars.show_runtimes:
-            print(f'time to convert flux to electrons: {time.time() - t0:.2f}s')
+            _logger.debug(f'time to convert flux to electrons: {time.time() - t0:.2f}s')
 
         t0 = time.time()
         self.add_cosmic_rays()
         if self.pars.show_runtimes:
-            print(f'time to add cosmic rays: {time.time() - t0:.2f}s')
+            _logger.debug(f'time to add cosmic rays: {time.time() - t0:.2f}s')
 
         t0 = time.time()
         self.electrons_to_adu()
         if self.pars.show_runtimes:
-            print(f'time to convert electrons to ADU: {time.time() - t0:.2f}s')
+            _logger.debug(f'time to convert electrons to ADU: {time.time() - t0:.2f}s')
 
         t0 = time.time()
         self.add_noise()
         if self.pars.show_runtimes:
-            print(f'time to add noise: {time.time() - t0:.2f}s')
+            _logger.debug(f'time to add noise: {time.time() - t0:.2f}s')
 
         # make sure to collect all the parameters used in each part
         self.save_truth()
@@ -2226,72 +2229,6 @@ class Simulator:
 
         self.truth = t
 
-
-def make_gaussian(sigma_x=2.0, sigma_y=None, rotation=0.0, norm=1, imsize=None):
-    """
-    Create a small image of a Gaussian centered around the middle of the image.
-
-    Parameters
-    ----------
-    sigma_x: float
-        The sigma width parameter.
-        If sigma_x and sigma_y are specified, this will be for the x-axis.
-    sigma_y: float or None
-        The sigma width parameter.
-        If None, will use sigma_x for both axes.
-    rotation: float
-        The rotation angle in degrees.
-        The Gaussian will be rotated counter-clockwise by this angle.
-        If sigma_y is equal to sigma_x (or None) this has no effect.
-    norm: int
-        Normalization of the Gaussian. Choose value:
-        0- do not normalize, peak will have a value of 1.0
-        1- normalize so the sum of the image is equal to 1.0
-        2- normalize the squares: the sqrt of the sum of squares is equal to 1.0
-    imsize: int or None
-        Number of pixels on a side for the output.
-        If None, will automatically choose the smallest odd integer that is larger than max(sigma_x, sigma_y) * 10.
-
-    Returns
-    -------
-    output: array
-        A 2D array of the Gaussian.
-    """
-    if sigma_y is None:
-        sigma_y = sigma_x
-
-    if imsize is None:
-        imsize = int(max(sigma_x, sigma_y) * 10)
-        if imsize % 2 == 0:
-            imsize += 1
-
-    if norm not in [0, 1, 2]:
-        raise ValueError('norm must be 0, 1, or 2')
-
-    x = np.arange(imsize)
-    y = np.arange(imsize)
-    x, y = np.meshgrid(x, y)
-
-    x0 = imsize // 2
-    y0 = imsize // 2
-    # TODO: what happens if imsize is even?
-
-    x = x - x0
-    y = y - y0
-
-    rotation = rotation * np.pi / 180.0  # TODO: add option to give rotation in different units?
-
-    x_rot = x * np.cos(rotation) - y * np.sin(rotation)
-    y_rot = x * np.sin(rotation) + y * np.cos(rotation)
-
-    output = np.exp(-0.5 * (x_rot ** 2 / sigma_x ** 2 + y_rot ** 2 / sigma_y ** 2))
-
-    if norm == 1:
-        output /= np.sum(output)
-    elif norm == 2:
-        output /= np.sqrt(np.sum(output ** 2))
-
-    return output
 
 
 if __name__ == "__main__":

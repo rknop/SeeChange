@@ -10,7 +10,9 @@ from models.base import FileOnDiskMixin, SmartSession
 from models.image import Image
 
 
-def test_preprocessing(decam_exposure, test_config, preprocessor, decam_default_calibrators):
+def test_preprocessing(
+        provenance_decam_prep, decam_exposure, test_config, preprocessor, decam_default_calibrators, archive
+):
     # The decam_default_calibrators fixture is included so that
     # _get_default_calibrators won't be called as a side effect of calls
     # to Preprocessor.run().  (To avoid committing.)
@@ -62,9 +64,7 @@ def test_preprocessing(decam_exposure, test_config, preprocessor, decam_default_
     try:
         ds.save_and_commit()
         basepath = pathlib.Path( FileOnDiskMixin.local_path ) / ds.image.filepath
-        archpath = pathlib.Path(test_config.value('archive.local_read_dir'))
-        archpath /= pathlib.Path(test_config.value('archive.path_base'))
-        archpath /= ds.image.filepath
+        archpath = archive.test_folder_path / ds.image.filepath
 
         for suffix, compimage in zip( [ '.image.fits', '.weight.fits', '.flags.fits' ],
                                       [ ds.image.data, ds.image._weight, ds.image._flags ] ):

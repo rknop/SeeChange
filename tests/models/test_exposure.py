@@ -120,13 +120,13 @@ def test_exposure_guess_demo_instrument():
     assert e.ra == 123
 
 
-def test_exposure_guess_decam_instrument(persistent_dir, data_dir):
-
+def test_exposure_guess_decam_instrument(decam_fits_image_filename, cache_dir, data_dir):
+    cache_dir = os.path.join(cache_dir, 'DECam')
     t = datetime.now()
     mjd = Time(t).mjd
-    basename = "c4d_20221002_040239_r_v1.24.fits"
-    shutil.copy2(os.path.join(persistent_dir, 'test_data/DECam_examples', basename), os.path.join(data_dir, basename))
-    e = Exposure(filepath=basename, exp_time=30, mjd=mjd,
+    # basename = "c4d_20221002_040239_r_v1.24.fits"
+    shutil.copy2(os.path.join(cache_dir, decam_fits_image_filename), os.path.join(data_dir, decam_fits_image_filename))
+    e = Exposure(filepath=decam_fits_image_filename, exp_time=30, mjd=mjd,
                  filter="r", ra=123, dec=-23, project='foo', target='bar', nofile=True)
 
     assert e.instrument == 'DECam'

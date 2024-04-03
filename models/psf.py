@@ -224,6 +224,9 @@ class PSF(Base, AutoIDMixin, FileOnDiskMixin, HasBitFlagBadness):
                 self.filepath = self.image.filepath
             else:
                 self.filepath = self.image.invent_filepath()
+
+            if self.provenance is None:
+                raise RuntimeError("Can't invent a filepath for the PSF without a provenance")
             self.filepath += f'.psf_{self.provenance.id[:6]}'
 
         psfpath = pathlib.Path( self.local_path ) / f'{self.filepath}.fits'
@@ -240,7 +243,7 @@ class PSF(Base, AutoIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         fitsshape.reverse()
         fitsshape = str( tuple( fitsshape ) )
         format = f'{np.prod(self._data.shape)}E'
-        fitscol = fits.Column( name='PSF_MASK', format=format, dim=fitsshape, array=[ self._data ] )
+        fitscol = fits.Column(name='PSF_MASK', format=format, dim=fitsshape, array=[self._data])
         fitsrec = fits.FITS_rec.from_columns( fits.ColDefs( [ fitscol ] ) )
         hdu = fits.BinTableHDU( fitsrec, self._header )
         hdu.writeto( psfpath, overwrite=( 'overwrite' in kwargs and kwargs['overwrite'] ) )

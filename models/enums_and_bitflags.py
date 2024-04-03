@@ -144,6 +144,7 @@ class SourceListFormatConverter( EnumConverter ):
     _dict = {
         1: 'sepnpy',
         2: 'sextrfits',
+        3: 'filter',  # when manually constructing a source table from a matched-filter image (e.g., on the subtraction)
     }
     _allowed_values = None
     _dict_filtered = None

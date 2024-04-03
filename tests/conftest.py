@@ -16,6 +16,9 @@ from models.catalog_excerpt import CatalogExcerpt
 from models.exposure import Exposure
 
 from util.archive import Archive
+from util.util import remove_empty_folders
+from util.retrydownload import retry_download
+
 
 pytest_plugins = [
     'tests.fixtures.simulated',
@@ -25,12 +28,13 @@ pytest_plugins = [
     'tests.fixtures.pipeline_objects',
 ]
 
+ARCHIVE_PATH = None
 
 # this fixture should be the first thing loaded by the test suite
 # (session is the pytest session, not the SQLAlchemy session)
 def pytest_sessionstart(session):
     # Will be executed before the first test
-    # print('Initial setup fixture loaded! ')
+    # _logger.debug('Initial setup fixture loaded! ')
 
     # make sure to load the test config
     test_config_file = str((pathlib.Path(__file__).parent.parent / 'tests' / 'seechange_config_test.yaml').resolve())
@@ -40,7 +44,7 @@ def pytest_sessionstart(session):
 
 # This will be executed after the last test (session is the pytest session, not the SQLAlchemy session)
 def pytest_sessionfinish(session, exitstatus):
-    # print('Final teardown fixture executed! ')
+    # _logger.debug('Final teardown fixture executed! ')
     with SmartSession() as dbsession:
         # first get rid of any Exposure loading Provenances, if they have no Exposures attached
         provs = dbsession.scalars(sa.select(Provenance).where(Provenance.process == 'load_exposure'))
@@ -57,12 +61,12 @@ def pytest_sessionfinish(session, exitstatus):
             if Class.__name__ in ['CodeVersion', 'CodeHash', 'SensorSection', 'CatalogExcerpt', 'Provenance']:
                 _logger.info(f'There are {len(ids)} {Class.__name__} objects in the database. These are OK to stay.')
             elif len(ids) > 0:
-                print(
+                _logger.debug(
                     f'There are {len(ids)} {Class.__name__} objects in the database. Please make sure to cleanup!'
                 )
                 for id in ids:
                     obj = dbsession.scalars(sa.select(Class).where(Class.id == id)).first()
-                    print(f'  {obj}')
+                    _logger.debug(f'  {obj}')
                     any_objects = True
 
         # delete the CodeVersion object (this should remove all provenances as well)
@@ -73,6 +77,30 @@ def pytest_sessionfinish(session, exitstatus):
         # comment this line out if you just want tests to pass quietly
         if any_objects:
             raise RuntimeError('There are objects in the database. Some tests are not properly cleaning up!')
+
+        # remove empty folders from the archive
+        if ARCHIVE_PATH is not None:
+            # remove catalog excerpts manually, as they are meant to survive
+            with SmartSession() as session:
+                catexps = session.scalars(sa.select(CatalogExcerpt)).all()
+                for catexp in catexps:
+                    if os.path.isfile(catexp.get_fullpath()):
+                        os.remove(catexp.get_fullpath())
+                    archive_file = os.path.join(ARCHIVE_PATH, catexp.filepath)
+                    if os.path.isfile(archive_file):
+                        os.remove(archive_file)
+
+            remove_empty_folders( ARCHIVE_PATH, remove_root=False )
+
+            # check that there's nothing left in the archive after tests cleanup
+            if os.path.isdir(ARCHIVE_PATH):
+                files = list(pathlib.Path(ARCHIVE_PATH).rglob('*'))
+                if len(files) > 0:
+                    raise RuntimeError(f'There are files left in the archive after tests cleanup: {files}')
+
+@pytest.fixture(scope='session')
+def download_url():
+    return 'https://portal.nersc.gov/cfs/m4616/SeeChange_testing_data'
 
 
 # data that is included in the repo and should be available for tests
@@ -97,7 +125,7 @@ def data_dir():
     with open(os.path.join(temp_data_folder, 'placeholder'), 'w'):
         pass  # make an empty file inside this folder to make sure it doesn't get deleted on "remove_data_from_disk"
 
-    # print(f'temp_data_folder: {temp_data_folder}')
+    # _logger.debug(f'temp_data_folder: {temp_data_folder}')
 
     yield temp_data_folder
 
@@ -237,37 +265,56 @@ def provenance_preprocessing(code_version):
         session.commit()
 
 
-@pytest.fixture
-def archive(test_config):
+@pytest.fixture(scope="session", autouse=True)
+def archive_path(test_config):
+    if test_config.value('archive.local_read_dir', None) is not None:
+        archivebase = test_config.value('archive.local_read_dir')
+    elif os.getenv('SEECHANGE_TEST_ARCHIVE_DIR') is not None:
+        archivebase = os.getenv('SEECHANGE_TEST_ARCHIVE_DIR')
+    else:
+        raise ValueError('No archive.local_read_dir in config, and no SEECHANGE_TEST_ARCHIVE_DIR env variable set')
+
+    # archive.path_base is usually /test
+    archivebase = pathlib.Path(archivebase) / pathlib.Path(test_config.value('archive.path_base'))
+    global ARCHIVE_PATH
+    ARCHIVE_PATH = archivebase
+    return archivebase
+
+
+@pytest.fixture(scope="session")
+def archive(test_config, archive_path):
     archive_specs = test_config.value('archive')
     if archive_specs is None:
         raise ValueError( "archive in config is None" )
     archive = Archive( **archive_specs )
+
+    archive.test_folder_path = archive_path  # track the place where these files actually go in the test suite
     yield archive
 
-    try:
-        # To tear down, we need to blow away the archive server's directory.
-        # For the test suite, we've also mounted that directory locally, so
-        # we can do that
-        archivebase = f"{test_config.value('archive.local_read_dir')}/{test_config.value('archive.path_base')}"
-        try:
-            shutil.rmtree( archivebase )
-        except FileNotFoundError:
-            pass
-
-    except Exception as e:
-        warnings.warn(str(e))
+    # try:
+    #     # To tear down, we need to blow away the archive server's directory.
+    #     # For the test suite, we've also mounted that directory locally, so
+    #     # we can do that
+    #     try:
+    #         shutil.rmtree( archivebase )
+    #     except FileNotFoundError:
+    #         pass
+    #
+    # except Exception as e:
+    #     warnings.warn(str(e))
 
 
 @pytest.fixture( scope="module" )
-def catexp(data_dir, persistent_dir):
-    if not os.path.isfile(os.path.join(data_dir, "Gaia_DR3_151.0926_1.8312_17.0_19.0.fits")):
-        shutil.copy2(
-            os.path.join(persistent_dir, "test_data/Gaia_DR3_151.0926_1.8312_17.0_19.0.fits"),
-            os.path.join(data_dir, "Gaia_DR3_151.0926_1.8312_17.0_19.0.fits")
-        )
+def catexp(data_dir, cache_dir, download_url):
+    filename = "Gaia_DR3_151.0926_1.8312_17.0_19.0.fits"
+    cachepath = os.path.join(cache_dir, filename)
+    filepath = os.path.join(data_dir, filename)
 
-    filepath = os.path.join(data_dir, "Gaia_DR3_151.0926_1.8312_17.0_19.0.fits")
+    if not os.path.isfile(cachepath):
+        retry_download(os.path.join(download_url, filename), cachepath)
+
+    if not os.path.isfile(filepath):
+        shutil.copy2(cachepath, filepath)
 
     yield CatalogExcerpt.create_from_file( filepath, 'GaiaDR3' )
 

@@ -228,12 +228,12 @@ class SourceList(Base, AutoIDMixin, FileOnDiskMixin, HasBitFlagBadness):
 
     @data.setter
     def data(self, value):
-        # TODO: add astropy table?
+
         if isinstance(value, pd.DataFrame):
             value = value.to_records(index=False)
 
-        if not isinstance(value, np.ndarray) or value.dtype.names is None:
-            raise TypeError("data must be a pandas DataFrame or numpy recarray")
+        if not isinstance(value, (np.ndarray, astropy.table.Table)) or value.dtype.names is None:
+            raise TypeError("data must be a pandas.DataFrame, astropy.table.Table or numpy.recarray")
 
         self._data = value
         self.num_sources = len(value)
@@ -263,6 +263,8 @@ class SourceList(Base, AutoIDMixin, FileOnDiskMixin, HasBitFlagBadness):
             return self.data['X_IMAGE']
         elif self.format == 'sepnpy':
             return self.data['x']
+        elif self.format == 'filter':
+            return self.data['x']
         else:
             raise ValueError( "Unknown format {self.format}" )
 
@@ -272,7 +274,9 @@ class SourceList(Base, AutoIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         if self.format == 'sextrfits':
             return self.data['Y_IMAGE']
         elif self.format == 'sepnpy':
-            return self.data['x']
+            return self.data['y']
+        elif self.format == 'filter':
+            return self.data['y']
         else:
             raise ValueError( "Unknown format {self.format}" )
 
@@ -285,6 +289,8 @@ class SourceList(Base, AutoIDMixin, FileOnDiskMixin, HasBitFlagBadness):
             # The sep documentation says this is "Second Moment Errors",
             # which may not really be what we want.
             return self.data['erry2']
+        elif self.format == 'filter':
+            return None
         else:
             raise ValueError( "Unknown format {self.format}" )
 
@@ -297,18 +303,20 @@ class SourceList(Base, AutoIDMixin, FileOnDiskMixin, HasBitFlagBadness):
             # The sep documentation says this is "Second Moment Errors",
             # which may not really be what we want.
             return self.data['errx2']
+        elif self.format == 'filter':
+            return None
         else:
             raise ValueError( "Unknown format {self.format}" )
 
     @property
     def errx( self ):
         """A numpy array with uncertainties on x position"""
-        return np.sqrt( self.varx )
+        return np.sqrt( self.varx ) if self.varx is not None else None
 
     @property
     def erry( self ):
         """A numpy array with uncertainties on y position"""
-        return np.sqrt( self.vary )
+        return np.sqrt( self.vary ) if self.vary is not None else None
 
     @property
     def good( self ):
@@ -516,7 +524,7 @@ class SourceList(Base, AutoIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         if filepath is None:
             filepath = self.get_fullpath()
 
-        if self.format == 'sepnpy':
+        if self.format in ['sepnpy', 'filter']:
             if self.aper_rads is not None:
                 raise ValueError( f"self.aper_rads is not None for a sepnpy format file" )
             self._info = []
@@ -588,7 +596,7 @@ class SourceList(Base, AutoIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         filename += '.sources_'
         self.provenance.update_id()
         filename += self.provenance.id[:6]
-        if self.format == 'sepnpy':
+        if self.format in ['sepnpy', 'filter']:
             filename += '.npy'
         elif self.format == 'sextrfits':
             filename += '.fits'
@@ -612,7 +620,7 @@ class SourceList(Base, AutoIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         fullname = os.path.join(self.local_path, self.filepath)
         self.safe_mkdir(os.path.dirname(fullname))
 
-        if self.format == "sepnpy":
+        if self.format in ["sepnpy", "filter"]:
             np.save(fullname, self.data)
         elif self.format == 'sextrfits':
             data = self._convert_to_sextractor_for_saving( self.data )
@@ -730,6 +738,20 @@ class SourceList(Base, AutoIDMixin, FileOnDiskMixin, HasBitFlagBadness):
             zps = session.scalars(sa.select(ZeroPoint).where(ZeroPoint.sources_id == self.id)).all()
 
         return wcs + zps
+
+    def show(self, **kwargs):
+        """Show the source positions on top of the image.
+
+        This is a convenience function that uses the Image.show() method.
+        The arguments are passed into the Image.show() method.
+
+        """
+        import matplotlib.pyplot as plt
+
+        if self.image is None:
+            raise ValueError("Can't show source list without an image")
+        self.image.show(**kwargs)
+        plt.plot(self.x, self.y, 'ro', markersize=5, fillstyle='none')
 
 
 # TODO: replace these with association proxies?

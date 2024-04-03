@@ -16,10 +16,10 @@ archive:
   archive_url: http://archive:8080/
   verify_cert: false
   path_base: test/
-  local_read_dir: /storage/base/
-  local_write_dir: /storage/base/
+  local_read_dir: null
+  local_write_dir: null
   token: insecure
 
 subtraction:
-  method: naive
+  method: zogy
 

@@ -4,7 +4,7 @@ import sqlalchemy as sa
 
 from pipeline.utils import get_git_hash, get_latest_provenance
 
-from models.base import SmartSession
+from models.base import SmartSession, _logger
 from models.provenance import CodeHash, CodeVersion, Provenance
 
 # parameters that are propagated from one Parameters object
@@ -380,7 +380,7 @@ class Parameters:
         """
         self.__aliases__[alias] = name
 
-    def override(self, dictionary):
+    def override(self, dictionary, ignore_addons=False):
         """
         Read parameters from a dictionary.
         If any parameters were already defined,
@@ -390,11 +390,21 @@ class Parameters:
         ----------
         dictionary: dict
             A dictionary with the parameters.
+        ignore_addons: bool
+            If True, will ignore any parameters that are not
+            already defined in the object. If False, will raise
+            an AttributeError if a parameter is not already defined
+            (unless the Parameter object's _enforce_no_new_attrs is False,
+            in which case you can add new parameters).
         """
         for k, v in dictionary.items():
-            self[k] = v
+            try:
+                self[k] = v
+            except AttributeError as e:
+                if not ignore_addons and "has no attribute" in str(e):
+                    raise e
 
-    def augment(self, dictionary):
+    def augment(self, dictionary, ignore_addons=False):
         """
         Update parameters from a dictionary.
         Any dict or set parameters already defined
@@ -405,10 +415,16 @@ class Parameters:
         ----------
         dictionary: dict
             A dictionary with the parameters.
+        ignore_addons: bool
+            If True, will ignore any parameters that are not
+            already defined in the object. If False, will raise
+            an AttributeError if a parameter is not already defined
+            (unless the Parameter object's _enforce_no_new_attrs is False,
+            in which case you can add new parameters).
         """
 
         for k, v in dictionary.items():
-            if k in self:  # need to update
+            if self._get_real_par_name(k) in self:  # need to update
                 if isinstance(self[k], set) and isinstance(v, (set, list)):
                     self[k].update(v)
                 elif isinstance(self[k], dict) and isinstance(v, dict):
@@ -417,7 +433,11 @@ class Parameters:
                 else:
                     self[k] = v
             else:  # just add this parameter
-                self[k] = v
+                try:
+                    self[k] = v
+                except AttributeError as e:
+                    if not ignore_addons and "has no attribute" in str(e):
+                        raise e
 
     def get_critical_pars(self):
         """
@@ -513,11 +533,11 @@ class Parameters:
             names.append(name)
 
         if len(defaults) > 0:
-            print(f" Propagated pars: {', '.join(defaults)}")
+            _logger.debug(f" Propagated pars: {', '.join(defaults)}")
         if len(names) > 0:
             max_length = max(len(n) for n in names)
             for n, d in zip(names, desc):
-                print(f" {n:>{max_length}}{d}")
+                _logger.debug(f" {n:>{max_length}}{d}")
 
     def vprint(self, text, threshold=1):
         """
@@ -535,7 +555,7 @@ class Parameters:
 
         """
         if self.verbose > threshold:
-            print(text)
+            _logger.debug(text)
 
     def compare(self, other, hidden=False, critical=False, ignore=None, verbose=False):
         """
@@ -578,7 +598,7 @@ class Parameters:
                     same = False
                     if not verbose:
                         break
-                    print(f'Par "{k}" is different: {self[k]} vs {other[k]}')
+                    _logger.debug(f'Par "{k}" is different: {self[k]} vs {other[k]}')
 
         return same
 

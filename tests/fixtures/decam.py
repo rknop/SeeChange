@@ -4,6 +4,7 @@ import wget
 import yaml
 import subprocess
 import shutil
+import warnings
 
 import sqlalchemy as sa
 import numpy as np
@@ -17,11 +18,21 @@ from models.decam import DECam  # need this import to make sure DECam is added t
 from models.provenance import Provenance
 from models.exposure import Exposure
 from models.image import Image
+from models.source_list import SourceList
 from models.datafile import DataFile
 from models.reference import Reference
 
 from util.retrydownload import retry_download
 from util.exceptions import SubprocessFailure
+
+
+@pytest.fixture(scope='session')
+def decam_cache_dir(cache_dir):
+    output = os.path.join(cache_dir, 'DECam')
+    if not os.path.isdir(output):
+        os.makedirs(output)
+
+    yield output
 
 
 # Get the flat, fringe, and linearity for
@@ -64,7 +75,7 @@ def decam_default_calibrators(cache_dir, data_dir):
         yield sections, filters
 
     finally:
-        # print('tear down of decam_default_calibrators')
+        # _logger.debug('tear down of decam_default_calibrators')
         imagestonuke = set()
         datafilestonuke = set()
         with SmartSession() as session:
@@ -147,7 +158,7 @@ def decam_raw_origin_exposures():
 
 
 @pytest.fixture(scope="session")
-def decam_filename(data_dir, cache_dir):
+def decam_filename(download_url, data_dir, decam_cache_dir):
     """Pull a DECam exposure down from the NOIRLab archives.
 
     Because this is a slow process (depending on the NOIRLab archive
@@ -161,11 +172,11 @@ def decam_filename(data_dir, cache_dir):
     base_name = 'c4d_221104_074232_ori.fits.fz'
     filename = os.path.join(data_dir, base_name)
     if not os.path.isfile(filename):
-        cachedfilename = os.path.join(cache_dir, 'DECam', base_name)
+        cachedfilename = os.path.join(decam_cache_dir, base_name)
         os.makedirs(os.path.dirname(cachedfilename), exist_ok=True)
 
         if not os.path.isfile(cachedfilename):
-            url = 'https://astroarchive.noirlab.edu/api/retrieve/004d537b1347daa12f8361f5d69bc09b/'
+            url = os.path.join(download_url, 'DECAM', base_name)
             response = wget.download(url=url, out=cachedfilename)
             assert response == cachedfilename
 
@@ -221,7 +232,7 @@ def decam_small_image(decam_raw_image):
 @pytest.fixture
 def decam_datastore(
         datastore_factory,
-        cache_dir,
+        decam_cache_dir,
         decam_exposure,
         decam_default_calibrators,  # not used directly, but makes sure this is pre-fetched from cache
 ):
@@ -237,11 +248,10 @@ def decam_datastore(
     extractor.run(datastore)
     assert extractor.has_recalculated is True
     """
-    cache_dir = os.path.join(cache_dir, 'DECam')
     ds = datastore_factory(
         decam_exposure,
         'N1',
-        cache_dir=cache_dir,
+        cache_dir=decam_cache_dir,
         cache_base_name='115/c4d_20221104_074232_N1_g_Sci_FVOSOC'
     )
     # This save is redundant, as the datastore_factory calls save_and_commit
@@ -249,39 +259,87 @@ def decam_datastore(
     # does not cause any problems.
     ds.save_and_commit()
 
+    delete_list = [
+        ds.image, ds.sources, ds.psf, ds.wcs, ds.zp, ds.sub_image, ds.detections, ds.cutouts, ds.measurements
+    ]
+
     yield ds
 
     # cleanup
     if 'ds' in locals():
         ds.delete_everything()
 
+    # make sure that these individual objects have their files cleaned up,
+    # even if the datastore is cleared and all database rows are deleted.
+    for obj in delete_list:
+        if obj is not None and hasattr(obj, 'delete_from_disk_and_database'):
+            obj.delete_from_disk_and_database(archive=True)
+
 
 @pytest.fixture
-def decam_ref_datastore( code_version, persistent_dir, cache_dir, data_dir, datastore_factory ):
-    persistent_dir = os.path.join(persistent_dir, 'test_data/DECam_examples')
-    cache_dir = os.path.join(cache_dir, 'DECam')
+def decam_processed_image(decam_datastore):
+
+    ds = decam_datastore
+
+    yield ds.image
+
+    # the datastore should delete everything, so we don't need to do anything here
+
+
+@pytest.fixture
+def decam_fits_image_filename(download_url, decam_cache_dir):
+    download_url = os.path.join(download_url, 'DECAM')
+
+    filename = 'c4d_20221002_040239_r_v1.24.fits'
+    filepath = os.path.join(decam_cache_dir, filename)
+    if not os.path.isfile(filepath):
+        url = os.path.join(download_url, filename)
+        response = wget.download(url=url, out=filepath)
+
+    yield filename
+
+
+@pytest.fixture
+def decam_fits_image_filename2(download_url, decam_cache_dir):
+    download_url = os.path.join(download_url, 'DECAM')
+
+    filename = 'c4d_20221002_040434_i_v1.24.fits'
+    filepath = os.path.join(decam_cache_dir, filename)
+    if not os.path.isfile(filepath):
+        url = os.path.join(download_url, filename)
+        response = wget.download(url=url, out=filepath)
+
+    yield filename
+
+
+@pytest.fixture
+def decam_ref_datastore( code_version, download_url, decam_cache_dir, data_dir, datastore_factory ):
     filebase = 'DECaPS-West_20220112.g.32'
 
-    urlmap = { '.image.fits': '.fits.fz',
-               '.weight.fits': '.weight.fits.fz',
-               '.flags.fits': '.bpm.fits.fz' }
-    for ext in [ '.image.fits', '.weight.fits', '.flags.fits' ]:
-        cache_path = os.path.join(cache_dir, f'115/{filebase}{ext}')
+    # I added this mirror so the tests will pass, and we should remove it once the decam image goes back up to NERSC
+    # TODO: should we leave these as a mirror in case NERSC is down?
+    dropbox_urls = {
+        '.image.fits': 'https://www.dropbox.com/scl/fi/x8rzwfpe4zgc8tz5mv0e2/DECaPS-West_20220112.g.32.image.fits?rlkey=5wse43bby3tce7iwo2e1fm5ru&dl=1',
+        '.weight.fits': 'https://www.dropbox.com/scl/fi/dfctqqj3rjt09wspvyzb3/DECaPS-West_20220112.g.32.weight.fits?rlkey=tubr3ld4srf59hp0cuxrv2bsv&dl=1',
+        '.flags.fits': 'https://www.dropbox.com/scl/fi/y693ckhcs9goj1t7s0dty/DECaPS-West_20220112.g.32.flags.fits?rlkey=fbdyxyzjmr3g2t9zctcil7106&dl=1',
+    }
+
+    for ext in [ '.image.fits', '.weight.fits', '.flags.fits', '.image.yaml' ]:
+        cache_path = os.path.join(decam_cache_dir, f'115/{filebase}{ext}')
         fzpath = cache_path + '.fz'
         if os.path.isfile(cache_path):
             _logger.info( f"{cache_path} exists, not redownloading." )
         else:  # need to download!
-            url = ( f'https://portal.nersc.gov/cfs/m2218/decat/decat/templatecache/DECaPS-West_20220112.g/'
-                    f'{filebase}{urlmap[ext]}' )
-            retry_download( url, fzpath )
-            res = subprocess.run( [ 'funpack', '-D', fzpath ] )
-            if res.returncode != 0:
-                raise SubprocessFailure( res )
+            url = os.path.join(download_url, 'DECAM', filebase + ext)
+            retry_download( url, cache_path )
+            if not os.path.isfile(cache_path):
+                raise FileNotFoundError(f'Cannot find downloaded file: {cache_path}')
+
         destination = os.path.join(data_dir, f'115/{filebase}{ext}')
         os.makedirs(os.path.dirname(destination), exist_ok=True)
         shutil.copy2( cache_path, destination )
 
-    yaml_path = os.path.join(persistent_dir, filebase + '.image.yaml')
+    yaml_path = os.path.join(decam_cache_dir, f'115/{filebase}.image.yaml')
 
     with open( yaml_path ) as ifp:
         refyaml = yaml.safe_load( ifp )
@@ -316,9 +374,9 @@ def decam_ref_datastore( code_version, persistent_dir, cache_dir, data_dir, data
         image.is_coadd = True
         image.save(verify_md5=False)  # make sure to upload to archive as well
 
-        image.copy_to_cache( cache_dir )
+        image.copy_to_cache( decam_cache_dir )
 
-        ds = datastore_factory(image, cache_dir=cache_dir, cache_base_name=f'115/{filebase}')
+        ds = datastore_factory(image, cache_dir=decam_cache_dir, cache_base_name=f'115/{filebase}')
 
         for filename in image.get_fullpath(as_list=True):
             assert os.path.isfile(filename)
@@ -326,9 +384,19 @@ def decam_ref_datastore( code_version, persistent_dir, cache_dir, data_dir, data
         ds.save_and_commit(session)
         session.commit()
 
+    delete_list = [
+        ds.image, ds.sources, ds.psf, ds.wcs, ds.zp, ds.sub_image, ds.detections, ds.cutouts, ds.measurements
+    ]
+
     yield ds
 
     ds.delete_everything()
+
+    # make sure that these individual objects have their files cleaned up,
+    # even if the datastore is cleared and all database rows are deleted.
+    for obj in delete_list:
+        if obj is not None and hasattr(obj, 'delete_from_disk_and_database'):
+            obj.delete_from_disk_and_database(archive=True)
 
 
 @pytest.fixture
@@ -373,3 +441,127 @@ def decam_reference(decam_ref_datastore):
             if sa.inspect(ref).persistent:
                 session.delete(ref.provenance)  # should also delete the reference image
             session.commit()
+
+
+@pytest.fixture
+
+def decam_subtraction(decam_reference, decam_processed_image, subtractor, decam_cache_dir):
+    filepath = '115/c4d_20221104_074232_N1_g_Diff_7EGWL3_u-4ea5cc.image.fits'
+
+    upstreams = []
+    for im in [decam_reference.image, decam_processed_image]:
+        upstreams.append(im.provenance)
+        for att in ['sources', 'psf', 'wcs', 'zp']:
+            upstreams.append(getattr(im, att).provenance)
+
+    prov = Provenance(
+        process='subtraction',
+        code_version=decam_processed_image.provenance.code_version,
+        parameters=subtractor.pars.get_critical_pars(),
+        upstreams=upstreams,
+        is_testing=True,
+    )
+
+    if prov.id[:6] not in filepath:
+        warnings.warn(f"Provenance ID {prov.id[:6]} not in filepath {filepath}")
+
+    if os.path.isfile(os.path.join(decam_cache_dir, filepath)):
+        sub_im = Image.copy_from_cache(decam_cache_dir, filepath)
+        sub_im.upstream_images = [decam_reference.image, decam_processed_image]
+
+        if sub_im._aligned_images is None:
+            align_ref_prov = Provenance(
+                code_version=decam_reference.image.provenance.code_version,
+                process='alignment',
+                parameters=prov.parameters['alignment'],
+                upstreams=[
+                    decam_reference.image.provenance,
+                    decam_reference.sources.provenance,
+                    decam_reference.psf.provenance,
+                    decam_reference.wcs.provenance,
+                    decam_reference.zp.provenance,
+                    decam_processed_image.provenance,
+                    decam_processed_image.sources.provenance,
+                    decam_processed_image.psf.provenance,
+                    decam_processed_image.wcs.provenance,
+                ],
+            )
+            align_new_prov = Provenance(
+                code_version=decam_reference.image.provenance.code_version,
+                process='alignment',
+                parameters=prov.parameters['alignment'],
+                upstreams=[
+                    decam_processed_image.provenance,
+                    decam_processed_image.sources.provenance,
+                    decam_processed_image.wcs.provenance,
+                    decam_processed_image.zp.provenance,
+                ],
+            )
+            aligned_ref = None
+            aligned_new = None
+            aligned_ref_file = '115/c4d_20220113_050224_N1_g_Warped_ZBELGP'
+            if os.path.isfile(os.path.join(decam_cache_dir, aligned_ref_file + '.image.fits.json')):
+                aligned_ref = Image.copy_from_cache(cache_dir, aligned_ref_file + '.image.fits.json')
+                aligned_ref.info['original_image_id'] = decam_reference.image.id
+                aligned_ref.provenance = align_ref_prov
+
+            aligned_new_file = '115/c4d_20221104_074232_N1_g_Warped_JZNHWZ'
+            if os.path.isfile(os.path.join(decam_cache_dir, aligned_new_file + '.image.fits.json')):
+                aligned_new = Image.copy_from_cache(decam_cache_dir, aligned_new_file + '.image.fits.json')
+                aligned_new.info['original_image_id'] = decam_processed_image.id
+                aligned_new.provenance = align_new_prov
+
+            if aligned_ref is not None and aligned_new is not None:
+                sub_im._aligned_images = [aligned_ref, aligned_new]
+
+        sub_im.ref_image_id = decam_reference.image.id
+        sub_im.ref_image = decam_reference.image
+        sub_im.provenance = prov
+        sub_im.load_upstream_products()  # make sure stuff like WCS is loaded for upstream_images
+        sub_im.coordinates_to_alignment_target()  # propagate WCS to sub_im
+
+    else:
+        ds = subtractor.run(decam_processed_image)
+
+        ds.sub_image.save()
+        sub_im = ds.sub_image
+        sub_im.copy_to_cache(decam_cache_dir)
+
+    for im in sub_im.aligned_images:  # also save the aligned images...
+        im.save()
+        im.copy_to_cache(decam_cache_dir)
+
+    yield sub_im
+
+    if 'sub_im' in locals():
+        for im in sub_im.aligned_images:
+            im.delete_from_disk_and_database(archive=True)
+        sub_im.delete_from_disk_and_database(archive=True)
+
+
+@pytest.fixture
+def decam_detection_list(decam_subtraction, detector, decam_cache_dir):
+    prov = Provenance(
+        process='detection',
+        code_version=decam_subtraction.provenance.code_version,
+        parameters=detector.pars.get_critical_pars(),
+        upstreams=[decam_subtraction.provenance],
+        is_testing=True,
+    )
+    filepath = decam_subtraction.filepath + f'.detections_{prov.id[:6]}.npy'
+
+    if os.path.isfile(filepath):
+        detections = SourceList.copy_from_cache(decam_cache_dir, filepath)
+        detections.image_id = decam_subtraction.id
+        detections.provenance = prov
+    else:  # no cache, need to product a new object
+        ds = detector.run(decam_subtraction)
+        detections = ds.sub_image.sources
+        detections.provenance = prov
+        detections.save()
+        detections.copy_to_cache(decam_cache_dir)
+
+    yield detections
+
+    # must delete the detections (especially the file) because I'm not sure the datastore will delete it
+    detections.delete_from_disk_and_database(archive=True)

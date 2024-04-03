@@ -201,7 +201,7 @@ def test_read_sextractor( ztf_filepath_sources ):
     assert sources.data['FLUXERR_APER'][50] == pytest.approx( np.array( [ 21.135862, 50.378757 ] ), rel=1e-5 )
 
 
-def test_write_sextractor():
+def test_write_sextractor(archive):
     fname = ''.join( np.random.choice( list('abcdefghijklmnopqrstuvwxyz'), 16 ) )
     sources = SourceList( format='sextrfits', filepath=f"{fname}.sources.fits" )
     assert sources.aper_rads is None
@@ -233,6 +233,7 @@ def test_write_sextractor():
             assert hdr.cards[0].comment == 'Comment'
     finally:
         pathlib.Path( sources.get_fullpath() ).unlink( missing_ok=True )
+        archive.delete(sources.filepath, okifmissing=True)
 
 
 def test_calc_apercor( decam_datastore ):

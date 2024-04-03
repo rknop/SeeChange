@@ -233,9 +233,8 @@ def test_write_psfex_psf( ztf_filepaths_image_sources_psf ):
     psf.load( psfpath=psfpath, psfxmlpath=psfxmlpath )
 
     tempname = ''.join( random.choices( 'abcdefghijklmnopqrstuvwxyz', k=10 ) )
-    psfpath = f'{tempname}.psf'
+    psfpath = f'{tempname}.psf.fits'
     psffullpath = pathlib.Path( FileOnDiskMixin.local_path ) / psfpath
-    psffullpath = psffullpath.with_suffix('.psf.fits')
     psfxmlpath = f'{tempname}.psf.xml'
     psfxmlfullpath = pathlib.Path( FileOnDiskMixin.local_path ) / psfxmlpath
     sourcesfullpath = pathlib.Path( FileOnDiskMixin.local_path ) / f'{tempname}.cat'
@@ -246,7 +245,7 @@ def test_write_psfex_psf( ztf_filepaths_image_sources_psf ):
         assert psffullpath.is_file()
         assert psfxmlfullpath.is_file()
         archive = get_archive_object()
-        assert archive.get_info( psfpath + '.fits' ) is not None
+        assert archive.get_info( psfpath ) is not None
         assert archive.get_info( psfxmlpath ) is not None
 
         # See if we can read the psf we wrote back in
@@ -295,6 +294,8 @@ def test_write_psfex_psf( ztf_filepaths_image_sources_psf ):
         psffullpath.unlink( missing_ok=True )
         psfxmlfullpath.unlink( missing_ok=True )
         sourcesfullpath.unlink( missing_ok=True )
+        archive.delete(psfpath, okifmissing=True)
+        archive.delete(psfxmlpath, okifmissing=True)
 
 
 def test_save_psf( ztf_datastore_uncommitted, provenance_base, provenance_extra ):

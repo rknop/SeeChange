@@ -20,6 +20,7 @@ from models.image import Image
 
 from pipeline.data_store import DataStore
 from pipeline.parameters import Parameters
+from pipeline.detection import Detector
 from pipeline.utils import read_fits_image
 from improc.bitmask_tools import dilate_bitflag
 
@@ -140,9 +141,8 @@ class ImageAligner:
                 setattr(warpedim, f'{att}_corner_{corner}', getattr(target, f'{att}_corner_{corner}'))
 
         warpedim.calculate_coordinates()
-        warpedim.psf = image.psf  # psf not available when loading from DB (psf.image_id doesn't point to warpedim)
         warpedim.zp = image.zp  # zp not available when loading from DB (zp.image_id doesn't point to warpedim)
-        # TODO: are SourceList and WorldCoordinates also included? Are they valid for the warped image?
+        # TODO: are the WorldCoordinates also included? Are they valid for the warped image?
 
         warpedim.type = 'Warped'
         warpedim.bitflag = 0
@@ -319,9 +319,31 @@ class ImageAligner:
             warpedim = self.image_source_warped_to_target(image, target)
 
             warpedim.data, warpedim.header = read_fits_image( outim, output="both" )
+            for att in ['SATURATA', 'SATURATB']:
+                if att in image.header:
+                    warpedim.header[att] = image.header[att]
+
             warpedim.weight = read_fits_image(outwt)
             warpedim.flags = read_fits_image(outfl)
             warpedim.flags = np.rint(warpedim.flags).astype(np.uint16)  # convert back to integers
+
+            # re-calculate the source list and PSF for the warped image
+            extractor = Detector()
+            extractor.pars.override(sources.provenance.parameters, ignore_addons=True)
+            warpedsrc, warpedpsf = extractor.extract_sources(warpedim)
+            warpedim.sources = warpedsrc
+            warpedim.psf = warpedpsf
+
+            prov = Provenance(
+                code_version=image.provenance.code_version,
+                process='extraction',
+                parameters=extractor.pars.get_critical_pars(),
+                upstreams=[image.provenance],
+            )
+            warpedim.sources.provenance = prov
+            warpedim.sources.provenance_id = prov.id
+            warpedim.psf.provenance = prov
+            warpedim.psf.provenance_id = prov.id
 
             # expand bad pixel mask to allow for warping that smears the badness
             warpedim.flags = dilate_bitflag(warpedim.flags, iterations=1)  # use the default structure

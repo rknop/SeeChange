@@ -4,6 +4,12 @@
 
 import numpy as np
 import scipy
+from scipy.stats.distributions import norm, chi2
+
+from improc.bitmask_tools import dilate_bitflag
+
+from models.base import _logger
+
 
 
 def zogy_subtract(image_ref, image_new, psf_ref, psf_new, noise_ref, noise_new, flux_ref, flux_new, dx=None, dy=None):
@@ -82,18 +88,30 @@ def zogy_subtract(image_ref, image_new, psf_ref, psf_new, noise_ref, noise_new, 
 
     Returns
     -------
-    sub_image : numpy.ndarray
-        The subtracted image.
-    sub_psf: numpy.ndarray
-        The PSF of the subtracted image.
-    score: numpy.ndarray
-        The score image
-    score_corr: numpy.ndarray
-        The score image corrected for source noise.
-    alpha: numpy.ndarray
-        The PSF-photometry measurement image
-    alpha_std: numpy.ndarray
-        The PSF-photometry noise image
+    A dictionary with the following keys:
+        sub_image : numpy.ndarray
+            The subtracted image.
+        sub_psf: numpy.ndarray
+            The PSF of the subtracted image.
+        score: numpy.ndarray
+            The score image
+        score_corr: numpy.ndarray
+            The score image corrected for source noise.
+        alpha: numpy.ndarray
+            The PSF-photometry measurement image
+        alpha_std: numpy.ndarray
+            The PSF-photometry noise image
+        translient: numpy.ndarray
+            The "translational transient" score for moving
+            objects or slightly misaligned images.
+            See the paper: ... TODO: add reference once paper is out!
+        translient_sigma: numpy.ndarray
+            The translient score, converted to S/N units assuming a chi2 distribution.
+        translient_corr: numpy.ndarray
+            The source-noise-corrected translient score.
+        translient_corr_sigma: numpy.ndarray
+            The corrected translient score, converted to S/N units assuming a chi2 distribution.
+
     """
     if dy is None:
         dy = dx  # assume equal astrometric noise if only dx is given
@@ -148,10 +166,26 @@ def zogy_subtract(image_ref, image_new, psf_ref, psf_new, noise_ref, noise_new, 
     # get the score image (match-filtered image)
     S_f = F_D * D_f * np.conj(P_D_f)  # eq 17 (which is equivalent to eq 12)
 
+    # use the "translient" paper to calculate the translational transient score
+    m1 = image_new.shape[-1]  # the length of the x-axis
+    m2 = image_new.shape[-2]  # the length of the y-axis
+
+    # these are the directional vectors in Fourier space (the translations), not the kernels used below!
+    k1, k2 = np.meshgrid(
+        range(-int(np.floor(m1 / 2)), int(np.ceil(m1 / 2))),
+        range(-int(np.floor(m2 / 2)), int(np.ceil(m2 / 2))),
+    )
+
+    # using Equation 22, for both directions
+    Z0 = 4 * np.pi * F_n * F_r * np.conj(P_r_f) * np.conj(P_n_f) * (F_n * P_n_f * R_f - F_r * P_r_f * N_f) / denominator
+    Z1_f = Z0 * np.fft.fftshift(k1) / m1  # make sure the zero frequency is in the corner
+    Z2_f = Z0 * np.fft.fftshift(k2) / m2  # make sure the zero frequency is in the corner
+
     # transform the subtracted image (and PSF, score) back to real space
     D = np.real(np.fft.ifft2(D_f))
     P_D = np.real(np.fft.ifft2(P_D_f))
     S = np.real(np.fft.ifft2(S_f))
+    Z = np.imag(np.fft.ifft2(Z1_f)) ** 2 + np.imag(np.fft.ifft2(Z2_f)) ** 2  # this is Z^2 but we'll call it Z for short
 
     # additional corrections from the source noise terms:
     # get the variance maps, assuming the N/R images are background subtracted,
@@ -203,6 +237,7 @@ def zogy_subtract(image_ref, image_new, psf_ref, psf_new, noise_ref, noise_new, 
     V_S_sqrt = np.sqrt(V_S, where=~zero_mask)
     V_S_sqrt[zero_mask] = 1
     S_corr = S / V_S_sqrt
+    Z_corr = Z / V_S
 
     # PSF photometry part:
     # Eqs. 41-43 from paper
@@ -223,7 +258,23 @@ def zogy_subtract(image_ref, image_new, psf_ref, psf_new, noise_ref, noise_new, 
     alpha = np.fft.fftshift(alpha)
     alpha_std = np.fft.fftshift(alpha_std)
 
-    return sub_image, sub_psf, score, score_corr, alpha, alpha_std
+    translient = np.fft.fftshift(Z)
+    translient_sigma = norm.isf(chi2.sf(translient, df=2))
+    translient_corr = np.fft.fftshift(Z_corr)
+    translient_corr_sigma = norm.isf(chi2.sf(translient_corr, df=2))
+
+    return dict(
+        sub_image=sub_image,
+        sub_psf=sub_psf,
+        score=score,
+        score_corr=score_corr,
+        alpha=alpha,
+        alpha_std=alpha_std,
+        translient=translient,
+        translient_sigma=translient_sigma,
+        translient_corr=translient_corr,
+        translient_corr_sigma=translient_corr_sigma,
+    )
 
 
 def pad_to_shape(arr, shape, value=0):
@@ -267,6 +318,53 @@ def pad_to_shape(arr, shape, value=0):
     return new_arr
 
 
+def zogy_add_weights_flags(ref_weight, new_weight, ref_flags, new_flags, ref_psf_fwhm, new_psf_fwhm):
+    """Combine the weight and flags images of the reference and new in a reasonable way,
+    accounting for PSF widening of the new image.
+
+    The weights are assumed to be 1/variance, so we will add the variance and then take the inverse.
+    Any points that have zero weight (in either image) will be given zero weight in the output,
+    and the appropriate flag will be or'd to the final flag image.
+
+    Will expand the flags of the new image based on max(ref_psf_fwhm, new_psf_fwhm).
+    Then the two flag images are or'd together.
+
+    Parameters
+    ----------
+    ref_weight: numpy.ndarray
+        The weight image of the reference image.
+    new_weight: numpy.ndarray
+        The weight image of the new image.
+    ref_flags: numpy.ndarray
+        The flag image of the reference image.
+    new_flags: numpy.ndarray
+        The flag image of the new image.
+    ref_psf_fwhm: float
+        The FWHM of the PSF of the reference image, in pixels!
+    new_psf_fwhm: float
+        The FWHM of the PSF of the new image, in pixels!
+
+    Returns
+    -------
+    outwt: numpy.ndarray
+        The combined weight image.
+    outfl: numpy.ndarray
+        The combined flag image.
+    """
+    # combine the weights
+    mask = (ref_weight == 0) | (new_weight == 0)
+    w1 = np.where(ref_weight == 0, 0, 1 / ref_weight)
+    w2 = np.where(new_weight == 0, 0, 1 / new_weight)
+    outwt = np.where(mask, 0, 1 / (w1 + w2))
+
+    # expand the flags of the new image
+    splash_pixels = int(np.ceil(max(ref_psf_fwhm, new_psf_fwhm)))
+    new_flags = dilate_bitflag(new_flags, iterations=splash_pixels)
+    outfl = mask | ref_flags | new_flags  # xor the flags (add zero-weight flag where needed)
+
+    return outwt, outfl
+
+
 if __name__ == "__main__":
     from improc.simulator import make_gaussian
     for i in range(10):
@@ -280,6 +378,10 @@ if __name__ == "__main__":
         P_n /= np.sum(P_n)
         F_r = 1 / np.sqrt(np.sum(P_r ** 2) / B_r)
         F_n = 1 / np.sqrt(np.sum(P_n ** 2) / B_n)
-        D, P, S, Sc, al, al_err = zogy_subtract(R, N, P_r, P_n, np.sqrt(B_r), np.sqrt(B_n), F_r, F_n)
-        print(f'std(D)= {np.std(D)}, std(S)= {np.std(S)}, std(Sc)= {np.std(Sc)}')
+        output = zogy_subtract(R, N, P_r, P_n, np.sqrt(B_r), np.sqrt(B_n), F_r, F_n)
+        _logger.debug(
+            f'std(D)= {np.std(output["sub_image"])}, '
+            f'std(S)= {np.std(output["score"])}, '
+            f'std(Sc)= {np.std(output["Score_corr"])}'
+        )
 

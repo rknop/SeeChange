@@ -106,21 +106,8 @@ def test_sep_save_source_list(decam_small_image, provenance_base, extractor):
             sources_id = sources.id
 
     finally:
-        if 'filename' in locals() and os.path.isfile(filename):
-            os.remove(filename)
-            folder = filename
-            for i in range(10):
-                folder = os.path.dirname(folder)
-                if len(os.listdir(folder)) == 0:
-                    os.rmdir(folder)
-                else:
-                    break
-        with SmartSession() as session:
-            if 'sources_id' in locals():
-                session.execute(sa.delete(SourceList).where(SourceList.id == sources_id))
-            if 'image_id' in locals():
-                session.execute(sa.delete(Image).where(Image.id == image_id))
-            session.commit()
+        if 'sources' in locals():
+            sources.delete_from_disk_and_database()
 
 
 # This is running sextractor in one particular way that is used by more than one test
@@ -296,11 +283,12 @@ def test_extract_sources_sextractor( decam_datastore, extractor, provenance_base
         assert os.path.isfile(os.path.join(data_dir, sources.filepath))
 
     finally:  # cleanup
-        [os.remove(f) for f in psf.get_fullpath()]
-        os.remove( sources.get_fullpath() )
+        psf.delete_from_disk_and_database()
+        sources.delete_from_disk_and_database()
 
 # TODO : add tests that handle different combinations
 #  of measure_psf and psf being passed to the Detector constructor
+
 
 # TODO: is this test really the same as the one above?
 def test_run_detection_sextractor( decam_datastore, extractor ):

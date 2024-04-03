@@ -34,7 +34,7 @@ UPSTREAM_OBJECTS = {
     'extraction': 'sources',
     'astro_cal': 'wcs',
     'photo_cal': 'zp',
-    'reference': 'ref-image',
+    'reference': 'reference',
     'subtraction': 'sub_image',
     'detection': 'detections',
     'cutting': 'cutouts',
@@ -115,6 +115,8 @@ class DataStore:
         self.psf = None  # psf determined from the extracted sources
         self.wcs = None  # astrometric solution
         self.zp = None  # photometric calibration
+        self.reference = None  # the Reference object needed to make subtractions
+        self.sub_image = None  # subtracted image
         self.detections = None  # a SourceList object for sources detected in the subtraction image
         self.cutouts = None  # cutouts around sources
         self.measurements = None  # photometry and other measurements for each source
@@ -151,6 +153,18 @@ class DataStore:
                     self.exposure.instrument_object.fetch_sections()
                     self._section = self.exposure.instrument_object.get_section( self.section_id )
         return self._section
+
+    @property
+    def ref_image( self ):
+        if self.reference is not None:
+            return self.reference.image
+        return None
+
+    @ref_image.setter
+    def ref_image( self, value ):
+        if self.reference is None:
+            self.reference = Reference()
+        self.reference.image = value
 
     def parse_args(self, *args, **kwargs):
         """
@@ -1020,6 +1034,10 @@ class DataStore:
                         ).where(Image.provenance.has(id=provenance.id))
                     ).first()
 
+        if self.sub_image is not None:
+            self.sub_image.load_upstream_products()
+            self.sub_image.coordinates_to_alignment_target()
+
         return self.sub_image
 
     def get_detections(self, provenance=None, session=None):
@@ -1095,12 +1113,12 @@ class DataStore:
         Parameters
         ----------
         provenance: Provenance object
-            The provenance to use for the measurements.
+            The provenance to use for the cutouts.
             This provenance should be consistent with
             the current code version and critical parameters.
             If none is given, will use the latest provenance
             for the "cutting" process.
-        session: sqlalchemy.orm.session.Session or SmartSession
+        session: sqlalchemy.orm.session.Session
             An optional session to use for the database query.
             If not given, will use the session stored inside the
             DataStore object; if there is none, will open a new session
@@ -1108,8 +1126,8 @@ class DataStore:
 
         Returns
         -------
-        measurements: list of Measurement objects
-            The list of measurements, or None if no matching measurements are found.
+        cutouts: list of Cutouts objects
+            The list of cutouts, that will be empty if no matching cutouts are found.
 
         """
         process_name = 'cutting'
@@ -1163,7 +1181,7 @@ class DataStore:
             the current code version and critical parameters.
             If none is given, will use the latest provenance
             for the "measurement" process.
-        session: sqlalchemy.orm.session.Session or SmartSession
+        session: sqlalchemy.orm.session.Session
             An optional session to use for the database query.
             If not given, will use the session stored inside the
             DataStore object; if there is none, will open a new session
@@ -1172,7 +1190,7 @@ class DataStore:
         Returns
         -------
         measurements: list of Measurement objects
-            The list of measurements, or None if no matching measurements are found.
+            The list of measurements, that will be empty if no matching measurements are found.
 
         """
         process_name = 'measurement'
@@ -1219,9 +1237,8 @@ class DataStore:
         """Get all the data products associated with this Exposure.
 
         By default, this returns a dict with named entries.
-        If using output='list', will return a flattened list of all
-        objects, including lists (e.g., Cutouts will be concatenated,
-        no nested). Any None values will be removed.
+        If using output='list', will return a list of all
+        objects, including sub-lists. None values are skipped.
 
         This list does not include the reference image.
 
@@ -1247,15 +1264,7 @@ class DataStore:
         if output == 'dict':
             return result
         if output == 'list':
-            list_result = []
-            for k, v in result.items():
-                if isinstance(v, list):
-                    list_result.extend(v)
-                else:
-                    list_result.append(v)
-
-            return [v for v in list_result if v is not None]
-
+            return [result[att] for att in attributes if result[att] is not None]
         else:
             raise ValueError(f'Unknown output format: {output}')
 
@@ -1338,11 +1347,10 @@ class DataStore:
             if obj is None:
                 continue
 
-            if isinstance(obj, list):  # handle cutouts and measurements
-                # TODO: the measurements is not a problem because they are probably not going to live on disk.
-                #  The cuouts, on the other hand, should probably be saved together as a list into one file.
-                #  We should implement something to do that sort of batch save on the cutouts.
-                raise NotImplementedError( 'Saving lists of objects (cutouts) is not implemented yet.' )
+            if isinstance(obj, list) and len(obj) > 0:  # handle cutouts and measurements
+                if hasattr(obj[0], 'save_list'):
+                    obj[0].save_list(obj, overwrite=overwrite, exists_ok=exists_ok, no_archive=no_archive)
+                continue
 
             _logger.debug( f'save_and_commit considering a {obj.__class__.__name__} with filepath '
                            f'{obj.filepath if isinstance(obj,FileOnDiskMixin) else "<none>"}' )
@@ -1389,8 +1397,8 @@ class DataStore:
             if self.image is not None:
                 self.image = self.image.merge_all(session)
                 for att in ['sources', 'psf', 'wcs', 'zp']:
-                    setattr(self, att, None)  # avoid automatically loading the image with non-merged products
-                for att in ['exposure', 'sources', 'psf', 'wcs', 'zp', '_aligned_images']:
+                    setattr(self, att, None)  # avoid automatically appending to the image self's non-merged products
+                for att in ['exposure', 'sources', 'psf', 'wcs', 'zp']:
                     if getattr(self.image, att, None) is not None:
                         setattr(self, att, getattr(self.image, att))
 
@@ -1401,11 +1409,17 @@ class DataStore:
                 self.image_id = self.image.id
 
             if self.sub_image is not None:
+                self.sub_image.new_image = self.image  # update with the now-merged image
                 self.sub_image = self.sub_image.merge_all(session)  # merges the upstream_images and downstream products
-                self.ref.id = self.sub_image.ref_image_id  # just to make sure the ref has an ID for merging
-                for att in ['detections', 'cutouts', 'measurements']:
-                    if getattr(self.sub_image, att, None) is not None:
-                        setattr(self, att, getattr(self.sub_image, att))
+                self.ref_image.id = self.sub_image.ref_image_id  # just to make sure the ref has an ID for merging
+                self.detections = self.sub_image.sources
+
+            if self.detections is not None:
+                for cutout in self.cutouts:
+                    cutout.sources = self.detections
+                self.cutouts = Cutouts.merge_list(self.cutouts, session)
+
+            # TODO: handle measurements
 
             self.psf = self.image.psf
             self.sources = self.image.sources
@@ -1418,7 +1432,7 @@ class DataStore:
         """Delete everything associated with this sub-image.
 
         All data products in the data store are removed from the DB,
-        and all files on disk are deleted.
+        and all files on disk and in the archive are deleted.
 
         NOTE: does *not* delete the exposure.  (There may well be other
         data stores out there with different images from the same
@@ -1442,12 +1456,25 @@ class DataStore:
                 session.autoflush = False
                 obj_list = self.get_all_data_products(output='list', omit_exposure=True)
                 for i, obj in enumerate(obj_list):  # first make sure all are merged
+                    if isinstance(obj, list):
+                        for j, o in enumerate(obj):
+                            if o.id is not None:
+                                for att in ['image', 'sources']:
+                                    if hasattr(o, att):
+                                        setattr(o, att, None)  # clear any back references before merging
+                                obj_list[i][j] = session.merge(o)
+                        continue
                     if obj.id is not None:  # don't merge new objects, as that just "adds" them to DB!
                         obj_list[i] = session.merge(obj)
 
                 for obj in obj_list:  # now do the deleting without flushing
+                    # call the special delete method for list-arranged objects (e.g., cutouts, measurements)
+                    if isinstance(obj, list):
+                        if len(obj) > 0:
+                            obj[0].delete_list(obj, session=session, commit=False, archive=True)
+                        continue
                     if isinstance(obj, FileOnDiskMixin):
-                        obj.delete_from_disk_and_database(session=session, commit=False)
+                        obj.delete_from_disk_and_database(session=session, commit=False, archive=True)
                     if obj in session and sa.inspect(obj).pending:
                         session.expunge(obj)
                     if obj in session and sa.inspect(obj).persistent:

@@ -1,11 +1,14 @@
 import pathlib
 import random
 import subprocess
+from functools import partial
 
 import numpy as np
 import numpy.lib.recfunctions as rfn
+from scipy import ndimage
 import sqlalchemy as sa
 
+import astropy.table
 import sep
 
 from astropy.io import fits, votable
@@ -20,12 +23,16 @@ from models.image import Image
 from models.psf import PSF
 from models.source_list import SourceList
 
+from improc.tools import sigma_clipping
+
 
 class ParsDetector(Parameters):
     def __init__(self, **kwargs):
         super().__init__()
 
-        self.method = self.add_par( 'method', 'sextractor', str, 'Method to use (sextractor, sep)', critical=True )
+        self.method = self.add_par(
+            'method', 'sextractor', str, 'Method to use (sextractor, sep, filter)', critical=True
+        )
 
         self.measure_psf = self.add_par(
             'measure_psf',
@@ -41,8 +48,9 @@ class ParsDetector(Parameters):
             'psf',
             None,
             ( PSF, int, None ),
-            ( 'Use this PSF; pass the PSF object, or its integer id. '
-              'If None, will not do PSF photometry.  Ignored if measure_psf is True.' )
+            'Use this PSF; pass the PSF object, or its integer id. '
+            'If None, will not do PSF photometry.  Ignored if measure_psf is True.' ,
+            critical=True
         )
 
         self.apers = self.add_par(
@@ -72,19 +80,29 @@ class ParsDetector(Parameters):
         )
         self.add_alias( 'aperture_unit', 'aperunit' )
 
+        self.separation_fwhms = self.add_par(
+            'separation_fwhms',
+            1.0,
+            float,
+            'Minimum separation between sources in units of FWHM',
+            critical=True
+        )
+
         self.threshold = self.add_par(
             'threshold',
             3.0,
             [float, int],
             'The number of standard deviations above the background '
-            'to use as the threshold for detecting a source. '
+            'to use as the threshold for detecting a source. ',
+            critical=True
         )
 
         self.subtraction = self.add_par(
             'subtraction',
             False,
             bool,
-            'Whether this is expected to run on a subtraction image or a regular image. '
+            'Whether this is expected to run on a subtraction image or a regular image. ',
+            critical=True
         )
 
         self._enforce_no_new_attrs = True
@@ -99,7 +117,39 @@ class ParsDetector(Parameters):
 
 
 class Detector:
-    """Extract sources (and possibly a psf) from images or subtraction images."""
+    """Extract sources (and possibly a psf) from images or subtraction images.
+
+    There are a few different ways to get the sources from an image.
+    The most common is to use SExtractor, which is the default we use for direct images.
+    There is also "sep", which is a python-based equivalent (sort of) of SExtractor,
+    but it is not fully compatible and not fully supported.
+    Finally, you can use a matched-filter approach, meaning that you cross-correlate
+    the image with the PSF and find everything above some threshold.
+    There are some subtleties involved, like what to do if multiple pixels
+    (connected or just close to each other) are above threshold.
+    In some cases, like after running ZOGY, the image already contains a "score" image,
+    which is just the normalized result of running a matched-filter.
+    In that case, the "filter" method of this class will just use the score image
+    instead of re-running PSF matched-filtering.
+
+    It should also be noted that using the "filter" method does not find the PSF
+    from the image (whereas the SExtractor method does). This is one of the main reasons
+    SExtractor is used for detecting sources on the direct images.
+    On the subtraction image, on the other hand, you can use the "filter" method
+    and either use the PSF from ZOGY or just assume the subtraction image's PSF is
+    the same as the direct image's PSF.
+
+    This is also why when you use this class on the subtraction image, it will
+    be initialized with pars.measure_psf=False.
+
+    We distinguish between finding sources in a regular image, calling it "extraction"
+    (we are extracting many sources of static objects, mostly) and finding sources
+    in difference images, calling it "detection" (identifying transient sources that
+    may or may not exist in an image). The pars.subtraction parameter is used to
+    define a Detection object to use in either of these cases, with a completely
+    different set of parameters for each object.
+
+    """
 
     def __init__(self, **kwargs):
         """Initialize Detector.
@@ -161,11 +211,14 @@ class Detector:
 
         # try to find the sources/detections in memory or in the database:
         if self.pars.subtraction:
+            if ds.sub_image is None and ds.image is not None and ds.image.is_sub:
+                ds.sub_image = ds.image
+                ds.image = ds.sub_image.new_image  # back-fill the image from the sub_image
+
             detections = ds.get_detections(prov, session=session)
 
             if detections is None:
                 self.has_recalculated = True
-                raise NotImplementedError( "This needs to be updated for detection on a subtraction." )
 
                 # load the subtraction image from memory
                 # or load using the provenance given in the
@@ -180,13 +233,9 @@ class Detector:
 
                 # TODO -- should probably pass **kwargs along to extract_sources
                 #  in any event, need a way of passing parameters
-                if self.pars.method == 'sep':
-                    detections = self.extract_sources_sep(image)
-                elif self.pars.method == 'sextractor':
-                    psffile = None if self.pars.psf is None else self.pars.psf.get_fullpath()
-                    detections, _ = self.extract_sources_sextractor( image, psffile=psffile )
-                else:
-                    raise ValueError( f"Unknown source extraction method: {self.pars.method}" )
+                #  Question: why is it not enough to just define what you need in the Parameters object?
+                #  Related to issue #50
+                detections, _ = self.extract_sources( image )
 
                 detections.image = image
 
@@ -196,6 +245,7 @@ class Detector:
                     if detections.provenance.id != prov.id:
                         raise ValueError('Provenance mismatch for detections and provenance!')
 
+            ds.sub_image.sources = detections
             ds.detections = detections
 
         else:  # regular image
@@ -220,6 +270,7 @@ class Detector:
                 else:
                     if sources.provenance.id != prov.id:
                         raise ValueError('Provenance mismatch for sources and provenance!')
+
                 psf.image_id = image.id
                 if psf.provenance is None:
                     psf.provenance = prov
@@ -235,30 +286,29 @@ class Detector:
         # make sure this is returned to be used in the next step
         return ds
 
-    def extract_sources( self, image, *args, **kwargs ):
-        """Extract sources.
-
-        Parmaters
-        ---------
-          image: Image
-             The image object to extract sources from
-
-        Returns
-        -------
-          sourcelist, psf
-             sourcelist : a SourceList
-             psf : a PSF (or None if the method doesn't support this)
-
-        """
-
+    def extract_sources(self, image):
+        """Calls one of the extraction methods, based on self.pars.method. """
+        sources = None
+        psf = None
         if self.pars.method == 'sep':
-            return self.extract_sources_sep( image, *args, **kwargs ), None
+            sources = self.extract_sources_sep(image)
         elif self.pars.method == 'sextractor':
-            return self.extract_sources_sextractor( image, *args, **kwargs )
+            if self.pars.subtraction:
+                psffile = None if self.pars.psf is None else self.pars.psf.get_fullpath()
+                sources, _ = self.extract_sources_sextractor(image, psffile=psffile)
+            else:
+                sources, psf = self.extract_sources_sextractor(image)
+        elif self.pars.method == 'filter':
+            if self.pars.subtraction:
+                sources = self.extract_sources_filter(image)
+            else:
+                raise ValueError('Cannot use "filter" method on regular image!')
         else:
-            raise ValueError( "Unknown extraction method {self.pars.method}" )
+            raise ValueError(f'Unknown extraction method "{self.pars.method}"')
 
-    def extract_sources_sextractor( self, image, *args, psffile=None, **kwargs ):
+        return sources, psf
+
+    def extract_sources_sextractor( self, image, psffile=None ):
         tempnamebase = ''.join( random.choices( 'abcdefghijklmnopqrstuvwxyz', k=10 ) )
         sourcepath = pathlib.Path( FileOnDiskMixin.temp_path ) / f'{tempnamebase}.sources.fits'
         psfpath = pathlib.Path( psffile ) if psffile is not None else None
@@ -624,6 +674,7 @@ class Detector:
                                 '-WRITE_XML', 'Y',
                                 '-XML_NAME', psfxmlfile,
                                 '-XML_URL', 'file:///usr/share/psfex/psfex.xsl',
+                                # '-PSFVAR_DEGREES', '4',  # polynomial order for PSF fitting across image
                                 sourcefile ]
                     res = subprocess.run( command, cwd=sourcefile.parent, capture_output=True )
                     if res.returncode == 0:
@@ -703,6 +754,125 @@ class Detector:
         r = np.array(r, dtype=[('rhalf', '<f4')])
         objects = rfn.merge_arrays((objects, r), flatten=True)
         sources = SourceList(image=image, data=objects, format='sepnpy')
+
+        return sources
+
+    def extract_sources_filter(self, image):
+        """Find sources in an image using the matched-filter method.
+
+        If the image has a "score" array, will use that.
+        If not, will apply the PSF of the image to make a score array.
+
+        Sources are detected as points in the score image that are
+        above the given threshold. If points are too close, they
+        will be merged into a single source.
+        The output SourceList will include the aperture and PSF photometry,
+        and the x,y positions will be given using the source centroid.
+
+        # TODO: should we do iterative PSF tapered centroiding?
+
+        Parameters
+        ----------
+        image: Image
+            The image to extract sources from. Must have a score, or a PSF,
+            that can be gotten from one of these places (in order):
+            - a PSF object loaded on the Image object itself.
+            - a zogy_psf attribute attached to the Image object.
+            - a PSF object of the new_image attribute of the Image object.
+            If the image also has a zogy_alpha attribute, it will be used
+            to extract the PSF photometry.
+
+        Returns
+        -------
+        sources: SourceList
+            The list of sources detected in the image.
+            This contains a table where each row represents
+            one source that was detected, along with all its properties.
+
+        """
+        score = image.score.copy()
+
+        if score is None:
+            raise NotImplementedError('Still need to add the matched-filter cross correlation! ')
+
+        psf_image = None
+        if image.psf is not None:
+            psf_image = image.psf.get_clip()
+        elif getattr(image, 'zogy_psf', None) is not None:
+            psf_image = image.zogy_psf
+
+        fwhm = image.fwhm_estimate
+        if fwhm is None:
+            fwhm = image.new_image.fwhm_estimate
+        if fwhm is None and image.psf is not None:
+            fwhm = image.psf.fwhm_pixels
+        if fwhm is None and image.new_image.psf is not None:
+            fwhm = image.new_image.psf.fwhm_pixels
+
+        if fwhm is None:
+            raise RuntimeError("Cannot find a FWHM estimate from the given image or its new_image attribute.")
+
+        # typical scale of PSF is X times the FWHM
+        fwhm_pixels = max(int(np.ceil(fwhm * self.pars.separation_fwhms / image.instrument_object.pixel_scale)), 1)
+        # remove flagged pixels
+        score[image.flags > 0] = np.nan
+
+        # remove the edges
+        border = fwhm_pixels * 2
+        score[:border, :] = np.nan
+        score[-border:, :] = np.nan
+        score[:, :border] = np.nan
+        score[:, -border:] = np.nan
+
+        # normalize the score based on sigma_clipping
+        # TODO: we should check if we still need this after b/g subtraction on the input images
+        mu, sigma = sigma_clipping(score)
+        score = (score - mu) / sigma
+        det_map = abs(score) > self.pars.threshold  # catch negative peaks too (can get rid of them later)
+
+        # dilate the map to merge nearby peaks
+        struct = np.ones((1 + 2 * fwhm_pixels, 1 + 2 * fwhm_pixels))
+        det_map = ndimage.binary_dilation(det_map, structure=struct).astype(det_map.dtype)
+
+        # label the map to get the number of sources
+        labels, num_sources = ndimage.label(det_map)
+        all_idx = np.arange(1, num_sources + 1)
+        # get the x,y positions of the sources (rough estimate)
+        xys = ndimage.center_of_mass(abs(image.data), labels, all_idx)
+        x = np.array([xy[1] for xy in xys])
+        y = np.array([xy[0] for xy in xys])
+        coords = image.wcs.wcs.pixel_to_world(x, y)
+        ra = [c.ra.value for c in coords]
+        dec = [c.dec.value for c in coords]
+
+        label_fluxes = ndimage.sum(image.data, labels, all_idx)  # sum image values where labeled
+
+        # run aperture and iterative PSF photometry
+        fluxes = ndimage.labeled_comprehension(image.psfflux, labels, all_idx, np.max, float, np.nan)
+
+        region_sizes = [np.sum(labels == i) for i in all_idx]
+
+        def peak_score(arr):
+            """Find the best score, whether positive or negative. """
+            return arr[np.unravel_index(np.nanargmax(abs(arr)), arr.shape)]
+
+        scores = ndimage.labeled_comprehension(score, labels, all_idx, peak_score, float, np.nan)
+
+        def count_nans(arr):
+            return np.sum(np.isnan(arr))
+
+        num_flagged = ndimage.labeled_comprehension(score, labels, all_idx, count_nans, int, 0)
+
+        # TODO: add a correct aperture photometry, instead of the label_fluxes which only sums the labeled pixels
+
+        tab = astropy.table.Table(
+            [ra, dec, x, y, label_fluxes, fluxes, region_sizes, num_flagged, scores],
+            names=('ra', 'dec', 'x', 'y', 'flux', 'psf_flux', 'num_pixels', 'num_flagged', 'score'),
+            meta={'fwhm': fwhm, 'threshold': self.pars.threshold}
+        )
+
+        sources = SourceList(data=tab, format='filter', num_sources=num_sources)
+        sources.labelled_regions = labels  # this is not saved with the SourceList, but added for debugging/testing!
 
         return sources
 

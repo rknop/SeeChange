@@ -20,6 +20,7 @@ from pipeline.utils import parse_session, parse_ra_hms_to_deg, parse_dec_dms_to_
 
 from improc.bitmask_tools import dilate_bitflag
 from improc.inpainting import Inpainter
+from improc.alignment import ImageAligner
 from improc.tools import sigma_clipping
 
 from util.config import Config
@@ -103,7 +104,9 @@ class Coadder:
     def __init__( self, **kwargs ):
         self.pars = ParsCoadd(**kwargs)
         self.inpainter = Inpainter(**self.pars.inpainting)
-        # the aligner object is created in the image object
+        self.pars.inpainting = self.inpainter.pars.get_critical_pars()  # add Inpainter defaults into this dictionary
+        self.aligner = ImageAligner(**self.pars.alignment)
+        self.pars.alignment = self.aligner.pars.get_critical_pars()  # add ImageAligner defaults into this dictionary
 
     def _estimate_background(self, data):
         """Get the mean and noise RMS of the background of the given image.

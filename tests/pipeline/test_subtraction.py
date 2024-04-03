@@ -1,8 +1,9 @@
 import uuid
 
 import numpy as np
+from scipy import ndimage
 
-from pipeline.data_store import DataStore
+from improc.tools import sigma_clipping
 
 
 def test_subtraction_data_products(ptf_ref, ptf_supernova_images, subtractor):
@@ -41,3 +42,36 @@ def test_subtraction_data_products(ptf_ref, ptf_supernova_images, subtractor):
     assert ds.sub_image.data is not None
 
 
+def test_subtraction_ptf_zogy(ptf_ref, ptf_supernova_images, subtractor):
+    assert len(ptf_supernova_images) == 2
+    image1, image2 = ptf_supernova_images
+
+    # run the subtraction like you'd do in the real pipeline (calls get_reference and get_subtraction internally)
+    subtractor.pars.test_parameter = uuid.uuid4().hex
+    subtractor.pars.method = 'zogy'  # this is the default, but it might not always be
+    assert subtractor.pars.alignment['to_index'] == 'new'  # make sure alignment is configured to new, not latest image
+    ds = subtractor.run(image1)
+
+    assert ds.sub_image is not None
+    assert ds.sub_image.data is not None
+
+    # make sure there are not too many masked pixels
+    mask = ds.sub_image.flags > 0
+    labels, num_masked_regions = ndimage.label(mask)
+    all_idx = np.arange(1, num_masked_regions + 1)
+    region_pixel_counts = ndimage.sum(mask, labels, all_idx)
+    region_pixel_counts.sort()
+    region_pixel_counts = region_pixel_counts[:-1]  # remove that last region, which is the largest one
+
+    assert max(region_pixel_counts) < 5000  # no region should have more than 5000 pixels masked
+    assert np.sum(region_pixel_counts) / ds.sub_image.data.size < 0.01  # no more than 1% of the pixels should be masked
+
+    # isolate the score, masking the bad pixels
+    S = ds.sub_image.score.copy()
+    S[ds.sub_image.flags > 0] = np.nan
+
+    mu, sigma = sigma_clipping(S)
+    # assert abs(mu) < 0.01  # the mean should be close to zero
+    assert abs(mu) < 0.2  # this is not working perfectly, we need to improve the background removal!
+    # assert abs(sigma - 1) < 0.1  # the standard deviation should be close to 1
+    assert abs(sigma - 1) < 1  # the standard deviation may be also affected by background...

@@ -6,10 +6,9 @@ from models.base import CODE_ROOT
 from pipeline.utils import read_fits_image
 
 
-def test_read_fits_image():
-    filename = os.path.join(CODE_ROOT, 'data/test_data/DECam_examples/c4d_20221002_040239_r_v1.24.fits')
-
+def test_read_fits_image(decam_fits_image_filename, cache_dir):
     # by default only get the data
+    filename = os.path.join(cache_dir, 'DECam', decam_fits_image_filename)
     data = read_fits_image(filename)
 
     assert data.shape == (4094, 2046)

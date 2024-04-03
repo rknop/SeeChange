@@ -57,3 +57,21 @@ def listify( val, require_string=False ):
         if require_string and ( not isinstance( val, str ) ):
             raise TypeError( f'listify wants a string, not a {type(val)}' )
         return [ val ]
+
+
+def remove_empty_folders(path, remove_root=True):
+    """Recursively remove any empty folders in the given path.
+
+    Parameters
+    ----------
+    path: str or pathlib.Path
+        The path to remove empty folders from.
+    remove_root: bool
+        If True, remove the root folder as well if it is empty.
+    """
+    path = pathlib.Path(path)
+    if path.is_dir():
+        for subpath in path.iterdir():
+            remove_empty_folders(subpath, remove_root=True)
+        if remove_root and not any(path.iterdir()):
+            path.rmdir()

@@ -45,22 +45,25 @@ def test_download_GaiaDR3(data_dir):
 
 def test_gaiadr3_excerpt_failures( ztf_datastore_uncommitted, ztf_gaiadr3_excerpt ):
     ds = ztf_datastore_uncommitted
+    try:
+        # Make sure it fails if we give it a ridiculous max mag
+        with pytest.raises( CatalogNotFoundError, match="Failed to fetch Gaia DR3 stars at" ):
+            catexp = fetch_GaiaDR3_excerpt( ds.image, maxmags=5.0, magrange=4, minstars=50 )
 
-    # Make sure it fails if we give it a ridiculous max mag
-    with pytest.raises( CatalogNotFoundError, match="Failed to fetch Gaia DR3 stars at" ):
-        catexp = fetch_GaiaDR3_excerpt( ds.image, maxmags=5.0, magrange=4, minstars=50 )
+        # ...but make sure it succeeds if we also give it a reasonable max mag
+        catexp = fetch_GaiaDR3_excerpt( ds.image, maxmags=[5.0, 20.0], magrange=4.0, minstars=50 )
+        assert catexp.id == ztf_gaiadr3_excerpt.id
 
-    # ...but make sure it succeeds if we also give it a reasonable max mag
-    catexp = fetch_GaiaDR3_excerpt( ds.image, maxmags=[5.0, 20.0], magrange=4.0, minstars=50 )
-    assert catexp.id == ztf_gaiadr3_excerpt.id
+        # Make sure it fails if we ask for too many stars
+        with pytest.raises( CatalogNotFoundError, match="Failed to fetch Gaia DR3 stars at" ):
+            catexp = fetch_GaiaDR3_excerpt( ds.image, maxmags=[20.0], magrange=4.0, minstars=50000 )
 
-    # Make sure it fails if we ask for too many stars
-    with pytest.raises( CatalogNotFoundError, match="Failed to fetch Gaia DR3 stars at" ):
-        catexp = fetch_GaiaDR3_excerpt( ds.image, maxmags=[20.0], magrange=4.0, minstars=50000 )
+        # Make sure it fails if mag range is too small
+        with pytest.raises( CatalogNotFoundError, match="Failed to fetch Gaia DR3 stars at" ):
+            catexp = fetch_GaiaDR3_excerpt( ds.image, maxmags=[20.0], magrange=0.01, minstars=50 )
 
-    # Make sure it fails if mag range is too small
-    with pytest.raises( CatalogNotFoundError, match="Failed to fetch Gaia DR3 stars at" ):
-        catexp = fetch_GaiaDR3_excerpt( ds.image, maxmags=[20.0], magrange=0.01, minstars=50 )
+    finally:
+        catexp.delete_from_disk_and_database()
 
 
 def test_gaiadr3_excerpt( ztf_datastore_uncommitted, ztf_gaiadr3_excerpt ):

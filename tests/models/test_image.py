@@ -12,10 +12,13 @@ from astropy.io import fits
 import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError
 
-import util.config as config
 from models.base import SmartSession, FileOnDiskMixin
 from models.image import Image
 from models.enums_and_bitflags import image_preprocessing_inverse, string_to_bitflag
+from models.psf import PSF
+from models.source_list import SourceList
+from models.world_coordinates import WorldCoordinates
+from models.zero_point import ZeroPoint
 
 from tests.conftest import rnd_str
 from tests.fixtures.simulated import ImageCleanup
@@ -134,7 +137,7 @@ def test_image_archive_singlefile(sim_image_uncommitted, provenance_base, archiv
     im.data = np.float32( im.raw_data )
     im.flags = np.random.randint(0, 100, size=im.raw_data.shape, dtype=np.uint16)
 
-    archivebase = f"{test_config.value('archive.local_read_dir')}/{test_config.value('archive.path_base')}"
+    archive_dir = archive.test_folder_path
     single_fileness = test_config.value('storage.images.single_file')
 
     try:
@@ -146,8 +149,9 @@ def test_image_archive_singlefile(sim_image_uncommitted, provenance_base, archiv
             # Make sure that the archive is *not* written when we tell it not to.
             im.save( no_archive=True )
             assert im.md5sum is None
+            archive_path = os.path.join(archive_dir, im.filepath)
             with pytest.raises(FileNotFoundError):
-                ifp = open( f'{archivebase}{im.filepath}', 'rb' )
+                ifp = open( archive_path, 'rb' )
                 ifp.close()
             im.remove_data_from_disk()
 
@@ -158,7 +162,7 @@ def test_image_archive_singlefile(sim_image_uncommitted, provenance_base, archiv
                 localmd5.update( ifp.read() )
             assert localmd5.hexdigest() == im.md5sum.hex
             archivemd5 = hashlib.md5()
-            with open( f'{archivebase}{im.filepath}', 'rb' ) as ifp:
+            with open( archive_path, 'rb' ) as ifp:
                 archivemd5.update( ifp.read() )
             assert archivemd5.hexdigest() == im.md5sum.hex
 
@@ -185,7 +189,7 @@ def test_image_archive_singlefile(sim_image_uncommitted, provenance_base, archiv
             # Make sure we can purge the archive
             im.delete_from_disk_and_database(session=session, commit=True)
             with pytest.raises(FileNotFoundError):
-                ifp = open( f'{archivebase}{im.filepath}', 'rb' )
+                ifp = open( archive_path, 'rb' )
                 ifp.close()
             assert im.md5sum is None
 
@@ -205,7 +209,7 @@ def test_image_archive_multifile(sim_image_uncommitted, provenance_base, archive
     im.flags = np.random.randint(0, 100, size=im.raw_data.shape, dtype=np.uint16)
     im.weight = None
 
-    archivebase = f"{test_config.value('archive.local_read_dir')}/{test_config.value('archive.path_base')}"
+    archive_dir = archive.test_folder_path
     single_fileness = test_config.value('storage.images.single_file')
 
     try:
@@ -238,7 +242,7 @@ def test_image_archive_multifile(sim_image_uncommitted, provenance_base, archive
                     m = hashlib.md5()
                     m.update( ifp.read() )
                     assert m.hexdigest() == localmd5s[fullpath].hexdigest()
-                with open( f'{archivebase}{im.filepath}{ext}', 'rb' ) as ifp:
+                with open( os.path.join(archive_dir, im.filepath) + ext, 'rb' ) as ifp:
                     m = hashlib.md5()
                     m.update( ifp.read() )
                     assert m.hexdigest() == localmd5s[fullpath].hexdigest()
@@ -1216,6 +1220,7 @@ def test_image_filename_conventions(sim_image1, test_config):
     for f in sim_image1.get_fullpath(as_list=True):
         assert os.path.isfile(f)
         os.remove(f)
+    original_filepath = sim_image1.filepath
 
     # try to set the name convention to None, to load the default hard-coded one
     convention = test_config.value('storage.images.name_convention')
@@ -1257,6 +1262,7 @@ def test_image_filename_conventions(sim_image1, test_config):
 
     finally:  # return to the original convention
         test_config.set_value('storage.images.name_convention', convention)
+        sim_image1.filepath = original_filepath  # this will allow the image to delete itself in the teardown
 
 
 def test_image_multifile(sim_image_uncommitted, provenance_base, test_config):
@@ -1333,5 +1339,42 @@ def test_image_multifile(sim_image_uncommitted, provenance_base, test_config):
         test_config.set_value('storage.images.single_file', single_fileness)
 
 
+def test_image_products_are_deleted(ptf_datastore, data_dir, archive):
+    ds = ptf_datastore  # shorthand
 
+    # check the datastore comes with all these objects
+    assert isinstance(ds.image, Image)
+    assert isinstance(ds.psf, PSF)
+    assert isinstance(ds.sources, SourceList)
+    assert isinstance(ds.wcs, WorldCoordinates)
+    assert isinstance(ds.zp, ZeroPoint)
+    # TODO: add more data types?
 
+    # make sure the image has the same objects
+    im = ds.image
+    assert im.psf == ds.psf
+    assert im.sources == ds.sources
+    assert im.wcs == ds.wcs
+    assert im.zp == ds.zp
+
+    # make sure the files are there
+    local_files = []
+    archive_files = []
+    for obj in [im, im.psf, im.sources]:  # TODO: add WCS when it becomes a FileOnDiskMixin
+        for file in obj.get_fullpath(as_list=True):
+            archive_file = file[len(obj.local_path)+1:]  # grap the end of the path only
+            archive_file = os.path.join(archive.test_folder_path, archive_file)  # prepend the archive path
+            assert os.path.isfile(file)
+            assert os.path.isfile(archive_file)
+            local_files.append(file)
+            archive_files.append(archive_file)
+
+    # delete the image and all its downstreams
+    im.delete_from_disk_and_database(remove_folders=True, remove_downstream_data=True)
+
+    # make sure the files are gone
+    for file in local_files:
+        assert not os.path.isfile(file)
+
+    for file in archive_files:
+        assert not os.path.isfile(file)

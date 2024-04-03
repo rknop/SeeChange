@@ -86,7 +86,8 @@ subtraction:
 
 detection:
   subtraction: true
-  threshold: 3
+  method: filter  # when using ZOGY subtraction, detection method must be "filter"!
+  threshold: 5.0
 
 cutting:
   cutout_size: 20
@@ -163,7 +164,7 @@ DECam:
   flattype: externally_supplied
   calibfiles:
     mjd: 56876
-    urlbase: https://portal.nersc.gov/cfs/m2218/decam_calibration_files/
+    urlbase: https://portal.nersc.gov/cfs/m4616/decam_calibration_files/
     linearity: DECamMasterCal_56475/linearity/linearity_table_v0.4.fits
     fringebase: DECamMasterCal_56876/fringecor/DECam_Master_20131115v1
     flatbase: DECamMasterCal_56876/starflat/DECam_Master_20130829v3

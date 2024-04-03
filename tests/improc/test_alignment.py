@@ -114,7 +114,10 @@ def test_alignment_in_image( ptf_reference_images, code_version ):
 
     finally:
         ImageAligner.cleanup_temp_images()
+        for im in new_image.aligned_images:
+            im.delete_from_disk_and_database()
         new_image.delete_from_disk_and_database(remove_downstream_data=True)
+
 
 
 def check_aligned(image1, image2):

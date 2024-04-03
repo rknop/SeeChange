@@ -79,3 +79,138 @@ def sigma_clipping(values, nsigma=3.0, iterations=5, axis=None, median=False):
             nans = new_nans
 
     return mean, rms
+
+
+def make_gaussian(sigma_x=2.0, sigma_y=None, rotation=0.0, norm=1, imsize=None):
+    """
+    Create a small image of a Gaussian centered around the middle of the image.
+
+    Parameters
+    ----------
+    sigma_x: float
+        The sigma width parameter.
+        If sigma_x and sigma_y are specified, this will be for the x-axis.
+    sigma_y: float or None
+        The sigma width parameter.
+        If None, will use sigma_x for both axes.
+    rotation: float
+        The rotation angle in degrees.
+        The Gaussian will be rotated counter-clockwise by this angle.
+        If sigma_y is equal to sigma_x (or None) this has no effect.
+    norm: int
+        Normalization of the Gaussian. Choose value:
+        0- do not normalize, peak will have a value of 1.0
+        1- normalize so the sum of the image is equal to 1.0
+        2- normalize the squares: the sqrt of the sum of squares is equal to 1.0
+    imsize: int or None
+        Number of pixels on a side for the output.
+        If None, will automatically choose the smallest odd integer that is larger than max(sigma_x, sigma_y) * 10.
+
+    Returns
+    -------
+    output: array
+        A 2D array of the Gaussian.
+    """
+    if sigma_y is None:
+        sigma_y = sigma_x
+
+    if imsize is None:
+        imsize = int(max(sigma_x, sigma_y) * 10)
+        if imsize % 2 == 0:
+            imsize += 1
+
+    if norm not in [0, 1, 2]:
+        raise ValueError('norm must be 0, 1, or 2')
+
+    x = np.arange(imsize)
+    y = np.arange(imsize)
+    x, y = np.meshgrid(x, y)
+
+    x0 = imsize // 2
+    y0 = imsize // 2
+    # TODO: what happens if imsize is even?
+
+    x = x - x0
+    y = y - y0
+
+    rotation = rotation * np.pi / 180.0  # TODO: add option to give rotation in different units?
+
+    x_rot = x * np.cos(rotation) - y * np.sin(rotation)
+    y_rot = x * np.sin(rotation) + y * np.cos(rotation)
+
+    output = np.exp(-0.5 * (x_rot ** 2 / sigma_x ** 2 + y_rot ** 2 / sigma_y ** 2))
+
+    if norm == 1:
+        output /= np.sum(output)
+    elif norm == 2:
+        output /= np.sqrt(np.sum(output ** 2))
+
+    return output
+
+
+def make_cutouts(data, x, y, size=15):
+    """Make square cutouts around the given positions in the data.
+
+    Parameters
+    ----------
+    data: numpy.ndarray
+        The image to make the cutouts from.
+    x: numpy.ndarray or list
+        The x positions of the cutouts.
+    y: numpy.ndarray or list
+        The y positions of the cutouts.
+    size: int
+        The size of the cutouts. Default is 15.
+
+    Returns
+    -------
+    cutouts: 3D np.ndarray
+        The cutouts, with shape (len(x), size, size).
+    """
+    cutouts = np.full((len(x), size, size), np.nan)  # preallocate!
+    down = int(np.floor((size - 1) / 2))
+    up = int(np.ceil((size - 1) / 2))
+
+    for i, (x0, y0) in enumerate(zip(x, y)):
+        x0, y0 = int(np.round(x0)), int(np.round(y0))
+        if x0 - down < 0:
+            if x0 + up < 0:
+                continue  # leave the cutout as NaNs
+            left = 0
+            offset_left = down - x0
+        else:
+            left = x0 - down
+            offset_left = 0
+
+        if x0 + up >= data.shape[1]:
+            if x0 - down >= data.shape[1]:
+                continue  # leave the cutout as NaNs
+            right = data.shape[1]
+            offset_right = size - (x0 + up - data.shape[1] + 1)
+        else:
+            right = x0 + up
+            offset_right = size
+
+        if y0 - down < 0:
+            if y0 + up < 0:
+                continue  # leave the cutout as NaNs
+            bottom = 0
+            offset_bottom = down - y0
+        else:
+            bottom = y0 - down
+            offset_bottom = 0
+
+        if y0 + up >= data.shape[0]:
+            if y0 - down >= data.shape[0]:
+                continue  # leave the cutout as NaNs
+            top = data.shape[0]
+            offset_top = size - (y0 + up - data.shape[0] + 1)
+        else:
+            top = y0 + up
+            offset_top = size
+        try:
+            cutouts[i][offset_bottom:offset_top, offset_left:offset_right] = data[bottom:top + 1, left:right + 1]
+        except:
+            raise
+
+    return cutouts
