@@ -52,6 +52,8 @@ def test_subtraction_ptf_zogy(ptf_ref, ptf_supernova_images, subtractor):
     assert subtractor.pars.alignment['to_index'] == 'new'  # make sure alignment is configured to new, not latest image
     ds = subtractor.run(image1)
 
+    import pdb; pdb.set_trace()
+    
     assert ds.sub_image is not None
     assert ds.sub_image.data is not None
 
