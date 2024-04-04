@@ -6,6 +6,7 @@ import subprocess
 
 import astropy.io
 from astropy.wcs import WCS
+from astropy import units
 
 
 from models.base import FileOnDiskMixin, _logger
@@ -71,7 +72,7 @@ def solve_wcs_scamp( sources, catalog, crossid_radius=2.,
 
       sources_regxy: bool, default True
         If sources_regfile is non-none, write out the ds9 region file in
-        image coordinates; otherwise, world coordinates.        
+        image coordinates; otherwise, world coordinates.
 
       catalog_regfile: str or Path, default None
         If non-None, will write out a ds9 region file for debugging purposes.
@@ -81,7 +82,7 @@ def solve_wcs_scamp( sources, catalog, crossid_radius=2.,
       catalog_refxy: bool, default False
         If catalog_regfile is non-none, write out the ds9 region file in
         image coordinates; otherwise, world coordinates.
-    
+
     Returns
     -------
       astropy.wcs.WCS
@@ -98,7 +99,7 @@ def solve_wcs_scamp( sources, catalog, crossid_radius=2.,
     # Scamp will have written a file stripping .fits from sourcefile and adding .head
     # I'm sad that there's not an option to scamp to explicitly specify this output filename.
     headfile = sourcefile.parent / f"{sourcefile.name[:-5]}.head"
-    
+
     sourceshdr, sources = ldac.get_table_from_ldac( sourcefile, imghdr_as_header=True )
     cathdr, cat = ldac.get_table_from_ldac( catfile, imghdr_as_header=True )
 
@@ -189,25 +190,42 @@ def solve_wcs_scamp( sources, catalog, crossid_radius=2.,
             mergedoutcatfile = pathlib.Path( FileOnDiskMixin.temp_path ) / f"scamp_merged_{barf}_1.fits"
             fullouthdr, fulloutcat = ldac.get_table_from_ldac( fulloutcatfile )
             sourcescat = fulloutcat[ fulloutcat['CATALOG_NUMBER'] == 1 ]
-            catalogcat = fulloutcat[ fulloutcat['CATALOG_NUMBER'] == 2 ]
+            catalogcat = fulloutcat[ fulloutcat['CATALOG_NUMBER'] == 0 ]
 
-            for regfile, cat, isxy in zip( [ sources_regfile, catalog_regfile ],
-                                           [ sourcescat, catalogcat ],
-                                           [ sources_regxy, catalog_regxy ] ):
+            joincat = astropy.table.join( sourcescat, catalogcat, keys=['SOURCE_NUMBER'] )
+            joincat['X_IMAGE'] = joincat['X_IMAGE_1']
+            joincat['Y_IMAGE'] = joincat['Y_IMAGE_1']
+            joincat['ALPHA_J2000'] = joincat['ALPHA_J2000_2']
+            joincat['DELTA_J2000'] = joincat['DELTA_J2000_2']
+
+            def _matchnamer( p ):
+                p = pathlib.Path( p )
+                base = p.name[:-4] if p.name[-4:] == '.reg' else p.name
+                return p.parent / f'{base}_matched.reg'
+            matchcat_regfile = _matchnamer( catalog_regfile )
+            matchsrc_regfile = _matchnamer( sources_regfile )
+
+            for regfile, srclist, isxy, rad, color in zip(
+                    [ sources_regfile, catalog_regfile, matchsrc_regfile, matchcat_regfile ],
+                    [ sourcescat, catalogcat, joincat, joincat ],
+                    [ sources_regxy, catalog_regxy, True, False ],
+                    [ 5, 5, 6, 6 ], [ 'green', 'green', 'yellow', 'yellow' ] ):
                 if regfile is not None:
                     with open( regfile, "w" ) as ofp:
-                        for row in cat:
-                            if isxy:
-                                ofp.write( f'image;circle({row["X_IMAGE"]:.2f},{row["Y_IMAGE"]:.2f},10) '
-                                           f'# color=green width=2\n' )
-                            else:
-                                ofp.write( f'icrs;circle({row["X_WORLD"]:.6f},{row["Y_WORLD"]:.6f},3" '
-                                           f'# color=green width=2\n' )
-            
+                        if isxy:
+                            rad /= wcs.proj_plane_pixel_scales()[0].to( units.arcsec ).value
+                            for row in srclist:
+                                ofp.write( f'image;circle({row["X_IMAGE"]:.2f},{row["Y_IMAGE"]:.2f},{rad}) '
+                                           f'# color={color} width=2\n' )
+                        else:
+                            for row in srclist:
+                                ofp.write( f'icrs;circle({row["ALPHA_J2000"]:.6f},{row["DELTA_J2000"]:.6f},{rad}" '
+                                           f'# color={color} width=2\n' )
+
             import pdb; pdb.set_trace()
             pass
-        
-        
+
+
         return wcs
 
     finally:

@@ -143,6 +143,14 @@ class ImageAligner:
         warpedim.calculate_coordinates()
         warpedim.zp = image.zp  # zp not available when loading from DB (zp.image_id doesn't point to warpedim)
         # TODO: are the WorldCoordinates also included? Are they valid for the warped image?
+        #
+        # No. The WCS that the warped image should have, assuming that
+        # swarp was used for the transformation, is currently in the
+        # header of FITS file for the warped image.  If there are any
+        # WCS header keywords that got copied from the database entry
+        # for Image, they will be wrong for warpedim.  Any size values
+        # from the databse entry will be wrong as well, unless they
+        # happen accidentally to be right.
 
         warpedim.type = 'Warped'
         warpedim.bitflag = 0
@@ -197,38 +205,53 @@ class ImageAligner:
         #
         # SWarp will normally align a bunch of images to the first
         # image, cropping them, and summing them, which is more (and
-        # less) than what we want.  In order to get it to align a single
-        # image to another single image, we rely on behavior that's
-        # mentioned almost as an afterthought in the SWarp manual: "To
-        # implement the unusual output features required, one must write
-        # a coadd.head ASCII file that contains a custom anisotropic
-        # scaling matrix."  Practically speaking, we put the WCS that we
-        # want the output image to have into <outim>.head.  SWarp will
-        # then warp the input image so that the requested WCS will be
-        # the right one for the warped image.
+        # less) than what we want.  This alignment is based on the WCS
+        # in every image; the final image will have the WCS of the first
+        # image in the list (though modified if the final image was
+        # cropped).  In order to get it to align a single image to
+        # another single image, we rely on behavior that's mentioned
+        # almost as an afterthought in the SWarp manual: "To implement
+        # the unusual output features required, one must write a
+        # coadd.head ASCII file that contains a custom anisotropic
+        # scaling matrix."  (It turns out that this file isn't really
+        # coadd.head, but <outim>.head, where the output FITS file is
+        # <outim>.fits.  coadd.fits is the default output file from
+        # swarp.)  Practically speaking, we put the WCS (and NAXIS*
+        # keywords) that we want the output image to have into
+        # <outim>.head.  SWarp will then warp the input image (assuming
+        # that the input image's WCS is perfect) so that the requested
+        # WCS will be the right one for the warped image.
         #
         # We *could* just put the target image's WCS in the coadd.head
         # file, and then swarp the source image.  However, that spatial
         # transformation is the combination of two transformation
-        # functions (from the source image to RA/Dec via its WCS, and
-        # then from RA/Dec to the target image WCS).  It may be that the
-        # Gaia WCSes we use nowadays are good enough for this, but we
-        # can do better by making a *direct* transformation between the
-        # two images.  To this end, we use the *source image's* source
-        # list as the catalog, and use Scamp to calculate the
-        # transformation necessary from the target image to the source
-        # image.  The resultant WCS is now a WCS for the target image,
-        # only it's using the RA/Decs calculated from the pixel
-        # positions in the image's source list.  We then tell SWarp to
-        # warp the source image so that it has this new WCS, and that
-        # will warp the pixels so that they will give all the objects on
-        # the source image the same RA/Dec that they have right now,
-        # only using the WCS that was derived for the target
-        # image... meaning the source image has been aligned with the
-        # target image.  There is one more wrinkle: we have to tell
-        # SWarp the shape of the output image, since it will default
-        # to the shape of the input image.  But, we want it to have
-        # the shape of the target image.
+        # functions (from the source image to RA/Dec via the image's
+        # WCS, and then from RA/Dec to the target image via the target's
+        # WCS).  It may be that the Gaia WCSes we use nowadays are good
+        # enough for this, but we can do better by making a *direct*
+        # transformation between the two images.
+        #
+        # To this end, we use the *source image's* source list as the
+        # catalog, and use Scamp to calculate the WCS that transforms
+        # from the pixel positions on the target image to RA/Dec of
+        # corresponding objects on the source image.  This pretends that
+        # the WCS of the source image is perfect, which is the
+        # assumption that swarp is going to make when warping the source
+        # image; effectively, we've made a direct transformation between
+        # pixel positions on the two images.
+        #
+        # We then tell SWarp to warp the source image so that it has
+        # this new WCS.  It will warp the pixels so that they will give
+        # all the objects on the source image the same RA/Dec that they
+        # have right now, only using the WCS that was derived for the
+        # pixel positions of the objects on the target image... meaning
+        # the source image has been aligned with the target image.
+        # There is one more wrinkle: we have to tell SWarp the shape of
+        # the output image, since it will default to the shape of the
+        # input image.  But, we want it to have the shape of the target
+        # image.  We can do this by making a header that combines the
+        # NAXIS* keywords from the target imag with the WCS we found
+        # with scamp
         #
         # (This mode of operation is not well-documented in the SWarp
         # manual, which assumes most people want to coadd with cropping,
@@ -244,8 +267,9 @@ class ImageAligner:
             ldac.save_table_as_ldac( astropy.table.Table( targetdat ), targetcat,
                                      imghdr=target_sources.info, overwrite=True )
 
+            # Scamp it up to get the WCS for the target image using
+            #  the source image's RA/Dec as the alignment catalog
             import pdb; pdb.set_trace()
-            # Scamp it up
             wcs = improc.scamp.solve_wcs_scamp(
                 targetcat,
                 imagecat,
@@ -256,8 +280,8 @@ class ImageAligner:
                 min_frac_matched=self.pars.min_frac_matched,
                 min_matched=self.pars.min_matched,
                 max_arcsec_residual=self.pars.max_arcsec_residual,
-                sources_regfile='sources.regs',
-                catalog_regfile='catalog.regs'
+                sources_regfile='sources.reg',
+                catalog_regfile='catalog.reg'
             )
 
             # Write out the .head file that swarp will use to figure out what to do
