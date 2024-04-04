@@ -222,8 +222,6 @@ def solve_wcs_scamp( sources, catalog, crossid_radius=2.,
                                 ofp.write( f'icrs;circle({row["ALPHA_J2000"]:.6f},{row["DELTA_J2000"]:.6f},{rad}" '
                                            f'# color={color} width=2\n' )
 
-            import pdb; pdb.set_trace()
-            pass
 
 
         return wcs
