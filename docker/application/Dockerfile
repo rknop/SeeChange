@@ -28,13 +28,13 @@
 #     included_code_build
 #       conductor_build
 #     build_selenium
-#   included_code
-#     conductor
-#   bindmount_code
+#   included_code      ** True production image
+#     conductor        ** Image used by the conductor
+#   bindmount_code     ** Development production image (i.e. no selenium)
 #     conductor_bindmount
 #   base_selenium
-#     test_included    ** Image used in tests to run the tests
-#     test_bindmount
+#     test_included
+#     test_bindmount   ** Image used in tests to run the tests
 #
 # As of 2024-06-10, the sizes of images from the various stages are as follows:
 #   base                1.18GB
@@ -62,7 +62,7 @@
 
 FROM rknop/devuan-daedalus-rknop AS base
 
-MAINTAINER Rob Knop <raknop@lbl.gov>
+LABEL maintainer="Rob Knop <raknop@lbl.gov>"
 
 SHELL ["/bin/bash", "-c"]
 
@@ -220,7 +220,25 @@ COPY requirements.txt /seechange/requirements.txt
 
 RUN source /venv/bin/activate \
     && pip install --upgrade pip setuptools wheel \
-    && pip install  -r /seechange/requirements.txt
+    && pip install  -r /seechange/requirements.txt \
+    && pip install torch --index-url https://download.pytorch.org/whl/cpu \
+    && pip install https://storage.googleapis.com/tensorflow/versions/2.16.1/tensorflow_cpu-2.16.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+
+# Install RBbot, needed for the R/B conversion.  Hopefully we'll get an
+# exported model that will run just with pytorch and won't need RBBot,
+# because RBBot has other dependencies that bloat the dockerfile by an
+# extra 2GB (e.g. tensorflow)
+
+# NOTE -- as of this writing, RBBot is a private repository, so
+# most people can't build the Dockerfile any more
+COPY extern/RBbot /usr/src/seechange/RBbot
+RUN source /venv/bin/activate \
+    && cd RBbot \
+    && git archive -o ../RBbot.tar seechange \
+    && mkdir /RBbot \
+    && cd /RBbot \
+    && tar xf /usr/src/seechange/RBbot.tar \
+    && pip install -e .
 
 # ======================================================================
 # A small addendum to build that adds selenium-firefox to /venv
@@ -303,7 +321,10 @@ FROM base AS bindmount_code
 
 COPY --from=build /usr/bin/hotpants /usr/bin/hotpants
 COPY --from=build /venv/ /venv/
-ENV PATH=/venv/bin:$PATH
+# NOTE : remove this if the RBbot dependency goes away,
+#   or if the RBbot install is made cleaner
+COPY --from=build /RBbot/ /RBbot/
+ENV PATH /venv/bin:$PATH
 
 ENV PYTHONPATH "/seechange"
 WORKDIR /seechange
@@ -318,7 +339,10 @@ FROM base AS included_code
 
 COPY --from=build /usr/bin/hotpants /usr/bin/hotpants
 COPY --from=build /venv/ /venv/
-ENV PATH=/venv/bin:$PATH
+# NOTE : remove this if the RBbot dependency goes away,
+#   or if the RBbot install is made cleaner
+COPY --from=build /RBbot/ /RBbot/
+ENV PATH /venv/bin:$PATH
 
 COPY --from=included_code_build /seechange/lib /seechange/lib
 COPY default_config.yaml /seechange/default_config.yaml
@@ -369,7 +393,7 @@ CMD [ "./run_conductor.sh", "8080" ]
 # conductor target is that it doesn't COPY the conductor code from the
 # conductor_build target.
 
-FROM bindmount_code as conductor_bindmount
+FROM bindmount_code AS conductor_bindmount
 
 RUN mkdir /webservice_code
 WORKDIR /webservice_code
@@ -407,7 +431,10 @@ FROM base_selenium AS test_included
 
 COPY --from=build_selenium /usr/bin/hotpants /usr/bin/hotpants
 COPY --from=build_selenium /venv/ /venv/
-ENV PATH=/venv/bin:$PATH
+# NOTE : remove this if the RBbot dependency goes away,
+#   or if the RBbot install is made cleaner
+COPY --from=build /RBbot/ /RBbot/
+ENV PATH /venv/bin:$PATH
 
 COPY --from=included_code_build /seechange/lib /seechange/lib
 COPY default_config.yaml /seechange/default_config.yaml
@@ -432,7 +459,10 @@ FROM base_selenium AS test_bindmount
 
 COPY --from=build_selenium /usr/bin/hotpants /usr/bin/hotpants
 COPY --from=build_selenium /venv/ /venv/
-ENV PATH=/venv/bin:$PATH
+# NOTE : remove this if the RBbot dependency goes away,
+#   or if the RBbot install is made cleaner
+COPY --from=build /RBbot/ /RBbot/
+ENV PATH /venv/bin:$PATH
 
 ENV PYTHONPATH "/seechange"
 WORKDIR /seechange
