@@ -146,10 +146,14 @@ def download_gaia_dr3( minra, maxra, mindec, maxdec, padding=0.1, minmag=18., ma
     Will Get a square on the sky given the limits, with the limits
     fractionally expanded at each edge by padding.
 
+    NOTE: the code assumes that the RA range is not more than 90° (which
+    is not realistic anyway, it should always be less than a few
+    degrees).
+    
     minra: float
-       Minimum ra of the image we're trying to match.
+       Minimum ra (degrees) of the image we're trying to match.
     maxra: float
-       Maximum ra of the image we're trying to match.
+       Maximum ra (degrees) of the image we're trying to match.
     mindec: float
        Minimum dec of the image we're trying to match.
     maxdec: float
@@ -188,9 +192,16 @@ def download_gaia_dr3( minra, maxra, mindec, maxdec, padding=0.1, minmag=18., ma
     if maxdec < mindec:
         mindec, maxdec = maxdec, mindec
 
+    # Handle ra that spans 0°: make
+    #   minra negative, fix that later
+    if maxra - minra > 90.:
+        maxra, minra = minra, maxra
+        minra -= 360.
+    
     ra = ( maxra + minra ) / 2.
-    dec = ( maxdec + mindec ) / 2.
     dra = maxra - minra
+    ra = ra if ra >= 0. else ra + 360.    # Make sure ra is non-negative
+    dec = ( maxdec + mindec ) / 2.
     ddec = maxdec - mindec
     ralow = minra - padding * dra
     rahigh = maxra + padding * dra
@@ -303,8 +314,8 @@ def download_gaia_dr3( minra, maxra, mindec, maxdec, padding=0.1, minmag=18., ma
     catexp = CatalogExcerpt( format='fitsldac', origin='gaia_dr3', num_items=len(fitstab),
                              minmag=minmag, maxmag=maxmag, ra=ra, dec=dec,
                              ra_corner_00=ralow, ra_corner_01=ralow, ra_corner_10=rahigh, ra_corner_11=rahigh,
-                             dec_corner_00=declow, dec_corner_10=declow,
-                             dec_corner_01=dechigh, dec_corner_11=dechigh )
+                             dec_corner_00=declow, dec_corner_10=declow, dec_corner_01=dechigh, dec_corner_11=dechigh,
+                             minra=ralow, maxra=rahigh, mindec=declow, maxdec=dechigh )
     catexp.calculate_coordinates()
 
     return catexp, str( ofpath ), str( dbpath )

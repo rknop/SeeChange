@@ -14,6 +14,7 @@ from pipeline.subtraction import Subtractor
 from pipeline.detection import Detector
 from pipeline.cutting import Cutter
 from pipeline.measuring import Measurer
+from pipeline.alertsending import AlertSender
 
 from models.base import SmartSession, merge_concurrent
 from models.provenance import Provenance
@@ -75,6 +76,22 @@ class ParsPipeline(Parameters):
             critical=False,
         )
 
+        self.send_alerts = self.add_par(
+            'send_alerts',
+            True,
+            bool,
+            'Send alerts on measurements that pass the initial cuts.  Normally requires save_at_finish',
+            critical=False
+        )
+
+        self.send_alerts_even_though_we_are_not_saving = self.add_par(
+            'send_alerts_even_though_we_are_not_saving',
+            False,
+            bool,
+            'Send alerts if send_alerts is True even if save_at_finish is False; use only for testing.',
+            critical=False
+        )
+        
         self._enforce_no_new_attrs = True  # lock against new parameters
 
         self.override(kwargs)
@@ -155,6 +172,12 @@ class Pipeline:
         measuring_config.update(kwargs.get('measuring', {}))
         self.pars.add_defaults_to_dict(measuring_config)
         self.measurer = Measurer(**measuring_config)
+
+        # sending alerts
+        alerter_config = config.value( 'alerts', {} )
+        alerter_config.update( kwargs.get( 'alerts', {} ) )
+        self.pars.add_defaults_to_dict( alerter_config )
+        self.alerter = AlertSender( **alerter_config )
 
     def override_parameters(self, **kwargs):
         """Override some of the parameters for this object and its sub-objects, using Parameters.override(). """
@@ -276,10 +299,17 @@ class Pipeline:
             return DataStore.catch_failure_to_parse(e, *args)
 
         try:
+            if ( self.pars.send_alerts
+                 and ( not self.pars.save_at_finish )
+                 and ( not self.parse.send_alerts_even_though_we_are_not_saving ) ):
+                raise RuntimeError( "Not runing pipeline; sending alerts requires setting save_at_finish" )
+
+            
             if ds.image is not None:
                 SCLogger.info(f"Pipeline starting for image {ds.image.id} ({ds.image.filepath})")
             elif ds.exposure is not None:
-                SCLogger.info(f"Pipeline starting for exposure {ds.exposure.id} ({ds.exposure}) section {ds.section_id}")
+                SCLogger.info(f"Pipeline starting for exposure {ds.exposure.id} ({ds.exposure}) "
+                              f"section {ds.section_id}")
             else:
                 SCLogger.info(f"Pipeline starting with args {args}, kwargs {kwargs}")
 
@@ -353,6 +383,8 @@ class Pipeline:
                 # measure deep learning models on the cutouts/measurements
                 # TODO: add this...
 
+                # Save everything we found
+                
                 if self.pars.save_at_finish:
                     t_start = time.perf_counter()
                     try:
@@ -366,6 +398,23 @@ class Pipeline:
 
                     ds.runtimes['save_final'] = time.perf_counter() - t_start
 
+                # Send out alerts.  Do this after saving so that we don't send an alert on
+                # something we haven't saved.  That way, if something crashes, we won't have
+                # sent alerts on things we don't have records of.
+
+                if self.pars.send_alerts:
+                    t_start = time.perf_counter()
+                    try:
+                        SCLogger.info( f"Sending alerts for id {ds.image.id}" )
+                        ds = self.alerter.run( ds, session )
+                    except Exception as e:
+                        ds.update_report( 'send_alerts', session )
+                        SCLogger.error( f"Failed to send alerts for image id {ds.image.id}" )
+                        SCLogger.error( e )
+                        raise e
+
+                    ds.runtimes['send_alerts'] = time.perf_counter() - t_start
+                    
                 ds.finalize_report(session)
 
                 return ds

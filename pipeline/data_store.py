@@ -17,6 +17,7 @@ from models.zero_point import ZeroPoint
 from models.reference import Reference
 from models.cutouts import Cutouts
 from models.measurements import Measurements
+from models.alerts import Alert
 
 # for each process step, list the steps that go into its upstream
 UPSTREAM_STEPS = {
@@ -27,6 +28,7 @@ UPSTREAM_STEPS = {
     'detection': ['subtraction'],
     'cutting': ['detection'],
     'measuring': ['cutting'],
+    'alertsending': ['measuring'],
 }
 
 # The products that are made at each processing step.
@@ -41,6 +43,7 @@ PROCESS_PRODUCTS = {
     'detection': 'detections',
     'cutting': 'cutouts',
     'measuring': 'measurements',
+    'alertsending': 'alerts',
 }
 
 
@@ -62,7 +65,8 @@ class DataStore:
         'sub_image',
         'detections',
         'cutouts',
-        'measurements'
+        'measurements',
+        'alerts'
     ]
 
     # these get cleared but not saved
@@ -218,7 +222,7 @@ class DataStore:
                 self.image = val
 
         if self.image is not None:
-            for att in ['sources', 'psf', 'bg', 'wcs', 'zp', 'detections', 'cutouts', 'measurements']:
+            for att in ['sources', 'psf', 'bg', 'wcs', 'zp', 'detections', 'cutouts', 'measurements', 'alerts']:
                 if getattr(self.image, att, None) is not None:
                     setattr(self, att, getattr(self.image, att))
 
@@ -281,6 +285,7 @@ class DataStore:
         self.detections = None  # a SourceList object for sources detected in the subtraction image
         self.cutouts = None  # cutouts around sources
         self.measurements = None  # photometry and other measurements for each source
+        self.alerts = None # Alerts sent out for measurements
         self.objects = None  # a list of Object associations of Measurements
 
         # these need to be added to the products_to_clear list
@@ -400,6 +405,14 @@ class DataStore:
                     f'measurements must be a list of Measurement objects, got list with {[type(m) for m in value]}'
                 )
 
+            if key == 'alerts' and not isinstance( value, list ):
+                raise ValueError( f'alserts must be a list of Alert objects, got {type(value)}' )
+
+            if key == 'alerts' and not all( [ isinstance( a, Alert ) for a in value ] ):
+                raise ValueError(
+                    f'alerts must be a list of Alert objects, got a list with {[type(a) for a in value ]}'
+                )
+            
             if (
                 key == 'prov_tree' and not isinstance(value, dict) and
                 not all([isinstance(v, Provenance) for v in value.values()])
@@ -507,7 +520,7 @@ class DataStore:
                         obj_names = [obj_names]
                     obj = getattr(self, obj_names[0], None)  # only need one object to get the provenance
                     if isinstance(obj, list):
-                        obj = obj[0]  # for cutouts or measurements just use the first one
+                        obj = obj[0]  # for cutouts or measurements or alerts just use the first one
 
                     if obj is not None and hasattr(obj, 'provenance') and obj.provenance is not None:
                         prov = obj.provenance
@@ -680,7 +693,7 @@ class DataStore:
         pipeline applications, to make sure the image
         object has all the data products it needs.
         """
-        for att in ['sources', 'psf', 'bg', 'wcs', 'zp', 'detections', 'cutouts', 'measurements']:
+        for att in ['sources', 'psf', 'bg', 'wcs', 'zp', 'detections', 'cutouts', 'measurements', 'alerts']:
             if getattr(self, att, None) is not None:
                 setattr(image, att, getattr(self, att))
         if image.sources is not None:
@@ -1317,7 +1330,57 @@ class DataStore:
 
         return self.measurements
 
+    def get_alerts( self, provenance=None, session=None ):
+        """Get a list of Alerts, either from memory or from database.
+
+        Measurements must be loaded; call get_measurements() before calling this!
+        
+        Parameters
+        ----------
+        provenance: Provenance object
+            The provenance of the alerts.  It should be consistent with
+            the current code and critical parametrs.  If None, will use
+            the latest provenance for the "alertsending" process.
+
+        session: Session
+
+        Returns
+        -------
+        alerts: list of Alert objects
+           The list of alerts, will be empty if no matching alerts are found."
+
+        """
+        process_name = 'alertsending'
+        if provenance is None:
+            provenance = self._get_provenance_for_an_upstream( process_name, session )
+
+        # TODO: figure out how to get the upstream measurements provenance and
+        #   load them if they're not loaded.
+        if self.measurements is None:
+            return None
+        if len( self.measurements ) == 0:
+            return []
+
+        measurement_ids = [ m.id for m in self.measurements ]
+            
+        # Make sure any existing alerts have the correct provenance
+        if self.alerts is not None:
+            if any( [ a.provenance is None for a in self.alerts ] ):
+                raise ValueError( 'One of the Slerts list has no provenance!' )
+            if provenance is not None and any( [ a.provenance.id != provenance.id for a in self.alerts ] ):
+                self.alerts = None
+
+        # Right ones weren't in memory, look for it on the DB:
+        if self.alerts is None:
+            with SmartSession( session, self.session ) as session:
+                self.alerts = ( session.query( Alert )
+                                .filter( Alerts.measurement_id.in_( measurement_ids ) )
+                                .filter( Alerts.provenance_id == provenance.id ) ).all()
+
+        return self.alerts
+    
     def get_all_data_products(self, output='dict', omit_exposure=False):
+
         """Get all the data products associated with this Exposure.
 
         By default, this returns a dict with named entries.
@@ -1343,7 +1406,7 @@ class DataStore:
         """
         attributes = [] if omit_exposure else [ '_exposure' ]
         attributes.extend( [ 'image', 'wcs', 'sources', 'psf', 'bg', 'zp', 'sub_image',
-                             'detections', 'cutouts', 'measurements' ] )
+                             'detections', 'cutouts', 'measurements', 'alerts' ] )
         result = {att: getattr(self, att) for att in attributes}
         if output == 'dict':
             return result

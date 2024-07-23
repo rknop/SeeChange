@@ -9,9 +9,11 @@ flaky==3.8.1
 flask==3.0.3
 flask-session==0.8.0
 GitPython==3.1.40
+fastavro==1.9.5
 gunicorn==22.0.0
 h5py==3.10.0
 healpy==1.16.6
+kafka-python3==3.0.0
 matplotlib==3.8.2
 numpy==1.26.2
 pandas==2.1.3

@@ -127,6 +127,10 @@ def test_four_corners( provenance_base ):
         image2 = None
         image3 = None
         image4 = None
+        image5 = None
+        image6 = None
+        imagepoint = None
+        imagefar = None
         try:
             kwargs = { 'format': 'fits',
                        'exp_time': 60.48,
@@ -167,20 +171,60 @@ def test_four_corners( provenance_base ):
             image3.end_mjd = image3.mjd + 0.007
             clean3 = ImageCleanup.save_image( image3 )
 
-            # imagepoint and imagefar are used to test Image.containing and Image.find_containing,
+            # Image 4-6 are for testing overlap
+            image4 = Image( ra=180, dec=0,
+                            ra_corner_00=179.8, ra_corner_01=179.8,
+                            ra_corner_10=180.2, ra_corner_11=180.2,
+                            dec_corner_00=-0.2, dec_corner_01=0.2,
+                            dec_corner_10=-0.2, dec_corner_11=0.2,
+                            provenance=provenance_base, nofile=True, **kwargs )
+            image4.mjd = np.random.uniform(0, 1) + 60000
+            image4.end_mjd = image3.mjd + 0.007
+            clean4 = ImageCleanup.save_image( image4 )
+            
+            image5 = Image( ra=180.25, dec=0.25,
+                            ra_corner_00=180.05, ra_corner_01=180.05,
+                            ra_corner_10=180.45, ra_corner_11=180.45,
+                            dec_corner_00=0.05, dec_corner_01=0.45,
+                            dec_corner_10=0.05, dec_corner_11=0.45,
+                            provenance=provenance_base, nofile=True, **kwargs )
+            image5.mjd = np.random.uniform(0, 1) + 60000
+            image5.end_mjd = image5.mjd + 0.007
+            clean5 = ImageCleanup.save_image( image5 )
+            
+            image6 = Image( ra=179.75, dec=-0.25,
+                            ra_corner_00=179.55, ra_corner_01=179.55,
+                            ra_corner_10=179.95, ra_corner_11=179.95,
+                            dec_corner_00=-0.45, dec_corner_01=-0.05,
+                            dec_corner_10=-0.45, dec_corner_11=-0.05,
+                            provenance=provenance_base, nofile=True, **kwargs )
+            image6.mjd = np.random.uniform(0, 1) + 60000
+            image6.end_mjd = image5.mjd + 0.007
+            clean6 = ImageCleanup.save_image( image6 )
+            
+
+
+            # imagepoint and imagefar are used to test Image.containing and Image.find_containing_siobj,
             # as Image is the only example of a SpatiallyIndexed thing we have so far.
-            # The corners don't matter for these given how they'll be used.
-            imagepoint = Image( ra=119.88, dec=39.95,
-                                ra_corner_00=-.001, ra_corner_01=0.001, ra_corner_10=-0.001,
-                                ra_corner_11=0.001, dec_corner_00=0, dec_corner_01=0, dec_corner_10=0, dec_corner_11=0,
+            rapoint = 119.88
+            decpoint = 39.95
+            imagepoint = Image( ra=rapoint, dec=decpoint,
+                                ra_corner_00=rapoint-0.1, ra_corner_01=rapoint-0.1,
+                                ra_corner_10=rapoint+0.1, ra_corner_11=rapoint+0.1,
+                                dec_corner_00=decpoint-0.1, dec_corner_01=decpoint+0.1,
+                                dec_corner_10=decpoint-0.1, dec_corner_11=decpoint+0.1,
                                 provenance=provenance_base, nofile=True, **kwargs )
             imagepoint.mjd = np.random.uniform(0, 1) + 60000
             imagepoint.end_mjd = imagepoint.mjd + 0.007
             clearpoint = ImageCleanup.save_image( imagepoint )
 
-            imagefar = Image( ra=30, dec=-10,
-                              ra_corner_00=0, ra_corner_01=0, ra_corner_10=0,
-                              ra_corner_11=0, dec_corner_00=0, dec_corner_01=0, dec_corner_10=0, dec_corner_11=0,
+            rafar = 30.
+            decfar = -10.
+            imagefar = Image( ra=rafar, dec=decfar,
+                              ra_corner_00=rafar-0.1, ra_corner_01=rafar-0.1,
+                              ra_corner_10=rafar+0.1, ra_corner_11=rafar+0.1,
+                              dec_corner_00=decfar-0.1, dec_corner_01=decfar+0.1,
+                              dec_corner_10=decfar-0.1, dec_corner_11=decfar+0.1,
                               provenance=provenance_base, nofile=True, **kwargs )
             imagefar.mjd = np.random.uniform(0, 1) + 60000
             imagefar.end_mjd = imagefar.mjd + 0.007
@@ -189,6 +233,9 @@ def test_four_corners( provenance_base ):
             session.add( image1 )
             session.add( image2 )
             session.add( image3 )
+            session.add( image4 )
+            session.add( image5 )
+            session.add( image6 )
             session.add( imagepoint )
             session.add( imagefar )
 
@@ -197,10 +244,10 @@ def test_four_corners( provenance_base ):
             assert { image1.id, image2.id, image3.id }.issubset( soughtids )
             assert len( { imagepoint.id, imagefar.id } & soughtids ) == 0
 
-            sought = session.query( Image ).filter( Image.containing( 119.88, 39.95 ) ).all()
+            sought = session.query( Image ).filter( Image.containing( rapoint, decpoint ) ).all()
             soughtids = set( [ s.id for s in sought ] )
-            assert { image1.id }.issubset( soughtids  )
-            assert len( { image2.id, image3.id, imagepoint.id, imagefar.id } & soughtids ) == 0
+            assert { image1.id, imagepoint.id }.issubset( soughtids  )
+            assert len( { image2.id, image3.id, imagefar.id } & soughtids ) == 0
 
             sought = session.query( Image ).filter( Image.containing( 120, 40.12 ) ).all()
             soughtids = set( [ s.id for s in sought ] )
@@ -212,18 +259,27 @@ def test_four_corners( provenance_base ):
             assert { image2.id }.issubset( soughtids )
             assert len( { image1.id, image3.id, imagepoint.id, imagefar.id } & soughtids ) == 0
 
-            sought = Image.find_containing( imagepoint, session=session )
+            sought = Image.find_containing( imagepoint.ra, imagepoint.dec, session=session )
             soughtids = set( [ s.id for s in sought ] )
-            assert { image1.id }.issubset( soughtids )
-            assert len( { image2.id, image3.id, imagepoint.id, imagefar.id } & soughtids ) == 0
+            assert { image1.id, imagepoint.id }.issubset( soughtids )
+            assert len( { image2.id, image3.id, imagefar.id } & soughtids ) == 0
+
+            sought = Image.find_containing_siobj( imagepoint, session=session )
+            soughtids = set( [ s.id for s in sought ] )
+            assert { image1.id, imagepoint.id }.issubset( soughtids )
+            assert len( { image2.id, image3.id, imagefar.id } & soughtids ) == 0
 
             sought = session.query( Image ).filter( Image.containing( 0, 0 ) ).all()
             soughtids = set( [ s.id for s in sought ] )
             assert len( { image1.id, image2.id, image3.id, imagepoint.id, imagefar.id } & soughtids ) == 0
 
-            sought = Image.find_containing( imagefar, session=session )
+            sought = Image.find_containing( imagefar.ra, imagefar.dec, session=session )
             soughtids = set( [ s.id for s in sought ] )
-            assert len( { image1.id, image2.id, image3.id, imagepoint.id, imagefar.id } & soughtids ) == 0
+            assert len( { image1.id, image2.id, image3.id, imagepoint.id } & soughtids ) == 0
+
+            sought = Image.find_containing_siobj( imagefar, session=session )
+            soughtids = set( [ s.id for s in sought ] )
+            assert len( { image1.id, image2.id, image3.id, imagepoint.id } & soughtids ) == 0
 
             sought = session.query( Image ).filter( Image.within( image1 ) ).all()
             soughtids = set( [ s.id for s in sought ] )
@@ -232,10 +288,44 @@ def test_four_corners( provenance_base ):
 
             sought = session.query( Image ).filter( Image.within( imagefar ) ).all()
             soughtids = set( [ s.id for s in sought ] )
-            assert len( { image1.id, image2.id, image3.id, imagepoint.id, imagefar.id } & soughtids ) == 0
+            assert len( { image1.id, image2.id, image3.id, imagepoint.id } & soughtids ) == 0
 
+            # TODO : also test prov_id in find_overlapping_fourcorners
+
+            sought = Image.find_overlapping_fourcorners( imagepoint, session=session )
+            soughtids = set( [ s.id for s in sought ] )
+            assert { image1.id, image2.id, image3.id, imagepoint.id }.issubset( soughtids )
+            assert imagefar.id not in soughtids
+            
+            sought = Image.find_overlapping_fourcorners( imagefar, session=session )
+            soughtids = set( [ s.id for s in sought ] )
+            assert len( { image1.id, image2.id, image3.id, imagepoint.id } & soughtids ) == 0
+
+            sought = Image.find_overlapping_fourcorners( image4, session=session )
+            soughtids = set( [ s.id for s in sought ] )
+            import pdb; pdb.set_trace()
+            assert { image4.id, image5.id, image6.id }.issubset( soughtids )
+
+            sought = Image.find_overlapping_fourcorners( image5, session=session )
+            soughtids = set( [ s.id for s in sought ] )
+            assert { image4.id, image5.id }.issubset( soughtids )
+            assert image6.id not in soughtids
+
+            
         finally:
-            session.rollback()
+            for i in [ image1, image2, image3, image4, image5, image6, imagepoint, imagefar ]:
+                if ( i is not None ) and sa.inspect( i ).persistent:
+                    session.delete( i )
+            session.commit()
+            # It's so hard to figure out SQLAlchemy
+            # The code above wasn't actually deleting the images.
+            # So, do it with SQL, because we know how that actually works.
+            # dbcon = session.bind.raw_connection()
+            # cursor = dbcon.cursor()
+            # cursor.execute( "DELETE FROM images WHERE id IN %(ids)s",
+            #                 { 'ids': tuple( [ i.id for i in [ image1, image2, image3, image4, image5, image6,
+            #                                                   imagepoint, imagefar ] if i is not None ] ) } )
+            # dbcon.commit()
 
 
 def im_qual(im, factor=3.0):

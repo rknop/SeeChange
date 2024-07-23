@@ -28,13 +28,13 @@
 #     included_code_build
 #       conductor_build
 #     build_selenium
-#   included_code
-#     conductor
-#   bindmount_code
+#   included_code       ** Image to use for true production
+#     conductor         ** Image used by the conductor (production & tests)
+#   bindmount_code      ** Image to use for "development production"
 #     conductor_bindmount
 #   base_selenium
-#     test_included    ** Image used in tests to run the tests
-#     test_bindmount
+#     test_included
+#     test_bindmount    ** Image used in tests to run the tests
 #
 # As of 2024-06-10, the sizes of images from the various stages are as follows:
 #   base                1.18GB
@@ -62,7 +62,7 @@
 
 FROM rknop/devuan-daedalus-rknop AS base
 
-MAINTAINER Rob Knop <raknop@lbl.gov>
+LABEL maintainer="Rob Knop <raknop@lbl.gov>"
 
 SHELL ["/bin/bash", "-c"]
 
@@ -303,7 +303,7 @@ FROM base AS bindmount_code
 
 COPY --from=build /usr/bin/hotpants /usr/bin/hotpants
 COPY --from=build /venv/ /venv/
-ENV PATH=/venv/bin:$PATH
+ENV PATH /venv/bin:$PATH
 
 ENV PYTHONPATH "/seechange"
 WORKDIR /seechange
@@ -318,7 +318,7 @@ FROM base AS included_code
 
 COPY --from=build /usr/bin/hotpants /usr/bin/hotpants
 COPY --from=build /venv/ /venv/
-ENV PATH=/venv/bin:$PATH
+ENV PATH /venv/bin:$PATH
 
 COPY --from=included_code_build /seechange/lib /seechange/lib
 COPY default_config.yaml /seechange/default_config.yaml
@@ -407,7 +407,7 @@ FROM base_selenium AS test_included
 
 COPY --from=build_selenium /usr/bin/hotpants /usr/bin/hotpants
 COPY --from=build_selenium /venv/ /venv/
-ENV PATH=/venv/bin:$PATH
+ENV PATH /venv/bin:$PATH
 
 COPY --from=included_code_build /seechange/lib /seechange/lib
 COPY default_config.yaml /seechange/default_config.yaml
@@ -432,7 +432,7 @@ FROM base_selenium AS test_bindmount
 
 COPY --from=build_selenium /usr/bin/hotpants /usr/bin/hotpants
 COPY --from=build_selenium /venv/ /venv/
-ENV PATH=/venv/bin:$PATH
+ENV PATH /venv/bin:$PATH
 
 ENV PYTHONPATH "/seechange"
 WORKDIR /seechange
