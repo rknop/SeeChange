@@ -180,6 +180,14 @@ measuring:
     filter bank: 1
 
 
+alertsending:
+  # If True, alerts will include the maglimit of sub images that include the object but that don't have a measurement
+  image_upper_limits: true
+  # How many days of previous measurements (and, possibly, upper limits) to include
+  lookback_days: 30
+  # Where to find the avro schema
+  alert_schema: /seechange/share/SeeChange/seechange_alert.avsc
+    
 # use these parameters when running the coaddition pipeline, e.g., for making weekly coadds
 # the coaddition pipeline will load the regular configuration first, then the coaddition config:
 coaddition:

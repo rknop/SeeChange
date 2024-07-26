@@ -5,6 +5,10 @@ from models.base import Base, AutoIDMixin
 class Alert( Base, AutoIDMixin ):
     __tablename__ = 'alerts'
 
+    __table_args__ = (
+        UniqueConstraint( 'measurement_id', 'provenance_id', name='_alert_measurement_provenance_uc' )
+    )
+    
     measurement_id = sa.Column(
         sa.ForeignKey( 'measurements.id', ondelete='CASCADE', name='alerts_measurements_id_fkey' ),
         nullable=False,

@@ -5,7 +5,7 @@
   "doc": "Seechange pipeline object",
   "version": "0.0.1",
   "fields": [
-    { "name": "object_id", "type": "long", "doc": "unique object id" },
+    { "name": "object_name", "type": "long", "doc": "unique object name" },
     { "name": "ra", "type": "double", "doc": "Nominal RA of the object" },
     { "name": "dec", "type": "double", "doc": "Nominal Dec of the object" },
     # TODO : host galaxy info?

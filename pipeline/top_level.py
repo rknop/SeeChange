@@ -301,9 +301,8 @@ class Pipeline:
         try:
             if ( self.pars.send_alerts
                  and ( not self.pars.save_at_finish )
-                 and ( not self.parse.send_alerts_even_though_we_are_not_saving ) ):
+                 and ( not self.pars.send_alerts_even_though_we_are_not_saving ) ):
                 raise RuntimeError( "Not runing pipeline; sending alerts requires setting save_at_finish" )
-
 
             if ds.image is not None:
                 SCLogger.info(f"Pipeline starting for image {ds.image.id} ({ds.image.filepath})")
@@ -401,7 +400,9 @@ class Pipeline:
                 # Send out alerts.  Do this after saving so that we don't send an alert on
                 # something we haven't saved.  That way, if something crashes, we won't have
                 # sent alerts on things we don't have records of.
-
+                #`In contrast to most pipeline objects, alerter *does* commit things to
+                # the database as it makes them.
+                
                 if self.pars.send_alerts:
                     t_start = time.perf_counter()
                     try:
