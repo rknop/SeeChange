@@ -88,6 +88,6 @@ class AlertSender:
 
         except Exception as ex:
             raise RuntimeError( "Rob needs to figure out what really to do in this except block" )
-            
-            
-                
+
+
+

@@ -340,7 +340,7 @@ def test_four_corners( provenance_base ):
             soughtids = set( [ s.id for s in sought ] )
             assert { image1.id, image2.id, image3.id, imagepoint.id }.issubset( soughtids )
             assert imagefar.id not in soughtids
-            
+
             sought = Image.find_overlapping_fourcorners( imagefar, session=session )
             soughtids = set( [ s.id for s in sought ] )
             assert len( { image1.id, image2.id, image3.id, imagepoint.id } & soughtids ) == 0
@@ -355,7 +355,7 @@ def test_four_corners( provenance_base ):
             assert { image4.id, image5.id }.issubset( soughtids )
             assert image6.id not in soughtids
 
-            
+
         finally:
             # When a test fails, this doesn't seem to actually
             #  clean up the database.  Is this pytest subverting

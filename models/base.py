@@ -1746,7 +1746,7 @@ class FourCorners:
         # This should protect against SQL injection
         if ( not isinstance( ra, float ) ) or ( not isinstance( dec, float ) ):
             return TypeError( f"(ra,dec) must be floats, got ({type(ra)},{type(dec)})" )
-          
+
         with SmartSession( session ) as sess:
             cls._find_possibly_containing_temptable( ra, dec, session, prov_id=prov_id )
             query = sa.text( f"SELECT i.id FROM temp_find_containing i "

@@ -18,7 +18,7 @@ class Alert( Base, AutoIDMixin ):
         nullable=True,
         doc="UTC time the alert was sent; NULL=it (probably) wasn't sent"
     )
-    
+
     provenance_id = sa.Column(
         sa.ForeignKey( 'provenances.id', ondelete="CASCADE", name='alerts_provenance_id_fkey' ),
         nullable=False,

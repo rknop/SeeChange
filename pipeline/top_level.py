@@ -91,7 +91,7 @@ class ParsPipeline(Parameters):
             'Send alerts if send_alerts is True even if save_at_finish is False; use only for testing.',
             critical=False
         )
-        
+
         self._enforce_no_new_attrs = True  # lock against new parameters
 
         self.override(kwargs)
@@ -304,7 +304,7 @@ class Pipeline:
                  and ( not self.parse.send_alerts_even_though_we_are_not_saving ) ):
                 raise RuntimeError( "Not runing pipeline; sending alerts requires setting save_at_finish" )
 
-            
+
             if ds.image is not None:
                 SCLogger.info(f"Pipeline starting for image {ds.image.id} ({ds.image.filepath})")
             elif ds.exposure is not None:
@@ -384,7 +384,7 @@ class Pipeline:
                 # TODO: add this...
 
                 # Save everything we found
-                
+
                 if self.pars.save_at_finish:
                     t_start = time.perf_counter()
                     try:
@@ -414,7 +414,7 @@ class Pipeline:
                         raise e
 
                     ds.runtimes['send_alerts'] = time.perf_counter() - t_start
-                    
+
                 ds.finalize_report(session)
 
                 return ds

@@ -412,7 +412,7 @@ class DataStore:
                 raise ValueError(
                     f'alerts must be a list of Alert objects, got a list with {[type(a) for a in value ]}'
                 )
-            
+
             if (
                 key == 'prov_tree' and not isinstance(value, dict) and
                 not all([isinstance(v, Provenance) for v in value.values()])
@@ -1334,7 +1334,7 @@ class DataStore:
         """Get a list of Alerts, either from memory or from database.
 
         Measurements must be loaded; call get_measurements() before calling this!
-        
+
         Parameters
         ----------
         provenance: Provenance object
@@ -1362,7 +1362,7 @@ class DataStore:
             return []
 
         measurement_ids = [ m.id for m in self.measurements ]
-            
+
         # Make sure any existing alerts have the correct provenance
         if self.alerts is not None:
             if any( [ a.provenance is None for a in self.alerts ] ):
@@ -1378,7 +1378,7 @@ class DataStore:
                                 .filter( Alerts.provenance_id == provenance.id ) ).all()
 
         return self.alerts
-    
+
     def get_all_data_products(self, output='dict', omit_exposure=False):
 
         """Get all the data products associated with this Exposure.
