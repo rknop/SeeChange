@@ -1534,14 +1534,17 @@ class FourCorners:
                                doc="Dec of the high-RA, high-Dec corner (degrees)" )
 
     # These next four can be calcualted from the columns above, but are here to speed up
-    #  searches.  They are filled assuming that no RA/Dec goes outside the corners,
-    #  which isn't strictly true on a sphere, but damn close.
-    minra = sa.Column( sa.REAL, nullable=False, index=True, doc="Min RA of image" )
-    maxra = sa.Column( sa.REAL, nullable=False, index=True, doc="Min RA of image" )
-    mindec = sa.Column( sa.REAL, nullable=False, index=True, doc="Min RA of image" )
-    maxdec = sa.Column( sa.REAL, nullable=False, index=True, doc="Min RA of image" )
-    
-    
+    #   searches.  They are filled assuming that no RA/Dec goes outside the corners,
+    #   which isn't strictly true on a sphere, but damn close for the sizes of
+    #   things we're going to be dealing with.
+    # ra is cyclic in the range [0,360), so maxra may be less than
+    #   minra, e.g. maxra=1, minra=359 is a 2° ra range cenetered on 0.
+    minra = sa.Column( sa.REAL, nullable=False, index=True, doc="Min RA of image (degrees)" )
+    maxra = sa.Column( sa.REAL, nullable=False, index=True, doc="Max RA of image (degrees)" )
+    mindec = sa.Column( sa.REAL, nullable=False, index=True, doc="Min Dec of image (degrees)" )
+    maxdec = sa.Column( sa.REAL, nullable=False, index=True, doc="Max Dec of image (degrees)" )
+
+
     @classmethod
     def sort_radec( cls, ras, decs ):
         """Sort ra and dec lists so they're each in the order in models.base.FourCorners
@@ -1567,17 +1570,16 @@ class FourCorners:
         raorder = list( range(4) )
         raorder.sort( key=lambda i: ras[i] )
 
-        # Try to detect an RA that spans 0.  Assuming no images
-        # are going to have a 90° field of view....
-        if ras[raorder[3]] - ras[raorder[0]] > 90.:
+        # Try to detect an RA that spans 0.
+        if ras[raorder[3]] - ras[raorder[0]] > 180.:
             newras = []
             for ra in ras:
                 if ra > 180.:
                     newras.append( ra - 360. )
                 else:
                     newras.append( ra )
-            raorder.sort( key=lamba i: newras[i] )
-                    
+            raorder.sort( key=lambda i: newras[i] )
+
         # Of two lowest ras, of those, pick the one with the lower dec;
         #   that's lowRA,lowDec; the other one is lowRA, highDec
 
@@ -1648,7 +1650,85 @@ class FourCorners:
 
         """
 
-        return cls.find_containing( siobj.ra, siobj.dec, session=session )
+        # Overabundance of caution to avoid Bobby Tables.
+        # (Because python is not strongly typed, siobj.ra and
+        # siobj.dec could be set to anything.)
+        ra = float( siobj.ra )
+        dec = float( siobj.dec )
+        return cls.find_containing( ra, dec, session=session )
+
+    @classmethod
+    def _find_possibly_containing_temptable( cls, ra, dec, session, prov_id=None ):
+        """Internal.
+
+        Looks for all cls objects where ra, dec is between minra:maxra,
+        mindec:maxdec.  This will be a superset of the images that
+        contain ra, dec.
+
+        Lots of special case code for images that cross RA 0.
+
+        Loads up the temp table temp_find_containing
+
+        Parameters
+        ----------
+          ra, dec : float
+             Coordinates to search for; deciam degrees.
+
+          session : Session
+             Required here, otherwise the temp table would be useless.
+
+          prov_id : str or None
+             If not None, search for objects with this provenance.
+
+        """
+        session.execute( sa.text( "DROP TABLE IF EXISTS temp_find_containing" ) )
+
+        # Shouldn't need this, but just in case somebody gave us a wrapped RA:
+        while ( ra < 0 ): ra += 360.
+        while ( ra >= 360.): ra -= 360.
+
+        query = ( "SELECT i.id, i.ra_corner_00, i.ra_corner_01, i.ra_corner_10, i.ra_corner_11, "
+                  "       i.dec_corner_00, i.dec_corner_01, i.dec_corner_10, i.dec_corner_11 "
+                  "INTO TEMP TABLE temp_find_containing "
+                  f"FROM {cls.__tablename__} i "
+                  "WHERE ( "
+                  "  ( maxdec >= :dec AND mindec <= :dec ) "
+                  "  AND ( "
+                  "    ( (maxra > minra ) AND "
+                  "      ( maxra >= :ra AND minra <= :ra ) )"
+                  "    OR "
+                  "    ( ( maxra < minra ) AND "
+                  "      ( ( maxra >= :ra OR :ra > 180. ) AND ( minra <= :ra OR ra <= 180. ) ) )"
+                  "  )"
+                  ")"
+                 )
+        subdict = { "ra": ra, "dec": dec }
+        if prov_id is not None:
+            query += " AND provenance_id=:prov"
+            subdict['prov'] = prov_id
+
+        session.execute( sa.text( query ), subdict )
+
+
+    @classmethod
+    def find_containing( cls, ra, dec, prov_id=None, session=None ):
+        """Return all objects in this class that contain the given RA and Dec
+
+        Parameters
+        ----------
+          ra, dec: float, decimal degrees
+
+          prov_id: str or None
+             id of the provenance of cls objects to search; if None, won't filter on provenance
+
+        Returns
+        -------
+          An sql query result thingy
+
+        """
+        # This should protect against SQL injection
+        if ( not isinstance( ra, float ) ) or ( not isinstance( dec, float ) ):
+            return TypeError( f"(ra,dec) must be floats, got ({type(ra)},{type(dec)})" )
 
     @classmethod
     def find_containing( cls, ra, dec, session=None ):
@@ -1668,19 +1748,7 @@ class FourCorners:
             return TypeError( f"(ra,dec) must be floats, got ({type(ra)},{type(dec)})" )
           
         with SmartSession( session ) as sess:
-            sess.execute( sa.text( f"SELECT i.id, i.ra_corner_00, i.ra_corner_01, i.ra_corner_10, i.ra_corner_11, "
-                                   f"       i.dec_corner_00, i.dec_corner_01, i.dec_corner_10, i.dec_corner_11 "
-                                   f"INTO TEMP TABLE temp_find_containing "
-                                   f"FROM {cls.__tablename__} i "
-                                   f"WHERE GREATEST(i.ra_corner_00, i.ra_corner_01, "
-                                   f"               i.ra_corner_10, i.ra_corner_11 ) >= :ra "
-                                   f"  AND LEAST(i.ra_corner_00, i.ra_corner_01, "
-                                   f"            i.ra_corner_10, i.ra_corner_11 ) <= :ra "
-                                   f"  AND GREATEST(i.dec_corner_00, i.dec_corner_01, "
-                                   f"               i.dec_corner_10, i.dec_corner_11 ) >= :dec "
-                                   f"  AND LEAST(i.dec_corner_00, i.dec_corner_01, "
-                                   f"            i.dec_corner_10, i.dec_corner_11 ) <= :dec" ),
-                          { 'ra': ra, 'dec': dec } )
+            cls._find_possibly_containing_temptable( ra, dec, session, prov_id=prov_id )
             query = sa.text( f"SELECT i.id FROM temp_find_containing i "
                              f"WHERE q3c_poly_query( {ra}, {dec}, ARRAY[ i.ra_corner_00, i.dec_corner_00, "
                              f"                                          i.ra_corner_01, i.dec_corner_01, "
@@ -1691,18 +1759,18 @@ class FourCorners:
             return objs
 
     @classmethod
-    def _find_overlapping_fourcorners_temptable( cls, fcobj, session, prov_id=None ):
+    def _find_potential_overlapping_temptable( cls, fcobj, session, prov_id=None ):
         """Internal.
 
         Given a FourCorners object fcobj, will return all objects of
-        this class that might overlap that object.  It does this by
-        looking at all four corners of fcobj, and looking for objects of
-        this class whose bounding NS-EW-aligned rectangle contains any
-        of those corners.  It loads the temp table
-        temp_find_overlapping.
+        this class that *might* overlap that object.  It does this by
+        making sure that each object's min(ra,dec) is less than the
+        other object's max(ra,dec).  If all four of those criteria are
+        true, then we have a potential overlap.
 
-        BROKEN : doesn't properly handle RAs spanning 0!!!!
-        
+        (...except for the special case of one or both images including
+        RA=0°, when things are a bit more complicated.)
+
         Parameters
         ----------
           fcobj : FourCorners
@@ -1712,74 +1780,53 @@ class FourCorners:
 
           prov_id : str, default None
              The id of the provenance of objects to look for; defaults to
-             not filtering on provenance (which is almost enver what you want).
+             not filtering on provenance (which is almost never what you want).
 
         """
 
         session.execute( sa.text( "DROP TABLE IF EXISTS temp_find_overlapping" ) )
 
-        # TODO : check to see if instead of all the GREATEST and LEAST stuff,
-        # we had a whole bunch ORs, if that makes the query faster.
-        # (Not sure how the index interacts with GREATEST and LEAST....)
+        # All kinds of special cases (everything from the first OR
+        # onwards) below to deal with the the case where RA crosses 0
+        # TODO : speed tests once we have a big enough database for that
+        # to matter to see how much this hurts us.
 
-        # Note that in what's below, we assume that one of (ra_corner_00, ra_corner_01)
-        # will be the minimum RA of the four corners, etc.  This is how things are
-        # defined in FourCorners.sort_radec(), so everything should be loaded that way.
-        
-        query = ( f"SELECT i.id, i.ra_corner_00, i.ra_corner_01, i.ra_corner_10, i.ra_corner_11, "
-                  f"       i.dec_corner_00, i.dec_corner_01, i.dec_corner_10, i.dec_corner_11 "
-                  f"INTO TEMP TABLE temp_find_overlapping "
+        query = ( "SELECT i.id, i.ra_corner_00, i.ra_corner_01, i.ra_corner_10, i.ra_corner_11, "
+                  "       i.dec_corner_00, i.dec_corner_01, i.dec_corner_10, i.dec_corner_11 "
+                  "INTO TEMP TABLE temp_find_overlapping "
                   f"FROM {cls.__tablename__} i "
-                  f"WHERE ( "
-                  f"  ( i.ra_corner_00 <= :maxra AND i.ra_corner_00 >= :minra "
-                  f"    AND i.dec_corner_00 <= :maxdec AND i.dec_corner_00 >= :mindec )"
-                  f"  OR "
-                  f"  ( i.ra_corner_01 <= :maxra AND i.ra_corner_01 >= :minra "
-                  f"    AND i.dec_corner_01 <= :maxdec AND i.dec_corner_01 >= :mindec )"
-                  f"  OR "
-                  f"  ( i.ra_corner_10 <= :maxra AND i.ra_corner_10 >= :minra "
-                  f"    AND i.dec_corner_10 <= :maxdec AND i.dec_corner_10 >= :mindec )"
-                  f"  OR "
-                  f"  ( i.ra_corner_11 <= :maxra AND i.ra_corner_11 >= :minra "
-                  f"    AND i.dec_corner_11 <= :maxdec AND i.dec_corner_11 >= :mindec )"
-                  f"  OR "
-                  f"  ( :ra00 <= GREATEST(i.ra_corner_10, i.ra_corner_11) "
-                  f"    AND :ra00 >= LEAST(i.ra_corner_00, i.ra_corner_01) "
-                  f"    AND :dec00 <= GREATEST(i.dec_corner_01, i.dec_corner_11) "
-                  f"    AND :dec00 >= LEAST(i.dec_corner_00, i.dec_corner_10) ) "
-                  f"  OR "
-                  f"  ( :ra10 <= GREATEST(i.ra_corner_10, i.ra_corner_11) "
-                  f"    AND :ra10 >= LEAST(i.ra_corner_00, i.ra_corner_01) "
-                  f"    AND :dec10 <= GREATEST(i.dec_corner_01, i.dec_corner_11) "
-                  f"    AND :dec10 >= LEAST(i.dec_corner_00, i.dec_corner_10) ) "
-                  f"  OR "
-                  f"  ( :ra01 <= GREATEST(i.ra_corner_10, i.ra_corner_11) "
-                  f"    AND :ra01 >= LEAST(i.ra_corner_00, i.ra_corner_01) "
-                  f"    AND :dec01 <= GREATEST(i.dec_corner_01, i.dec_corner_11) "
-                  f"    AND :dec01 >= LEAST(i.dec_corner_00, i.dec_corner_10) ) "
-                  f"  OR "
-                  f"  ( :ra11 <= GREATEST(i.ra_corner_10, i.ra_corner_11) "
-                  f"    AND :ra11 >= LEAST(i.ra_corner_00, i.ra_corner_01) "
-                  f"    AND :dec11 <= GREATEST(i.dec_corner_01, i.dec_corner_11) "
-                  f"    AND :dec11 >= LEAST(i.dec_corner_00, i.dec_corner_10) ) "
-                  f") " )
-        subdict = { 'ra00': fcobj.ra_corner_00, 'dec00': fcobj.dec_corner_00,
-                    'ra01': fcobj.ra_corner_01, 'dec01': fcobj.dec_corner_01,
-                    'ra10': fcobj.ra_corner_10, 'dec10': fcobj.dec_corner_10,
-                    'ra11': fcobj.ra_corner_11, 'dec11': fcobj.dec_corner_11,
-                    'maxra': max( fcobj.ra_corner_10, fcobj.ra_corner_11 ),
-                    'minra': min( fcobj.ra_corner_00, fcobj.ra_corner_01 ),
-                    'maxdec': max( fcobj.dec_corner_01, fcobj.dec_corner_11 ),
-                    'mindec': min( fcobj.dec_corner_00, fcobj.dec_corner_10 ) }
+                  "WHERE ( "
+                  "  ( i.maxdec >= :mindec AND i.mindec <= :maxdec ) "
+                  "  AND "
+                  "  ( ( ( i.maxra >= i.minra AND :maxra >= :minra ) AND "
+                  "      i.maxra >= :minra AND i.minra <= :maxra ) "
+                  "    OR "
+                  "    ( i.maxra < i.minra AND :maxra < :minra ) "   # both include RA=0, will overlap in RA
+                  "    OR "
+                  "    ( ( i.maxra < i.minra AND :maxra >= :minra AND :minra <= 180. ) AND "
+                  "      i.maxra >= :minra ) "
+                  "    OR "
+                  "    ( ( i.maxra < i.minra AND :maxra >= :minra AND :minra > 180. ) AND "
+                  "      i.minra <= :maxra ) "
+                  "    OR "
+                  "    ( ( i.maxra >= i.minra AND :maxra < :minra AND i.maxra <= 180. ) AND "
+                  "      i.minra <= :maxra ) "
+                  "    OR "
+                  "    ( ( i.maxra >= i.minra AND :maxra < :minra AND i.maxra > 180. ) AND "
+                  "      i.maxra >= :minra ) "
+                  "  )"
+                  ") " )
+        subdict = { 'minra': fcobj.minra, 'maxra': fcobj.maxra,
+                    'mindec': fcobj.mindec, 'maxdec': fcobj.maxdec }
         if prov_id is not None:
             query += "AND provenance_id=:prov"
             subdict['prov'] = prov_id
-        
+
         session.execute( sa.text( query ), subdict )
-                                  
-    
+
+
     @classmethod
-    def find_overlapping_fourcorners( cls, fcobj, prov_id=None, session=None ):
+    def find_potential_overlapping( cls, fcobj, prov_id=None, session=None ):
         """Return all objects of this class that *might* overlap FourCorners object fcobj.
 
         This will in general be a superset of things that actually do
@@ -1789,39 +1836,12 @@ class FourCorners:
         or right near the poles.)  This box is defined by the least/greatest
         RA/dec of all four corners.  (Below: the actual image is tilted
         rectangle (modulo your font aspect ratio), the bounding box is the
-        one squre to the screen.)
+        one square to the screen.)
+
                   __
-                 |/\|
-                 |\/|
+                 │╱╲│
+                 │╲╱│
                   ‾‾
-
-        If any of the four corners of fcobj are within any of those
-        bounding rectangles, or vice versa, the the corresponding cls
-        objects are included on the list.
-
-        However, this is not sufficient to capture everything; consider
-        the cases:
-
-                  ______                       ______ 
-                 |      |                     |      |
-                 |  __  |                     |      |
-                 |_|__|_|                     |__/\__|
-                   |__|                          \/  
-        
-        where the smaller (lower) rectangle is the cls object we're
-        searching through, and the larger (upper) rectangle is fcobj.
-        (Another exmaple would be if the cls object were entirely inside
-        fcobj.)  This cls object clearly overlaps fcobj but none of the
-        for corners of fcobj's bounding box (which for both examples
-        above is the smaller rectangle on the left) are inside the inner
-        cls object.  (This can happen due to floating-point roundoff
-        when searching an FourCorners object against itself!)  (Another
-        very simple example: whip out your favorite draw program, and
-        draw a square.  Copy it.  Rotate the copy thorugh a small angle.
-        None of the tilted square's corners are in the original square's
-        bounding box (which is the same as the original square itself).)
-        
-
 
         Parameters
         ----------
@@ -1840,12 +1860,13 @@ class FourCorners:
 
         """
         with SmartSession( session ) as sess:
-            cls._find_overlapping_fourcorners_temptable( fcobj, sess, prov_id=prov_id )
+            cls._find_potential_overlapping_temptable( fcobj, sess, prov_id=prov_id )
             objs = sess.scalars( sa.select( cls )
                                  .from_statement( sa.text( "SELECT id FROM temp_find_overlapping" ) )
                                 ).all()
+            sess.execute( sa.text( "DROP TABLE temp_find_overlapping" ) )
             return objs
-        
+
     @classmethod
     def get_overlap_frac(cls, obj1, obj2):
         """Calculate the overlap fraction between two objects that have four corners.
@@ -1876,23 +1897,38 @@ class FourCorners:
         (RA ranges in all cases are scaled by cos(dec).)
 
         """
-        dimra = (((obj1.ra_corner_10 + obj1.ra_corner_11) / 2. -
-                  (obj1.ra_corner_00 + obj1.ra_corner_01) / 2.
-                  ) / np.cos(obj1.dec * np.pi / 180.))
-        dimdec = ((obj1.dec_corner_01 + obj1.dec_corner_11) / 2. -
-                  (obj1.dec_corner_00 + obj1.dec_corner_10) / 2.)
-        r0 = max(obj2.ra_corner_00, obj2.ra_corner_01,
-                 obj1.ra_corner_00, obj1.ra_corner_01)
-        r1 = min(obj2.ra_corner_10, obj2.ra_corner_10,
-                 obj1.ra_corner_10, obj1.ra_corner_10)
-        d0 = max(obj2.dec_corner_00, obj2.dec_corner_10,
-                 obj1.dec_corner_00, obj1.dec_corner_10)
-        d1 = min(obj2.dec_corner_01, obj2.dec_corner_11,
-                 obj1.dec_corner_01, obj1.dec_corner_11)
-        dra = (r1 - r0) / np.cos((d1 + d0) / 2. * np.pi / 180.)
+
+        o1ra = np.array( [ [ obj1.ra_corner_00, obj1.ra_corner_01 ], [ obj1.ra_corner_10, obj1.ra_corner_11 ] ] )
+        o2ra = np.array( [ [ obj2.ra_corner_00, obj2.ra_corner_01 ], [ obj2.ra_corner_10, obj2.ra_corner_11 ] ] )
+        o1dec = np.array( [ [ obj1.dec_corner_00, obj1.dec_corner_01 ], [ obj1.dec_corner_10, obj1.dec_corner_11 ] ] )
+        o2dec = np.array( [ [ obj2.dec_corner_00, obj2.dec_corner_01 ], [ obj2.dec_corner_10, obj2.dec_corner_11 ] ] )
+
+        # Have to handle the case of ra spanning 0
+        # This happens when maxra < minra.  In that case,
+        # take all ras > 180 and subtract 360 to make them
+        # negative.  Subsequent computations will then work.
+        # (Can check each image individually.  If one is
+        # all above 0, and the other is all below 0, they
+        # don't overlap, so no need to do fancy things.)
+        if ( obj1.maxra < obj1.minra ) or ( obj2.maxra < obj2.minra ):
+            o1ra[ o1ra > 180. ] -= 360.
+            o2ra[ o2ra > 180. ] -= 360.
+
+        dimra = ( ( ( o1ra[1,0] + o1ra[1,1] ) / 2. -
+                    ( o1ra[0,0] + o1ra[0,1] ) / 2.
+                   ) / np.cos( obj1.dec * np.pi / 180. ) )
+        dimdec = ( ( o1dec[0,1] + o1dec[1,1] ) / 2. -
+                   ( o1dec[0,0] + o1dec[1,0] ) / 2. )
+
+        r0 = max( o2ra[0,0], o2ra[0,1], o1ra[0,0], o1ra[0,1] )
+        r1 = min( o2ra[1,0], o2ra[1,1], o1ra[1,0], o1ra[1,1] )
+        d0 = max( o2dec[0,0], o2dec[1,0], o1dec[0,0], o2dec[1,0] )
+        d1 = min( o2dec[0,1], o2dec[1,1], o1dec[0,1], o1dec[1,1] )
+
+        dra = ( r1 - r0 ) / np.cos( (d1+d0 ) / 2. * np.pi / 180. )
         ddec = d1 - d0
 
-        return (dra * ddec) / (dimra * dimdec)
+        return ( dra * ddec ) / ( dimra * dimdec )
 
 
 class HasBitFlagBadness:
