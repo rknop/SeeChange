@@ -1,0 +1,14 @@
+{
+  "namespace": "seechange",
+  "type": "record",
+  "name": "seechange_nondetection",
+  "doc": "SeeChange pipeline nondetection",
+  "version": "0.0.1",
+  "fields": [
+    { "name": "image_id", "type": "long", "doc": "unique identifier of image of nondetection" },
+    { "name": "mjd", "type": "double", "doc": "MJD of image" },
+    { "name": "instrument": "type": "str", "doc": "Instrument of the image" },
+    { "name": "section_id", "type": "str", "doc": "Chip or sensor section of the image " },
+    { "name": "filter", "type": "str", "doc": "Filter of the image" },
+    { "name": "maglimit", type": "float", "doc": "5-sigma upper limit on image; many assumptions!" }
+}

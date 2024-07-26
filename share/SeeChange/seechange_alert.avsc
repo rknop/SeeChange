@@ -1,0 +1,25 @@
+{
+  "namespace": "seechange",
+  "type": "record",
+  "name": "seechange_alert",
+  "doc": "SeeChange pipeline detection alert",
+  "version": "0.0.1",
+  "fields": [
+    { "name": "alert_id", "type": "long", "doc": "unique alert identifier" },
+    { "name": "object", type: "seechange_object" },
+    { "name": "detection", "type": "seechange_detection" },
+    { "name": "previous_detections",
+      "type": [ "null", { "type": "array", "seechange_detection" } ],
+      "default": null },
+    { "name": "previous_nondetections",
+      "type": [ "null", { "type": "array", "seechange_nondetection" } ],
+      "default": null },
+    { "cutout_width": "type": "int" },
+    { "cutout_height": "type": "int" },
+    { "cutout_filter": "type": "string": "doc": "Filter of cutout images" },
+    { "cutout_zp": "type": "float", "doc": "Cutout zeropoint" },
+    { "newcutout": "type": [ "null", "bytes" ], "doc": "Science image cutout", "default": null },
+    { "refcutout": "type": [ "null", "bytes" ], "doc": "Template image cutout", "default": null },
+    { "subcotout": "type": [ "null", "bytes" ], "doc": "Difference image cutout", "default": null }
+  ]
+}

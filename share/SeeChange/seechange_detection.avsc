@@ -1,0 +1,29 @@
+{
+  "namespace": "seechange",
+  "type": "record",
+  "name": "seechange_detection",
+  "doc": "SeeChange pipeline detection",
+  "version": "0.0.1",
+  "fields": [
+    { "name": "measurements_id", "type": "long", "doc": "unique measurements identifier" },
+    { "name": "mjd", "type": "double", "doc": "MJD of the detection" },
+    { "name": "instrument", "type": "str", "doc": "Instrument of the detection" },
+    { "name": "section_id", "type": "str", "doc": "Chip or sensor section of the detection" },
+    { "name": "filter": "type": "str", "doc": "Filter of the detection" },
+    { "name": "zp", "type": "float", "doc": "Zeropoint for use with flux_*" },
+    { "name": "zp_err", "type": "float", "doc": "Statistical (~meaningless) uncertainty on zp" },
+    { "name": "flux_psf", "type": "float", "doc": "PSF flux of the measurement (ADU)" },
+    { "name": "flux_psf_err", "type": "float", "doc": "1-sigma uncertainty on flux_psf" },
+    { "name": "flux_aper", "type": "float", "doc": "Uncorrected aperture flux (ADU)" },
+    { "name": "flux_aper_err", "type": "float", "doc": "1-sigma uncertainty on flux_aper" },
+    { "name": "flux_aper_corr", "type": "float", "doc": "Magnitude aperture correction for flux_aper" },
+    { "name": "flux_aper_rad_pix", "type": "float", "doc": "Aperture radius (pixels)" },
+    { "name": "flux_aper_rad_arcsec": "type": "float", "doc": "Aperture radius (arcsec)" },
+    { "name": "mag", "type": "float", "doc": "Magnitude based on flux_psf and zp" },
+    { "name": "mag_err", "type": "float", "doc": "1-sigma uncertainty onag" }
+    { "name": "image_fwhm", "type": "float", "doc": "Characteristic image seeing FWHM (pixels)" },
+    { "name": "source_fwhm", "type": "float", "doc": "FWHM of the source on the difference image" },
+    { "name": "rb", "type": "float", "doc": "Real/Bogus score; 1=Real, 0=Bogus" },
+    { "name": "rbcut", "type": "float", "doc": "Real/Bogus cutoff; above this assumed real" }
+  ]
+}
