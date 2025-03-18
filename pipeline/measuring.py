@@ -287,6 +287,38 @@ class Measurer:
                         ):
                         keep = False
 
+                    # psf S/N
+                    if ( ( badthresh['psf_snr'] is not None )
+                         and ( np.isnan( m.flux_psf ) or ( np.isnan( m.flux_psf_err ) ) or ( np.flux_psf_err <= 0 ) or
+                               ( m.flux_psf / m.flux_psf_err <  badthresh['psf_snr'] )
+                              )
+                        ):
+                        is_bad = True
+                    if ( ( delthresh['psf_snr'] is not None )
+                         and ( np.isnan( m.flux_psf ) or ( np.isnan( m.flux_psf_err ) ) or ( np.flux_psf_err <= 0 ) or
+                               ( m.flux_psf / m.flux_psf_err <  delthresh['psf_snr'] )
+                              )
+                        ):
+                        keep = False
+
+                    # aperture S/N
+                    if badthresh['aper_snr'] is not None:
+                        for iaper in range( min( len( self.flux_apertures ), len( badthresh['aper_snr'] ) ) ):
+                            f = self.flux_apertres[ iaper ]
+                            df = self.flux_apertures_err[ iaper ]
+                            t = badthresh[ 'aper_snr' ][ iaper ]
+                            if ( ( t is not None ) and ( np.isnan( f ) or np.isnan( df )
+                                                         or ( df <= 0 ) or ( f / df < t ) ) ):
+                                is_bad = True
+                    if delthresh['aper_snr'] is not None:
+                        for iaper in range( min( len( self.flux_apertures ), len( delthresh['aper_snr'] ) ) ):
+                            f = self.flux_apertres[ iaper ]
+                            df = self.flux_apertures_err[ iaper ]
+                            t = delthresh[ 'aper_snr' ][ iaper ]
+                            if ( ( t is not None ) and ( np.isnan( f ) or np.isnan( df )
+                                                         or ( df <= 0 ) or ( f / df < t ) ) ):
+                                keep = False
+
                     # detection to center of fit psf distance
                     if ( badthresh['detection_dist'] is not None ) or ( delthresh['detection_dist'] is not None ):
                         dist = np.sqrt( ( m.x - m.center_x_pixel ) ** 2 + ( m.y - m.center_y_pixel ) ** 2 )

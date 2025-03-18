@@ -427,6 +427,11 @@ cutting:
 # of the source is masked.)
 #
 # See pipeline/measuring.py for definition of the parameters
+#
+# One notes : you need the length of the lists in
+# bad_thresholds.aper_snr and deletion_thresholds.aper_snr to match the
+# length of extraction.apertures.  Some elements can be null.  All
+# non-null cuts will be applied.
 
 measuring:
   annulus_radii: [ 4., 5. ]
@@ -437,6 +442,8 @@ measuring:
   negatives_n_sigma_outlier: 2.
   bad_thresholds:
     psf_fit_flags_bitmask: 0x2e
+    psf_snr: null
+    aper_snr: [ 5., null, null, null ]
     detection_dist: 5.
     gaussfit_dist: 5.
     elongation: 3.
@@ -446,6 +453,8 @@ measuring:
     negfluxfrac: 0.3
   deletion_thresholds:
     psf_fit_flags_bitmask: 0x2e
+    psf_snr: null
+    aper_snr: [ 5., null, null, null ]
     detection_dist: 5.
     gaussfit_dist: 5.
     elongation: 3.
