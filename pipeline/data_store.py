@@ -584,10 +584,10 @@ class DataStore:
             A list of arguments to parse.
             Possible argument combinations are:
             - DataStore: makes a copy of the other DataStore's __dict__
-            - exposure_id, section_id: give two integers or integer and string
+            - exposure_id, section_id: give a uuid, and an integer or a string
             - Exposure, section_id: an Exposure object, and an integer or string
             - Image: an Image object.
-            - image_id: give a single integer
+            - image_id: give a single uuid
 
         prov_tree : ProvenanceTree or None
            Initialize the DataStore's provenance tree (stored in the

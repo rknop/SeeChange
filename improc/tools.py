@@ -140,7 +140,7 @@ def find_and_apply_bscale( arr, rescut ):
 
 
 def pepper_stars( xsize=2048, ysize=2048, skynoise=42., seeing=4.2, gain=1.,
-                  nstars=20000, minflux=0., fluxscale=20000., rng=None ):
+                  nstars=20000, minflux=0., fluxscale=20000., rng=None, noiserng=None ):
     """The quick and dirty simulator that plops symmetric gaussian stars down on a noisy sky.
 
     Parameters
@@ -170,6 +170,12 @@ def pepper_stars( xsize=2048, ysize=2048, skynoise=42., seeing=4.2, gain=1.,
          have reproducible simulated data from a fixed seed.  If this is None,
          will just use np.random.default_rng().
 
+      noiserng : numpy.random.Generator or None
+         The rng used to generate the noise.  If this is None, it will use
+         the same rng used to generate star positions.  If you want two images
+         with the same star positions and fluxes but with different noise, call
+         pepper_stars twice with the same rng but different noiserngs.
+
     Returns
     -------
       image, var : 2d numpy arrays
@@ -178,13 +184,15 @@ def pepper_stars( xsize=2048, ysize=2048, skynoise=42., seeing=4.2, gain=1.,
     """
     if rng is None:
         rng = np.default_rng()
+    if noiserng is None:
+        noiserng = rng
 
     sky = gain * ( skynoise ** 2 )
     sigma = seeing / 2.35482
     halfwid = int( np.ceil( 4. * seeing ) )
     xvals, yvals = np.meshgrid( range(-halfwid, halfwid+1), range(-halfwid, halfwid+1) )
 
-    image = rng.normal( sky, skynoise, size=(ysize, xsize) )
+    image = noiserng.normal( sky, skynoise, size=(ysize, xsize) )
     var = np.full_like( image, skynoise*skynoise )
 
     for n in range( nstars ):
@@ -224,7 +232,7 @@ def pepper_stars( xsize=2048, ysize=2048, skynoise=42., seeing=4.2, gain=1.,
 
         image[ iy0:iy1, ix0:ix1 ] += star[ y0:y1, x0:x1 ]
         var[ iy0:iy1, ix0:ix1 ] += dstar[ y0:y1, x0:x1 ] ** 2
-        image[ iy0:iy1, ix0:ix1 ] += rng.normal( 0., dstar[ y0:y1, x0:x1 ] )
+        image[ iy0:iy1, ix0:ix1 ] += noiserng.normal( 0., dstar[ y0:y1, x0:x1 ] )
 
     return image, var
 
