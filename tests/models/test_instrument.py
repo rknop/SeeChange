@@ -26,6 +26,7 @@ def test_base_instrument_not_implemented():
         inst.get_filename_regex()
 
 
+@pytest.mark.skip( "This is now obsolete given the current assumption sections are static.  See Issue #487." )
 def test_global_vs_sections_values():
     inst = DemoInstrument()
     inst.name = 'TestInstrument' + uuid.uuid4().hex

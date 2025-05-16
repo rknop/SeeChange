@@ -72,9 +72,9 @@ def retry_download( url, fpath, md5sum=None, retries=5, sleeptime=5, exists_ok=T
     # it was never there, or because it was clobbered.
 
     if logger.getEffectiveLevel() >= logging.DEBUG:
-        logger.info( f"download_exposures: Downloading {url} to {fpath}" )
+        logger.info( f"retry_download: Downloading {url} to {fpath}" )
     else:
-        logger.info( f"download_exposures: Downloading {fname}" )
+        logger.info( f"retry_download: Downloading {fname}" )
 
     countdown = retries
     success = False
