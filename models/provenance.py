@@ -421,7 +421,7 @@ class Provenance(Base):
                     cvid = rows[0][0]
                 else:
                     cvid = uuid.uuid4()
-                    cursor.execute( "INSERT INTO code_version(_id,process,version_major,version_minor,version_patch) "
+                    cursor.execute( "INSERT INTO code_versions(_id,process,version_major,version_minor,version_patch) "
                                     "VALUES (%(id)s,%(proc)s,%(maj)s,%(min)s,%(pat)s)",
                                     { 'id': str(cvid),
                                       'proc': process,
