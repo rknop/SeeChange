@@ -549,19 +549,7 @@ def main():
     else:
         SCLogger.set_level( logging.INFO )
 
-    # I'm not really happy about how we handle the whole filter and filter_short thing
-    #   right now.  This is kind of a hack, needed for the database searches to work.
-    # It'd be nice if in the database we stored filter_short, and then the class had a
-    #   lookup from full filter descriptions in headers to filter_short.
-    filtertranslation = { 'g': 'g DECam SDSS c0001 4720.0 1520.0',
-                          'r': 'r DECam SDSS c0002 6415.0 1480.0',
-                          'i': 'i DECam SDSS c0003 7835.0 1470.0',
-                          'z': 'z DECam SDSS c0004 9260.0 1520.0' }
-    if args.filter not in filtertranslation:
-        raise ValueError( f"Unknown filter {args.filter}" )
-    band = filtertranslation[ args.filter ]
-
-    fetcher = DECamRefFetcher( args.ra, args.dec, band,
+    fetcher = DECamRefFetcher( args.ra, args.dec, args.filter,
                                min_exptime=args.min_exptime, max_seeing=args.max_seeing, min_depth=args.min_depth,
                                min_mjd=args.min_mjd, max_mjd=args.max_mjd, min_per_chip=args.min_num_per_chip,
                                numprocs=args.numprocs,
