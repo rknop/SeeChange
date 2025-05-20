@@ -238,7 +238,13 @@ class DECamRefFetcher:
                 #   False.  We want it to not use the image when the
                 #   value is NaN (if the appropriate limit isn't itself
                 #   None).
-                if self.decam.get_short_filter_name( filter ) != self.decam.get_short_filter_name( self.filter ):
+                try:
+                    short_filter_name = self.decam.get_short_filter_name( filter )
+                except Exception:
+                    # If that failed, it's probably because the DECam class doesn't
+                    #  recognize the filter, so we don't care anyway
+                    continue
+                if short_filter_name != self.decam.get_short_filter_name( self.filter ):
                     continue
                 if ( ( ( self.max_seeing is not None )
                        and
