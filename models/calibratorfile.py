@@ -1,17 +1,21 @@
 import os
+import re
 import time
 import math
 import datetime
 import contextlib
 import random
+import uuid
+import multiprocessing
+
+import psycopg2.extras
 
 import sqlalchemy as sa
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.schema import UniqueConstraint
-from sqlalchemy.exc import IntegrityError
 
-from models.base import Base, UUIDMixin, SmartSession
+from models.base import Base, UUIDMixin, Psycopg2Connection
 from models.enums_and_bitflags import CalibratorTypeConverter, CalibratorSetConverter, FlatTypeConverter
 
 from util.logger import SCLogger
@@ -161,8 +165,6 @@ class CalibratorFileDownloadLock(Base, UUIDMixin):
         doc="Type of calibrator (Dark, Flat, Linearity, etc.)"
     )
 
-    _locks = {}
-
     @hybrid_property
     def type( self ):
         return CalibratorTypeConverter.convert( self._type )
@@ -237,12 +239,96 @@ class CalibratorFileDownloadLock(Base, UUIDMixin):
                  f"flat_type={self.flat_type}, "
                  f"for {self.instrument} section {self.sensor_section})" )
 
+
+    @classmethod
+    def update_lock_heartbeat( cls, instrument, section, calibset, calibtype, flattype, pipe ):
+        """Update the heartbeat described in acquire_lock below."""
+
+        # Some of the SCLogger.debug comments below are useful when debugging the lock
+        #   mechanism itself, but are too spammy for general use (even with debug)
+        #   Thus, they are commented out, but not deleted so it's easy to put them back.
+
+        me = multiprocessing.current_process()
+        SCLogger.replace( midformat=me.name )
+
+        SCLogger.debug( "Heartbeat process starting." )
+
+        calibset = CalibratorSetConverter.to_int( calibset )
+        calibtype = CalibratorTypeConverter.to_int( calibtype )
+        flattype = CalibratorTypeConverter.to_int( flattype )
+
+        while True:
+            if pipe.poll( timeout=5 ):
+                msg = pipe.recv()
+                if msg == "exit":
+                    # This next line is too much even for debug, unless debugging the lock mechanism itself
+                    SCLogger.debug( "Heartbeat process exiting." )
+                    return
+
+            SCLogger.debug( "Updating heartbeat." )
+            with Psycopg2Connection() as conn:
+                cursor = conn.cursor()
+                q = ( f"UPDATE calibfile_downloadlock SET modified=%(now)s "
+                      f"WHERE instrument=%(inst)s "
+                      f"  AND sensor_section{' IS NULL' if section is None else '=%(sec)s'} "
+                      f"  AND _calibrator_set{' IS NULL' if calibset is None else '=%(calibset)s'} "
+                      f"  AND _type{' IS NULL' if calibtype is None else '=%(calibtype)s'} "
+                      f"  AND _flat_type{' IS NULL' if flattype is None else '=%(flattype)s'} " )
+                cursor.execute( q, { 'inst': instrument, 'sec': section, 'calibset': calibset,
+                                     'calibtype': calibtype, 'flattype': flattype,
+                                     'now': datetime.datetime.now( tz=datetime.UTC ) } )
+                conn.commit()
+
+
     @classmethod
     @contextlib.contextmanager
-    def acquire_lock( cls, instrument, section, calibset, calibtype, flattype=None, maxsleep=40, session=None ):
+    def acquire_lock( cls, instrument, section, calibset, calibtype, flattype=None,
+                      heartbeat_interval=5, heartbeat_timeout=15, maxsleep=40 ):
         """Get a lock on updating/adding Calibrators of a given type for a given instrument/section.
 
-        This class method should *only* be called as a context manager ("with").
+        This class method should *only* be called as a context manager
+        ("with").  Do NOT call this method when you are holding open a
+        database connection, because this method could potentially take
+        a long time to return (as it waits for another process to finish
+        a big download).
+
+        OK.  This is highly unpleasant.  Here are the constraints:
+
+          * We don't want multiple processes all trying to download the
+            same calibrator file at the same time.  Not only will this
+            lead to contention, this will slow everything down as a big
+            (tens of MB) file is downloaded many times when it only
+            needs to be downloaded once.
+
+          * We don't want to hold a database connection open while we're
+            doing the download, because downloads take long enough that
+            that violates the principle of keeping database connections
+            open for only short periods of time in order to avoid
+            exhausting server resources.  This scotches database locks
+            (even row locks) as a solution.  (It's worse than it sounds,
+            because not only will the processes doing downloading be
+            holding open connections, but so will all the other
+            processes waiting for the table lock.)
+
+          * A cooperative, "I promise to free this when I'm done" lock
+            isn't good enough.  Even with all the try/finally blocks in
+            the world, you'll hit a situation were the computer crashes,
+            or the process is killed, while it's in the middle of
+            downloading, and it never actually frees the manual
+            cooperative lock.  (This is what we tried before, and, yeah,
+            we ended up with a bunch of dead locks sitting around.
+            You've probably seen this with things like git, where there
+            are dead locks sitting around, and you just manually
+            override.  We can't manually override in an automated
+            pipeline.)
+
+        So what do we do?  A cooperative "I promise to free this when
+        I'm done" lock, only with you having to renew the promise
+        constantly.  If you go to get a lock, see that somebody else has
+        it, but the promise hasn't been renewed recently enough, you can
+        grab it.
+
+        What a mess.
 
         Parameters
         ----------
@@ -261,115 +347,142 @@ class CalibratorFileDownloadLock(Base, UUIDMixin):
         flattype: str, default None
            The flat type if calibtype is 'flat'
 
+        heartbeat_interval: int, default 5
+           Send a "no, really, I have the lock!" heart beat at intervals
+           of this many seconds.
+
+        hearbeat_timeout: int, default 15
+           If the heartbeat on a lock hasn't been updated in this many
+           seconds, assume it's stale and can be blow away.
+
         maxsleep: int, default 40
            Keep trying for at most this many seconds before finally
            giving up and failing to get the lock.
 
-        session: Session
-
-        We need to avoid a race condition where two processes both look
-        for a calibrator file, don't find it, and both try to download
-        it at the same time.  Just using database locks doesn't work
-        here, because the process of downloading and committing the
-        images takes long enough that the database server starts whining
-        about deadlocks.  So, we manually invent our own database lock
-        mechanism here and use that.  (One advantage is that we can just
-        lock the specific thing being downloaded.)
-
-        This has a danger : if the code fully crashes with a lock
-        checked out, it will leave behind this lock (i.e. the row in the
-        database).  That should be rare, because of the use of yield
-        below, but a badly-time crash could leave these rows behind.
-
         """
 
-        # First, see if the session already has the lock, and if so, just
-        #  return (not yield) it.  (In this case, this function was called
-        #  earlier with the same session.)
-        if ( session is not None ) and ( session in cls._locks ):
-            return cls._locks[ session ]
-
-        lockid = None
-        fail = False
-        sleepmin = 0.25
-        sleepsigma = 0.25
+        sleepmin = 1.
+        sleepsigma = 0.5
+        sleepmax = 3.  # ...why, yes, I have sleepmax and maxsleep and they mean different things.  What's your point?
         totsleep = 0.
         # Use os.urandom() to see the rng because if we just use the
         #  random module stuff, it will use the system clock.  A bunch
         #  of processes may well hit this line at the same time and get
         #  the same random seed.
         random.seed( os.urandom(4) )
+
+        whereclause = ( f"WHERE instrument=%(inst)s "
+                        f"  AND sensor_section{' IS NULL' if section is None else '=%(sec)s'} "
+                        f"  AND _calibrator_set{' IS NULL' if calibset is None else '=%(calibset)s'} "
+                        f"  AND _type{' IS NULL' if calibtype is None else '=%(calibtype)s'} "
+                        f"  AND _flat_type{' IS NULL' if flattype is None else '=%(flattype)s'}" )
+        subdict = { 'inst': instrument,
+                    'sec': section,
+                    'calibset': CalibratorSetConverter.to_int( calibset ),
+                    'calibtype': CalibratorTypeConverter.to_int( calibtype ),
+                    'flattype': FlatTypeConverter.to_int( flattype )
+                   }
+
+        gotlock = False
+        mypipe = None
+        process = None
         try:
-            SCLogger.debug( f"Trying to get CalibratorFileDownloadLock for "
-                            f"{instrument} {section} {calibset} {calibtype}" )
-            while ( lockid is None ) and ( not fail ):
-                # Try to create the lock
-                with SmartSession(session) as sess:
+            SCLogger.debug( f"Trying to get lock for {instrument} {section} calibset={calibset} "
+                            f"calibtype={calibtype} flattype={flattype}" )
+
+            # To start: try to get a lock on the calibfiles_downloadlock table itself,
+            #   and, if we get it, see if the row we're after exists.  If not,
+            #   create it.  Otherwise, sleep, and then try again... until the
+            #   modified date on the row is too old, at which point we're just
+            #   going to assume control of it.
+            done = False
+            while not done:
+                tsleep = min( sleepmax, sleepmin + math.fabs( random.normalvariate( mu=0., sigma=sleepsigma ) ) )
+                with Psycopg2Connection() as conn:
+                    cursor = conn.cursor( cursor_factory=psycopg2.extras.RealDictCursor )
                     try:
-                        caliblock = CalibratorFileDownloadLock( calibrator_set=calibset,
-                                                                instrument=instrument,
-                                                                type=calibtype,
-                                                                sensor_section=section,
-                                                                flat_type=flattype )
-                        sess.add( caliblock )
-                        # SCLogger.debug( "CalibratorFileDownloadLock comitting" )
-                        sess.commit()
-                        sess.refresh( caliblock )
-                        lockid = caliblock.id
-                    except IntegrityError:
-                        sess.rollback()
-                        lockid = None
-                if lockid is None:
-                    # Lock already existed, so wait a bit and try again
-                    if totsleep > maxsleep:
-                        fail = True
-                    else:
-                        # We used to keep exponentially expanding the sleep time by a factor of 2
-                        # each time, but that had a race condition of its own.  When launching a
-                        # bunch of processes with a multiprocessing pool, they'd all be synchronized
-                        # enough that multiple processes would get to a long sleep at the same time,
-                        # and then all pool for the lock at close enough to the same time that only
-                        # one would get it.  The rest would all wait a very long time (while, for
-                        # most of it, no lock was being held) before trying again.  They'd only have
-                        # a few tries left, and ultimately several would fail.  So, instead, wait a
-                        # random amount of time, to prevent synchronization.
-                        tsleep = sleepmin + math.fabs( random.normalvariate( mu=0., sigma=sleepsigma ) )
+                        cursor.execute( "LOCK TABLE calibfile_downloadlock NOWAIT" )
+                    except psycopg2.errors.LockNotAvailable:
+                        if totsleep > maxsleep:
+                            raise RuntimeError( f"Failed to get the lock on calibfile_downloadlock after "
+                                                f"{totsleep:.1f} seconds." )
+                        # Next line is useful debugging the lock mechanism, but too spammy for general use
+                        SCLogger.debug( f"sleeping {tsleep:.2f} seconds waiting for table lock" )
                         time.sleep( tsleep )
                         totsleep += tsleep
+                        continue
 
-            if fail:
-                raise RuntimeError( f"Couldn't get CalibratorFileDownloadLock for "
-                                    f"{instrument} {section} {calibset} {calibtype} after many tries." )
+                    now = datetime.datetime.now( tz=datetime.UTC )
+                    cursor.execute( f"SELECT * FROM calibfile_downloadlock {whereclause}", subdict )
+                    rows = cursor.fetchall()
+                    if len(rows) != 0:
+                        # Somebody else has the lock.  Be suspicious.  See if the hearbeat has been updated.
+                        if now - rows[0]['modified'] < datetime.timedelta( seconds=heartbeat_timeout ):
+                            # OK, OK, the claim has been refreshed recently, we'll be nice.
+                            if totsleep > maxsleep:
+                                raise RuntimeError( f"Failed to claim the calibfile_downloadlock row for "
+                                                    f"{instrument} {section} calibset={calibset} calibtype={calibtype} "
+                                                    f"flattype={flattype} after {totsleep:.1f}s" )
+                            time.sleep( tsleep )
+                            # Next line is useful debugging the lock mechanism, but too spammy for general use
+                            SCLogger.debug( f"sleeping {tsleep:.2f} seconds waiting for row not to be there" )
+                            totsleep += tsleep
+                            continue
+                        else:
+                            # The lock is too old.  Piss on it to claim it for ourselves.
+                            newdict = subdict.copy()
+                            newdict['now'] = now
+                            SCLogger.debug( "Existing lock is too old, claiming it." )
+                            cursor.execute( f"UPDATE calibfile_downloadlock SET modified=%(now)s {whereclause}",
+                                            newdict )
+                            conn.commit()
+                            done = True
+                    else:
+                        # The row didn't exist!  Make it!
+                        SCLogger.debug( "Creating lock row." )
+                        insertdict = subdict.copy()
+                        insertdict['id'] = uuid.uuid4()
+                        cursor.execute( "INSERT INTO calibfile_downloadlock(_id,instrument,sensor_section,"
+                                        "                                   _calibrator_set,_type,_flat_type ) "
+                                        "VALUES (%(id)s,%(inst)s,%(sec)s,%(calibset)s,%(calibtype)s,%(flattype)s)",
+                                        insertdict )
+                        conn.commit()
+                        done = True
 
-            # Assign the lock to the passed session, if any
-            if session is not None:
-                cls._locks[session] = lockid
+            # Start a subprocess to regularly update the "modified" field of the
+            #   table so nobody else does what... well, what we might just have done.
+            SCLogger.debug( "Starting lock heartbeat process." )
+            me = multiprocessing.current_process()
+            match = re.search( '([0-9]+)', me.name )
+            if match is not None:
+                name = f"{int(match.group(1)):3d} - lock-heartbeat"
+            elif me.name == "MainProcess":
+                name = "lock-heartbeat"
+            else:
+                name = f"{me.name} - lock-heartbeat"
+            mypipe, theirpipe = multiprocessing.Pipe()
+            process = multiprocessing.Process( target=CalibratorFileDownloadLock.update_lock_heartbeat,
+                                               kwargs={ 'instrument': instrument, 'section': section,
+                                                        'calibset': calibset, 'calibtype': calibtype,
+                                                        'flattype': flattype, 'pipe': theirpipe },
+                                               name=name )
+            process.start()
 
-            yield lockid
+            gotlock = True
+
+            # Yield and let whoever called us play with their shiny new lock
+
+            yield True
 
         finally:
-            if lockid is not None:
-                with SmartSession(session) as sess:
-                    SCLogger.debug( f"Deleting calibfile_downloadlock {lockid} for "
-                                    f"{instrument} {section} {calibset} {calibtype}" )
-                    sess.connection().execute( sa.text( 'DELETE FROM calibfile_downloadlock WHERE _id=:id' ),
-                                               { 'id': lockid } )
-                    sess.commit()
+            # Tell the heartbeat process to stop doing its thing
+            if ( process is not None ) and ( mypipe is not None ):
+                mypipe.send( "exit" )
+                process.join()
 
-            if session is not None:
-                try:
-                    del cls._locks[ session ]
-                except KeyError:
-                    pass
-
-
-    @classmethod
-    def lock_reaper( cls, secondsold=120 ):
-        """Utility function for cleaning out rows that are older than a certain cutoff."""
-
-        cutoff = datetime.datetime.now() - datetime.timestamp( seconds=secondsold )
-        with SmartSession() as sess:
-            oldlocks = sess.query( cls ).filter( cls.created_at > cutoff ).all()
-            for oldlock in oldlocks:
-                sess.delete( oldlock )
-            sess.commit()
+            # If we got the lock, we have to delete it
+            if gotlock:
+                with Psycopg2Connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute( f"DELETE FROM calibfile_downloadlock {whereclause}", subdict )
+                    conn.commit()
