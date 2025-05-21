@@ -450,7 +450,7 @@ def test_linearity( decam_raw_image, decam_default_calibrators ):
     try:
         with SmartSession() as session:
             info = decam.preprocessing_calibrator_files( 'externally_supplied', 'externally_supplied',
-                                                         im.section_id, im.filter_short, im.mjd, session=session )
+                                                         im.section_id, im.filter_short, im.mjd )
             lindf = session.get( DataFile, info['linearity_fileid'] )
             im.data = decam.overscan_and_trim( im )
             assert im.data.shape == ( 4096, 2048 )
