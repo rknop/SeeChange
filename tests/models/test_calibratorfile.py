@@ -43,7 +43,6 @@ def test_acquire_lock( kwargs ):
         cursor.execute( f"SELECT * FROM calibfile_downloadlock {whereclause(kwargs)}", kwargs )
         assert len( cursor.fetchall() ) == 0
 
-    import pdb; pdb.set_trace()
     # Get the lock, then make sure it's there
     with CalibratorFileDownloadLock.acquire_lock( **kwargs ):
         with Psycopg2Connection() as conn:
