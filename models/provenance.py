@@ -65,7 +65,7 @@ class CodeVersion(Base, UUIDMixin):
     #     affecting provenances. MINOR changes will result in some change in the data products, and MAJOR will
     #     represent a major change in how they interact with other parts of the pipeline.
     CODE_VERSION_DICT = {
-        'preprocessing': (0,1,0),
+        'preprocessing': (0,1,1),
         'extraction': (0,1,0),
         'astrocal' : (0,1,0),
         'photocal' : (0,1,0),

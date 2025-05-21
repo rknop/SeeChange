@@ -251,11 +251,12 @@ class CalibratorFileDownloadLock(Base, UUIDMixin):
         me = multiprocessing.current_process()
         SCLogger.replace( midformat=me.name )
 
-        SCLogger.debug( "Heartbeat process starting." )
+        SCLogger.debug( f"Heartbeat process starting with instrument={instrument}, section={section}, "
+                        f"calibset={calibset}, calibtype={calibtype}, flattype={flattype}" )
 
         calibset = CalibratorSetConverter.to_int( calibset )
         calibtype = CalibratorTypeConverter.to_int( calibtype )
-        flattype = CalibratorTypeConverter.to_int( flattype )
+        flattype = FlatTypeConverter.to_int( flattype )
 
         while True:
             if pipe.poll( timeout=5 ):
