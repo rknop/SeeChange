@@ -531,14 +531,11 @@ class DECam(Instrument):
             # file for all chips.  So, to avoid chaos, we will get
             # the CalibratorFileDownloadLock for it with section=None;
             # that will prevent different processes inside this function
-            # from stepping on each others' toes.  (By the time this
-            # this function is called, we should already have the lock
-            # for one specific section, but not for the whole
-            # instrument.)
+            # from stepping on each others' toes.
 
             SCLogger.debug( f"decam._get_default_calibrator: getting lock for {self.name} on all chips "
                             f"for linearity file {os.path.basename(filepath)}" )
-            with CalibratorFileDownloadLock.acquire_lock( instrument=self.name,
+            with CalibratorFileDownloadLock.acquire_lock( instrument='DECam',
                                                           section=None,
                                                           calibset='externally_supplied',
                                                           calibtype='linearity'
