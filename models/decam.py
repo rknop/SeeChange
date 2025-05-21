@@ -485,7 +485,7 @@ class DECam(Instrument):
 
         return trans_mag, trans_magerr
 
-    def _get_default_calibrator( self, mjd, section, calibtype='dark', filter=None, session=None ):
+    def _get_default_calibrator( self, mjd, section, calibtype='dark', filter=None ):
         # Just going to use the 56876 versions for everything
         # (configured in the yaml files), even though there are earlier
         # versions.  "Good enough."
@@ -497,9 +497,9 @@ class DECam(Instrument):
         from models.calibratorfile import CalibratorFile, CalibratorFileDownloadLock
 
         cfg = Config.get()
-        cv = Provenance.get_code_version( session=session, process='DECam Default Calibrator' )
+        cv = Provenance.get_code_version( process='DECam Default Calibrator' )
         prov = Provenance( process='DECam Default Calibrator', code_version_id=cv.id )
-        prov.insert_if_needed( session=session )
+        prov.insert_if_needed()
 
         reldatadir = pathlib.Path( "DECam_default_calibrators" )
         datadir = pathlib.Path( FileOnDiskMixin.local_path ) / reldatadir
@@ -541,12 +541,11 @@ class DECam(Instrument):
             with CalibratorFileDownloadLock.acquire_lock( instrument=self.name,
                                                           section=None,
                                                           calibset='externally_supplied',
-                                                          calibtype='linearity',
-                                                          session=session
+                                                          calibtype='linearity'
                                                          ):
                 SCLogger.debug( "decam._get_default_calibrator: received lock on all chips for linearity file" )
 
-                with SmartSession( session ) as dbsess:
+                with SmartSession() as dbsess:
                     # Gotta check to see if the file was there from
                     # something that didn't go all the way through
                     # before, or if it was downloaded by another process
@@ -559,14 +558,14 @@ class DECam(Instrument):
                     retry_download( url, fileabspath )
                     datafile = DataFile( filepath=str(filepath), provenance_id=prov.id )
                     datafile.save( str(fileabspath) )
-                    datafile.insert( session=session )
+                    datafile.insert()
 
                 # Linearity file applies for all chips, so load the database accordingly
                 # Once again, gotta check to make sure the entry doesn't already exist,
                 # because somebody else may have created it while we were waiting for
                 # the calibfile_downloadlock.  No race condition here, because nobody
                 # else can muck with this table while we have the calibfile_downloadlock.
-                with SmartSession( session ) as dbsess:
+                with SmartSession() as dbsess:
                     for ssec in self._chip_radec_off.keys():
                         if ( dbsess.query( CalibratorFile )
                              .filter( CalibratorFile.type=='linearity' )
@@ -599,40 +598,49 @@ class DECam(Instrument):
             SCLogger.debug( f"decam_get_default_calibrator: releasing lock for {self.name} on all chips "
                             f"for linearity file {os.path.basename(filepath)}" )
         else:
-            # No need to get a new calibfile_downloadlock, we should already have the one for this type and section
-            retry_download( url, fileabspath )
+            SCLogger.debug( f"decam_get_default_calibrator: getting calibfile lock for {self.name} {section} "
+                            f"calibset='externally_supplied' calibtype={calibtype}" )
+            with CalibratorFileDownloadLock.acquire_lock( instrument='DECam',
+                                                          sensor_section=section,
+                                                          calibset='externally_supplied',
+                                                          calibtype=calibtype,
+                                                          flattype=( 'externally_supplied' if calibtype == 'flat'
+                                                                     else None ) ):
+                retry_download( url, fileabspath )
 
-            # We know calibtype will be one of fringe, flat, or illumination
-            if calibtype == 'fringe':
-                dbtype = 'Fringe'
-            elif calibtype == 'flat':
-                dbtype = 'ComDomeFlat'
-            elif calibtype == 'illumination':
-                dbtype = 'ComSkyFlat'
-            mjd = float( cfg.value( "DECam.calibfiles.mjd" ) )
-            image = Image( format='fits', type=dbtype, provenance_id=prov.id, instrument='DECam',
-                           telescope='CTIO4m', filter=filter, section_id=section, filepath=str(filepath),
-                           mjd=mjd, end_mjd=mjd,
-                           info={}, exp_time=0, ra=0., dec=0.,
-                           ra_corner_00=0., ra_corner_01=0.,ra_corner_10=0., ra_corner_11=0.,
-                           dec_corner_00=0., dec_corner_01=0., dec_corner_10=0., dec_corner_11=0.,
-                           minra=0, maxra=0, mindec=0, maxdec=0,
-                           target="", project="" )
-            # Use FileOnDiskMixin.save instead of Image.save here because we're doing
-            # a lower-level operation.  image.save would be if we wanted to read and
-            # save FITS data, but here we just want to have it make sure the file
-            # is in the right place and check its md5sum.  (FileOnDiskMixin.save, when
-            # given a filename, will move that file to where it goes in the local data
-            # storage unless it's already in the right place.)
-            FileOnDiskMixin.save( image, fileabspath )
-            calfile = CalibratorFile( type=calibtype,
-                                      calibrator_set='externally_supplied',
-                                      flat_type='externally_supplied' if calibtype == 'flat' else None,
-                                      instrument='DECam',
-                                      sensor_section=section,
-                                      image_id=image.id )
-            image.insert( session=session )
-            calfile.insert( session=session )
+                # We know calibtype will be one of fringe, flat, or illumination
+                if calibtype == 'fringe':
+                    dbtype = 'Fringe'
+                elif calibtype == 'flat':
+                    dbtype = 'ComDomeFlat'
+                elif calibtype == 'illumination':
+                    dbtype = 'ComSkyFlat'
+                mjd = float( cfg.value( "DECam.calibfiles.mjd" ) )
+                image = Image( format='fits', type=dbtype, provenance_id=prov.id, instrument='DECam',
+                               telescope='CTIO4m', filter=filter, section_id=section, filepath=str(filepath),
+                               mjd=mjd, end_mjd=mjd,
+                               info={}, exp_time=0, ra=0., dec=0.,
+                               ra_corner_00=0., ra_corner_01=0.,ra_corner_10=0., ra_corner_11=0.,
+                               dec_corner_00=0., dec_corner_01=0., dec_corner_10=0., dec_corner_11=0.,
+                               minra=0, maxra=0, mindec=0, maxdec=0,
+                               target="", project="" )
+                # Use FileOnDiskMixin.save instead of Image.save here because we're doing
+                # a lower-level operation.  image.save would be if we wanted to read and
+                # save FITS data, but here we just want to have it make sure the file
+                # is in the right place and check its md5sum.  (FileOnDiskMixin.save, when
+                # given a filename, will move that file to where it goes in the local data
+                # storage unless it's already in the right place.)
+                FileOnDiskMixin.save( image, fileabspath )
+                calfile = CalibratorFile( type=calibtype,
+                                          calibrator_set='externally_supplied',
+                                          flat_type='externally_supplied' if calibtype == 'flat' else None,
+                                          instrument='DECam',
+                                          sensor_section=section,
+                                          image_id=image.id )
+                image.insert()
+                calfile.insert()
+            SCLogger.debug( f"decam_get_default_calibrator: releasing calibfile lock for {self.name} {section} "
+                            f"calibset='externally_supplied' calibtype={calibtype}" )
 
         return calfile
 

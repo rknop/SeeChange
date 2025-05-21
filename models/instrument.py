@@ -1473,10 +1473,13 @@ class Instrument:
 
         return None
 
-    def preprocessing_calibrator_files( self, calibset, flattype, section, filter, mjd, nofetch=False, session=None ):
+    def preprocessing_calibrator_files( self, calibset, flattype, section, filter, mjd, nofetch=False ):
         """Get a dictionary of calibrator images/datafiles for a given mjd and sensor section.
 
-        MIGHT call session.commit(); see below.
+        Don't call this when you're holding open a database session, as
+        it may take a while to run -- it may have to download files.
+        Plus, iternally, it will open database sessions, and we don't
+        want them to pile up.
 
         Instruments *may* need to override this.
 
@@ -1510,7 +1513,6 @@ class Instrument:
           the instrument's _get_default_calibrators method if an
           externally_supplied calibrator isn't found in the database.
           Ignored if calibset is not externally_supplied.
-        session: Session
 
         Returns
         -------
@@ -1535,7 +1537,7 @@ class Instrument:
         # the file because calibrator.py imports image.py, image.py
         # imports exposure.py, and exposure.py imports instrument.py --
         # leading to a circular import
-        from models.calibratorfile import CalibratorFile, CalibratorFileDownloadLock
+        from models.calibratorfile import CalibratorFile
         from models.image import Image
 
         params = {}
@@ -1549,55 +1551,50 @@ class Instrument:
             SCLogger.debug( f'Looking for calibrators for {section} type {calibtype}' )
 
             calib = None
-            with CalibratorFileDownloadLock.acquire_lock(
-                    self.name, section, calibset, calibtype, flattype, session=session
-            ):
-                with SmartSession(session) as dbsess:
-                    calibquery = ( dbsess.query( CalibratorFile )
-                                   .filter( CalibratorFile.calibrator_set == calibset )
-                                   .filter( CalibratorFile.instrument == self.name )
-                                   .filter( CalibratorFile.type == calibtype )
-                                   .filter( CalibratorFile.sensor_section == section )
-                                   .filter( sa.or_( CalibratorFile.validity_start.is_(None),
-                                                    CalibratorFile.validity_start <= expdatetime ) )
-                                   .filter( sa.or_( CalibratorFile.validity_end.is_(None),
-                                                    CalibratorFile.validity_end >= expdatetime ) )
-                                  )
-                    if calibtype == 'flat':
-                        calibquery = calibquery.filter( CalibratorFile.flat_type == flattype )
-                    if ( calibtype in [ 'flat', 'fringe', 'illumination' ] ) and ( filter is not None ):
-                        calibquery = ( calibquery.join( Image, CalibratorFile.image_id==Image._id )
-                                       .filter( Image.filter == filter ) )
+            with SmartSession() as dbsess:
+                calibquery = ( dbsess.query( CalibratorFile )
+                               .filter( CalibratorFile.calibrator_set == calibset )
+                               .filter( CalibratorFile.instrument == self.name )
+                               .filter( CalibratorFile.type == calibtype )
+                               .filter( CalibratorFile.sensor_section == section )
+                               .filter( sa.or_( CalibratorFile.validity_start.is_(None),
+                                                CalibratorFile.validity_start <= expdatetime ) )
+                               .filter( sa.or_( CalibratorFile.validity_end.is_(None),
+                                                CalibratorFile.validity_end >= expdatetime ) )
+                              )
+                if calibtype == 'flat':
+                    calibquery = calibquery.filter( CalibratorFile.flat_type == flattype )
+                if ( calibtype in [ 'flat', 'fringe', 'illumination' ] ) and ( filter is not None ):
+                    calibquery = ( calibquery.join( Image, CalibratorFile.image_id==Image._id )
+                                   .filter( Image.filter == filter ) )
 
-                    if calibquery.count() > 1:
-                        SCLogger.warning( f"Found {calibquery.count()} valid {calibtype}s for "
-                                          f"{self.name} {section}, randomly using one." )
-                    if calibquery.count() > 0:
-                        SCLogger.debug( f"Got an existing valid {calibtype} for {self.name} {section}" )
-                        calib = calibquery.first()
+                if calibquery.count() > 1:
+                    SCLogger.warning( f"Found {calibquery.count()} valid {calibtype}s for "
+                                      f"{self.name} {section}, randomly using one." )
+                if calibquery.count() > 0:
+                    SCLogger.debug( f"Got an existing valid {calibtype} for {self.name} {section}" )
+                    calib = calibquery.first()
 
-                if ( calib is None ) and ( calibset == 'externally_supplied' ) and ( not nofetch ):
-                    # This is the real reason we got the calibfile downloadlock, but of course
-                    # we had to do it before searching for the file so that we don't have a race
-                    # condition for multiple processes all downloading the file at once.
-                    calib = self._get_default_calibrator( mjd, section, calibtype=calibtype,
-                                                          filter=filter,
-                                                          session=session )
-                    SCLogger.debug( f"Got default calibrator {calib} for {calibtype} {section}" )
+            if ( calib is None ) and ( calibset == 'externally_supplied' ) and ( not nofetch ):
+                # This is the real reason we got the calibfile downloadlock, but of course
+                # we had to do it before searching for the file so that we don't have a race
+                # condition for multiple processes all downloading the file at once.
+                calib = self._get_default_calibrator( mjd, section, calibtype=calibtype, filter=filter )
+                SCLogger.debug( f"Got default calibrator {calib} for {calibtype} {section}" )
 
-                if calib is None:
+            if calib is None:
+                params[ f'{calibtype}_isimage' ] = False
+                params[ f'{calibtype}_fileid' ] = None
+            else:
+                if calib.image_id is not None:
+                    params[ f'{calibtype}_isimage' ] = True
+                    params[ f'{calibtype}_fileid' ] = calib.image_id
+                elif calib.datafile_id is not None:
                     params[ f'{calibtype}_isimage' ] = False
-                    params[ f'{calibtype}_fileid' ] = None
+                    params[ f'{calibtype}_fileid' ] = calib.datafile_id
                 else:
-                    if calib.image_id is not None:
-                        params[ f'{calibtype}_isimage' ] = True
-                        params[ f'{calibtype}_fileid' ] = calib.image_id
-                    elif calib.datafile_id is not None:
-                        params[ f'{calibtype}_isimage' ] = False
-                        params[ f'{calibtype}_fileid' ] = calib.datafile_id
-                    else:
-                        raise RuntimeError( f'Data corruption: CalibratorFile {calib.id} has neither '
-                                            f'image_id nor datafile_id' )
+                    raise RuntimeError( f'Data corruption: CalibratorFile {calib.id} has neither '
+                                        f'image_id nor datafile_id' )
         return params
 
     def overscan_sections( self, header ):
