@@ -598,7 +598,7 @@ class DECam(Instrument):
             SCLogger.debug( f"decam_get_default_calibrator: getting calibfile lock for {self.name} {section} "
                             f"calibset='externally_supplied' calibtype={calibtype}" )
             with CalibratorFileDownloadLock.acquire_lock( instrument='DECam',
-                                                          sensor_section=section,
+                                                          section=section,
                                                           calibset='externally_supplied',
                                                           calibtype=calibtype,
                                                           flattype=( 'externally_supplied' if calibtype == 'flat'
