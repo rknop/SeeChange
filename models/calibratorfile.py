@@ -1,11 +1,11 @@
 import os
-import re
 import time
 import math
 import datetime
 import contextlib
 import random
 import uuid
+import threading
 import multiprocessing
 
 import psycopg2.extras
@@ -248,9 +248,6 @@ class CalibratorFileDownloadLock(Base, UUIDMixin):
         #   mechanism itself, but are too spammy for general use (even with debug)
         #   Thus, they are commented out, but not deleted so it's easy to put them back.
 
-        me = multiprocessing.current_process()
-        SCLogger.replace( midformat=me.name )
-
         SCLogger.debug( f"Heartbeat process starting with instrument={instrument}, section={section}, "
                         f"calibset={calibset}, calibtype={calibtype}, flattype={flattype}" )
 
@@ -453,20 +450,18 @@ class CalibratorFileDownloadLock(Base, UUIDMixin):
             # Start a subprocess to regularly update the "modified" field of the
             #   table so nobody else does what... well, what we might just have done.
             SCLogger.debug( "Starting lock heartbeat process." )
-            me = multiprocessing.current_process()
-            match = re.search( '([0-9]+)', me.name )
-            if match is not None:
-                name = f"{int(match.group(1)):3d} - lock-heartbeat"
-            elif me.name == "MainProcess":
-                name = "lock-heartbeat"
-            else:
-                name = f"{me.name} - lock-heartbeat"
+            # We have to use a thread, not a process, for this, because we may ourselves
+            #   be running in a daemonic process (launched from a multiprocessing Pool
+            #   by ExposureLauncher (pipeline/exposure_launcher.py).  Daemonic processes
+            #   can't spawn their own subprocesses.  However, threads should just be fine
+            #   here, because the whole reason downloading takes a long time is that it
+            #   is subject to long i/o waits, which is when threads work well.
             mypipe, theirpipe = multiprocessing.Pipe()
-            process = multiprocessing.Process( target=CalibratorFileDownloadLock.update_lock_heartbeat,
-                                               kwargs={ 'instrument': instrument, 'section': section,
-                                                        'calibset': calibset, 'calibtype': calibtype,
-                                                        'flattype': flattype, 'pipe': theirpipe },
-                                               name=name )
+            process = threading.Thread( target=CalibratorFileDownloadLock.update_lock_heartbeat,
+                                        kwargs={ 'instrument': instrument, 'section': section,
+                                                 'calibset': calibset, 'calibtype': calibtype,
+                                                 'flattype': flattype, 'pipe': theirpipe } ) #,
+                                        # name=name )
             process.start()
 
             gotlock = True

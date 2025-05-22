@@ -13,7 +13,7 @@ from sqlalchemy.schema import UniqueConstraint
 import psycopg2.extras
 import psycopg2.errors
 
-from util.util import NumpyAndUUIDJsonEncoder
+from util.util import NumpyAndUUIDJsonEncoder, asUUID
 from util.logger import SCLogger
 
 from models.base import Base, UUIDMixin, SeeChangeBase, SmartSession, Psycopg2Connection
@@ -402,23 +402,33 @@ class Provenance(Base):
             # ISSUE consider raising exception if there exists a more up-to-date version than the hardcoded
 
             codebase_semver = CodeVersion.CODE_VERSION_DICT[process]  # (major, minor, patch) eg. (2,0,1)
-            with SmartSession() as sess:
-                code_version = sess.scalars(sa.select(CodeVersion)
-                                               .where( CodeVersion.process == process )
-                                               .where( CodeVersion.version_major == codebase_semver[0] )
-                                               .where( CodeVersion.version_minor == codebase_semver[1] )
-                                               .where( CodeVersion.version_patch == codebase_semver[2] )).first()
 
-            if code_version is not None:
+            with Psycopg2Connection() as conn:
+                cursor = conn.cursor( cursor_factory=psycopg2.extras.RealDictCursor )
+                cursor.execute( "LOCK TABLE code_versions" )
+                cursor.execute( "SELECT * FROM code_versions "
+                                "WHERE process=%(proc)s AND version_major=%(maj)s "
+                                "  AND version_minor=%(min)s AND version_patch=%(pat)s",
+                                { 'proc': process, 'maj': codebase_semver[0],
+                                  'min': codebase_semver[1], 'pat': codebase_semver[2] } )
+                rows = cursor.fetchall()
+                code_version = CodeVersion()
+                if len(rows) > 0:
+                    rows[0]['_id'] = asUUID( rows[0]['_id'] )
+                    code_version.set_attributes_from_dict( rows[0] )
+                else:
+                    subdict = { '_id': uuid.uuid4(),
+                                'process': process,
+                                'version_major': codebase_semver[0],
+                                'version_minor': codebase_semver[1],
+                                'version_patch': codebase_semver[2] }
+                    cursor.execute( "INSERT INTO code_versions(_id,process,version_major,version_minor,version_patch) "
+                                    "VALUES (%(_id)s,%(process)s,%(version_major)s,"
+                                    "        %(version_minor)s,%(version_patch)s)",
+                                    subdict )
+                    conn.commit()
+                    code_version.set_attributes_from_dict( subdict )
                 CodeVersion._code_version_cache[process] = code_version
-            else:
-                cv = CodeVersion( process=process,
-                                  version_major=codebase_semver[0],
-                                  version_minor=codebase_semver[1],
-                                  version_patch=codebase_semver[2]
-                )
-                cv.insert()  # should never collide here and need upsert due to above
-                CodeVersion._code_version_cache[process] = cv
 
         return CodeVersion._code_version_cache[process]
 
