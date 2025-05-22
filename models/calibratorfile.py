@@ -248,8 +248,8 @@ class CalibratorFileDownloadLock(Base, UUIDMixin):
         #   mechanism itself, but are too spammy for general use (even with debug)
         #   Thus, they are commented out, but not deleted so it's easy to put them back.
 
-        SCLogger.debug( f"Heartbeat process starting with instrument={instrument}, section={section}, "
-                        f"calibset={calibset}, calibtype={calibtype}, flattype={flattype}" )
+        # SCLogger.debug( f"Heartbeat process starting with instrument={instrument}, section={section}, "
+        #                 f"calibset={calibset}, calibtype={calibtype}, flattype={flattype}" )
 
         calibset = CalibratorSetConverter.to_int( calibset )
         calibtype = CalibratorTypeConverter.to_int( calibtype )
@@ -260,10 +260,10 @@ class CalibratorFileDownloadLock(Base, UUIDMixin):
                 msg = pipe.recv()
                 if msg == "exit":
                     # This next line is too much even for debug, unless debugging the lock mechanism itself
-                    SCLogger.debug( "Heartbeat process exiting." )
+                    # SCLogger.debug( "Heartbeat process exiting." )
                     return
 
-            SCLogger.debug( "Updating heartbeat." )
+            # SCLogger.debug( "Updating heartbeat." )
             with Psycopg2Connection() as conn:
                 cursor = conn.cursor()
                 q = ( f"UPDATE calibfile_downloadlock SET modified=%(now)s "
@@ -405,7 +405,7 @@ class CalibratorFileDownloadLock(Base, UUIDMixin):
                             raise RuntimeError( f"Failed to get the lock on calibfile_downloadlock after "
                                                 f"{totsleep:.1f} seconds." )
                         # Next line is useful debugging the lock mechanism, but too spammy for general use
-                        SCLogger.debug( f"sleeping {tsleep:.2f} seconds waiting for table lock" )
+                        # SCLogger.debug( f"sleeping {tsleep:.2f} seconds waiting for table lock" )
                         time.sleep( tsleep )
                         totsleep += tsleep
                         continue
@@ -423,7 +423,7 @@ class CalibratorFileDownloadLock(Base, UUIDMixin):
                                                     f"flattype={flattype} after {totsleep:.1f}s" )
                             time.sleep( tsleep )
                             # Next line is useful debugging the lock mechanism, but too spammy for general use
-                            SCLogger.debug( f"sleeping {tsleep:.2f} seconds waiting for row not to be there" )
+                            # SCLogger.debug( f"sleeping {tsleep:.2f} seconds waiting for row not to be there" )
                             totsleep += tsleep
                             continue
                         else:
