@@ -133,8 +133,7 @@ class SCLogger:
         if match is not None:
             num = f'{int(match.group(1)):3d}'
         else:
-            num = me.name
-            # num = str(me.pid)
+            num = str(me.pid)
         cls.replace( *args, midformat=num, **kwargs )
 
     @classmethod

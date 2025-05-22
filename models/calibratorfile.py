@@ -326,6 +326,11 @@ class CalibratorFileDownloadLock(Base, UUIDMixin):
         it, but the promise hasn't been renewed recently enough, you can
         grab it.
 
+        (This DOES assume that every computer running the pipeline, and
+        the database server, are all time-synced.  Please use ntp!  If
+        the clocks are off by seconds, then the timeouts may be too fast
+        or too slow.)
+
         What a mess.
 
         Parameters
@@ -351,7 +356,7 @@ class CalibratorFileDownloadLock(Base, UUIDMixin):
 
         hearbeat_timeout: int, default 15
            If the heartbeat on a lock hasn't been updated in this many
-           seconds, assume it's stale and can be blow away.
+           seconds, assume it's stale and can be ignored.
 
         maxsleep: int, default 40
            Keep trying for at most this many seconds before finally
@@ -452,7 +457,7 @@ class CalibratorFileDownloadLock(Base, UUIDMixin):
             SCLogger.debug( "Starting lock heartbeat process." )
             # We have to use a thread, not a process, for this, because we may ourselves
             #   be running in a daemonic process (launched from a multiprocessing Pool
-            #   by ExposureLauncher (pipeline/exposure_launcher.py).  Daemonic processes
+            #   by ExposureLauncher (pipeline/exposure_launcher.py)).  Daemonic processes
             #   can't spawn their own subprocesses.  However, threads should just be fine
             #   here, because the whole reason downloading takes a long time is that it
             #   is subject to long i/o waits, which is when threads work well.
@@ -461,7 +466,6 @@ class CalibratorFileDownloadLock(Base, UUIDMixin):
                                         kwargs={ 'instrument': instrument, 'section': section,
                                                  'calibset': calibset, 'calibtype': calibtype,
                                                  'flattype': flattype, 'pipe': theirpipe } ) #,
-                                        # name=name )
             process.start()
 
             gotlock = True
