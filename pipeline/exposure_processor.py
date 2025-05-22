@@ -244,7 +244,6 @@ class ExposureProcessor:
             if self.numprocs > 1:
                 SCLogger.info( f"Creating pool of {self.numprocs} processes to do {len(chips)} chips" )
                 with multiprocessing.pool.Pool( self.numprocs, maxtasksperchild=1 ) as pool:
-                    pool.daemon = False
                     for chip in chips:
                         pool.apply_async( self.processchip, ( chip, ), {}, self.collate )
 
