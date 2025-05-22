@@ -86,17 +86,16 @@ def decam_default_calibrators(cache_dir, data_dir):
         # SCLogger.debug('tear down of decam_default_calibrators')
         imagestonuke = set()
         datafilestonuke = set()
-        with SmartSession() as session:
-            for sec in [ 'S2', 'S3', 'N16' ]:
-                for filt in [ 'r', 'i', 'z', 'g' ]:
-                    info = decam.preprocessing_calibrator_files( 'externally_supplied', 'externally_supplied',
-                                                                 sec, filt, 60000, nofetch=True, session=session )
-                    for filetype in [ 'zero', 'flat', 'dark', 'fringe', 'illumination', 'linearity' ]:
-                        if ( f'{filetype}_fileid' in info ) and ( info[ f'{filetype}_fileid' ] is not None ):
-                            if info[ f'{filetype}_isimage' ]:
-                                imagestonuke.add( info[ f'{filetype}_fileid' ] )
-                            else:
-                                datafilestonuke.add( info[ f'{filetype}_fileid' ] )
+        for sec in [ 'S2', 'S3', 'N16' ]:
+            for filt in [ 'r', 'i', 'z', 'g' ]:
+                info = decam.preprocessing_calibrator_files( 'externally_supplied', 'externally_supplied',
+                                                             sec, filt, 60000, nofetch=True )
+                for filetype in [ 'zero', 'flat', 'dark', 'fringe', 'illumination', 'linearity' ]:
+                    if ( f'{filetype}_fileid' in info ) and ( info[ f'{filetype}_fileid' ] is not None ):
+                        if info[ f'{filetype}_isimage' ]:
+                            imagestonuke.add( info[ f'{filetype}_fileid' ] )
+                        else:
+                            datafilestonuke.add( info[ f'{filetype}_fileid' ] )
 
         for imid in imagestonuke:
             im = Image.get_by_id( imid )
