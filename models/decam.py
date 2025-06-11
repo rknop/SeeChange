@@ -1230,6 +1230,7 @@ class DECamOriginExposures:
                                     params={ 'url': expinfo.url,
                                              'md5sum': expinfo.md5sum,
                                              'obs_type': expinfo.obs_type,
+                                             'proc_type': expinfo.proc_type,
                                              'preproc_bitflag': preproc_bitflag },
                                     hold=hold,
                                     exp_time=expinfo.exposure,
