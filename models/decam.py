@@ -838,10 +838,9 @@ class DECam(Instrument):
         See Instrument.acquire_and_commit_origin_exposure.
 
         """
-        raise RuntimeError( "This one is beyond broken." )
         downloaded = self.acquire_origin_exposure( identifier, params )
-        return self._commit_exposure( identifier, downloaded,
-                                      params['obs_type'], params['preproc_bitflag'], params['proc_type'] )
+        return self._commit_exposure( identifier, downloaded, obs_type=params['obs_type'],
+                                      preproc_bitflag=params['preproc_bitflag'], proc_type=params['proc_type'] )
 
 
     def find_origin_exposures( self,
