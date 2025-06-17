@@ -121,6 +121,7 @@ RUN mkdir /home/seechange/.astropy
 ENV HOME=/home/seechange
 RUN chmod -R 777 /home/seechange
 
+# Generate locale
 RUN cat /etc/locale.gen | perl -pe 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' > /etc/locale.gen.new \
     && mv /etc/locale.gen.new /etc/locale.gen
 RUN locale-gen en_US.UTF-8
@@ -128,6 +129,12 @@ ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en
 ENV LC_ALL=en_US.UTF-8
 
+# Just in case we're writing to a archive directory directly,
+# make sure directories we create will be group-writeable.
+# This is the use case needed for LS4 on Perlmutter.
+RUN umask 0002
+
+# Python stuff, trying to subvert injected stuff into containers?
 ENV PYTHONSTARTUP=""
 ENV PYTHONNOUSERSITE="1"
 ENV PYTHONUSERBASE="/tmp"

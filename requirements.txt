@@ -4,7 +4,7 @@ astro-datalab==2.20.1
 astropy==7.0.0
 beautifulsoup4==4.12.3
 confluent-kafka==2.8.0
-fitsio==1.2.4
+fitsio==1.2.6
 flaky==3.8.1
 flask==3.1.0
 flask-session==0.8.0
