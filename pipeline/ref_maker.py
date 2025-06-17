@@ -308,7 +308,7 @@ class RefMaker:
         self.coadd_zp_prov = coadd_provs['photocal']
 
         pars = self.pars.get_critical_pars()
-        code_version = Provenance.get_code_version()
+        code_version = Provenance.get_code_version(self.pars.get_process_name())
         self.ref_prov = Provenance(
             process=self.pars.get_process_name(),
             code_version_id=code_version.id,  # TODO: allow loading versions for each process
