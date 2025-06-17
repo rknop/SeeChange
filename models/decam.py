@@ -308,7 +308,7 @@ class DECam(Instrument):
             url = f'{cfg.value("DECam.calibfiles.urlbase")}{str(rempath)}'
             retry_download( url, filepath )
 
-        with fits.open( filepath, memmap=False ) as hdu:
+        with fits.open( filepath ) as hdu:
             rawbpm = hdu[0].data
 
         # TODO : figure out what the bits mean in this bad pixel mask file!
@@ -671,7 +671,7 @@ class DECam(Instrument):
         newdata = np.zeros_like( data )
         ccdnum = header[ 'CCDNUM' ]
 
-        with fits.open( linearitydata.get_fullpath( nofile=False ), memmap=False ) as linhdu:
+        with fits.open( linearitydata.get_fullpath( nofile=False ) ) as linhdu:
             for amp in ["A", "B"]:
                 ampdex = f'ADU_LINEAR_{amp}'
                 x0 = secs[amp]['destsec']['x0']
@@ -680,12 +680,8 @@ class DECam(Instrument):
                 y1 = secs[amp]['destsec']['y1']
 
                 lindex = np.floor( data[ y0:y1, x0:x1 ] ).astype( int )
-                # ...this used to work without having to flatten the
-                #    array used as indexes into the linhdu[ccdnum].data
-                #    table, but it stopped working.  Don't know why.
-                #    Astropy version change?  Something in numpy 2.0 and
-                #    how it interacts with astropy fits tables?  Dunno.
-                #    Scary.
+                # Make sure not to extrapolate past the end of the array
+                lindex[lindex == 65535] = 65534
                 flatdata = data[ y0:y1, x0:x1 ].flatten()
                 lindata = linhdu[ccdnum].data[ lindex.flatten() ]
                 lindatap1 = linhdu[ccdnum].data[ lindex.flatten() + 1 ]
@@ -694,7 +690,6 @@ class DECam(Instrument):
                                    * ( lindatap1[ampdex] - lindata[ampdex] )
                                    / ( lindatap1['ADU'] - lindata['ADU'] ) ) )
                 newdata[ y0:y1, x0:x1 ] = np.reshape( linearized, shape=( y1-y0, x1-x0 ) )
-
         return newdata
 
 
