@@ -11,6 +11,12 @@ from pipeline.data_store import DataStore, ProvenanceTree
 from models.base import SmartSession, Psycopg2Connection
 from models.provenance import Provenance
 from models.reference import Reference
+
+### HACK ALERT
+### Remove this (maybe?) when Issue #465 is solved
+import models.decam
+###
+
 from models.image import Image
 from models.refset import RefSet
 
@@ -557,6 +563,10 @@ class RefMaker:
 
         # look for the reference at the given location in the sky (via ra/dec or target/section_id)
         refsandimgs = Reference.get_references(
+            minra=self.minra,
+            maxra=self.maxra,
+            mindec=self.mindec,
+            maxdec=self.maxdec,
             ra=self.ra,
             dec=self.dec,
             target=self.target,
@@ -679,6 +689,7 @@ def main():
     parser.add_argument( "--maxra", type=float, default=None, help="See description above." )
     parser.add_argument( "--mindec", type=float, default=None, help="See description above." )
     parser.add_argument( "--maxdec", type=float, default=None, help="See description above." )
+    parser.add_argument( "-f", "--filter", type=str, required=True, help="Filter name." )
     # parser.add_argument( "-n", "--name", required=True, help="Name of refset" )
     # parser.add_argument( "-d", "--description", default="",
     #                      help="Description of refset.  Only used if the refset is newly created." )
@@ -708,7 +719,7 @@ def main():
             raise RuntimeError( f"Cound not find image {args.image}" )
         # TODO : pass arguments that override config arguments
         refmaker = RefMaker()
-        refmaker.run( image=img )
+        refmaker.run( image=img, filter=args.filter )
 
     elif args.ra is not None:
         if args.dec is None:
@@ -716,7 +727,7 @@ def main():
         if any( x is not None for x in [ args.image, args.minra, args.maxra, args.mindec, args.maxdec ] ):
             raise ValueError( "When specifying ra/dec, cannot specify any of image/minra/maxra/mindec/maxdec" )
         refmaker = RefMaker()
-        refmaker.run( ra=args.ra, dec=args.dec )
+        refmaker.run( ra=args.ra, dec=args.dec, filter=args.filter )
 
     elif args.minra is not None:
         if any( x is None for x in [ args.maxra, args.mindec, args.maxdec ] ):
@@ -724,7 +735,7 @@ def main():
         if any( x is not None for x in [ args.image, args.ra, args.dec ] ):
             raise ValueError( "Cannot give image or ra/dec with minra/maxra/mindec/maxdec" )
         refmaker = RefMaker()
-        refmaker.run( minra=args.minra, maxra=args.maxra, mindec=args.mindec, maxdec=args.maxdec )
+        refmaker.run( minra=args.minra, maxra=args.maxra, mindec=args.mindec, maxdec=args.maxdec, filter=args.filter )
 
     else:
         raise ValueError( "Must give one of --image, (--ra and --dec), or (--minra, --maxra, --mindec, and --maxdec)" )
