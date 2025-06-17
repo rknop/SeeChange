@@ -311,7 +311,7 @@ class RefMaker:
         code_version = Provenance.get_code_version(self.pars.get_process_name())
         self.ref_prov = Provenance(
             process=self.pars.get_process_name(),
-            code_version_id=code_version.id,  # TODO: allow loading versions for each process
+            code_version_id=code_version.id,
             parameters=pars,
             upstreams=[ self.coadd_zp_prov ],
             is_testing='test_parameter' in pars,
