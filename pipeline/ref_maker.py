@@ -1,4 +1,5 @@
 import datetime
+import argparse
 
 import numpy as np
 import psycopg2.extras
@@ -307,8 +308,10 @@ class RefMaker:
         self.coadd_zp_prov = coadd_provs['photocal']
 
         pars = self.pars.get_critical_pars()
+        code_version = Provenance.get_code_version()
         self.ref_prov = Provenance(
             process=self.pars.get_process_name(),
+            code_version_id=code_version.id,  # TODO: allow loading versions for each process
             parameters=pars,
             upstreams=[ self.coadd_zp_prov ],
             is_testing='test_parameter' in pars,
@@ -652,3 +655,82 @@ class RefMaker:
             ref.insert()
 
         return ref
+
+# ======================================================================
+
+
+class ArgFormatter( argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter ):
+    def __init__( self, *args, **kwargs ):
+        super().__init__( *args, **kwargs )
+
+
+def main():
+    parser = argparse.ArgumentParser( 'ref_maker.py',
+                                      description="Build a reference",
+                                      formatter_class=ArgFormatter,
+                                      epilog="Rob write help" )
+    parser.add_argument( "-r", "--ra", type=float, default=None,
+                         help="RA to make a reference for; decimal degrees.  See description above." )
+    parser.add_argument( "-d", "--dec", type=float, default=None,
+                         help="RA to make a reference for; decimal degrees.  See description above." )
+    parser.add_argument( "-i", "--image", type=str, default=None,
+                         help="filepath or uuid of image to make a reference for." )
+    parser.add_argument( "--minra", type=float, default=None, help="See description above." )
+    parser.add_argument( "--maxra", type=float, default=None, help="See description above." )
+    parser.add_argument( "--mindec", type=float, default=None, help="See description above." )
+    parser.add_argument( "--maxdec", type=float, default=None, help="See description above." )
+    # parser.add_argument( "-n", "--name", required=True, help="Name of refset" )
+    # parser.add_argument( "-d", "--description", default="",
+    #                      help="Description of refset.  Only used if the refset is newly created." )
+    # parser.add_argument( "-s", "--start-time", type=str, default=None,
+    #                      help=( "YYYY-MM-DDTHH:MM:SS (may omit THH:MM:SS).  Only use images taken "
+    #                             "after this time (inclusive)" ) )
+    # parser.add_argument( "-e", "--end-time", type=str, default=None,
+    #                      help=( "YYYY-MM-DDTHH:MM:SS (may omit THH:MM:SS).  Only use images taken "
+    #                             "before this time (inclusive)" ) )
+    # TODO : add arugments that let us override what's in the config file?  Or just rely on config file?
+    # (Probably we want this, so we can do one-offs, but put in warnings or require a --override-config
+    # so that we don't do it willy-nilly.)
+
+    args = parser.parse_args()
+
+    # TODO : Process arguments that override the config file
+
+    if args.image is not None:
+        if any( x is not None for x in [ args.ra, args.dec, args.minra, args.maxra, args.mindec, args.maxdec ] ):
+            raise ValueError( "Cannot specify image and any of ra/dec/minra/maxra/mindec/maxdec" )
+
+        with SmartSession() as session:
+            img = Image.get_by_id( args.image, session=session )
+            if img is None:
+                img = session.query( Image ).filter( filepath=args.image ).first()
+        if img is None:
+            raise RuntimeError( f"Cound not find image {args.image}" )
+        # TODO : pass arguments that override config arguments
+        refmaker = RefMaker()
+        refmaker.run( image=img )
+
+    elif args.ra is not None:
+        if args.dec is None:
+            raise ValueError( "Must give dec if giving ra" )
+        if any( x is not None for x in [ args.image, args.minra, args.maxra, args.mindec, args.maxdec ] ):
+            raise ValueError( "When specifying ra/dec, cannot specify any of image/minra/maxra/mindec/maxdec" )
+        refmaker = RefMaker()
+        refmaker.run( ra=args.ra, dec=args.dec )
+
+    elif args.minra is not None:
+        if any( x is None for x in [ args.maxra, args.mindec, args.maxdec ] ):
+            raise ValueError( "Must give all of minra, maxra, mindec, maxdec." )
+        if any( x is not None for x in [ args.image, args.ra, args.dec ] ):
+            raise ValueError( "Cannot give image or ra/dec with minra/maxra/mindec/maxdec" )
+        refmaker = RefMaker()
+        refmaker.run( minra=args.minra, maxra=args.maxra, mindec=args.mindec, maxdec=args.maxdec )
+
+    else:
+        raise ValueError( "Must give one of --image, (--ra and --dec), or (--minra, --maxra, --mindec, and --maxdec)" )
+
+
+# ======================================================================
+
+if __name__ == "__main__":
+    main()
