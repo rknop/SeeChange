@@ -480,7 +480,16 @@ class CalibratorFileDownloadLock(Base, UUIDMixin):
                 mypipe.send( "exit" )
                 process.join()
 
-            # If we got the lock, we have to delete it
+            # If we got the lock, we have to delete it.
+            # NOTE : there's a possible race condition here.  That is:
+            #  * we get the lock
+            #  * we take too long using it
+            #  * another process decides that the lock we got is stale, and now makes
+            #    its own lock.
+            #  * we finally finish, and we now delete that other processe's lock.
+            # This is an edge case within the edge case, and hopefully it won't actually
+            # kill us.  (That is, we'll end up with a couple of processes trying to download
+            # the same file at the same time, which isn't enough to overload things.)
             if gotlock:
                 with Psycopg2Connection() as conn:
                     cursor = conn.cursor()
