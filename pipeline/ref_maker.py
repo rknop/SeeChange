@@ -14,7 +14,7 @@ from models.reference import Reference
 
 ### HACK ALERT
 ### Remove this (maybe?) when Issue #465 is solved
-import models.decam
+import models.decam  # noqa: F401
 ###
 
 from models.image import Image
