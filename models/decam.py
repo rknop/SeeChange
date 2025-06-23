@@ -687,7 +687,7 @@ class DECam(Instrument):
                 y1 = secs[amp]['destsec']['y1']
 
                 lindex = np.floor( data[ y0:y1, x0:x1 ] ).astype( int )
-                # Make sure not to extrapolate past the end of the array
+                # Make sure not to access past the end of the array
                 lindex[lindex == 65535] = 65534
                 flatdata = data[ y0:y1, x0:x1 ].flatten()
                 lindata = linhdu[ccdnum].data[ lindex.flatten() ]
