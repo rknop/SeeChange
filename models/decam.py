@@ -33,6 +33,13 @@ FILTER_NAME_CONVERSIONS = {
     'i' : 'i DECam SDSS c0003 7835.0 1470.0',
     'z' : 'z DECam SDSS c0004 9260.0 1520.0',
     'Y' : 'Y DECam c0005 10095.0 1130.0',
+    # We never use the following filters, but they show up on the archive sometimes,
+    #  so they're here to stop the code from choking
+    'M438' : 'M438 DECam c0019 4380.0 260.0',
+    'M490' : 'M490 DECam c0020 4900.0 260.0',
+    'N395' : 'N395 DECam c0015 3950.0 100.0',
+    'M464' : 'M464 DECam c0018 4640.0 264.0',
+    'N1008' : 'N1008 DECam c0016 10097.0 109.0',
 }
 
 
