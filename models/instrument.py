@@ -1521,7 +1521,7 @@ class Instrument:
 
         Don't call this when you're holding open a database session, as
         it may take a while to run -- it may have to download files.
-        Plus, iternally, it will open database sessions, and we don't
+        Plus, internally, it will open database sessions, and we don't
         want them to pile up.
 
         Instruments *may* need to override this.
