@@ -486,7 +486,7 @@ class CalibratorFileDownloadLock(Base, UUIDMixin):
             #  * we take too long using it
             #  * another process decides that the lock we got is stale, and now makes
             #    its own lock.
-            #  * we finally finish, and we now delete that other processe's lock.
+            #  * we finally finish, and we now delete that other process' lock.
             # This is an edge case within the edge case, and hopefully it won't actually
             # kill us.  (That is, we'll end up with a couple of processes trying to download
             # the same file at the same time, which isn't enough to overload things.)
