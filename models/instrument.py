@@ -4,7 +4,6 @@ import copy
 import pathlib
 import pytz
 from enum import Enum
-from datetime import timedelta
 
 import numpy as np
 
@@ -19,7 +18,7 @@ from models.base import Base, SmartSession, UUIDMixin
 from models.provenance import Provenance
 
 from pipeline.catalog_tools import Bandpass
-from util.util import parse_dateobs, get_inheritors
+from util.util import get_inheritors
 from util.fits import read_fits_image
 from util.logger import SCLogger
 
@@ -117,6 +116,7 @@ def get_instrument_instance(instrument_name):
         INSTRUMENT_INSTANCE_CACHE = {}
 
     if instrument_name not in INSTRUMENT_INSTANCE_CACHE:
+        SCLogger.debug( f"Making instrument cache for {instrument_name}" )
         INSTRUMENT_INSTANCE_CACHE[instrument_name] = INSTRUMENT_CLASSNAME_TO_CLASS[instrument_name]()
 
     return INSTRUMENT_INSTANCE_CACHE[instrument_name]
@@ -124,6 +124,10 @@ def get_instrument_instance(instrument_name):
 
 class SensorSection(Base, UUIDMixin):
     """A class to represent a section of a sensor.
+
+    NOTE : right now, SensorSections should *not* actually be stored in
+    the database.  We may start doing that again based on how we address
+    Issue #487.
 
     This is most often associated with a CCD chip, but could be any
     section of a sensor. For example, a section of a CCD chip that
@@ -139,6 +143,7 @@ class SensorSection(Base, UUIDMixin):
     Thus, a SensorSection can override global instrument values either for
     specific parts of the sensor (spatial variability) or for specific times
     (temporal variability).
+
     """
 
     __tablename__ = "sensor_sections"
@@ -497,6 +502,30 @@ class Instrument:
     def fetch_sections(self, session=None, dateobs=None):
         """Get the sensor section objects associated with this instrument.
 
+        TEMPORARILY REPLACED.  See Issue #487.  This was causing a
+        gigantic performance hit in searching for NOIRLab references.
+        Each exposure searched was on a new dateobs, so was not in the
+        section cache, so was causing the database to be hit *every*
+        *single* *time*... even though we know for DECam that it was
+        never ever loading anything new.  So, currently, just ignore the
+        database.
+
+        We should think about the concept of date-dependent sensor
+        sections and do a better implemtnation of them than one that
+        caches sensor sections for exactly the dateobs we asked for.
+        (Cache by ranges!)  For now, though, I've just removed this and
+        put in the assumption that the sensor sections are static, for
+        performance reasons.
+
+        (It looks like it sorta tries to do range caching right now, but
+        it has a dateobs_range_days thing.  Since the sensor_sections
+        table has validity_start and validity_end, we should cache in
+        memory here based on *that*, not on the dateobs we were looking
+        for.)
+
+        ========
+        OLD DOCS
+
         Will try to get sections that are valid during the given date.
         If any sections are missing, they will be created using the
         hard coded values in _make_new_section().
@@ -519,49 +548,62 @@ class Instrument:
             If there are multiple instances of a sensor section on the DB,
             only choose the ones valid during the observation.
 
+        END OF OLD DOCS
+        ===============
+
         THIS METHOD SHOULD GENERALLY NOT BE OVERRIDEN BY SUBCLASSES.
+
+
 
         Returns
         -------
         sections: list of SensorSection
             The sensor sections associated with this instrument.
+
         """
-        dateobs = parse_dateobs(dateobs, output='datetime')
 
-        # if dateobs is too far from last time we loaded sections, reload
-        if self._dateobs_for_sections is not None:
-            if abs(self._dateobs_for_sections - dateobs) < timedelta(self._dateobs_range_days):
-                self.sections = None
-
-        # this should never happen, but still
-        if self._dateobs_for_sections is None:
-            self.sections = None
-
-        # we need to get new sections
         if self.sections is None:
-            self.sections = {}
-            self._dateobs_for_sections = dateobs  # track the date used to load
-            if session is False:
-                all_sec = []
-            else:
-                # load sections from DB
-                with SmartSession(session) as session:
-                    all_sec = session.scalars(
-                        sa.select(SensorSection).where(
-                            SensorSection.instrument == self.name,
-                            sa.or_(SensorSection.validity_start.is_(None), SensorSection.validity_start <= dateobs),
-                            sa.or_(SensorSection.validity_end.is_(None), SensorSection.validity_end >= dateobs),
-                        ).order_by(SensorSection.modified.desc())
-                    ).all()
-
-            for sid in self.get_section_ids():
-                sec = [s for s in all_sec if s.identifier == sid]
-                if len(sec) > 0:
-                    self.sections[sid] = sec[0]
-                else:
-                    self.sections[sid] = self._make_new_section(sid)
+            self.sections = { s: self._make_new_section(s) for s in self.get_section_ids() }
 
         return self.sections
+
+        # dateobs = parse_dateobs(dateobs, output='datetime')
+
+        # # if dateobs is too far from last time we loaded sections, reload
+        # if self._dateobs_for_sections is not None:
+        #     if abs(self._dateobs_for_sections - dateobs) < timedelta(self._dateobs_range_days):
+        #         self.sections = None
+
+        # # this should never happen, but still
+        # if self._dateobs_for_sections is None:
+        #     self.sections = None
+
+        # # we need to get new sections
+        # if self.sections is None:
+        #     self.sections = {}
+        #     self._dateobs_for_sections = dateobs  # track the date used to load
+        #     if session is False:
+        #         all_sec = []
+        #     else:
+        #         # load sections from DB
+        #         SCLogger.debug( f"Loading sensor sections from database for {self.name}" )
+        #         with SmartSession(session) as session:
+        #             all_sec = session.scalars(
+        #                 sa.select(SensorSection).where(
+        #                     SensorSection.instrument == self.name,
+        #                     sa.or_(SensorSection.validity_start.is_(None), SensorSection.validity_start <= dateobs),
+        #                     sa.or_(SensorSection.validity_end.is_(None), SensorSection.validity_end >= dateobs),
+        #                 ).order_by(SensorSection.modified.desc())
+        #             ).all()
+
+        #     for sid in self.get_section_ids():
+        #         sec = [s for s in all_sec if s.identifier == sid]
+        #         if len(sec) > 0:
+        #             self.sections[sid] = sec[0]
+        #         else:
+        #             self.sections[sid] = self._make_new_section(sid)
+
+        # return self.sections
 
     def commit_sections(self, session=None, validity_start=None, validity_end=None):
         """Commit the sensor sections associated with this instrument to the database.
@@ -584,6 +626,8 @@ class Instrument:
             Only changes the validity end of sections that have validity_end=None.
             If None, will not modify any of the validity end values.
         """
+        raise RuntimeError( "Do not commit sections until we address Issue #487." )
+
         with SmartSession(session) as session:
             for sec in self.sections.values():
                 if sec.validity_start is None and validity_start is not None:
@@ -1478,7 +1522,7 @@ class Instrument:
 
         Don't call this when you're holding open a database session, as
         it may take a while to run -- it may have to download files.
-        Plus, iternally, it will open database sessions, and we don't
+        Plus, internally, it will open database sessions, and we don't
         want them to pile up.
 
         Instruments *may* need to override this.
@@ -2332,7 +2376,7 @@ class InstrumentOriginExposures:
 
 
     def download_exposures( self, outdir=".", indexes=None, onlyexposures=True,
-                            clobber=False, existing_ok=False, session=None ):
+                            clobber=False, existing_ok=False, skip_failures=False, session=None ):
         """Download exposures from the origin.
 
         Parameters
@@ -2367,10 +2411,18 @@ class InstrumentOriginExposures:
 
         Returns
         -------
-        A list of dictionaries, each element of which is { prod_type: pathlib.Path }
-        prod_type will generally only be "exposure", but if there are ancillary
-        exposures, there may be others.  E.g., when downloading reduced DECam
-        images from NOIRlab, prod_type may be all of 'exposure', 'weight', 'dqmask'.
+        indexes, downloaded
+
+        indexes are the indexes that were actually downloaded.  If
+        skip_failures is False and indexes was passed, this should be
+        exactly the same.  If skip_failures is True, then the ones whose
+        downloads failed will not be included.
+
+        downloaded is aw list of dictionaries, each element of which is {
+        prod_type: pathlib.Path } prod_type will generally only be
+        "exposure", but if there are ancillary exposures, there may be
+        others.  E.g., when downloading reduced DECam images from
+        NOIRlab, prod_type may be all of 'exposure', 'weight', 'dqmask'.
 
         """
         raise NotImplementedError( f"Instrument class {self.__class__.__name__} hasn't "

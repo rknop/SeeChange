@@ -6,6 +6,7 @@ import argparse
 import multiprocessing
 import multiprocessing.pool
 import traceback
+import logging
 
 from models.base import SmartSession
 from models.instrument import get_instrument_instance
@@ -17,9 +18,13 @@ from models.exposure import Exposure
 from pipeline.data_store import DataStore
 from pipeline.top_level import Pipeline
 from pipeline.preprocessing import Preprocessor
+from pipeline.detection import Detector
+from pipeline.astro_cal import AstroCalibrator
+from pipeline.photo_cal import PhotCalibrator
 from pipeline.ref_maker import RefMaker
 
 from util.logger import SCLogger
+from util.config import Config
 
 
 class DECamRefFetcher:
@@ -27,6 +32,7 @@ class DECamRefFetcher:
                   min_exptime=None, max_seeing=1.2, min_depth=None,
                   min_mjd=None, max_mjd=None, min_per_chip=9,
                   only_local=False, no_fallback=False, full_report=False ):
+        self.cfg = Config.get()
         self.numprocs = numprocs
         self.ra = ra
         self.dec = dec
@@ -59,8 +65,14 @@ class DECamRefFetcher:
         else:
             self.chips = knownchips
 
-        # Need a RefMaker for probing the database.
-        # For that, need a temporary preprocessor to figure out the provenance
+        # Need a RefMaker for probing the database, which requires a zeropoint provenance.
+        # For that, need a temporary preprocessor, extractor, astrometor, and photometor
+        #   to figure out that provenance.
+        # WARNING -- these provenances need to match exactly the provenances that are
+        #   going to come out of the reduction process!  In particular, make sure
+        #   that the preprocprov below matches what gets created in extract_image_and_do_things.
+        #   This means maing sure that the same call is made to decam.get_exposure_provenance
+        #   (which actually happens inside the DECam class... gah, what a mess).
         preprocessor = Preprocessor( preprocessing='noirlab_instcal',
                                      calibset='externally_supplied',
                                      flattype='externally_supplied',
@@ -70,25 +82,45 @@ class DECamRefFetcher:
                                   upstreams=[ self.decam.get_exposure_provenance( proc_type='instcal' ) ],
                                  )
         preprocprov.insert_if_needed()
+        extraction_config = self.cfg.value( 'extraction', {} )
+        extractor = Detector( **extraction_config )
+        extractprov = Provenance( process='extraction',
+                                  parameters=extractor.pars.get_critical_pars(),
+                                  upstreams=[ preprocprov ] )
+        extractprov.insert_if_needed()
+        astrometor_config = self.cfg.value( 'astrocal', {} )
+        astrometor = AstroCalibrator( **astrometor_config )
+        wcsprov = Provenance( process='astrocal',
+                              parameters=astrometor.pars.get_critical_pars(),
+                              upstreams=[ extractprov ] )
+        wcsprov.insert_if_needed()
+        photometor_config = self.cfg.value( 'photocal', {} )
+        photometor = PhotCalibrator( **photometor_config )
+        zpprov = Provenance( process='photocal',
+                             parameters=photometor.pars.get_critical_pars(),
+                             upstreams=[ wcsprov ] )
+        zpprov.insert_if_needed()
+
 
         # TODO : get some of these values from config
         self.refmaker = RefMaker( maker={ 'start_time': min_mjd,
                                           'end_time': max_mjd,
                                           'corner_distance': 0.8,
                                           'coadd_overlap_fraction': 0.1,
-                                          'instruments': [ 'DECam' ],
+                                          'instrument': 'DECam',
                                           'max_seeing': max_seeing,
                                           'min_lim_mag': min_depth,
                                           'min_exp_time': min_exptime,
                                           'min_number': min_per_chip,
                                           'min_only_center': False,
-                                          'preprocessing_prov_id': str(preprocprov.id)
+                                          'zp_prov_id': str(zpprov.id)
                                          } )
         self.refmaker.setup_provenances()
 
         self.chipimages = {}
         self.match_poses = {}
         self.match_counts = {}
+        self.already_tried = set()
 
     def log_position_counts( self, prefix="", match_counts=None ):
         strio = io.StringIO()
@@ -176,9 +208,12 @@ class DECamRefFetcher:
                 except Exception:
                     omitdexen.add( i )
                 else:
-                    existing = sess.query( Exposure ).filter( Exposure.origin_identifier==identifier ).all()
-                    if len(existing) > 0:
-                        omitdexen.add( i )
+                    if identifier in self.already_tried:
+                        omitdexen.add()
+                    else:
+                        existing = sess.query( Exposure ).filter( Exposure.origin_identifier==identifier ).all()
+                        if len(existing) > 0:
+                            omitdexen.add( i )
 
         # Things that we need to download will go into usefuldexen
         usefuldexen = set()
@@ -203,7 +238,13 @@ class DECamRefFetcher:
                 #   False.  We want it to not use the image when the
                 #   value is NaN (if the appropriate limit isn't itself
                 #   None).
-                if self.decam.get_short_filter_name( filter ) != self.decam.get_short_filter_name( self.filter ):
+                try:
+                    short_filter_name = self.decam.get_short_filter_name( filter )
+                except Exception:
+                    # If that failed, it's probably because the DECam class doesn't
+                    #  recognize the filter, so we don't care anyway
+                    continue
+                if short_filter_name != self.decam.get_short_filter_name( self.filter ):
                     continue
                 if ( ( ( self.max_seeing is not None )
                        and
@@ -275,7 +316,6 @@ class DECamRefFetcher:
                                                  'flattype': 'externally_supplied',
                                                  'steps_required': [ 'overscan', 'linearity', 'flat', 'fringe' ]} )
             pipeline.run( ds, no_provtag=True, ok_no_ref_prov=True )
-            ds.reraise()
 
             success = True
             return ( ds.exposure.id, ds.section_id, True, "OK" )
@@ -312,7 +352,14 @@ class DECamRefFetcher:
         SCLogger.info( f"============ Downloading {len(usefuldexen)} reduced exposures." )
         exposures = origexps.download_and_commit_exposures( list(usefuldexen),
                                                             delete_downloads=False,
-                                                            existing_ok=True )
+                                                            existing_ok=True,
+                                                            skip_failures=True )
+
+        # Flag the ones we've already tried.  They're either loaded, or
+        #   the downloads failed.  It might be that a retry would get them,
+        #   but we are more likely to get stuck in an infinite fail loop.
+        for i in usefuldexen:
+            self.already_tried.add( origexps.exposure_origin_identifier( i ) )
 
         for exposure_n, exposure in enumerate( exposures ):
             SCLogger.info( f"Downloading and extracting an exposure\n"
@@ -499,21 +546,16 @@ def main():
                                 "This will be long." ) )
     parser.add_argument( '-p', '--numprocs', type=int, default=10,
                          help="Number of extraction/wcs/zp processes to run" )
+    parser.add_argument( '-v', '--verbose', action='store_true', default=False,
+                         help="Show debug log info (default: only info)" )
     args = parser.parse_args()
 
-    # I'm not really happy about how we handle the whole filter and filter_short thing
-    #   right now.  This is kind of a hack, needed for the database searches to work.
-    # It'd be nice if in the database we stored filter_short, and then the class had a
-    #   lookup from full filter descriptions in headers to filter_short.
-    filtertranslation = { 'g': 'g DECam SDSS c0001 4720.0 1520.0',
-                          'r': 'r DECam SDSS c0002 6415.0 1480.0',
-                          'i': 'i DECam SDSS c0003 7835.0 1470.0',
-                          'z': 'z DECam SDSS c0004 9260.0 1520.0' }
-    if args.filter not in filtertranslation:
-        raise ValueError( f"Unknown filter {args.filter}" )
-    band = filtertranslation[ args.filter ]
+    if args.verbose:
+        SCLogger.set_level( logging.DEBUG )
+    else:
+        SCLogger.set_level( logging.INFO )
 
-    fetcher = DECamRefFetcher( args.ra, args.dec, band,
+    fetcher = DECamRefFetcher( args.ra, args.dec, args.filter,
                                min_exptime=args.min_exptime, max_seeing=args.max_seeing, min_depth=args.min_depth,
                                min_mjd=args.min_mjd, max_mjd=args.max_mjd, min_per_chip=args.min_num_per_chip,
                                numprocs=args.numprocs,

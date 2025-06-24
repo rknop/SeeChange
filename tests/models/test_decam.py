@@ -191,7 +191,7 @@ def test_decam_download_reduced_origin_exposure( decam_reduced_origin_exposures,
     assert all( [ row.proc_type == 'instcal' for i, row in decam_reduced_origin_exposures._frame.iterrows() ] )
     try:
         # First try downloading the reduced exposures themselves
-        downloaded = decam_reduced_origin_exposures.download_exposures(
+        _, downloaded = decam_reduced_origin_exposures.download_exposures(
             outdir=os.path.join(cache_dir, 'DECam'),
             indexes=whichtodownload,
             onlyexposures=True,
@@ -207,7 +207,7 @@ def test_decam_download_reduced_origin_exposure( decam_reduced_origin_exposures,
             assert md5.hexdigest() == decam_reduced_origin_exposures._frame.loc[ dex, 'image' ].md5sum
 
         # Now try downloading exposures, weights, and dataquality masks
-        downloaded = decam_reduced_origin_exposures.download_exposures(
+        _, downloaded = decam_reduced_origin_exposures.download_exposures(
             outdir=os.path.join(cache_dir, 'DECam'),
             indexes=whichtodownload,
             onlyexposures=False,
@@ -335,7 +335,7 @@ def test_decam_download_and_commit_exposure(
                 raise RuntimeError( "Failed to idnetify enough exposures to download for test." )
 
             # get these downloaded first, to get the filenames to check against the cache
-            downloaded = decam_raw_origin_exposures.download_exposures(
+            _, downloaded = decam_raw_origin_exposures.download_exposures(
                 outdir=os.path.join(cache_dir, 'DECam'),
                 indexes=expdexes,
                 onlyexposures=True,

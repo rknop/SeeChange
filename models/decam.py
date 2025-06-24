@@ -32,6 +32,14 @@ FILTER_NAME_CONVERSIONS = {
     'g' : 'g DECam SDSS c0001 4720.0 1520.0',
     'i' : 'i DECam SDSS c0003 7835.0 1470.0',
     'z' : 'z DECam SDSS c0004 9260.0 1520.0',
+    'Y' : 'Y DECam c0005 10095.0 1130.0',
+    # We never use the following filters, but they show up on the archive sometimes,
+    #  so they're here to stop the code from choking
+    'M438' : 'M438 DECam c0019 4380.0 260.0',
+    'M490' : 'M490 DECam c0020 4900.0 260.0',
+    'N395' : 'N395 DECam c0015 3950.0 100.0',
+    'M464' : 'M464 DECam c0018 4640.0 264.0',
+    'N1008' : 'N1008 DECam c0016 10097.0 109.0',
 }
 
 
@@ -307,7 +315,7 @@ class DECam(Instrument):
             url = f'{cfg.value("DECam.calibfiles.urlbase")}{str(rempath)}'
             retry_download( url, filepath )
 
-        with fits.open( filepath, memmap=False ) as hdu:
+        with fits.open( filepath ) as hdu:
             rawbpm = hdu[0].data
 
         # TODO : figure out what the bits mean in this bad pixel mask file!
@@ -670,7 +678,7 @@ class DECam(Instrument):
         newdata = np.zeros_like( data )
         ccdnum = header[ 'CCDNUM' ]
 
-        with fits.open( linearitydata.get_fullpath( nofile=False ), memmap=False ) as linhdu:
+        with fits.open( linearitydata.get_fullpath( nofile=False ) ) as linhdu:
             for amp in ["A", "B"]:
                 ampdex = f'ADU_LINEAR_{amp}'
                 x0 = secs[amp]['destsec']['x0']
@@ -679,12 +687,8 @@ class DECam(Instrument):
                 y1 = secs[amp]['destsec']['y1']
 
                 lindex = np.floor( data[ y0:y1, x0:x1 ] ).astype( int )
-                # ...this used to work without having to flatten the
-                #    array used as indexes into the linhdu[ccdnum].data
-                #    table, but it stopped working.  Don't know why.
-                #    Astropy version change?  Something in numpy 2.0 and
-                #    how it interacts with astropy fits tables?  Dunno.
-                #    Scary.
+                # Make sure not to access past the end of the array
+                lindex[lindex == 65535] = 65534
                 flatdata = data[ y0:y1, x0:x1 ].flatten()
                 lindata = linhdu[ccdnum].data[ lindex.flatten() ]
                 lindatap1 = linhdu[ccdnum].data[ lindex.flatten() + 1 ]
@@ -693,7 +697,6 @@ class DECam(Instrument):
                                    * ( lindatap1[ampdex] - lindata[ampdex] )
                                    / ( lindatap1['ADU'] - lindata['ADU'] ) ) )
                 newdata[ y0:y1, x0:x1 ] = np.reshape( linearized, shape=( y1-y0, x1-x0 ) )
-
         return newdata
 
 
@@ -712,7 +715,7 @@ class DECam(Instrument):
                         clobber=True, md5sum=params['md5sum'], sizelog='GiB', logger=SCLogger.get() )
         return outfile
 
-    def _commit_exposure( self, origin_identifier, expfile, obs_type='Sci',
+    def _commit_exposure( self, origin_identifier, expfile, obs_type='Sci', proc_type='raw',
                           preproc_bitflag=0, wtfile=None, flgfile=None, session=None ):
         """Add to the Exposures table in the database an exposure downloaded from NOIRLab.
 
@@ -765,7 +768,7 @@ class DECam(Instrument):
                                     "a weight and a flags file." )
             exts = [ 'image', 'weight', 'flags' ]
 
-        provenance = self.get_exposure_provenance()
+        provenance = self.get_exposure_provenance( proc_type=proc_type )
 
         expfile = pathlib.Path( expfile )
         with fits.open( expfile ) as ifp:
@@ -838,7 +841,8 @@ class DECam(Instrument):
 
         """
         downloaded = self.acquire_origin_exposure( identifier, params )
-        return self._commit_exposure( identifier, downloaded, params['obs_type'], params['preproc_bitflag'] )
+        return self._commit_exposure( identifier, downloaded, obs_type=params['obs_type'],
+                                      preproc_bitflag=params['preproc_bitflag'], proc_type=params['proc_type'] )
 
 
     def find_origin_exposures( self,
@@ -1228,6 +1232,7 @@ class DECamOriginExposures:
                                     params={ 'url': expinfo.url,
                                              'md5sum': expinfo.md5sum,
                                              'obs_type': expinfo.obs_type,
+                                             'proc_type': expinfo.proc_type,
                                              'preproc_bitflag': preproc_bitflag },
                                     hold=hold,
                                     exp_time=expinfo.exposure,
@@ -1246,7 +1251,7 @@ class DECamOriginExposures:
 
 
     def download_exposures( self, outdir=".", indexes=None, onlyexposures=True,
-                            clobber=False, existing_ok=False, session=None ):
+                            clobber=False, existing_ok=False, skip_failures=False, session=None ):
         """Download exposures, and maybe weight and data quality frames as well.
 
         Parameters
@@ -1271,26 +1276,36 @@ class DECamOriginExposures:
             indexes = [ indexes ]
 
         downloaded = []
+        dlindexes = []
 
         for dex in indexes:
             expinfo = self._frame.loc[dex]
             extensions = expinfo.index.values
             fpaths = {}
-            for ext in extensions:
-                if onlyexposures and ext != 'image':
+            try:
+                for ext in extensions:
+                    if onlyexposures and ext != 'image':
+                        continue
+                    expinfo = self._frame.loc[ dex, ext ]
+                    fname = pathlib.Path( expinfo.archive_filename ).name
+                    fpath = outdir / fname
+                    retry_download( expinfo.url, fpath, retries=5, sleeptime=5, exists_ok=existing_ok,
+                                    clobber=clobber, md5sum=expinfo.md5sum, sizelog='GiB', logger=SCLogger.get() )
+                    fpaths[ 'exposure' if ext=='image' else ext ] = fpath
+            except Exception:
+                if skip_failures:
+                    SCLogger.warning( f"Failed to download {fname}; skip_failures is true, so moving on." )
                     continue
-                expinfo = self._frame.loc[ dex, ext ]
-                fname = pathlib.Path( expinfo.archive_filename ).name
-                fpath = outdir / fname
-                retry_download( expinfo.url, fpath, retries=5, sleeptime=5, exists_ok=existing_ok,
-                                clobber=clobber, md5sum=expinfo.md5sum, sizelog='GiB', logger=SCLogger.get() )
-                fpaths[ 'exposure' if ext=='image' else ext ] = fpath
+                else:
+                    raise
+            dlindexes.append( dex )
             downloaded.append( fpaths )
 
-        return downloaded
+        return dlindexes, downloaded
 
     def download_and_commit_exposures( self, indexes=None, clobber=False, existing_ok=False,
-                                       delete_downloads=True, skip_existing=True, session=None ):
+                                       delete_downloads=True, skip_existing=True,
+                                       skip_failures=False, session=None ):
         # TODO : implement skip_existing
 
         outdir = pathlib.Path( FileOnDiskMixin.local_path )
@@ -1299,8 +1314,9 @@ class DECamOriginExposures:
         if not isinstance( indexes, collections.abc.Sequence ):
             indexes = [ indexes ]
 
-        downloaded = self.download_exposures( outdir=outdir, indexes=indexes, clobber=clobber,
-                                              onlyexposures=False, existing_ok=existing_ok, session=session )
+        indexes, downloaded = self.download_exposures( outdir=outdir, indexes=indexes, clobber=clobber,
+                                                       onlyexposures=False, existing_ok=existing_ok,
+                                                       skip_failures=skip_failures, session=session )
 
         exposures = []
         for dex, expfiledict in zip( indexes, downloaded ):
@@ -1338,7 +1354,7 @@ class DECamOriginExposures:
             # proc_type = self._frame.loc[dex,'image'].proc_type
             expobj = self.decam._commit_exposure( origin_identifier, expfile, obs_type=obs_type,
                                                   preproc_bitflag=preproc_bitflag, wtfile=wtfile, flgfile=flgfile,
-                                                  session=session )
+                                                  proc_type=self.proc_type, session=session )
             exposures.append( expobj )
 
             # If the comitted exposures aren't in the same place as the downloaded exposures,
