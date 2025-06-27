@@ -502,12 +502,13 @@ class Instrument:
     def fetch_sections(self, session=None, dateobs=None):
         """Get the sensor section objects associated with this instrument.
 
-        TEMPORARILY REPLACED.  This was causing a gigantic performance
-        hit in searching for NOIRLab references.  Each exposure searched
-        was on a new dateobs, so was not in the section cache, so was
-        causing the database to be hit *every* *single* *time*... even
-        though we know for DECam that it was never ever loading anything
-        new.  So, currently, just ignore the database.
+        TEMPORARILY REPLACED.  See Issue #487.  This was causing a
+        gigantic performance hit in searching for NOIRLab references.
+        Each exposure searched was on a new dateobs, so was not in the
+        section cache, so was causing the database to be hit *every*
+        *single* *time*... even though we know for DECam that it was
+        never ever loading anything new.  So, currently, just ignore the
+        database.
 
         We should think about the concept of date-dependent sensor
         sections and do a better implemtnation of them than one that
@@ -2375,7 +2376,8 @@ class InstrumentOriginExposures:
 
 
     def download_exposures( self, outdir=".", indexes=None, onlyexposures=True,
-                            clobber=False, existing_ok=False, skip_failures=False, session=None ):
+                            clobber=False, existing_ok=False, skip_existing=True,
+                            skip_failures=False, session=None ):
         """Download exposures from the origin.
 
         Parameters
@@ -2400,7 +2402,15 @@ class InstrumentOriginExposures:
            otherwise will throw an exception.
 
         existing_ok: bool
-           Only matters if clobber=False (see above)
+           Only matters if clobber=False (see above).  Note that this is
+           a different thing from skip_existing; the parmaeter names are
+           perhaps unfortuate.
+
+        skip_existing: bool
+           If True, will silently skip downloading exposures that
+           already exist in the database.  If False, will raise an
+           exception on an attempt to load an exposure that already
+           exists in the database.
 
         session: Session
            Database session to use.  (A new one will be created if this
