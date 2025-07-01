@@ -22,6 +22,8 @@ seechange.ExposureList = class
     };
 
 
+    // **********************************************************************
+
     render_page()
     {
         let self = this;
@@ -42,18 +44,6 @@ seechange.ExposureList = class
         this.tabbed.addTab( "exposuredetail", "Exposure Details", this.exposurediv, false );
         rkWebUtil.elemaker( "p", this.exposurediv,
                             { "text": 'No exposure listed; click on an exposure in the "Exposure List" tab.' } );
-
-        var table, th, tr, td;
-
-        // let p = rkWebUtil.elemaker( "p", this.listdiv );
-        // rkWebUtil.elemaker( "span", p, { "text": "[Back to exposure search]",
-        //                                  "classes": [ "link" ],
-        //                                  "click": () => { self.context.render_page() } } );
-        // p.appendChild( document.createTextNode( "  —  " ) );
-        // rkWebUtil.elemaker( "span", p, { "text": "[Refresh]",
-        //                                  "classes": [ "link" ],
-        //                                  "click": () => { rkWebUtil.wipeDiv( self.div );
-        //                                                   self.context.show_exposures(); } } );
 
         let h2 = rkWebUtil.elemaker( "h2", this.listdiv, { "text": "Exposures" } );
         if ( ( this.fromtime == null ) && ( this.totime == null ) ) {
@@ -77,29 +67,9 @@ seechange.ExposureList = class
                             { "text": '"Detections" are everything found on subtratcions; ' +
                               '"Sources" are things that passed preliminary cuts.' } )
 
-        table = rkWebUtil.elemaker( "table", this.listdiv, { "classes": [ "exposurelist" ],
-                                                             "attributes": { "id": "exposure_list_table" } } );
-        tr = rkWebUtil.elemaker( "tr", table );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "Exposure" } );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "MJD" } );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "target" } );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "filter" } );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "t_exp (s)" } );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "subs" } );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "detections" } );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "sources" } );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "n_successim" } );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "n_errors" } );
-
-        this.tablerows = [];
-        let exps = this.exposures;   // For typing convenience...
-        // Remember, in javascript, "i in x" is like python "i in range(len(x))" or "i in x.keys()"
-        let fade = 1;
-        let countdown = 3;
-        for ( let i in exps["name"] ) {
-            let row = rkWebUtil.elemaker( "tr", table, { "classes": [ fade ? "bgfade" : "bgwhite" ] } );
-            this.tablerows.push( row );
-            td = rkWebUtil.elemaker( "td", row );
+        let rowrenderer = (exps, i) => {
+            let row = rkWebUtil.elemaker( "tr", null );
+            let td = rkWebUtil.elemaker( "td", row );
             rkWebUtil.elemaker( "a", td, { "text": exps["name"][i],
                                            "classes": [ "link" ],
                                            "click": function() {
@@ -115,6 +85,7 @@ seechange.ExposureList = class
                                                                    exps["exp_time"][i] );
                                            }
                                          } );
+            td = rkWebUtil.elemaker( "td", row, { "text": exps["project"][i] } );
             td = rkWebUtil.elemaker( "td", row, { "text": exps["mjd"][i].toFixed(2) } );
             td = rkWebUtil.elemaker( "td", row, { "text": exps["target"][i] } );
             td = rkWebUtil.elemaker( "td", row, { "text": exps["filter"][i] } );
@@ -124,12 +95,33 @@ seechange.ExposureList = class
             td = rkWebUtil.elemaker( "td", row, { "text": exps["n_measurements"][i] } );
             td = rkWebUtil.elemaker( "td", row, { "text": exps["n_successim"][i] } );
             td = rkWebUtil.elemaker( "td", row, { "text": exps["n_errors"][i] } );
-            countdown -= 1;
-            if ( countdown == 0 ) {
-                countdown = 3;
-                fade = 1 - fade;
-            }
-        }
+            return row
+        };
+
+        let fields = [ "Exposure", "project", "MJD", "target", "filter", "t_exp (s)",
+                       "subs", "detections", "sources", "n_successim", "n_errors" ];
+        let fieldmap = { 'Exposure': "name",
+                         'project': "project",
+                         'MJD': "mjd",
+                         'target': "target",
+                         'filter': "filter",
+                         't_exp (s)': "exp_time",
+                         'subs': "n_subs",
+                         'detections': "n_sources",
+                         'sources': "n_measurements",
+                         'n_successim': "n_successim",
+                         'n_errors': "n_errors",
+                       };
+        let tab = new rkWebUtil.SortableTable( this.exposures, rowrenderer, fields,
+                                               { 'fieldmap': fieldmap,
+                                                 'dictoflists': true,
+                                                 'initsort': [ '+MJD' ],
+                                                 'tableclasses': [ 'exposure_list_table' ],
+                                                 'colorclasses': [ 'bgfade', 'bgwhite' ],
+                                                 'colorlength': 3 } );
+        tab.table.id = 'exposure_list_table';
+        this.listdiv.appendChild( tab.table );
+
     };
 
 
