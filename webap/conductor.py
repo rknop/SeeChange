@@ -13,7 +13,8 @@ import flask
 
 from util.util import asUUID
 from models.base import SmartSession, Psycopg2Connection
-from models.knownexposure import PipelineWorker, KnownExposure
+from models.enums_and_bitflags import KnownExposureStateConverter
+from models.knownexposure import PipelineWorker
 # NOTE: for get_instrument_instrance to work, must manually import all
 #  known instrument classes we might want to use here.
 # If models.instrument gets imported somewhere else before this file
@@ -143,8 +144,8 @@ class ConductorBaseView( BaseView ):
 class GetStatus( ConductorBaseView ):
     def do_the_things( self ):
         status = self.get_updater_status()
-        status[ 'throughstep' ] = self.__class__.throughstep
-        status[ 'pickuppartial' ] = self.__class__.pickuppartial
+        status[ 'throughstep' ] = ConductorBaseView.throughstep
+        status[ 'pickuppartial' ] = ConductorBaseView.pickuppartial
         return status
 
 # ======================================================================
@@ -193,19 +194,19 @@ class UpdateParameters( ConductorBaseView ):
             return f"Unknown arguments to UpdateParameters: {unknown}", 500
 
         for att, val in clsatttoset.items():
-            setattr( self.__class__, att, val )
+            setattr( ConductorBaseView, att, val )
         # Bools will have been passed as ints through the web interface, so make
         #   sure they're really bools.  (This matters when passing to Postgres.)
-        self.__class__.pause_updates = bool( self.__class__.pause_updates )
-        self.__class__.hold_new_exposures = bool( self.__class__.hold_new_exposures )
-        self.__class__.pickuppartial = bool( self.__class__.pickuppartial )
+        ConductorBaseView.pause_updates = bool( ConductorBaseView.pause_updates )
+        ConductorBaseView.hold_new_exposures = bool( ConductorBaseView.hold_new_exposures )
+        ConductorBaseView.pickuppartial = bool( ConductorBaseView.pickuppartial )
 
         updaterargs['command'] = 'updateparameters'
         res = self.talk_to_updater( updaterargs )
         del curstatus['status']
         res['oldsconfig'] = curstatus
 
-        self.__class__.configchangetime = res['configchangetime']
+        ConductorBaseView.configchangetime = res['configchangetime']
         with Psycopg2Connection() as conn:
             cursor = conn.cursor()
             cursor.execute( "UPDATE conductor_config SET instrument_name=%(inst)s, updateargs=%(upda)s, "
@@ -218,8 +219,8 @@ class UpdateParameters( ConductorBaseView ):
                               'pause': bool( res['pause'] ),
                               'hold': bool( res['hold'] ),
                               't': res['configchangetime'],
-                              'through': self.__class__.throughstep,
-                              'partial': self.__class__.pickuppartial } )
+                              'through': ConductorBaseView.throughstep,
+                              'partial': ConductorBaseView.pickuppartial } )
             conn.commit()
 
         return res
@@ -338,14 +339,17 @@ class RequestExposure( ConductorBaseView ):
         with Psycopg2Connection() as dbcon:
             cursor = dbcon.cursor( cursor_factory=psycopg2.extras.RealDictCursor )
             cursor.execute( "LOCK TABLE knownexposures" )
+            # Select the lowest-mjd exposure in the "ready" state (1)
             cursor.execute( "SELECT _id, cluster_id FROM knownexposures "
-                            "WHERE cluster_id IS NULL AND NOT hold "
+                            "WHERE _state=1 "
                             "ORDER BY mjd LIMIT 1" )
             rows = cursor.fetchall()
             if len(rows) > 0:
                 knownexp_id = rows[0]['_id']
+                # Set state to claimed (2), update the claim time and the cluster id
                 cursor.execute( "UPDATE knownexposures "
-                                "SET cluster_id=%(cluster_id)s, claim_time=NOW() "
+                                "SET cluster_id=%(cluster_id)s, claim_time=NOW(), start_time=NULL, release_time=NULL, "
+                                "    _state=2, node_id=NULL, machine_name=NULL "
                                 "WHERE _id=%(id)s",
                                 { 'id': knownexp_id, 'cluster_id': args['cluster_id'] } )
                 cursor.execute( "SELECT throughstep FROM conductor_config" )
@@ -373,93 +377,102 @@ class GetKnownExposures( ConductorBaseView ):
                                               "filter": None,
                                               "project": None,
                                               "minexptime": None,
-                                              "claimed": None,
-                                              "released": None,
+                                              "state": None,
                                               "maxclaimtime": None
                                              } )
         args['minmjd'] = float( args['minmjd'] ) if args['minmjd'] is not None else None
         args['maxmjd'] = float( args['maxmjd'] ) if args['maxmjd'] is not None else None
-        with SmartSession() as session:
-            q = session.query( KnownExposure )
+        with Psycopg2Connection() as conn:
+            cursor = conn.cursor( cursor_factory=psycopg2.extras.RealDictCursor )
+            q = ( "SELECT ke.*,e.filepath FROM knownexposures ke "
+                  "LEFT JOIN exposures e ON ke.exposure_id=e._id " )
+            _and = "WHERE"
+            subdict = {}
+
             if args['minmjd'] is not None:
-                q = q.filter( KnownExposure.mjd >= args['minmjd'] )
+                q += f"{_and} mjd >= %(minmjd)s "
+                subdict['minmjd'] = float( args['minmjd'] )
+                _and = "AND"
             if args['maxmjd'] is not None:
-                q = q.filter( KnownExposure.mjd <= args['maxmjd'] )
+                q += f"{_and} mjd <= %(maxmjd)s "
+                subdict['maxmjd'] = float( args['maxmjd'] )
+                _and = "AND"
             if args['instrument'] is not None:
-                q = q.filter( KnownExposure.instrument == args['instrument'] )
+                q += f"{_and} instrument = %(instr)s "
+                subdict['instr'] = args['instrument']
+                _and = "AND"
             if args['target'] is not None:
-                q = q.filter( KnownExposure.target == args['target'] )
+                q += f"{_and} target = %(target)s "
+                subdict['target'] = args['target']
+                _and = "AND"
             if args['project'] is not None:
-                q = q.filter( KnownExposure.project == args['project'] )
+                q += f"{_and} project = %(project)s "
+                subdict['project'] = args['project']
+                _and = "AND"
             if args['minexptime'] is not None:
-                q = q.filter( KnownExposure.exp_time >= float( args['minexptime'] ) )
-            if args['claimed'] == '1':
-                q = q.filter( KnownExposure.claim_time is not None )
-            elif args['claimed'] == '0':
-                q = q.filter( KnownExposure.claim_time is None )
-            if args['released'] == '1':
-                q = q.filter( KnownExposure.release_time is not None )
-            elif args['released'] == '0':
-                q = q.filter( KnownExposure.release_time is None )
+                q += f"{_and} exp_time >= %(minexp)s "
+                subdict['minexp'] = float( args['minexptime'] )
+                _and = "AND"
+            if args['state'] is not None:
+                q += f"{_and} _state IN %(state)s"
+                subdict['state'] = tuple( KnownExposureStateConverter.to_int( s ) for s in args['state'].split(",") )
             if args['maxclaimtime'] is not None:
                 claimtime = datetime.datetime.fromisoformat( args['maxclaimtime'] )
                 if claimtime.tzinfo is None:
                     claimtime = pytz.utc.localize( claimtime )
-                q = q.filter( KnownExposure.claim_time <= claimtime )
-            q = q.order_by( KnownExposure.instrument, KnownExposure.mjd )
-            kes = q.all()
-        retval= { 'status': 'ok',
-                  'knownexposures': [ ke.to_dict() for ke in kes ] }
+                q += f"{_and} claim_time <= %(maxclaimtime)s "
+                subdict['maxclaimtime'] = claimtime
+                _and = "AND"
+            q += "ORDER BY mjd "
+
+            cursor.execute( q, subdict )
+            rows = cursor.fetchall()
+
+        retval = { 'status': 'ok',
+                   'knownexposures': rows }
         # Add the "id" field that's the same as "_id" for convenience,
-        #   and make the filter the short name
+        #   make the filter the short name, convert "_state" to a string
+        #   in "state", and strip off all but the filename of the
+        #   filepath
         for ke in retval['knownexposures']:
             ke['id'] = ke['_id']
             ke['filter'] = get_instrument_instance( ke['instrument'] ).get_short_filter_name( ke['filter'] )
+            ke['state'] = KnownExposureStateConverter.to_string( ke['_state'] )
+            if ke['filepath'] is not None:
+                ke['filepath'] = pathlib.Path( ke['filepath'] ).name
         # We didn't search by filter because we want to make sure we're letting the user
         #   specify short filter names.  Filter by filter now.
         if args['filter'] is not None:
             retval['knownexposures'] = [ ke for ke in retval['knownexposures'] if ke['filter'] == args['filter'] ]
         return retval
 
+
 # ======================================================================
 
-
-class HoldReleaseExposures( ConductorBaseView ):
-    def hold_or_release( self, keids, hold ):
-        # flask.current_app.logger.info( f"HoldOrReleaseExposures with hold={hold} and keids={keids}" )
-        if len( keids ) == 0:
-            return { 'status': 'ok', 'held': [], 'missing': [] }
-        held = []
-        with SmartSession() as session:
-            q = session.query( KnownExposure ).filter( KnownExposure._id.in_( keids ) )
-            todo = q.all()
-            # flask.current_app.logger.info( f"HoldOrRelease got {len(todo)} things "
-            #                                f"to {'hold' if hold else 'release'}" )
-            kes = { str(i._id) : i for i in todo }
-            notfound = []
-            for keid in keids:
-                if keid not in kes.keys():
-                    notfound.append( keid )
-                else:
-                    kes[keid].hold = hold
-                    held.append( keid )
-            session.commit()
-        return { 'status': 'ok', 'held': held, 'missing': notfound }
-
-
-class HoldExposures( HoldReleaseExposures ):
+class SetKnownExposureState( ConductorBaseView ):
     def do_the_things( self ):
-        args = self.argstr_to_args( None, { 'knownexposure_ids': [] } )
-        return self.hold_or_release( args['knownexposure_ids'], True )
+        args = self.argstr_to_args( None, { 'knownexposure_ids': [],
+                                            'state': None } )
+        if ( args['state'] is None ):
+            raise ValueError( "must specify state" )
+        state = KnownExposureStateConverter.to_int( args['state'] )
+        if state not in (0, 1, 2, 3, 4):
+            raise ValueError( "state must be one of held, ready, claimed, running, or done, "
+                              "or an int in [0, 1, 2, 3, 4]" )
+        if not isinstance( args['knownexposure_ids'], list ):
+            raise TypeError( "knownexposure_ids must be a list" )
+        if len( args['knownexposure_ids'] ) == 0:
+            raise ValueError( "Must have at least one in knownexposure_ids to do anything" )
 
+        with Psycopg2Connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute( "UPDATE knownexposures SET _state=%(state)s WHERE _id IN %(ids)s",
+                            { 'state': state, 'ids': tuple( args['knownexposure_ids'] ) } )
+            conn.commit()
 
-class ReleaseExposures( HoldReleaseExposures ):
-    def do_the_things( self ):
-        args = self.argstr_to_args( None, { 'knownexposure_ids': [] } )
-        retval = self.hold_or_release( args['knownexposure_ids'], False )
-        retval['released'] = retval['held']
-        del retval['held']
-        return retval
+        return { 'status': 'ok',
+                 'state': KnownExposureStateConverter.to_string( state ),
+                 'knownexposure_ids': args['knownexposure_ids'] }
 
 
 # ======================================================================
@@ -480,7 +493,7 @@ class DeleteKnownExposures( ConductorBaseView ):
 
 # ======================================================================
 
-class ClearClusterClaim( ConductorBaseView ):
+class FullyClearClusterClaim( ConductorBaseView ):
     def do_the_things( self ):
         args = flask.request.json
         if 'knownexposure_ids' not in args:
@@ -517,10 +530,9 @@ urls = {
     "/getworkers": GetWorkers,
     "/getknownexposures": GetKnownExposures,
     "/getknownexposures/<path:argstr>": GetKnownExposures,
-    "/holdexposures": HoldExposures,
-    "/releaseexposures": ReleaseExposures,
+    "/setknownexposurestate": SetKnownExposureState,
     "/deleteknownexposures": DeleteKnownExposures,
-    "/clearclusterclaim": ClearClusterClaim,
+    "/fullyclearclusterclaim": FullyClearClusterClaim,
 }
 
 usedurls = {}

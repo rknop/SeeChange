@@ -158,6 +158,8 @@ class ExposureLauncher:
                 if data['status'] != 'available':
                     raise ValueError( f"Unexpected value of data['status']: {data['status']}" )
 
+                SCLogger.info( f"Conductor told me to do known exposure {data['knownexposure_id']} "
+                               f"through step {data['through_step']}; my own through_step is {self.through_step}" )
                 with SmartSession() as session:
                     knownexp = ( session.query( KnownExposure )
                                  .filter( KnownExposure._id==data['knownexposure_id'] ) ).all()
@@ -194,29 +196,23 @@ class ExposureLauncher:
                     through_step = self.through_step
 
                 # Run
+                logtext = ( f"Creating an ExposureProcessor for instrument {knownexp.instrument} and "
+                            f"identifier {knownexp.identifier}, with {self.numprocs} subporcesses, for cluster "
+                            f"{self.cluster_id} and node {self.node_id}.  Running through step {through_step}." )
+                if self.onlychips is not None:
+                    logtext += f"  Only doing chips {self.onlychips}."
+                SCLogger.info( logtext )
                 exposure_processor = ExposureProcessor( knownexp.instrument,
                                                         knownexp.identifier,
-                                                        knownexp.params,
                                                         self.numprocs,
                                                         self.cluster_id,
                                                         self.node_id,
                                                         onlychips=self.onlychips,
                                                         through_step=through_step,
-                                                        verify=self.verify,
                                                         worker_log_level=self.worker_log_level )
-                exposure_processor.start_work()
-                SCLogger.info( f'Downloading and loading exposure {knownexp.identifier}...' )
-                exposure_processor.download_and_load_exposure()
-                SCLogger.info( '...downloaded.  Launching process to handle all chips.' )
-
-                with SmartSession() as session:
-                    knownexp = ( session.query( KnownExposure )
-                                 .filter( KnownExposure._id==data['knownexposure_id'] ) ).first()
-                    knownexp.exposure_id = exposure_processor.exposure.id
-                    session.commit()
-
+                exposure_processor.secure_exposure()
+                SCLogger.info( 'Exposure secured.  Launching process to handle all chips.' )
                 exposure_processor()
-                exposure_processor.finish_work()
                 SCLogger.info( f"Done processing exposure {exposure_processor.exposure.origin_identifier}" )
 
                 n_processed += 1
@@ -245,14 +241,36 @@ def main():
                                       description='Ask the conductor for exposures to do, launch piplines to run them',
                                       formatter_class=ArgFormatter,
                                       epilog=
-
-        """pipeline_exposure_launcher.py
+"""pipeline_exposure_launcher.py
 
 Runs a process that regularly (by default, every 2 minutes) polls the
 SeeChange conductor to see if there are any exposures that need
 processing.  If given one by the conductor, will download the exposure
-and load it into the database, and then launch multiple processes with
-pipelines to process each of the chips in the exposure.
+and load it into the database, and run the pipeline on all chips in the exposure.
+
+Uses exposure_processor.py to actually do its dirty work.
+exposure_processor will launch multiple subprocesses; each subprocess
+will run chip of the exposure at a time.  (If there are enough
+subprocesses, then each subprocess will only one run chip.  If there are
+fewer subprocesses than chips, then as a subprocess finishes one chip,
+it will start one of the leftovers.)  Be careful not to oversubscribe
+your CPUs.  There are two ways this can happen.  First, you can just
+specify too many subprocesses.  Second, it's possible that some
+libraries may use OpenMP or similar internally.  If that's the case,
+make sure to set the appropriate environment variables to instruct them
+to only use one process (or as many as you can afford, if you have more
+CPUs than you intend to launch subprocesses).  As of this writing, the
+following environment varaibles should be set to 1 (or to the number of
+subprocesses you might want things to use):
+  OMP_NUM_THREADS
+  OPENBLAS_NUM_THREADS
+  MKL_NUM_THREADS
+  VECLIB_MAXIMUM_THREADS
+(Probably not all of the libraires referenced by these environment
+variables are actually used in SeeChange, but it won't hurt to set the
+environment variable anyway.)
+
+
 """
                                       )
     parser.add_argument( "-c", "--cluster-id", required=True, help="Name of the cluster where this is running" )

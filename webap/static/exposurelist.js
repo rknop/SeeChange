@@ -5,21 +5,29 @@ import { seechange } from "./seechange_ns.js"
 
 seechange.ExposureList = class
 {
-    constructor( context, parent, parentdiv, exposures, fromtime, totime, provtag, projects )
+    constructor( context, parent, parentdiv )
     {
         this.context = context;
         this.parent = parent;
         this.parentdiv = parentdiv;
-        this.exposures = exposures;
-        this.fromtime = fromtime;
-        this.totime = totime;
-        this.provtag = provtag;
-        this.projects = projects;
         this.masterdiv = null;
         this.listdiv = null;
+        this.exposures = {};
         this.exposurediv = null;
         this.exposure_displays = {};
     };
+
+
+    // **********************************************************************
+
+    new_exposure_list( exposures, fromtime, totime, projects ) {
+        this.exposures = exposures;
+        this.masterdiv = null;
+        this.fromtime = fromtime;
+        this.totime = totime;
+        this.projects = projects;
+        this.render_page();
+    }
 
 
     // **********************************************************************
@@ -57,11 +65,7 @@ seechange.ExposureList = class
                                                      + this.totime.toFixed(2) ) );
         }
 
-        if ( this.provtag == null ) {
-            h2.appendChild( document.createTextNode( " including all provenances" ) );
-        } else {
-            h2.appendChild( document.createTextNode( " with provenance tag " + this.provtag ) );
-        }
+        h2.appendChild( document.createTextNode( " with provenance tag " + this.context.provtag_wid.value ) );
 
         rkWebUtil.elemaker( "p", this.listdiv,
                             { "text": '"Detections" are everything found on subtratcions; ' +
@@ -72,19 +76,9 @@ seechange.ExposureList = class
             let td = rkWebUtil.elemaker( "td", row );
             rkWebUtil.elemaker( "a", td, { "text": exps["name"][i],
                                            "classes": [ "link" ],
-                                           "click": function() {
-                                               self.show_exposure( exps["id"][i],
-                                                                   exps["name"][i],
-                                                                   exps["mjd"][i],
-                                                                   exps["airmass"][i],
-                                                                   exps["filter"][i],
-                                                                   exps["seeingavg"][i],
-                                                                   exps["limmagavg"][i],
-                                                                   exps["target"][i],
-                                                                   exps["project"][i],
-                                                                   exps["exp_time"][i] );
-                                           }
-                                         } );
+                                           "click": function() { self.show_exposure( exps["id"][i] ) }
+                                         }
+                              );
             td = rkWebUtil.elemaker( "td", row, { "text": exps["project"][i] } );
             td = rkWebUtil.elemaker( "td", row, { "text": exps["mjd"][i].toFixed(2) } );
             td = rkWebUtil.elemaker( "td", row, { "text": exps["target"][i] } );
@@ -125,9 +119,10 @@ seechange.ExposureList = class
     };
 
 
-    show_exposure( id, name, mjd, airmass, filter, seeingavg, limmagavg, target, project, exp_time )
+    show_exposure( id, provtag=null )
     {
         let self = this;
+        if ( provtag == null ) provtag = this.context.provtag_wid.value;
 
         this.tabbed.selectTab( "exposuredetail" );
 
@@ -138,24 +133,18 @@ seechange.ExposureList = class
             rkWebUtil.wipeDiv( this.exposurediv );
             rkWebUtil.elemaker( "p", this.exposurediv, { "text": "Loading...",
                                                          "classes": [ "warning", "bold", "italic" ] } );
-            this.context.connector.sendHttpRequest( "exposure_images/" + id + "/" + this.provtag,
+            this.context.connector.sendHttpRequest( "exposure_images/" + id + "/" + provtag,
                                                     null,
-                                                    (data) => {
-                                                        self.actually_show_exposure( id, name, mjd, airmass,
-                                                                                     filter, seeingavg, limmagavg,
-                                                                                     target, project,
-                                                                                     exp_time, data );
-                                                    } );
+                                                    (data) => { self.actually_show_exposure( data ); }
+                                                  );
         }
     };
 
 
-    actually_show_exposure( id, name, mjd, airmass, filter, seeingavg, limmagavg, target, project, exp_time, data )
+    actually_show_exposure( data )
     {
-        let exp = new seechange.Exposure( this.context, this.exposurediv,
-                                          id, name, mjd, airmass, filter, seeingavg, limmagavg,
-                                          target, project, exp_time, data );
-        this.exposure_displays[id] = exp;
+        let exp = new seechange.Exposure( this.context, this.exposurediv, data );
+        this.exposure_displays[data.exposure._id] = exp;
         exp.render_page();
     };
 }

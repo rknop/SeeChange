@@ -293,6 +293,19 @@ class DeepscoreAlgorithmConverter( EnumConverter ):
     _dict_inverse = None
 
 
+class KnownExposureStateConverter( EnumConverter ):
+    _dict = {
+        0: "held",
+        1: "ready",
+        2: "claimed",
+        3: "running",
+        4: "done"
+    }
+    _allowed_values = None
+    _dict_filtered = None
+    _dict_inverse = None
+
+
 def bitflag_to_string(value, dictionary):
     """Convert 64-bit bitflag into a comma separated string.
 
