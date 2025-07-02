@@ -1,5 +1,7 @@
 ## Setting up a SeeChange instance
 
+See [setting up a production instance](#production-instance-setup) below for trying to actually run SeeChange.  First, though, the setup you'd need to run development instances locally on your own machine.
+
 ### Installing using Docker
 
 At the moment, some of the things below will not work if you install Docker Desktop.  It has to do with permissions and bind-mounting system volumes; because of how Docker Desktop works, the files inside the container all end up owned as root, not as you, even if they are owned by you on your own filesystem.  Hopefully there's a way to fix this, but in the meantime, install Docker Engine instead of Docker Desktop; instructions are here:
@@ -135,7 +137,7 @@ Note that in the devshell and test docker environments above, database migration
 
 ### Installing SeeChange on a local machine (not dockerized)
 
-**WARNING:** This section is no longer complete.  What's described here will get you partway there.  However, the tests now require a number of external servers to be running, and setting all of them up is not documented here.  The best way to get everything set up as necessary to run all of the code, and all of the tests, is to use a dockerized environment as described above.
+**WARNING: This section is no longer complete.  What's described here will get you partway there.  However, the tests now require a number of external servers to be running, and setting all of them up is not documented here.  The best way to get everything set up as necessary to run all of the code, and all of the tests, is to use a dockerized environment as described above.**
 
 As always, checkout the code from github: <https://github.com/c3-time-domain/SeeChange>.
 We recommend using a virtual environment to install the dependencies. For example:
@@ -347,3 +349,27 @@ testpaths =
 
 Which will limit pytest to automatically only run the tests in that folder, 
 and ignore other test folders, e.g., those in the `extern` folder.
+
+
+<a name="production-instance-setup"></a>
+### Setting up a production SeeChange instance
+
+#### Setting up a database
+
+##### Database migrations
+
+#### Setting up an archive server
+
+#### Building the docker images
+
+#### Setting up a web application
+
+#### Installing the code
+
+#### Creating your config file
+
+#### Running
+
+##### Running on multiple different machines and clusters at the same time
+
+#### Concrete example: Perlmutter on NERSC for LS4

@@ -5,19 +5,28 @@ Data is stored in three main places:
  - The local filesystem
  - The data archive
 
+The database, for the most part, stores information about stored objects (e.g. meta data for images or source lists). In some cases, the database tables contain all the information (e.g. measurements on a source detected on a difference image).
+
+If an object is "in" the database, and has data that is not stored in the PostgreSQL server itself, then it will have one or more associated files on disk.  For instance, `Image` objects usually have three FITS images (one for the image, one for a weight (inverse variance) image, and one for a bad pixel flags image).  Objects in the database will have their associated files available on the *archive*.  The archive is (usually) a remote server somewhere.  When you run SeeChange, you configure it to know how to connect to the archive.
+
+You also configure a data directory for the local filesystem.  This data directory is treated as a cache.  When a data file is needed, the code will look there for it; if it's not there, it will ask the archive for it and download it to the local filesystem.  When a new file is created, it's created in the local filesystem.  However, the metadata of an object is not saved to the PostgreSQL database until the file has been succesfully transferred to the archive.
+
+This design allows us to not be locked into running on a single cluster or machine.  As long as a machine is able to contact both the PostgreSQL, the archive, and the webap (see REFERENCE TODO), it is able to process data, working harmoniously with any other machines or clusters working on the same data.  What's more, if local filesystem space is limited, it's safe to just delete files out of it (at least, while no pipeline is running locally!), as the pipeline can always get needed data back from the archive.  (This could slow you down, of course.)
+
+
 ### Database
 
-We use `postgres` as the database backend, which allows us to use the `q3c` extension for fast spatial queries, as well as types like JSONB for storing dictionaries.  This needs to be set up as a service on the local machine, or as a separate container in a docker-compose environment.  See :doc:`setup` for more details.
+We use PostgreSQL as the database backend, which allows us to use the `q3c` extension for fast spatial queries, as well as types like JSONB for storing dictionaries.  There must be a database server available for use by the pipeline.  See :doc:`setup` for more details.
 
 Database models are defined using SQLAlchemy, and database migrations are tracked with Alembic.  Database communication is done using a combination of SQLALchmey and direct SQL using `psycopg2`.
 
-The database communications is defined in `models/base.py`, where we define a `Base` class for all database mapped objects.  Each class that inherits from it can have columns and relationships mapped to object attributes.
+The database structure is defined in `models/base.py`, where we define a `Base` class for all database mapped objects.  Each class that inherits from it can have columns and relationships mapped to object attributes.
 
 Unless you're writing one-off code that you expect to run by itself (i.e. not as part of a pipline that is mass-processing data), do not hold database connections open for a long time.  Sometimes you do want to have a connection open for several operations, either because they're linked, or because they're happening fast enough that the inefficiency of opening a new connection between the operations isn't worth it.  However, if code that runs in a pipeline designed to run many times concurrently hold open database connections for extended periods of time, we run the risk of exhausting database connection resources.  See "SQLAlchemy sessions" and "Psycopg2 connections" below.
 
 Database communcation should usually be done inside `with SmartSession(...) as session:` or `with Psycopg2Connection(...) as conn:` blocks, where these two functions are defined in `models/base.py`.  See "SQLAlchemy sessions" and "Psycopg2 connections" below.
 
-Many of our basic database functions take either a SQLAlchemy `Session` object, or a psycopg2 `connection` object, as an optional argument.  If you are inside a `with` block that holds a database connection, pass that connection to the function, and the function will use the same session or connection that you're already using.  (Otherwise, the function will open a new connection.)  For example, see `test.py::SeeChangeBase.insert()`.  (`SeeChangeBase` is a class that most (all?) of our database model objects inherit from, so `insert` (and others) are defined for all models.)  Often, however, you will not want to open your own session, but just let these functions open sessions themselves.  This is usually the case when you are doing any non-trivial computation between database calls, as the overhead of establishing a new database connection will become small compared to the computation you're doing.
+Many of our basic database functions take either a SQLAlchemy `Session` object, Psycopg2connection object, or a psycopg2 `connection` object, as an optional argument.  If you are inside a `with` block that holds a database connection, pass that connection to the function, and the function will use the same session or connection that you're already using.  (Otherwise, the function will open a new connection.)  For example, see `test.py::SeeChangeBase.insert()`.  (`SeeChangeBase` is a class that most (all?) of our database model objects inherit from, so `insert` (and others) are defined for all models.)  Often, however, you will not want to open your own session, but just let these functions open sessions themselves.  This is usually the case when you are doing any non-trivial computation between database calls, as the overhead of establishing a new database connection will become small compared to the computation you're doing.
 
 
 #### SQLAlchemy sessions
@@ -76,9 +85,9 @@ with SmartSession() as session:
 
 #### Psycopg2 connections
 
-While it's possible to do direct SQL with SQLAlchemy sessions, either with the session itself, or by (painfully) extracting the underlying database connection, if what you really need to do is direct SQL, you're probably better off with a simple psycopg2 connection.  If you are going to do anything that locks tables, you must do it this way.  Empirically, SQLAlchemy does not seem to actually close the underlying databse connection when you call the `close` method of a session, but rather markes it for closing sometime later during garbage collection.  The result is that if you lock a table using SQL passed to an SQLAlchemy session, most of the time it will work, but rarely the table will not unlock when you close the session (or exist the relevantg `with` block).  If you really need control over your database, use an actual database connection and save yourself the complication of another opininated layer between you and the database.
+While it's possible to do direct SQL with SQLAlchemy sessions, either with the session itself, or by (painfully) extracting the underlying database connection, if what you really need to do is direct SQL, you're probably better off with a simple psycopg2 connection.  If you are going to do anything that locks tables, you must do it this way.  Empirically, SQLAlchemy does not seem to actually close the underlying database connection when you call the `close` method of a session, but rather markes it for closing sometime later during garbage collection.  The result is that if you lock a table using SQL passed to an SQLAlchemy session, most of the time it will work, but rarely the table will not unlock when you close the session (or exist the relevantg `with` block).  If you really need control over your database, use an actual database connection and save yourself the complication of another opininated layer between you and the database.
 
-`models/base.py` provides a function `Psycopg2connection()` that must be used as a context manager (i.e. in a `with` block).  It takes one optional argument, and returns a standard `psycopg2.connection` object..  If that argument is `None`, it opens a new connection to the databse, and then calls `rollback` and closes that connection when the context exits.  (This means that if you want any changes you made to presist, you must make sure to call `commit` on the connection.)  If that argument is an existing psycopg2 connection, it just immediately returns that, and does not automatically rollback or close it.  (In that case, whatever created the connection in the first place is responsible for doing that.)  This latter use is analgous to passing an existing SQLAlchemy session to `SmartSession`, as described above.
+`models/base.py` provides a function `Psycopg2Connection()` that must be used as a context manager (i.e. in a `with` block).  It takes one optional argument, and returns a standard `psycopg2.connection` object.  If that argument is `None`, it opens a new connection to the database, and then calls `rollback` and closes that connection when the context exits.  (This means that if you want any changes you made to presist, you must make sure to call `commit` on the connection.)  If that argument is an existing psycopg2 connection, it just immediately returns that, and does not automatically rollback or close it.  (In that case, whatever created the connection in the first place is responsible for doing that.)  This latter use is analgous to passing an existing SQLAlchemy session to `SmartSession`, as described above.
 
 As a trivial example:
 ```
@@ -119,7 +128,7 @@ class MyObject:
 
 This makes sure those properties are defined and initialized even when an object is not created with its `__init__()` function.
 
-If you change a mapped class, or define a new mapped class, make sure also to update the database migrations.  See "Database migrations" in "Setting up a SeeChange instance".
+If you change a mapped class, or define a new mapped class, make sure also to update the database migrations.  See "Database migrations" in :doc:`setup`.
 
 
 ### Files on disk
