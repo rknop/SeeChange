@@ -69,7 +69,8 @@ class ParsMeasurer(Parameters):
 
         self.bad_thresholds = self.add_par(
             'bad_thresholds',
-            { 'psf_fit_flags_bitmask': 0x2e,
+            { 'sn': 5.,
+              'psf_fit_flags_bitmask': 0x2e,
               'detection_dist': 5.,
               'gaussfit_dist': 5.,
               'elongation': 3.,
@@ -86,7 +87,8 @@ class ParsMeasurer(Parameters):
 
         self.deletion_thresholds = self.add_par(
             'deletion_thresholds',
-            { 'psf_fit_flags_bitmask': 0x2e,
+            { 'sn': 5.,
+              'psf_fit_flags_bitmask': 0x2e,
               'detection_dist': 5.,
               'gaussfit_dist': 5.,
               'elongation': 3.,
@@ -276,6 +278,12 @@ class Measurer:
                 for m in all_measurements:
                     is_bad = False
                     keep = True
+
+                    # Look at the psf photometry S/N
+                    if ( badthresh['sn'] is not None ) and ( m.flux_psf / m.flux_psf_err < badthresh['sn'] ):
+                        is_bad = True
+                    if ( delthresh['sn'] is not None ) and ( m.flux_psf / m.flux_psf_err < delthresh['sn'] ):
+                        keep = False
 
                     # Chuck it if the psf fit failed
                     if ( ( badthresh['psf_fit_flags_bitmask'] is not None )

@@ -2,6 +2,7 @@ import pytest
 import os
 import uuid
 import copy
+import collections.abc
 
 import numpy as np
 
@@ -26,6 +27,7 @@ from pipeline.data_store import DataStore
 from pipeline.top_level import Pipeline
 
 from improc.simulator import Simulator
+from improc.tools import make_gaussian
 
 from util.util import patch_image_overlap_limits
 
@@ -389,6 +391,177 @@ def sim_sources(sim_image1):
     # No need to delete, it will be deleted
     #   as a downstream of the exposure parent
     #   of sim_image1
+
+
+# ======================================================================
+# This fixture is used in both improc/test_photometry.py and
+# pipeline/test_measuring.py.  It is a bunch of things that can be
+# injected at various positions on an image to test if the code measures
+# them properly.
+#
+# The "expected" is used mainly by improc/test_photometry.py
+#
+# Pass the following to the function that the fixture gives you:
+#   sigma : 1σ width of the Gaussian to draw (default 2.0)
+#   wid : width of the image clips to return
+#   skynoise : a sky noise level, used for determining expected flux tolerances
+#   skylevel : a sky level, used for determining expected background levels
+#   fluxen : either a float, or a list of floats
+#       If a float, then this flux is used for all injected sources.  If a
+#       list, then must have as many elements as the number of returned
+#       image clips.
+#   xposes, yposes : None, or list of ints
+#       Positions on the image where the clips are expected to be added;
+#       corresponds to the center pixel of the clip.  If given, must give both,
+#       and must have as many elements as the number of returned image clips.
+#
+# The function that the fixture gives you returns images, masks, positions, expected
+#   images : image clips.  You probably want to just add these to your image at
+#            [ postions[i][1]:positions[i][1]+wid, positions[i][0]:positions[i][0]+wid ]
+#   masks : mask clips; True=masked.  Logical OR this with your mask at those same positions
+#   positions : posistions of the *lower-left* of the iamge clips on the parent image
+#   expected: dictionary of expected parameters that should match to things
+#             in Measurements.  See test_photometry.py::test_diagnostics for
+#             an example of use.
+
+
+@pytest.fixture( scope='session' )
+def diagnostic_injections():
+
+    def maker( sigma=2.0, wid=51, skynoise=5., skylevel=100., fluxen=20000., xposes=None, yposes=None ):
+        _sqrt2 = np.sqrt(2.)
+        _2sqrt2ln2 = 2. * np.sqrt( 2. * np.log( 2. ) )
+        # xvals, yvals = np.meshgrid( np.array(range(wid)) - wid // 2, np.array(range(wid)) - wid // 2 )
+        fwhm = _2sqrt2ln2 * sigma
+        inner = 4. * fwhm
+        outer = 5. * fwhm
+        ringarea = np.pi * ( outer**2 - inner**2 )
+
+        assert ( xposes is None) == ( yposes is None )
+        if xposes is None:
+            xposes = [ 100, 100, 100, 100, 100, 100, 200, 200, 200, 200, 200, 200,
+                       300, 300, 300, 300, ]
+            yposes = [ 100, 200, 300, 400, 500, 600, 100, 200, 300, 400, 500, 600,
+                       100, 200, 300, 400, ]
+
+        positions = []
+        images = []
+        expected = []
+        masks = []
+
+        # Put in six normal PSFs.  There are several are here so the caller can play games with
+        #   fluxes to do things like S/N tests.
+        for n in range(6):
+            flux = fluxen[n] if isinstance( fluxen, collections.abc.Sequence ) else fluxen
+            x0 = xposes[n] - wid // 2
+            y0 = yposes[n] - wid // 2
+            images.append( flux * make_gaussian( sigma, imsize=wid ) )
+            masks.append( np.full( (wid, wid), False ) )
+            positions.append( (x0, y0) )
+            expected.append( { 'flux': pytest.approx( flux, abs=3. * np.sqrt(2*np.pi) * fwhm * skynoise ),
+                               'center_x_pixel': xposes[n],
+                               'center_y_pixel': yposes[n],
+                               'bkg_per_pix': pytest.approx( skylevel, abs=3. * ( skynoise / np.sqrt(ringarea) ) ),
+                               'x': pytest.approx( xposes[n], abs=0.05 ),
+                               'y': pytest.approx( yposes[n], abs=0.05 ),
+                               'gfit_x': pytest.approx( xposes[n], abs=0.05 ),
+                               'gfit_y': pytest.approx( yposes[n], abs=0.05 ),
+                               'major_width': pytest.approx( fwhm, rel=0.01 ),
+                               'minor_width': pytest.approx( fwhm, rel=0.01 ),
+                               'psf_fit_flags': 0,
+                               'nbadpix': 0,
+                               'negfrac': ( "lt", 0.06 ),
+                               'negfluxfrac': ( "lt", 0.05 )
+                              } )
+
+
+
+        # Six negative psfs
+        for n in range(6, 12):
+            flux = fluxen[n] if isinstance( fluxen, collections.abc.Sequence ) else fluxen
+            x0 = xposes[n] - wid // 2
+            y0 = yposes[n] - wid // 2
+            images.append( -flux * make_gaussian( sigma, imsize=wid ) )
+            masks.append( np.full( (wid, wid), False ) )
+            positions.append( (x0, y0) )
+            expected.append( { 'psf_fit_flags': ( "and", 4 ),
+                               'negfrac': ( "gt", 0.75 ),
+                               'negfluxfrac': ( "gt", 0.75 ) } )
+
+
+        # A dipole with 1/2 the flux negative, separated by 1σ
+        n = 12
+        flux = fluxen[n] if isinstance( fluxen, collections.abc.Sequence ) else fluxen
+        x0 = xposes[n] - wid // 2
+        y0 = yposes[n] - wid // 2
+        images.append( flux * make_gaussian( sigma, imsize=wid )
+                       - flux/2. * make_gaussian( sigma, imsize=wid,
+                                                  offset_x=-sigma/_sqrt2, offset_y=-sigma/_sqrt2 ) )
+        masks.append( np.full( (wid, wid), False ) )
+        positions.append( (x0, y0) )
+        expected.append( { 'psf_fit_flags': 0,
+                           'negfrac': ( "gt", 0.45 ),
+                           'negfluxfrac': ( "gt", 0.1 ) } )
+
+        # A dipole with full flux negative, separated by 2.5σ
+        n = 13
+        flux = fluxen[n] if isinstance( fluxen, collections.abc.Sequence ) else fluxen
+        x0 = xposes[n] - wid // 2
+        y0 = yposes[n] - wid // 2
+        images.append( flux * make_gaussian( sigma, imsize=wid )
+                       - flux * make_gaussian( sigma, imsize=wid,
+                                               offset_x=-sigma/(2.5*_sqrt2), offset_y=-sigma/(2.5*_sqrt2) ) )
+        masks.append( np.full( (wid, wid), False ) )
+        positions.append( (x0, y0) )
+        expected.append( { 'psf_fit_flags': ( "notand", 1 & 2 & 32 ),
+                           'negfrac': pytest.approx( 1.0, rel=0.1 ),
+                           'negfluxfrac': pytest.approx( 1.0, rel=0.1 ) } )
+
+        # A normal psf, but with some masked pixels
+        n = 14
+        flux = fluxen[n] if isinstance( fluxen, collections.abc.Sequence ) else fluxen
+        x0 = xposes[n] - wid // 2
+        y0 = yposes[n] - wid // 2
+        images.append( flux * make_gaussian( sigma, imsize=wid ) )
+        _mask = np.full( (wid, wid), False )
+        _mask[ wid//2, wid//2-1:wid//2+2 ] = True
+        masks.append( _mask )
+        positions.append( (x0, y0) )
+        expected.append( { 'psf_fit_flags': ( "and", 1 ),
+                           'flux': pytest.approx( flux, abs=3. * np.sqrt(2*np.pi) * fwhm * skynoise ),
+                           'x': pytest.approx( xposes[n], abs=0.05 ),
+                           'y': pytest.approx( yposes[n], abs=0.05 ),
+                           'major_width': pytest.approx( fwhm, rel=0.01 ),
+                           'minor_width': pytest.approx( fwhm, rel=0.01 ),
+                           'negfrac': ( "lt", 0.05 ),
+                           'negfluxfrac': ( "lt", 0.05 ),
+                           'nbadpix': 3 } )
+
+        # A big blob
+        n = 15
+        flux = fluxen[n] if isinstance( fluxen, collections.abc.Sequence ) else fluxen
+        x0 = xposes[n] - wid // 2
+        y0 = yposes[n] - wid // 2
+        images.append( flux * make_gaussian( 3.*sigma, imsize=wid ) )
+        masks.append( np.full( (wid, wid), False ) )
+        positions.append( (x0, y0) )
+        expected.append( { 'psf_fit_flags': 0,
+                           'center_x_pixel': xposes[n],
+                           'center_y_pixel': yposes[n],
+                           'gfit_x': pytest.approx( xposes[n], abs=0.1 ),
+                           'gfit_y': pytest.approx( yposes[n], abs=0.1 ),
+                           'bkg_per_pix': pytest.approx( skylevel, abs=3. * ( skynoise / np.sqrt(ringarea) ) ),
+                           'x': pytest.approx( xposes[n], abs=1. ),       # fit of 1fwhm gaussian won't be so good
+                           'y': pytest.approx( yposes[n], abs=1. ),
+                           'negfrac': ( "lt", 0.05 ),
+                           'negfluxfrac': ( "lt", 0.05 ),
+                           'nbadpix': 0,
+                           'major_width': pytest.approx( 3*fwhm, rel=0.03 ),
+                           'minor_width': pytest.approx( 3*fwhm, rel=0.03 ) } )
+
+        return images, masks, positions, expected
+
+    return maker
 
 
 # ======================================================================
