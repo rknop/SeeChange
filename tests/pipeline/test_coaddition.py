@@ -22,6 +22,7 @@ from pipeline.data_store import DataStore
 from pipeline.coaddition import Coadder, CoaddPipeline
 
 from util.util import env_as_bool
+from util.logger import SCLogger
 
 
 def estimate_psf_width(data, sz=7, upsampling=50, num_stars=20):
@@ -145,7 +146,6 @@ def extract_psf_surrogate(data, sz=7, upsampling=50):
     return psf
 
 
-@pytest.mark.flaky(max_runs=3)
 def test_zogy_simulation(coadder, blocking_plots):
     num_images = 10
     sim = Simulator(
@@ -157,6 +157,7 @@ def test_zogy_simulation(coadder, blocking_plots):
         gain_std=0,  # leave the gain at 1.0
         read_noise=1,
         optic_psf_pars={'sigma': 0.1},  # make the optical PSF much smaller than the seeing
+        random_seed=1230622645
     )
     images = []
     weights = []
@@ -361,6 +362,16 @@ def test_coaddition_run(coadder, ptf_reference_image_datastores, ptf_aligned_ima
         ref_image.md5sum = uuid.uuid4()
         ref_image.insert()
         upstrzps = ref_image.get_upstreams()
+        # ****
+        if not [ i.id for i in upstrzps ] == [ d.zp.id for d in ptf_reference_image_datastores ]:
+            import io
+            strio = io.StringIO()
+            strio.write( "MISMATCH BETWEEN UPSTREAM ZPS AND EXPECTED:\n" )
+            strio.write( f"  {'upstrzps':36s}   {'d.zp.id':36s}\n" )
+            for u, d in zip( upstrzps, ptf_reference_image_datastores ):
+                strio.write( f"  {str(u.id):36s}  {str(d.zp.id):36s}\n" )
+            SCLogger.info( strio.getvalue() )
+        # ****
         assert [ i.id for i in upstrzps ] == [ d.zp.id for d in ptf_reference_image_datastores ]
         assert ref_image.coadd_alignment_target == refimlast.id
         assert ref_image.is_coadd
