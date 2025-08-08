@@ -57,10 +57,14 @@ def test_measuring( diagnostic_injections ):
         measparam[ 'bad_thresholds' ] = threshes
         measparam[ 'deletion_thresholds' ] = nullthreshes
 
-        starting_prov = Provenance( process='no_process' )
+        # By putting test_measuring=True in starting_prov, it should ensure that all of the
+        #   downstream provenances are things unique to this test, so when we delete them
+        #   at the end it won't screw up other tests.  (But, gotta do that with referencing
+        #   also since that doesn't have any upstreams.)
+        starting_prov = Provenance( process='no_process', parameters={ 'test_measuring': True } )
         starting_prov.insert_if_needed()
         nukeprovs.add( starting_prov )
-        refprov = Provenance( process='referencing' )
+        refprov = Provenance( process='referencing', parameters={ 'test_measuring': True } )
         refprov.insert_if_needed()
         nukeprovs.add( refprov )
         refset = RefSet( name='test_measuring_refset', provenance_id=refprov.id )
