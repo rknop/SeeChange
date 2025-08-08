@@ -37,7 +37,7 @@ class ParsMeasurer(Parameters):
         )
 
         self.use_annulus_bg_on_sub = self.add_par(
-            'annulus_bg_on_sub',
+            'use_annulus_bg_on_sub',
             False,
             bool,
             ( 'Use an annulus background for measurements on the sub image.  Defaults to '
@@ -48,8 +48,8 @@ class ParsMeasurer(Parameters):
             'diag_box_halfsize',
             2.,
             float,
-            ( 'The diagnostic box used for counting bad pixels and negative pixels will be '
-              '2 * diag_box_halfsize + 1 on a side.  (Think of this as a radius.)' )
+            ( 'The diagnostic box, in fwhm, used for counting bad pixels and negative pixels will be '
+              '2 * round(diag_box_halfsize_pixels) + 1 on a side.  (Think of this as a radius.)' )
         )
 
         self.diag_box_halfsize_unit = self.add_par(

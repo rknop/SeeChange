@@ -123,7 +123,12 @@ def test_diagnostics( diagnostic_injections ):
     fwhm = 4.70964
     inner = 4. * fwhm
     outer = 5. * fwhm
-    images, masks, positions, expected = diagnostic_injections( sigma, wid=51 )
+    # Note!  slow_but_right here is actually not right, because the
+    #   image simulator created its psfs using gaussian sampling rather
+    #   than gaussian integration.  So, we're better approximating those
+    #   psfs with slow_but_right=false!  Good news, because it's faster
+    #   that way.
+    images, masks, positions, expected = diagnostic_injections( sigma, wid=51, slow_but_right=False )
     for im, ma, po in zip( images, masks, positions ):
         image[ po[1]:po[1]+51, po[0]:po[0]+51 ] += im
         mask[ po[1]:po[1]+51, po[0]:po[0]+51 ] = mask[ po[1]:po[1]+51, po[0]:po[0]+51 ] | ma
@@ -134,7 +139,7 @@ def test_diagnostics( diagnostic_injections ):
     measurements = photometry_and_diagnostics( image, noise, mask, positions, [ fwhm, 2*fwhm ],
                                                photutils_psf=psf, fwhm_pixels=fwhm,
                                                dobgsub=True, innerrad=inner, outerrad=outer )
-    for exp, m in zip( expected, measurements ):
+    for i, (exp, m) in enumerate( zip( expected, measurements ) ):
         for attr, val in exp.items():
             m_attr = getattr( m, attr )
             if isinstance( val, tuple ):

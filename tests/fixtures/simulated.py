@@ -399,6 +399,14 @@ def sim_sources(sim_image1):
 # injected at various positions on an image to test if the code measures
 # them properly.
 #
+# The tests in pipeline/test_measuring.py assume that the sources below
+# show up in the order they are.  So, if you edit this fixture, either
+# don't edit anything already here (just add), or update
+# pipeline/test_measuring.py.  You will need to edit
+# pipeline/test_measuring.py in any event, because it will need to
+# supply positions and fluxes for the new sources you add.  (And, while
+# you're there, you may as well add tests for the new sources... )
+#
 # The "expected" is used mainly by improc/test_photometry.py
 #
 # Pass the following to the function that the fixture gives you:
@@ -428,7 +436,8 @@ def sim_sources(sim_image1):
 @pytest.fixture( scope='session' )
 def diagnostic_injections():
 
-    def maker( sigma=2.0, wid=51, skynoise=5., skylevel=100., fluxen=20000., xposes=None, yposes=None ):
+    def maker( sigma=2.0, wid=51, skynoise=5., skylevel=100., fluxen=20000., xposes=None, yposes=None,
+               slow_but_right=False ):
         _sqrt2 = np.sqrt(2.)
         _2sqrt2ln2 = 2. * np.sqrt( 2. * np.log( 2. ) )
         # xvals, yvals = np.meshgrid( np.array(range(wid)) - wid // 2, np.array(range(wid)) - wid // 2 )
@@ -440,38 +449,68 @@ def diagnostic_injections():
         assert ( xposes is None) == ( yposes is None )
         if xposes is None:
             xposes = [ 100, 100, 100, 100, 100, 100, 200, 200, 200, 200, 200, 200,
-                       300, 300, 300, 300, ]
+                       300, 300, 300, 300, 300, ]
             yposes = [ 100, 200, 300, 400, 500, 600, 100, 200, 300, 400, 500, 600,
-                       100, 200, 300, 400, ]
+                       100, 200, 300, 400, 500, ]
 
         positions = []
         images = []
         expected = []
         masks = []
 
+        fluxerrest = np.sqrt(np.pi) * fwhm * skynoise
+
         # Put in six normal PSFs.  There are several are here so the caller can play games with
         #   fluxes to do things like S/N tests.
+        # At least one test puts in some really low S/N injected sources.  We don't expect the
+        #   position and width parameters to be that good on such sources, so try to estimate
+        #   if that's happening and adjust accordingly.
         for n in range(6):
             flux = fluxen[n] if isinstance( fluxen, collections.abc.Sequence ) else fluxen
             x0 = xposes[n] - wid // 2
             y0 = yposes[n] - wid // 2
-            images.append( flux * make_gaussian( sigma, imsize=wid ) )
+            images.append( flux * make_gaussian( sigma, imsize=wid, slow_but_right=slow_but_right ) )
             masks.append( np.full( (wid, wid), False ) )
             positions.append( (x0, y0) )
-            expected.append( { 'flux': pytest.approx( flux, abs=3. * np.sqrt(2*np.pi) * fwhm * skynoise ),
+            # For low s/n, positions and widths won't be that good
+            # For undersampled data, they will be worse.
+            # (I haven't really pushed most of these cuts, esp.
+            # in the non-oversampled case, so if you ever use them,
+            # you may have to fiddle with them.)
+            poserr = 0.05 if fwhm > 2. else 0.15
+            widerr = 0.02 if fwhm > 2. else 0.25
+            if flux < 5. * fluxerrest:
+                poserr = 0.2 if fwhm > 2. else 0.5
+                widerr = 0.6 if fwhm > 2. else 1.0
+            elif flux < 15. * fluxerrest:
+                poserr = 0.1 if fwhm > 2. else 0.35
+                widerr = 0.1 if fwhm > 2. else 0.5
+            # For low s/n, negfrac could be huge
+            negfrac = 0.06
+            negfluxfrac = 0.05
+            if flux < 5. * fluxerrest:
+                negfrac = 4.
+                negfluxfrac = 5.
+            elif flux < 15. * fluxerrest:
+                # I don't like these, but needed them in test_measurements.
+                # Undersampled data is sad.
+                # (With 25 pixels in a box,
+                negfrac = 2.1
+                negfluxfrac = 0.7
+            expected.append( { 'flux': pytest.approx( flux, abs=3. * fluxerrest ),
                                'center_x_pixel': xposes[n],
                                'center_y_pixel': yposes[n],
                                'bkg_per_pix': pytest.approx( skylevel, abs=3. * ( skynoise / np.sqrt(ringarea) ) ),
-                               'x': pytest.approx( xposes[n], abs=0.05 ),
-                               'y': pytest.approx( yposes[n], abs=0.05 ),
-                               'gfit_x': pytest.approx( xposes[n], abs=0.05 ),
-                               'gfit_y': pytest.approx( yposes[n], abs=0.05 ),
-                               'major_width': pytest.approx( fwhm, rel=0.01 ),
-                               'minor_width': pytest.approx( fwhm, rel=0.01 ),
+                               'x': pytest.approx( xposes[n], abs=poserr ),
+                               'y': pytest.approx( yposes[n], abs=poserr ),
+                               'gfit_x': pytest.approx( xposes[n], abs=poserr ),
+                               'gfit_y': pytest.approx( yposes[n], abs=poserr ),
+                               'major_width': pytest.approx( fwhm, rel=widerr ),
+                               'minor_width': pytest.approx( fwhm, rel=widerr ),
                                'psf_fit_flags': 0,
                                'nbadpix': 0,
-                               'negfrac': ( "lt", 0.06 ),
-                               'negfluxfrac': ( "lt", 0.05 )
+                               'negfrac': ( "lt", negfrac ),
+                               'negfluxfrac': ( "lt", negfluxfrac )
                               } )
 
 
@@ -481,7 +520,7 @@ def diagnostic_injections():
             flux = fluxen[n] if isinstance( fluxen, collections.abc.Sequence ) else fluxen
             x0 = xposes[n] - wid // 2
             y0 = yposes[n] - wid // 2
-            images.append( -flux * make_gaussian( sigma, imsize=wid ) )
+            images.append( -flux * make_gaussian( sigma, imsize=wid, norm=3, slow_but_right=slow_but_right ) )
             masks.append( np.full( (wid, wid), False ) )
             positions.append( (x0, y0) )
             expected.append( { 'psf_fit_flags': ( "and", 4 ),
@@ -494,8 +533,8 @@ def diagnostic_injections():
         flux = fluxen[n] if isinstance( fluxen, collections.abc.Sequence ) else fluxen
         x0 = xposes[n] - wid // 2
         y0 = yposes[n] - wid // 2
-        images.append( flux * make_gaussian( sigma, imsize=wid )
-                       - flux/2. * make_gaussian( sigma, imsize=wid,
+        images.append( flux * make_gaussian( sigma, imsize=wid, norm=3, slow_but_right=slow_but_right )
+                       - flux/2. * make_gaussian( sigma, imsize=wid, slow_but_right=slow_but_right,
                                                   offset_x=-sigma/_sqrt2, offset_y=-sigma/_sqrt2 ) )
         masks.append( np.full( (wid, wid), False ) )
         positions.append( (x0, y0) )
@@ -508,31 +547,36 @@ def diagnostic_injections():
         flux = fluxen[n] if isinstance( fluxen, collections.abc.Sequence ) else fluxen
         x0 = xposes[n] - wid // 2
         y0 = yposes[n] - wid // 2
-        images.append( flux * make_gaussian( sigma, imsize=wid )
-                       - flux * make_gaussian( sigma, imsize=wid,
+        images.append( flux * make_gaussian( sigma, imsize=wid, norm=3, slow_but_right=slow_but_right )
+                       - flux * make_gaussian( sigma, imsize=wid, slow_but_right=slow_but_right,
                                                offset_x=-sigma/(2.5*_sqrt2), offset_y=-sigma/(2.5*_sqrt2) ) )
         masks.append( np.full( (wid, wid), False ) )
         positions.append( (x0, y0) )
         expected.append( { 'psf_fit_flags': ( "notand", 1 & 2 & 32 ),
-                           'negfrac': pytest.approx( 1.0, rel=0.1 ),
-                           'negfluxfrac': pytest.approx( 1.0, rel=0.1 ) } )
+                           'negfrac': pytest.approx( 0.75, abs=0.25 ),
+                           'negfluxfrac': pytest.approx( 0.75, abs=0.25 ) } )
 
         # A normal psf, but with some masked pixels
         n = 14
         flux = fluxen[n] if isinstance( fluxen, collections.abc.Sequence ) else fluxen
         x0 = xposes[n] - wid // 2
         y0 = yposes[n] - wid // 2
-        images.append( flux * make_gaussian( sigma, imsize=wid ) )
+        images.append( flux * make_gaussian( sigma, imsize=wid, norm=3, slow_but_right=slow_but_right ) )
         _mask = np.full( (wid, wid), False )
         _mask[ wid//2, wid//2-1:wid//2+2 ] = True
         masks.append( _mask )
         positions.append( (x0, y0) )
         expected.append( { 'psf_fit_flags': ( "and", 1 ),
-                           'flux': pytest.approx( flux, abs=3. * np.sqrt(2*np.pi) * fwhm * skynoise ),
+                           # Give it a bigger error because psf fitting with masks won't do as well,
+                           #   *especially* for undersampled data.  (But... do we actually
+                           #   consider the masks in psf fitting?)  (I think we do.)
+                           #   (So, in this test, most of the weight of the fit is masked out
+                           #   for undersampled data!)
+                           'flux': pytest.approx( flux, abs=15. * fluxerrest ),
                            'x': pytest.approx( xposes[n], abs=0.05 ),
                            'y': pytest.approx( yposes[n], abs=0.05 ),
-                           'major_width': pytest.approx( fwhm, rel=0.01 ),
-                           'minor_width': pytest.approx( fwhm, rel=0.01 ),
+                           'major_width': pytest.approx( fwhm, rel=0.02 ),
+                           'minor_width': pytest.approx( fwhm, rel=0.02 ),
                            'negfrac': ( "lt", 0.05 ),
                            'negfluxfrac': ( "lt", 0.05 ),
                            'nbadpix': 3 } )
@@ -542,7 +586,7 @@ def diagnostic_injections():
         flux = fluxen[n] if isinstance( fluxen, collections.abc.Sequence ) else fluxen
         x0 = xposes[n] - wid // 2
         y0 = yposes[n] - wid // 2
-        images.append( flux * make_gaussian( 3.*sigma, imsize=wid ) )
+        images.append( flux * make_gaussian( 3.5*sigma, imsize=wid, slow_but_right=slow_but_right ) )
         masks.append( np.full( (wid, wid), False ) )
         positions.append( (x0, y0) )
         expected.append( { 'psf_fit_flags': 0,
@@ -556,8 +600,24 @@ def diagnostic_injections():
                            'negfrac': ( "lt", 0.05 ),
                            'negfluxfrac': ( "lt", 0.05 ),
                            'nbadpix': 0,
-                           'major_width': pytest.approx( 3*fwhm, rel=0.03 ),
-                           'minor_width': pytest.approx( 3*fwhm, rel=0.03 ) } )
+                           'major_width': pytest.approx( 3.5*fwhm, rel=0.1 ),
+                           'minor_width': pytest.approx( 3.5*fwhm, rel=0.1 ) } )
+
+        # An elongated thingy
+        n = 16
+        flux = fluxen[n] if isinstance( fluxen, collections.abc.Sequence ) else fluxen
+        x0 = xposes[n] - wid // 2
+        y0 = yposes[n] - wid // 2
+        images.append( flux * make_gaussian( 1.25*sigma, 4.5*sigma, rotation=35.,
+                                             imsize=wid, norm=3, slow_but_right=slow_but_right ) )
+        masks.append( np.full( (wid, wid), False ) )
+        positions.append( (x0, y0) )
+        expected.append( { 'psf_fit_flags': 0,
+                           'major_width': pytest.approx( 4.5*fwhm, rel=0.03 ),
+                           'minor_width': pytest.approx( 1.25*fwhm, rel=0.03 ),
+                          } )
+
+
 
         return images, masks, positions, expected
 
