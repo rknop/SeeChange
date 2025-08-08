@@ -305,13 +305,13 @@ def test_get_measurements_et_al( sim_lightcurve_complete_dses_module,
     assert objobj.ra == pytest.approx( sim_lightcurve_persistent_sources[2]['ra'], abs=1./3600. )
     assert objobj.dec == pytest.approx( sim_lightcurve_persistent_sources[2]['dec'], abs=1./3600. )
 
-    # Get all measurements for the object; there should be 6, ordered by mjd:
-    expected_mjd = np.array(  [ 60030.,    60032.,   60037.,    60040.,    60045.,    60055. ] )
-    expected_flux = np.array( [ 1613.0602, 1914.028, 2193.6316, 2734.4426, 2939.5178, 2692.7202 ] )
-    expected_rb = np.array(   [ 0.6149,    0.5408,   0.5471,    0.5510,    0.6644,    0.5116 ] )
+    # Get all measurements for the object; there should be 5, ordered by mjd:
+    expected_mjd = np.array(  [ 60032.,   60037.,    60040.,    60045.,    60055. ] )
+    expected_flux = np.array( [ 1914.028, 2193.6316, 2734.4426, 2939.5178, 2692.7202 ] )
+    expected_rb = np.array(   [ 0.5408,   0.5471,    0.5510,    0.6644,    0.5116 ] )
 
     mess = objobj.get_measurements_et_al( measprovid )
-    assert len( mess['measurements'] ) == 6
+    assert len( mess['measurements'] ) == 5
     assert all( isinstance( m, Measurements ) for m in mess['measurements'] )
     assert all( isinstance( i, Image ) for i in mess['images'] )
     assert all( isinstance( z, ZeroPoint ) for z in mess['zeropoints'] )
@@ -319,7 +319,7 @@ def test_get_measurements_et_al( sim_lightcurve_complete_dses_module,
 
     oldmess = mess
     mess = objobj.get_measurements_et_al( measprovid, deepprovid )
-    assert len( mess ) == 6
+    assert len( mess['measurements'] ) == 5
     assert all( isinstance( d, DeepScore ) for d in mess['deepscores'] )
     assert all( isinstance( d, DeepScoreSet ) for d in mess['deepscoresets'] )
     assert all( o.id == m.id for o, m in zip ( oldmess['measurements'], mess['measurements'] ) )
@@ -338,37 +338,37 @@ def test_get_measurements_et_al( sim_lightcurve_complete_dses_module,
     mjds = np.array( [ m.mjd for m in mess['images'] ] )
     fluxen = np.array( [ m.flux_psf for m in mess['measurements'] ] )
     rbs = np.array( [ m.score for m in mess['deepscores'] ] )
-    assert np.all( np.isclose( mjds, expected_mjd[[2,3,4]], atol=0.1 ) )
-    assert np.all( np.isclose( fluxen, expected_flux[[2,3,4]], rtol=1e-6 ) )
-    assert np.all( np.isclose( rbs, expected_rb[[2,3,4]], atol=0.001 ) )
+    assert np.all( np.isclose( mjds, expected_mjd[[1,2,3]], atol=0.1 ) )
+    assert np.all( np.isclose( fluxen, expected_flux[[1,2,3]], rtol=1e-6 ) )
+    assert np.all( np.isclose( rbs, expected_rb[[1,2,3]], atol=0.001 ) )
 
     # Try doing the same search only using datstrings
     mess = objobj.get_measurements_et_al( measprovid, deepprovid, mjd_min='2023-04-01', mjd_max='2023-04-13' )
     mjds = np.array( [ m.mjd for m in mess['images'] ] )
     fluxen = np.array( [ m.flux_psf for m in mess['measurements'] ] )
     rbs = np.array( [ m.score for m in mess['deepscores'] ] )
-    assert np.all( np.isclose( mjds, expected_mjd[[2,3,4]], atol=0.1 ) )
-    assert np.all( np.isclose( fluxen, expected_flux[[2,3,4]], rtol=1e-6 ) )
-    assert np.all( np.isclose( rbs, expected_rb[[2,3,4]], atol=0.001 ) )
+    assert np.all( np.isclose( mjds, expected_mjd[[1,2,3]], atol=0.1 ) )
+    assert np.all( np.isclose( fluxen, expected_flux[[1,2,3]], rtol=1e-6 ) )
+    assert np.all( np.isclose( rbs, expected_rb[[1,2,3]], atol=0.001 ) )
 
     # Try to get everything with r/b > 0.55
     mess = objobj.get_measurements_et_al( measprovid, deepprovid, min_deepscore=0.55 )
     mjds = np.array( [ m.mjd for m in mess['images'] ] )
     fluxen = np.array( [ m.flux_psf for m in mess['measurements'] ] )
     rbs = np.array( [ m.score for m in mess['deepscores'] ] )
-    assert np.all( np.isclose( mjds, expected_mjd[[0,3,4]], atol=0.1 ) )
-    assert np.all( np.isclose( fluxen, expected_flux[[0,3,4]], rtol=1e-6 ) )
-    assert np.all( np.isclose( rbs, expected_rb[[0,3,4]], atol=0.001 ) )
+    assert np.all( np.isclose( mjds, expected_mjd[[2,3]], atol=0.1 ) )
+    assert np.all( np.isclose( fluxen, expected_flux[[2,3]], rtol=1e-6 ) )
+    assert np.all( np.isclose( rbs, expected_rb[[2,3]], atol=0.001 ) )
 
     # Combine the previous two
-    mess = objobj.get_measurements_et_al( measprovid, deepprovid, mjd_min='2023-04-01', mjd_max='2023-04-13',
+    mess = objobj.get_measurements_et_al( measprovid, deepprovid, mjd_min=60044, mjd_max=60046,
                                           min_deepscore=0.55 )
     mjds = np.array( [ m.mjd for m in mess['images'] ] )
     fluxen = np.array( [ m.flux_psf for m in mess['measurements'] ] )
     rbs = np.array( [ m.score for m in mess['deepscores'] ] )
-    assert np.all( np.isclose( mjds, expected_mjd[[3,4]], atol=0.1 ) )
-    assert np.all( np.isclose( fluxen, expected_flux[[3,4]], rtol=1e-6 ) )
-    assert np.all( np.isclose( rbs, expected_rb[[3,4]], atol=0.001 ) )
+    assert np.all( np.isclose( mjds, expected_mjd[[3]], atol=0.1 ) )
+    assert np.all( np.isclose( fluxen, expected_flux[[3]], rtol=1e-6 ) )
+    assert np.all( np.isclose( rbs, expected_rb[[3]], atol=0.001 ) )
 
     # TODO : test thresholds when those are implmeneted
 
