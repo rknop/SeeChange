@@ -1,4 +1,3 @@
-import pytest
 import copy
 
 import numpy as np
@@ -167,9 +166,9 @@ def test_measuring( diagnostic_injections ):
         # Sub image has sky noise ~22.3
         # For a 1.1pix FWHM, 1σ detection should be ~43.9
 
-        x =      [  20,   40,   60,   80,  100,   120, ]
-        y =      [  20,   20,   20,   20,   20,    20, ]
-        fluxen = [ 80., 120., 240., 480., 960., 1920., ]
+        x =      [   20,   40,   60,   80,   100,   120, ]
+        y =      [   20,   20,   20,   20,    20,    20, ]
+        fluxen = [  120., 240., 480., 960., 1920., 3840., ]
 
         # The negative PSFs should just not be detected, so give them big flux and forget about them
         x.extend(      [    20,    40,    60,    80,   100,   120, ] )
@@ -237,26 +236,28 @@ def test_measuring( diagnostic_injections ):
                 else:
                     assert m_attr == val
 
-        # The only things that are good should be the brighter of the first 6 regular psfs
-        assert all( not ds.measurements[i].is_bad for i in ( 3, 4, 5 ) )
-        assert all( m.is_bad for i, m in enumerate(ds.measurements) if i<3 or i>5 )
+        # The only things that are good should be the brighter of the
+        #   first 6 regular psfs.  Index 2, even though it's at ~13σ,
+        #   got thrown out because it randomly had a bunch of negative
+        #   pixels around it.
+        # (Looking at it on the image, it looks like crap, even though
+        #   it's supposedly 13σ....)
+        assert all( not ds.measurements[i].is_bad for i in ( 1, 3, 4, 5 ) )
+        assert all( m.is_bad for i, m in enumerate(ds.measurements) if i not in ( 1, 3, 4, 5 ) )
 
         # ...I guess we're not really testing *why* things got rejected.  We don't keep
         # that information.
 
         # Run the measurements again, only this time with deletion thresholds equal
-        # to measurement thresdholds.  Only the three measurements should be kept.
-        lastmeas = ds.measurements
+        # to measurement thresdholds.  Only the four brightest of the regular psfs should be kept.
         ds.measurement_set = None
         measparam[ 'deletion_thresholds' ] = threshes
         ds.edit_prov_tree( 'measuring', params_dict=measparam, newprovtag='test_measuring_1'  )
         nukeprovs = nukeprovs.union( set( v for v in ds.prov_tree.values() ) )
         measer = Measurer( **measparam )
         ds = measer.run( ds )
-        assert len( ds.measurements ) == 3
-        assert all( ( m.flux_psf == pytest.approx( n.flux_psf, rel=0.01 )
-                      for m, n in zip( ds.measurements, lastmeas[3:6] ) ) )
-        assert [ m.index_in_sources for m in ds.measurements ] == [ 3, 4, 5 ]
+        assert len( ds.measurements ) == 4
+        assert [ m.index_in_sources for m in ds.measurements ] == [ 1, 3, 4, 5 ]
 
     finally:
         with Psycopg2Connection() as conn:

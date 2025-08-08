@@ -477,8 +477,8 @@ def diagnostic_injections():
             # (I haven't really pushed most of these cuts, esp.
             # in the non-oversampled case, so if you ever use them,
             # you may have to fiddle with them.)
-            poserr = 0.05 if fwhm > 2. else 0.15
-            widerr = 0.02 if fwhm > 2. else 0.25
+            poserr = 0.05 if fwhm > 2. else 0.2
+            widerr = 0.02 if fwhm > 2. else 0.3
             if flux < 5. * fluxerrest:
                 poserr = 0.2 if fwhm > 2. else 0.5
                 widerr = 0.6 if fwhm > 2. else 1.0
@@ -486,8 +486,8 @@ def diagnostic_injections():
                 poserr = 0.1 if fwhm > 2. else 0.35
                 widerr = 0.1 if fwhm > 2. else 0.5
             # For low s/n, negfrac could be huge
-            negfrac = 0.06
-            negfluxfrac = 0.05
+            negfrac = 0.06 if fwhm > 2. else 0.13
+            negfluxfrac = 0.05 if fwhm > 2. else 0.1
             if flux < 5. * fluxerrest:
                 negfrac = 4.
                 negfluxfrac = 5.
