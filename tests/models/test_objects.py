@@ -222,12 +222,23 @@ def test_associate_measurements( sim_lightcurve_complete_dses_module,
                     allsourceids.add( asUUID( meas.id ) )
                     found = True
                     break
-            #  Image FWHM is 1.11 pixels.  That means that the
-            #    source is spread over ~4 pixels (for an aperture of r=1FWHM).
+            #  Image FWHM is 2.72 pixels.  That means that the
+            #    source is spread over ~23 pixels (for an aperture of r=1FWHM).
             #  Sky noise is about 57 ADU.  So, noise in 1 aperture is about
-            #    115 ADU.  Ideally we'd detect things up to 5σ or 7σ,
-            #    but in practice we're getting 10σ. :(
-            assert found or ( flux < 1150 )
+            #    275 ADU.  A 5σ object is at flux:
+            #      f = n sqrt( f/g + s² ) where n
+            #    where f is the flux, n is the number of sigma cutoff,
+            #    g is the instrument gain (2.0 for DemoInstrument),
+            #    and s is the sky noise in the aperture.  Quadraticify,
+            #      f = ( n*sqrt( 4g²s² + n² ) + n² ) / 2g
+            #    Put in n=5, s=275, g=2, get f = 1381.
+            #
+            # Determining the actual S/N cutoff of what we should detect
+            #   is challenging, because some of the supernovae
+            #   are on very bright host galaxies.  Maybe what
+            #   I should do is turn off the deletion thresholds,
+            #   and then look at is_bad?  For now, just do ~1.5 * 1381.
+            assert found or ( flux < 2000. )
             if found:
                 thisdet.append( ds )
 
