@@ -880,6 +880,13 @@ class Instrument:
         To override the header keyword translation, use _get_header_keyword_translations(),
         to add unit conversions use _get_header_values_converters().
 
+        (However, if you must, consider using super() for most of the
+        work.  As an example, see::
+
+          ls4cam.py::LS4Cam.extract_header_info
+
+        .)
+        
         Parameters
         ----------
         header: fits.Header
@@ -891,6 +898,7 @@ class Instrument:
         -------
         output_values: dict
             A dictionary with some of the required values from the header.
+
         """
         header = {cls.normalize_keyword(key): value for key, value in header.items()}
         output_values = {}
@@ -939,8 +947,6 @@ class Instrument:
         global exposure header, e.g., using the offsets and
         pixel scale to calculate the center of the section
         relative to the center of the detector.
-
-        THIS METHOD SHOULD BE OVERRIDEN BY SUBCLASSES.
 
         Parameters
         ----------
