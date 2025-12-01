@@ -2,7 +2,6 @@ import pytest
 import datetime
 import logging
 
-import psycopg2
 import psycopg2.extras
 
 from models.base import Psycopg2Connection, SmartSession

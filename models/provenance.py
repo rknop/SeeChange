@@ -11,7 +11,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.schema import UniqueConstraint
 import psycopg2.extras
-import psycopg2.errors
 
 from util.util import NumpyAndUUIDJsonEncoder, asUUID
 from util.logger import SCLogger

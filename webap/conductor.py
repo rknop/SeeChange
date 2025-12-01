@@ -6,7 +6,6 @@ import datetime
 import pytz
 import traceback
 
-import psycopg2
 import psycopg2.extras
 
 import flask

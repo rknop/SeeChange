@@ -10,8 +10,8 @@ from astropy.wcs import WCS
 
 from util.logger import SCLogger
 
-import models.instrument
-import models.decam
+import models.instrument  # noqa: F401
+import models.decam  # noqa: F401
 from models.base import Psycopg2Connection
 from models.image import Image
 from models.reference import Reference
