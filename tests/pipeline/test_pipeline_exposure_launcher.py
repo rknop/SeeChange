@@ -1,5 +1,5 @@
-# import pytest
-# import os
+import pytest
+import os
 import time
 import logging
 
@@ -223,7 +223,7 @@ def test_exposure_launcher_through_step( conductor_connector,
 # the test down significantly, but does mean that every time I want to
 # do this, I don't have to remember to put the users there in addition
 # to putting in the breakpoint.
-# @pytest.mark.skipif( os.getenv('SKIP_BIG_MEMORY') is not None, reason="Uses too much memory for github actions" )
+@pytest.mark.skipif( os.getenv('SKIP_BIG_MEMORY') is not None, reason="Uses too much memory for github actions" )
 def test_exposure_launcher( conductor_connector,
                             conductor_config_decam_pull_all_held,
                             decam_elais_e1_two_references,

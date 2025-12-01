@@ -22,7 +22,6 @@ import astropy.visualization
 
 import flask
 import flask_session
-import flask.views
 
 from util.config import Config
 from util.util import asUUID

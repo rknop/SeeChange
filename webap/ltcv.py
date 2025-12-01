@@ -8,7 +8,6 @@ import flask
 import h5py
 import numpy as np
 import PIL
-import psycopg2
 import psycopg2.extras
 
 from util.config import Config

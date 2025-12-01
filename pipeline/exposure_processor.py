@@ -6,7 +6,6 @@ import multiprocessing
 import logging
 import psutil
 
-import psycopg2
 import psycopg2.extras
 
 from util.logger import SCLogger
