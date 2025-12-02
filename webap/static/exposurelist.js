@@ -71,7 +71,7 @@ seechange.ExposureList = class
                             { "text": '"Detections" are everything found on subtratcions; ' +
                               '"Sources" are things that passed preliminary cuts.' } )
 
-        let rowrenderer = (exps, i) => {
+        let rowrenderer = (exps, fields, i) => {
             let row = rkWebUtil.elemaker( "tr", null );
             let td = rkWebUtil.elemaker( "td", row );
             rkWebUtil.elemaker( "a", td, { "text": exps["name"][i],
@@ -92,22 +92,22 @@ seechange.ExposureList = class
             return row
         };
 
-        let fields = [ "Exposure", "project", "MJD", "target", "filter", "t_exp (s)",
-                       "subs", "detections", "sources", "n_successim", "n_errors" ];
-        let fieldmap = { 'Exposure': "name",
-                         'project': "project",
-                         'MJD': "mjd",
-                         'target': "target",
-                         'filter': "filter",
-                         't_exp (s)': "exp_time",
-                         'subs': "n_subs",
-                         'detections': "n_sources",
-                         'sources': "n_measurements",
-                         'n_successim': "n_successim",
-                         'n_errors': "n_errors",
+        let fields = [ "name", "project", "mjd", "target", "filter", "exp_time",
+                       "n_subs", "n_sources", "n_measurements", "n_successim", "n_errors" ];
+        let fieldmap = { "name": 'Exposure',
+                         "project": 'project',
+                         "mjd": 'MJD',
+                         "target": 'target',
+                         "filter": 'filter',
+                         "exp_time": 't_exp (s)',
+                         "n_subs": 'subs',
+                         "n_sources": 'detections',
+                         "n_measurements": 'sources',
+                         "n_successim": 'n_successim',
+                         "n_errors": 'n_errors',
                        };
-        let tab = new rkWebUtil.SortableTable( this.exposures, rowrenderer, fields,
-                                               { 'fieldmap': fieldmap,
+        let tab = new rkWebUtil.SortableTable( this.exposures, fields, rowrenderer,
+                                               { 'hdrs': fieldmap,
                                                  'dictoflists': true,
                                                  'initsort': [ '+MJD' ],
                                                  'tableclasses': [ 'exposure_list_table' ],

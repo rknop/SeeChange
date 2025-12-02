@@ -504,7 +504,7 @@ seechange.Conductor = class
             this.known_exposures.push( ke );
         }
 
-        let rowrenderer = ( ke ) => {
+        let rowrenderer = ( data, fields, ke ) => {
             tr = rkWebUtil.elemaker( "tr", null );
             if ( ke.state == "held" ) tr.classList.add( "heldexposure" );
             else if ( ke.state == "ready" ) tr.classList.add( "readyexposure" );
@@ -558,9 +558,9 @@ seechange.Conductor = class
             return tr;
         }
 
-        let fields = [ '', 'state', 'instrument', 'identifier', 'mjd', 'target', 'ra', 'dec', 'b',
-                       'filter', 'exp_time', 'project', 'cluster', 'claim_time', 'release_time',
-                       'exposure' ];
+        let fields = [ '', 'state', 'instrument', 'identifier', 'mjd', 'target', 'ra', 'dec', 'gallat',
+                       'filter', 'exp_time', 'project', 'cluster_id', 'claim_time', 'release_time',
+                       'exposure_id' ];
         let nosortfields = [ '', 'state' ];
         let fieldmap = { 'instrument': 'instrument',
                          'identifier': 'identifier',
@@ -568,17 +568,17 @@ seechange.Conductor = class
                          'target': 'target',
                          'ra': 'ra',
                          'dec': 'dec',
-                         'b': 'gallat',
+                         'gallat': 'b',
                          'filter': 'filter',
                          'exp_time': 'exp_time',
                          'project': 'project',
-                         'cluster': 'cluster_id',
+                         'cluster_id': 'cluster',
                          'claim_time': 'claim_time',
                          'release_time': 'release_time',
-                         'exposure': 'exposure_id',
+                         'exposure_id': 'exposure'
                        };
-        let tab = new rkWebUtil.SortableTable( this.known_exposures, rowrenderer, fields,
-                                               { 'fieldmap': fieldmap,
+        let tab = new rkWebUtil.SortableTable( this.known_exposures, fields, rowrenderer,
+                                               { 'hdrs': fieldmap,
                                                  'dictoflists': false,
                                                  'nosortfields': nosortfields,
                                                  'initsort': [ '+mjd' ],

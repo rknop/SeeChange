@@ -435,7 +435,7 @@ def provenance_tags_loaded( provenance_base, provenance_extra ):
     finally:
         with PsycopgConnection() as conn:
             cursor = conn.cursor()
-            cursor.execute( "DELETE FROM provenance_tags WHERE tag=ANY( {'xyzzy', 'plugh'} )" )
+            cursor.execute( "DELETE FROM provenance_tags WHERE tag=ANY( ARRAY['xyzzy', 'plugh'] )" )
             conn.commit()
 
 
