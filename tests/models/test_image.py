@@ -16,9 +16,8 @@ from astropy.utils.exceptions import AstropyWarning
 
 import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError
-import psycopg2.extras
 
-from models.base import SmartSession, FileOnDiskMixin, Psycopg2Connection
+from models.base import SmartSession, FileOnDiskMixin, PsycopgConnection
 from models.provenance import Provenance
 from models.instrument import get_instrument_instance
 from models.image import Image
@@ -845,8 +844,8 @@ def test_image_coadd( sim_image_r1, sim_image_r2, sim_image_r3, provenance_base 
                     assert getattr( gotim, a ) == getattr( imgs[0], a )
         assert gotim.exp_time == imgs[0].exp_time + imgs[1].exp_time + imgs[2].exp_time
         # Really make sure the coadd component table got loaded
-        with Psycopg2Connection() as conn:
-            cursor = conn.cursor( cursor_factory=psycopg2.extras.RealDictCursor )
+        with PsycopgConnection() as conn:
+            cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
             cursor.execute( "SELECT zp_id FROM image_coadd_component WHERE coadd_image_id=%(id)s",
                             {'id': im.id } )
             rows = cursor.fetchall()
@@ -874,15 +873,15 @@ def test_image_coadd( sim_image_r1, sim_image_r2, sim_image_r3, provenance_base 
                     assert getattr( gotim, a ) == getattr( imgs[0], a )
         assert gotim.exp_time == imgs[0].exp_time + imgs[1].exp_time + imgs[2].exp_time
         # Really make sure the coadd component table got loaded
-        with Psycopg2Connection() as conn:
-            cursor = conn.cursor( cursor_factory=psycopg2.extras.RealDictCursor )
+        with PsycopgConnection() as conn:
+            cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
             cursor.execute( "SELECT zp_id FROM image_coadd_component WHERE coadd_image_id=%(id)s",
                             {'id': im.id } )
             rows = cursor.fetchall()
             assert set( [ asUUID(row['zp_id']) for row in rows ] ) == set( [ z.id for z in zps ] )
 
     finally:
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
             if im is not None:
                 cursor.execute( "DELETE FROM images WHERE _id=%(id)s", { 'id': im.id } )
@@ -999,7 +998,7 @@ def test_image_subtraction(sim_exposure1, sim_exposure2, provenance_base, proven
         assert im.exp_time == im2.exp_time
 
     finally:
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
             for obj in [ im, ref, im2zp, im2wcs, im2bg, im2sl, im2, im1zp, im1wcs, im1bg, im1sl, im1 ]:
                 if obj is not None:

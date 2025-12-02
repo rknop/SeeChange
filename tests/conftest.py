@@ -23,7 +23,7 @@ from util.config import Config
 from models.base import (
     FileOnDiskMixin,
     SmartSession,
-    Psycopg2Connection,
+    PsycopgConnection,
     CODE_ROOT,
     get_all_database_objects,
     setup_warning_filters,
@@ -219,7 +219,7 @@ def pytest_sessionfinish(session, exitstatus):
     # Issue #516
     sqlalchemy.orm.session.close_all_sessions()
 
-    with Psycopg2Connection() as conn:
+    with PsycopgConnection() as conn:
         cursor = conn.cursor()
 
         # delete the CodeVersion objects (this should remove all provenances as well,
@@ -419,7 +419,7 @@ def provenance_extra( provenance_base ):
 @pytest.fixture
 def provenance_tags_loaded( provenance_base, provenance_extra ):
     try:
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( "INSERT INTO provenance_tags(_id,tag,provenance_id) "
                             "VALUES (%(id)s,%(tag)s,%(provid)s)",
@@ -433,7 +433,7 @@ def provenance_tags_loaded( provenance_base, provenance_extra ):
             conn.commit()
         yield True
     finally:
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( "DELETE FROM provenance_tags WHERE tag IN ('xyzzy', 'plugh')" )
             conn.commit()

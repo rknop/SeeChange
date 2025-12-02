@@ -25,7 +25,7 @@ import flask_session
 
 from util.config import Config
 from util.util import asUUID
-from models.base import Psycopg2Connection
+from models.base import PsycopgConnection
 from models.deepscore import DeepScoreSet
 from models.fakeset import FakeSet, FakeAnalysis
 from models.report import Report
@@ -45,7 +45,7 @@ class MainPage( BaseView ):
 
 class ProvTags( BaseView ):
     def do_the_things( self ):
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( 'SELECT DISTINCT ON(tag) tag FROM provenance_tags ORDER BY tag' )
             tags = [ row[0] for row in cursor.fetchall() ]
@@ -59,7 +59,7 @@ class ProvTags( BaseView ):
 
 class ProvTagInfo( BaseView ):
     def do_the_things( self, tag ):
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( 'SELECT p._id, p.process, p.code_version_id, p.parameters, '
                             '       p.is_bad, p.bad_comment, p.is_outdated, p.replaced_by, '
@@ -104,7 +104,7 @@ class CloneProvTag( BaseView ):
     _any_group_required = [ 'root', 'admin' ]
 
     def do_the_things( self, existingtag, newtag, clobber=0 ):
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
             if clobber:
                 q = "DELETE FROM provenance_tags WHERE tag=%(tag)s"
@@ -141,7 +141,7 @@ class CloneProvTag( BaseView ):
 
 class ProvenanceInfo( BaseView ):
     def do_the_things( self, provid ):
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( "SELECT p._id, p.process, p.code_version_id, p.parameters, "
                             "       p.is_bad, p.bad_comment, p.is_outdated, p.replaced_by, p.is_testing, "
@@ -176,7 +176,7 @@ class ProvenanceInfo( BaseView ):
 
 class Projects( BaseView ):
     def do_the_things( self ):
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( 'SELECT DISTINCT ON(project) project FROM exposures ORDER BY project' )
             return { 'status': 'ok',
@@ -201,7 +201,7 @@ class Exposures( BaseView ):
         t1 = None if data['enddate'] is None else astropy.time.Time( data['enddate'], format='isot' ).mjd
         app.logger.debug( f"t0 = {t0}, t1 = {t1}" )
 
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
 
             # Gonna do this in three steps.  First, get all the images with
@@ -420,7 +420,7 @@ class Exposures( BaseView ):
 
 class ExposureImages( BaseView ):
     def do_the_things( self, expid, provtag ):
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
 
             # Going to do this in a few steps again.  Might be able to write one
@@ -639,7 +639,7 @@ class ExposureReports( BaseView ):
         q, subdict = Report.query_for_reports( provtag )
         q = f"SELECT e._id,r.* FROM exposures e INNER JOIN ({q}) r ON e._id=r.exposure_id WHERE e._id=%(expid)s"
         subdict['expid'] = expid
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( q, subdict )
             columns = { cursor.description[i][0]: i for i in range( len(cursor.description) ) }
@@ -670,7 +670,7 @@ class PngCutoutsForSubImage( BaseView ):
             app.logger.debug( f"Looking for cutouts from exposure {exporsubid} ({'with' if nomeas else 'without'} "
                               f"missing-measurements)" )
 
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
 
             # Figure out the subids, zeropoints, backgrounds, and apertures we need
@@ -1003,7 +1003,7 @@ class PngCutoutsForSubImage( BaseView ):
 
 class FakeAnalysisData( BaseView ):
     def do_the_things( self, expid, provtag, sectionid=None ):
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
             expid = asUUID( expid )
 

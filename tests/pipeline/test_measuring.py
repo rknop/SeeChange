@@ -5,7 +5,7 @@ from astropy.table import Table
 from astropy.wcs import WCS
 
 from util.config import Config
-from models.base import Psycopg2Connection
+from models.base import PsycopgConnection
 from models.provenance import Provenance
 from models.image import Image
 from models.source_list import SourceList
@@ -264,7 +264,7 @@ def test_measuring( diagnostic_injections ):
         assert [ m.index_in_sources for m in ds.measurements ] == [ 1, 3, 4, 5 ]
 
     finally:
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( "DELETE FROM refsets WHERE name='test_measuring_refset'" )
             cursor.execute( "DELETE FROM provenance_tags WHERE tag LIKE 'test_measuring%'" )

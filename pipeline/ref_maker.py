@@ -2,13 +2,13 @@ import datetime
 import argparse
 
 import numpy as np
-import psycopg2.extras
+import psycopg
 
 from pipeline.parameters import Parameters
 from pipeline.coaddition import CoaddPipeline
 from pipeline.data_store import DataStore, ProvenanceTree
 
-from models.base import SmartSession, Psycopg2Connection
+from models.base import SmartSession, PsycopgConnection
 from models.provenance import Provenance
 from models.reference import Reference
 
@@ -341,8 +341,8 @@ class RefMaker:
             # make sure the ref_prov is in the database
             self.ref_prov.insert_if_needed( session=dbsession )
 
-        with Psycopg2Connection() as conn:
-            cursor = conn.cursor( cursor_factory=psycopg2.extras.RealDictCursor )
+        with PsycopgConnection() as conn:
+            cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
             # Lock the refset table so we don't have a race condition
             cursor.execute( "LOCK TABLE refsets" )
             # Check to see if the refset already exists

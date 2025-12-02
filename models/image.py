@@ -28,7 +28,7 @@ from models.base import (
     Base,
     SeeChangeBase,
     SmartSession,
-    Psycopg2Connection,
+    PsycopgConnection,
     UUIDMixin,
     FileOnDiskMixin,
     SpatiallyIndexed,
@@ -112,7 +112,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
     )
 
     def _load_coadd_component_zp_ids( self, session=None ):
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
             # We have to join back to image in order to get the mjd for sorting
             cursor.execute( "SELECT z._id FROM zero_points z "
@@ -926,7 +926,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             # couldn't figure out how to SQLize it. The supposed advantages
             # of an ORM seem very thin when constructing a query with the ORM
             # is just as byzantine, if not more so, than writing it in SQL.)
-            with Psycopg2Connection() as conn:
+            with PsycopgConnection() as conn:
                 cursor = conn.cursor()
                 cursor.execute( "SELECT i._id,z._id "
                                 "FROM images i "

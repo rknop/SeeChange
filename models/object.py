@@ -10,7 +10,7 @@ from sqlalchemy.schema import UniqueConstraint
 
 from astropy.coordinates import SkyCoord
 
-from models.base import Base, SeeChangeBase, SmartSession, Psycopg2Connection, UUIDMixin, SpatiallyIndexed
+from models.base import Base, SeeChangeBase, SmartSession, PsycopgConnection, UUIDMixin, SpatiallyIndexed
 from models.image import Image
 from models.cutouts import Cutouts
 from models.source_list import SourceList
@@ -313,7 +313,7 @@ class Object(Base, UUIDMixin, SpatiallyIndexed):
             parameter is used in some of our tests, but should not be
             used outside of that context.)
 
-          connection : psycopg2 Connection
+          connection : psycopg.Connection
             Database connection.  Will create and close one if this is
             None.
 
@@ -330,7 +330,7 @@ class Object(Base, UUIDMixin, SpatiallyIndexed):
         else:
             radius = float( radius )
 
-        with Psycopg2Connection( connection ) as conn:
+        with PsycopgConnection( connection ) as conn:
             neednew = []
             cursor = conn.cursor()
             # We have to lock the object table for this entire process.
@@ -430,7 +430,7 @@ class Object(Base, UUIDMixin, SpatiallyIndexed):
             this (unless you're writing a test and need reproducible
             results).
 
-          connection : psycopg2 Connection or None
+          connection : psycopg.Connection or None
             Database connection.  Only used if %A, %a, or %n is in the
             format string, or if verifyunique is True.  If %A, %a, or %n
             is in the format string, the connection will be comitted.
@@ -487,7 +487,7 @@ class Object(Base, UUIDMixin, SpatiallyIndexed):
         if ( ( "%a" in formatstr ) or ( "%A" in formatstr ) or ( "%n" in formatstr ) ):
             if not isinstance( year, numbers.Integral ):
                 raise ValueError( "Use of %a, %A, or %n requires integer year" )
-            with Psycopg2Connection( connection ) as conn:
+            with PsycopgConnection( connection ) as conn:
                 cursor = conn.cursor()
                 cursor.execute( "LOCK TABLE object_name_max_used" )
                 cursor.execute( "SELECT year, maxnum FROM object_name_max_used WHERE year=%(year)s",
@@ -589,7 +589,7 @@ class Object(Base, UUIDMixin, SpatiallyIndexed):
                 raise ValueError( f"Newly generated names contain duplicates: {names}" )
 
             # Make sure none of the names are already in the database.
-            with Psycopg2Connection( connection ) as conn:
+            with PsycopgConnection( connection ) as conn:
                 cursor = conn.cursor()
                 cursor.execute( "SELECT name FROM objects WHERE name IN %(names)s", { 'names': tuple(names) } )
                 rows = cursor.fetchall()
@@ -713,7 +713,7 @@ class ObjectLegacySurveyMatch(Base, UUIDMixin):
           objid : uuid
             Object ID
 
-          con : Psycopg2Connection, default None
+          con : psycopg.Connection, default None
             Database connection.  If not given, makes and closes a new one.
 
         Returns
@@ -721,7 +721,7 @@ class ObjectLegacySurveyMatch(Base, UUIDMixin):
           list of ObjectLegacySurveyMatch
 
         """
-        with Psycopg2Connection( con ) as dbcon:
+        with PsycopgConnection( con ) as dbcon:
             # Check for existing matches:
             cursor = dbcon.cursor()
             cursor.execute( "SELECT _id,object_id, lsid, ra, dec, dist, white_mag, xgboost, is_star "
@@ -746,7 +746,7 @@ class ObjectLegacySurveyMatch(Base, UUIDMixin):
 
         Searches the liuserver for nearby objects, creates database
         entries.  May or may not commit them.  (If you pass a
-        Psycopg2Connection in con and don't set commit=True, then
+        PsycopgConnection in con and don't set commit=True, then
         the added entries will *not* be committed to the database.)
 
         Parameters
@@ -760,7 +760,7 @@ class ObjectLegacySurveyMatch(Base, UUIDMixin):
             it's here for convenience.  (Also, so we can run this
             routine in case the object isn't yet saved to the database.)
 
-          con : Psycopg2Connection, default None
+          con : PsycopgConnection, default None
             Database connection to use.  If None, makes and closes a new one.
 
           commit : boolean, default None
@@ -882,7 +882,7 @@ class ObjectLegacySurveyMatch(Base, UUIDMixin):
         if len(olsms) == 0:
             return []
         else:
-            with Psycopg2Connection( con ) as dbcon:
+            with PsycopgConnection( con ) as dbcon:
                 cursor = dbcon.cursor()
                 for olsm in olsms:
                     subdict = { k: getattr( olsm, k ) for k in expected_keys }
