@@ -217,7 +217,7 @@ class Positioner:
                 subdict = { 'filt': self.pars.filter, 'mjdcut': mjdcut,
                             'measprov': self.pars.measuring_provenance_id,
                             'ra': curra, 'dec': curdec, 'rad': self.pars.radius/3600. }
-                SCLogger.debug( f"Running query: {cursor.mogrify(q, subdict)}" )
+                # SCLogger.debug( f"Running query: {cursor.mogrify(q, subdict)}" )
                 cursor.execute( q, subdict )
                 rows = cursor.fetchall()
                 srcra = np.array( [ r[0] for r in rows ] )
