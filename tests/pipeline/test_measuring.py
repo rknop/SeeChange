@@ -268,6 +268,6 @@ def test_measuring( diagnostic_injections ):
             cursor = conn.cursor()
             cursor.execute( "DELETE FROM refsets WHERE name='test_measuring_refset'" )
             cursor.execute( "DELETE FROM provenance_tags WHERE tag LIKE 'test_measuring%'" )
-            cursor.execute( "DELETE FROM provenances WHERE _id IN %(ids)s",
-                            { 'ids': tuple( p.id for p in nukeprovs ) } )
+            cursor.execute( "DELETE FROM provenances WHERE _id=ANY(%(ids)s)",
+                            { 'ids': [ p.id for p in nukeprovs ] } )
             conn.commit()

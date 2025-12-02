@@ -277,7 +277,7 @@ def test_associate_measurements( sim_lightcurve_complete_dses_module,
         # Look at all the other objects and make sure that none of them are associated with
         #   any of our measurements
 
-        cursor.execute( "SELECT _id FROM objects WHERE _id NOT IN %(objids)s", { 'objids': tuple( sourcesobjects ) } )
+        cursor.execute( "SELECT _id FROM objects WHERE _id!=ANY(%(objids)s)", { 'objids': sourcesobjects } )
         rows = cursor.fetchall()
         assert len( rows ) > 0
         for row in rows:

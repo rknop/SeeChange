@@ -314,11 +314,14 @@ def PsycopgConnection( current=None ):
             with open( cfg.value( "db.password_file" ) ) as ifp:
                 password = ifp.readline().strip()
 
+        # psycopg docs seems to suggest that the client_encoding parameter isn't necessary,
+        #   but empirically it is.
         _psycopg_params = { 'host': cfg.value('db.host'),
                             'port': cfg.value('db.port'),
                             'dbname': cfg.value('db.database'),
                             'user': cfg.value('db.user'),
-                            'password': password }
+                            'password': password,
+                            'client_encoding': 'UTF8' }
 
     try:
         conn = psycopg.connect( **_psycopg_params )
@@ -2188,8 +2191,8 @@ class FourCorners:
                 query += f" AND {provtable}.provenance_id=:prov"
                 subdict['prov'] = prov_id
             elif isinstance( prov_id, list ):
-                query += f" AND {provtable}.provenance_id IN :prov"
-                subdict['prov'] = tuple( prov_id )
+                query += f" AND {provtable}.provenance_id=ANY(:prov)"
+                subdict['prov'] = prov_id
             else:
                 raise TypeError( "prov_id must be a a str or a list of str" )
 
@@ -2316,8 +2319,8 @@ class FourCorners:
                 query += f" AND {provtable}.provenance_id=:prov"
                 subdict['prov'] = prov_id
             elif isinstance( prov_id, list ):
-                query += f" AND {provtable}.provenance_id IN :prov"
-                subdict['prov'] = tuple( prov_id )
+                query += f" AND {provtable}.provenance_id=ANY(:prov)"
+                subdict['prov'] = prov_id
             else:
                 raise TypeError( "prov_id must be a a str or a list of str" )
 

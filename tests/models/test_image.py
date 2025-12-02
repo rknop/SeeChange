@@ -887,17 +887,17 @@ def test_image_coadd( sim_image_r1, sim_image_r2, sim_image_r3, provenance_base 
             if im is not None:
                 cursor.execute( "DELETE FROM images WHERE _id=%(id)s", { 'id': im.id } )
             if len(zps) > 0:
-                cursor.execute( "DELETE FROM zero_points WHERE _id IN %(ids)s",
-                                { 'ids': tuple( z.id for z in zps ) } )
+                cursor.execute( "DELETE FROM zero_points WHERE _id=ANY(%(ids)s)",
+                                { 'ids': [ z.id for z in zps ] } )
             if len(wcses) > 0:
-                cursor.execute( "DELETE FROM world_coordinates WHERE _id IN %(ids)s",
-                                { 'ids': tuple( w.id for w in wcses ) } )
+                cursor.execute( "DELETE FROM world_coordinates WHERE _id=ANY(%(ids)s)",
+                                { 'ids': [ w.id for w in wcses ] } )
             if len(bgs) > 0:
-                cursor.execute( "DELETE FROM backgrounds WHERE _id IN %(ids)s",
-                                { 'ids': tuple( b.id for b in bgs ) } )
+                cursor.execute( "DELETE FROM backgrounds WHERE _id=ANY(%(ids)s)",
+                                { 'ids': [ b.id for b in bgs ] } )
             if len(sls) > 0:
-                cursor.execute( "DELETE FROM source_lists WHERE _id IN %(ids)s",
-                                { 'ids': tuple( s.id for s in sls ) } )
+                cursor.execute( "DELETE FROM source_lists WHERE _id=ANY(%(ids)s)",
+                                { 'ids': [ s.id for s in sls ] } )
             conn.commit()
 
 

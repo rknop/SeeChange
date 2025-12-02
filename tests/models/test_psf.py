@@ -74,8 +74,8 @@ def test_psf_polymorphism( bogus_image_factory, bogus_sources_factory ):
         # Make sure that they all got stuck in the database
         with PsycopgConnection() as con:
             cursor = con.cursor( row_factory=psycopg.rows.dict_row )
-            cursor.execute( "SELECT * FROM psfs WHERE _id IN %(ids)s",
-                            { 'ids': ( ppsf.id, dpsf.id, gpsf.id, ipsf.id ) } )
+            cursor.execute( "SELECT * FROM psfs WHERE _id=ANY(%(ids)s)",
+                            { 'ids': [ ppsf.id, dpsf.id, gpsf.id, ipsf.id ] } )
             psfs = cursor.fetchall()
             assert len(psfs) == 4
             for psf in psfs:

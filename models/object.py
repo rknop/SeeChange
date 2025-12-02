@@ -591,7 +591,7 @@ class Object(Base, UUIDMixin, SpatiallyIndexed):
             # Make sure none of the names are already in the database.
             with PsycopgConnection( connection ) as conn:
                 cursor = conn.cursor()
-                cursor.execute( "SELECT name FROM objects WHERE name IN %(names)s", { 'names': tuple(names) } )
+                cursor.execute( "SELECT name FROM objects WHERE name=ANY(%(names)s)", { 'names': names } )
                 rows = cursor.fetchall()
                 if len(rows) != 0:
                     raise ValueError( f"{len(rows)} of {len(names)} newly generated names already exist in the "

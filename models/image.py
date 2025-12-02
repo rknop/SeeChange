@@ -933,8 +933,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                                 "INNER JOIN source_lists s ON s.image_id=i._id "
                                 "INNER JOIN world_coordinates w ON w.sources_id=s._id "
                                 "INNER JOIN zero_points z ON z.wcs_id=w._id "
-                                "WHERE z._id IN %(zpids)s",
-                                { 'zpids': tuple( z.id for z in zps ) } )
+                                "WHERE z._id=ANY(%(zpids)s)",
+                                { 'zpids': [ z.id for z in zps ] } )
                 rows = cursor.fetchall()
             # ...and now we use SA to get the Image objects.  Not very
             # efficient, we've made two connections.  But, oh well.
@@ -2039,7 +2039,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                   "INTO TEMP TABLE temp_image_from_upstreams "
                   "FROM images i "
                   "INNER JOIN image_coadd_component c ON c.coadd_image_id=i._id "
-                  "WHERE c.zp_id IN :zpids " )
+                  "WHERE c.zp_id=ANY(:zpids) " )
             subdict = { 'zpids': zpids }
 
             if prov_id is not None:  # pick only those coadds with the right provenance id

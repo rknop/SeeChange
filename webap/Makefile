@@ -16,17 +16,17 @@ install: $(patsubst %, $(INSTALLDIR)/%, $(toinstall))
 $(INSTALLDIR)/%: %
 	install -Dp $< $@
 
-rkauth_flask.py: ../extern/rkwebutil/rkauth_flask.py
-	ln -s ../extern/rkwebutil/rkauth_flask.py rkauth_flask.py
+rkauth_flask.py: ../extern/rkwebutil/rkwebutil/rkauth_flask.py
+	ln -s ../extern/rkwebutil/rkwebutil/rkauth_flask.py rkauth_flask.py
 
-static/rkwebutil.js: ../extern/rkwebutil/rkwebutil.js
-	ln -s ../../extern/rkwebutil/rkwebutil.js static/rkwebutil.js
+static/rkwebutil.js: ../extern/rkwebutil/rkwebutil/static/rkwebutil.js
+	ln -s ../../extern/rkwebutil/rkwebutil/static/rkwebutil.js static/rkwebutil.js
 
-static/svgplot.js: ../extern/rkwebutil/svgplot.js
-	ln -s ../../extern/rkwebutil/svgplot.js static/svgplot.js
+static/svgplot.js: ../extern/rkwebutil/rkwebutil/static/svgplot.js
+	ln -s ../../extern/rkwebutil/rkwebutil/static/svgplot.js static/svgplot.js
 
-static/rkauth.js: ../extern/rkwebutil/rkauth.js
-	ln -s ../../extern/rkwebutil/rkauth.js static/rkauth.js
+static/rkauth.js: ../extern/rkwebutil/rkwebutil/static/rkauth.js
+	ln -s ../../extern/rkwebutil/rkwebutil/static/rkauth.js static/rkauth.js
 
-static/resetpasswd_start.js: ../extern/rkwebutil/resetpasswd_start.js
-	ln -s ../../extern/rkwebutil/resetpasswd_start.js static/resetpasswd_start.js
+static/resetpasswd_start.js: ../extern/rkwebutil/rkwebutil/static/resetpasswd_start.js
+	ln -s ../../extern/rkwebutil/rkwebutil/static/resetpasswd_start.js static/resetpasswd_start.js

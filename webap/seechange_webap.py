@@ -291,8 +291,8 @@ class Exposures( BaseView ):
                 q += 'WHERE '
                 _and = ''
                 if data['projects'] is not None:
-                    q += f'{_and}e.project IN %(projects)s '
-                    subdict['projects'] = tuple( data['projects'] )
+                    q += f'{_and}e.project=ANY(%(projects)s) '
+                    subdict['projects'] = data['projects']
                     _and = 'AND '
                 if t0 is not None:
                     q += f'{_and}e.mjd >= %(t0)s '
@@ -747,10 +747,10 @@ class PngCutoutsForSubImage( BaseView ):
                   'INNER JOIN provenance_tags cpt ON cpt.provenance_id=c.provenance_id AND cpt.tag=%(provtag)s '
                   'INNER JOIN source_lists sl ON c.sources_id=sl._id '
                   'INNER JOIN images s ON sl.image_id=s._id '
-                  'WHERE s._id IN %(subids)s ' )
+                  'WHERE s._id=ANY(%(subids)s) ' )
             # Don't have to check the source_lists provenance tag because the cutouts provenance
             # tag cut will limit us to a single source_list for each cutouts
-            cursor.execute( q, { 'subids': tuple(subids), 'provtag': provtag } )
+            cursor.execute( q, { 'subids': subids, 'provtag': provtag } )
             cols = { cursor.description[i][0]: i for i in range(len(cursor.description)) }
             rows = cursor.fetchall()
             sectionids = { asUUID( c[cols['subimageid']] ): c[cols['section_id']] for c in rows }
@@ -793,7 +793,7 @@ class PngCutoutsForSubImage( BaseView ):
             if not nomeas:
                 q += '    WHERE NOT meas.is_bad '
             q += ( '   ) AS m ON m.meascutid=c._id '
-                   'WHERE s._id IN %(subids)s ' )
+                   'WHERE s._id=ANY(%(subids)s) ' )
             if data['sortby'] == 'fluxdesc_chip_index':
                 q += 'ORDER BY flux DESC NULLS LAST,s.section_id,m.index_in_sources '
             elif data['sortby'] == 'rbdesc_fluxdesc_chip_index':
@@ -802,7 +802,7 @@ class PngCutoutsForSubImage( BaseView ):
                 raise RuntimeError( f"Unknown sort criterion {data['sortby']}" )
             if limit is not None:
                 q += 'LIMIT %(limit)s OFFSET %(offset)s'
-            subdict = { 'subids': tuple(subids), 'provtag': provtag, 'limit': limit, 'offset': offset }
+            subdict = { 'subids': subids, 'provtag': provtag, 'limit': limit, 'offset': offset }
             # app.logger.debug( f"Sending query to get measurements: {cursor.mogrify(q,subdict)}" )
             cursor.execute( q, subdict )
             cols = { cursor.description[i][0]: i for i in range(len(cursor.description)) }

@@ -413,8 +413,8 @@ class GetKnownExposures( ConductorBaseView ):
                 subdict['minexp'] = float( args['minexptime'] )
                 _and = "AND"
             if args['state'] is not None:
-                q += f"{_and} ke._state IN %(state)s"
-                subdict['state'] = tuple( KnownExposureStateConverter.to_int( s ) for s in args['state'].split(",") )
+                q += f"{_and} ke._state=ANY(%(state)s)"
+                subdict['state'] = [ KnownExposureStateConverter.to_int( s ) for s in args['state'].split(",") ]
             if args['maxclaimtime'] is not None:
                 claimtime = datetime.datetime.fromisoformat( args['maxclaimtime'] )
                 if claimtime.tzinfo is None:
@@ -465,8 +465,8 @@ class SetKnownExposureState( ConductorBaseView ):
 
         with PsycopgConnection() as conn:
             cursor = conn.cursor()
-            cursor.execute( "UPDATE knownexposures SET _state=%(state)s WHERE _id IN %(ids)s",
-                            { 'state': state, 'ids': tuple( args['knownexposure_ids'] ) } )
+            cursor.execute( "UPDATE knownexposures SET _state=%(state)s WHERE _id=ANY(%(ids)s)",
+                            { 'state': state, 'ids': args['knownexposure_ids'] } )
             conn.commit()
 
         return { 'status': 'ok',
@@ -483,8 +483,8 @@ class DeleteKnownExposures( ConductorBaseView ):
             return "Error, must pass knownexposure_ids in JSON post body", 500
         with PsycopgConnection() as conn:
             cursor = conn.cursor()
-            cursor.execute( "DELETE FROM knownexposures WHERE _id IN %(expids)s",
-                            { 'expids': tuple( args['knownexposure_ids'] ) } )
+            cursor.execute( "DELETE FROM knownexposures WHERE _id=ANY(%(expids)s)",
+                            { 'expids': args['knownexposure_ids'] } )
             ndel = cursor.rowcount
             conn.commit()
             return { 'status': 'ok', 'num_deleted': ndel }
@@ -501,8 +501,8 @@ class FullyClearClusterClaim( ConductorBaseView ):
             cursor = conn.cursor()
             cursor.execute( "UPDATE knownexposures SET cluster_id=NULL, node_id=NULL, machine_name=NULL, "
                             "  claim_time=NULL, start_time=NULL, release_time=NULL "
-                            "WHERE _id IN %(expids)s",
-                            { 'expids': tuple( args['knownexposure_ids'] ) } )
+                            "WHERE _id=ANY(%(expids)s)",
+                            { 'expids': args['knownexposure_ids'] } )
             nmod = cursor.rowcount
             conn.commit()
             return { 'status': 'ok', 'num_cleared': nmod }
