@@ -1,5 +1,5 @@
 # This list is copied into the docker file
-alembic==1.14.0
+alembic==1.17.2
 astro-datalab==2.20.1
 astropy==7.0.0
 beautifulsoup4==4.12.3

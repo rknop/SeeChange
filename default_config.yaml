@@ -79,9 +79,12 @@ path:
 
 # ======================================================================
 # Databse config
+#
+# Note that as of this writing, psycopg3 requires an SQLAlchemy engine
+#   of "postgresql+psycopg"; otherwise, it will try to use psycopg2.
 
 db:
-  engine: postgresql
+  engine: postgresql+psycopg
   user: postgres
   password: fragile
   password_file: null

@@ -9,6 +9,7 @@ import uuid
 import time
 import warnings
 
+import psycopg
 import numpy as np
 
 from astropy.io import fits

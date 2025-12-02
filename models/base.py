@@ -17,7 +17,7 @@ import shapely
 from astropy.coordinates import SkyCoord
 
 import psycopg
-import psycopg.adapt
+# import psycopg.adapt
 
 import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql
@@ -140,7 +140,7 @@ def Session():
     if _Session is None:
         cfg = config.Config.get()
 
-        if cfg.value("db.engine") != "postgresql":
+        if cfg.value("db.engine") != "postgresql+psycopg":
             raise ValueError( "This pipeline only supports PostgreSQL as a database engine" )
 
         password = cfg.value( "db.password" )
@@ -151,7 +151,8 @@ def Session():
                 password = ifp.readline().strip()
 
         url = (f'{cfg.value("db.engine")}://{cfg.value("db.user")}:{password}'
-               f'@{cfg.value("db.host")}:{cfg.value("db.port")}/{cfg.value("db.database")}')
+               f'@{cfg.value("db.host")}:{cfg.value("db.port")}/{cfg.value("db.database")}'
+               f'?client_encoding=utf8')
         _engine = sa.create_engine( url,
                                     future=True,
                                     poolclass=sa.pool.NullPool,
@@ -303,7 +304,7 @@ def PsycopgConnection( current=None ):
 
     if _psycopg_params is None:
         cfg = config.Config.get()
-        if cfg.value( "db.engine" ) != "postgresql":
+        if cfg.value( "db.engine" ) != "postgresql+psycopg":
             raise ValueError( "This pipeline only supports PostgreSQL as a database engine" )
 
         password = cfg.value( 'db.password' )
