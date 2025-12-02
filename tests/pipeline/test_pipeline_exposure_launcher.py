@@ -141,7 +141,7 @@ def test_exposure_launcher_conductor_through_step( conductor_connector,
         #   ready exposure and that make sure the pipeline runs all the
         #   way to the end.
         conductor_connector.send( "/conductor/updateparameters/throughstep=scoring" )
-        conductor_connector.send( "/conductor/setknownexposurestate", { 'knownexposure_ids': [ keid ],
+        conductor_connector.send( "/conductor/setknownexposurestate", { 'knownexposure_ids': [ str(keid) ],
                                                                         'state': 'ready' } )
         elaunch = ExposureLauncher( 'testcluster', 'testnode', numprocs=2, onlychips=['S2', 'N16'], verify=False,
                                     worker_log_level=logging.DEBUG )

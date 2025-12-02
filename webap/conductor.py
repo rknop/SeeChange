@@ -7,6 +7,7 @@ import pytz
 import traceback
 
 import psycopg
+import psycopg.types.json
 
 import flask
 
@@ -213,7 +214,7 @@ class UpdateParameters( ConductorBaseView ):
                             "                            hold_new_exposures=%(hold)s, configchangetime=%(t)s, "
                             "                            throughstep=%(through)s, pickuppartial=%(partial)s ",
                             { 'inst': res['instrument'],
-                              'upda': res['updateargs'],
+                              'upda': psycopg.types.json.Jsonb(res['updateargs']),
                               'updt': res['timeout'],
                               'pause': bool( res['pause'] ),
                               'hold': bool( res['hold'] ),
