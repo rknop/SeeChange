@@ -2,7 +2,7 @@ import pytest
 import datetime
 import time
 
-import psycopg.extras
+import psycopg
 
 from models.base import PsycopgConnection
 from models.enums_and_bitflags import CalibratorTypeConverter, CalibratorSetConverter, FlatTypeConverter
@@ -54,7 +54,7 @@ def test_acquire_lock( kwargs ):
         # Wait 6 seconds, then check to make sure the heartbeat got updated
         time.sleep( 6 )
         with PsycopgConnection() as conn:
-            cursor = conn.cursor( rows_factory=psycopg.rows.dict_row )
+            cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
             cursor.execute( f"SELECT * FROM calibfile_downloadlock {whereclause(kwargs)}", kwargs )
             rows = cursor.fetchall()
             assert len(rows) == 1

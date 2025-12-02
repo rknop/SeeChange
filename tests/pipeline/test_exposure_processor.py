@@ -171,7 +171,7 @@ def test_exposure_processor( decam_default_calibrators,
         processor()
 
         with PsycopgConnection() as conn:
-            cursor = conn.cursor( rows_factory=psycopg.rows.dict_row )
+            cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
             cursor.execute( "SELECT * FROM knownexposures WHERE instrument='DECam' AND identifier=%(iden)s",
                             { 'iden': decam_exposure_name } )
             ke = cursor.fetchone()

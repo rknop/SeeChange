@@ -1941,8 +1941,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                     val = field['val']
                     q += f"{andtxt} i.{field['field']} "
                     if field['type'] == 'list':
-                        q += f" IN :param{paramn}"
-                        val = tuple( listify( val ) )
+                        q += f" = ANY(:param{paramn})"
+                        val = listify( val )
                     elif field['type'] == 'ge':
                         q += f" >= :param{paramn}"
                     elif field['type'] == 'le':
@@ -2027,10 +2027,13 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
 
         if ( prov_id is not None ) and ( isinstance( prov_id, Provenance ) ):
             prov_id = prov_id.id
-        zpids = tuple( i.id if isinstance(i,ZeroPoint) else str(i) for i in zps )
+        zpids = [ i.id if isinstance(i,ZeroPoint) else str(i) for i in zps ]
 
         with SmartSession(session) as session:
-            session.execute( sa.text( "DROP TABLE IF EXISTS temp_image_from_upstreams" ) )
+            dbcon = session.bind.raw_connection()
+            cursor = dbcon.cursor()
+
+            cursor.execute( "DROP TABLE IF EXISTS temp_image_from_upstreams" )
 
             # First get a list of candidate coadd images that are ones whose upstreams
             #   include anything in images, plus a count of how many of
@@ -2039,15 +2042,15 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                   "INTO TEMP TABLE temp_image_from_upstreams "
                   "FROM images i "
                   "INNER JOIN image_coadd_component c ON c.coadd_image_id=i._id "
-                  "WHERE c.zp_id=ANY(:zpids) " )
+                  "WHERE c.zp_id=ANY(%(zpids)s) " )
             subdict = { 'zpids': zpids }
 
             if prov_id is not None:  # pick only those coadds with the right provenance id
-                q += "AND i.provenance_id=:provid "
+                q += "AND i.provenance_id=%(provid)s "
                 subdict[ 'provid' ] = prov_id
 
             q += "GROUP BY i._id "
-            session.execute( sa.text( q ), subdict )
+            cursor.execute( q, subdict )
 
             # Now go through those images and count *all* of the upstreams.
             # (The previous table only counted upstreams that were in zps.)
@@ -2058,16 +2061,17 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                   "  FROM temp_image_from_upstreams t "
                   "  INNER JOIN image_coadd_component c ON c.coadd_image_id=t.imgid "
                   "  GROUP BY t.imgid, t.nmatchupstr ) subq "
-                  "WHERE nmatchupstr=:num AND nupstr=:num " )
-            output = session.scalars( sa.text(q), { 'num': len(zpids) } ).all()
+                  "WHERE nmatchupstr=%(num)s AND nupstr=%(num)s " )
+            cursor.execute( q, { 'num': len(zpids) } )
+            rows = cursor.fetchall()
 
-            if len(output) > 1:
+            if len(rows) > 1:
                 raise ValueError( f"More than one combined image found with provenance ID {prov_id} "
                                   f"and upstreams {zps}." )
-            elif len(output) == 0:
+            elif len(rows) == 0:
                 return None
             else:
-                return Image.get_by_id( output[0], session=session )
+                return Image.get_by_id( rows[0][0], session=session )
 
 
     @property

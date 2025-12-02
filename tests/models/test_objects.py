@@ -277,11 +277,11 @@ def test_associate_measurements( sim_lightcurve_complete_dses_module,
         # Look at all the other objects and make sure that none of them are associated with
         #   any of our measurements
 
-        cursor.execute( "SELECT _id FROM objects WHERE _id!=ANY(%(objids)s)", { 'objids': sourcesobjects } )
+        cursor.execute( "SELECT _id FROM objects WHERE NOT _id=ANY(%(objids)s)", { 'objids': list(sourcesobjects) } )
         rows = cursor.fetchall()
         assert len( rows ) > 0
         for row in rows:
-            cursor.execute( "SELECT _id FROM measurements WHERE object_id=%(objid)s", { 'objid': rows[0] } )
+            cursor.execute( "SELECT _id FROM measurements WHERE object_id=%(objid)s", { 'objid': row[0] } )
             meases = set( r[0] for r in cursor.fetchall() )
             assert len( meases.intersection( objsourceids ) ) == 0
 
