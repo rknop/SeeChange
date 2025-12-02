@@ -109,7 +109,7 @@ def test_psf_polymorphism( bogus_image_factory, bogus_sources_factory ):
     finally:
         with PsycopgConnection() as con:
             cursor = con.cursor()
-            cursor.execute( "DELETE FROM psfs WHERE _id=ANY(%(id)s)", { 'id': ([i.id for i in psfdel],) } )
+            cursor.execute( "DELETE FROM psfs WHERE _id=ANY(%(id)s)", { 'id': [i.id for i in psfdel] } )
             con.commit()
         for src in srcdel:
             src.delete_from_disk_and_database()
