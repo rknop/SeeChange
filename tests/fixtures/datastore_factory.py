@@ -9,7 +9,7 @@ import numpy as np
 import astropy.time
 import sqlalchemy as sa
 
-from models.base import SmartSession, Psycopg2Connection
+from models.base import SmartSession, PsycopgConnection
 from models.provenance import Provenance
 from models.enums_and_bitflags import BitFlagConverter #, string_to_bitflag, flag_image_bits_inverse
 from models.report import Report
@@ -276,7 +276,7 @@ def datastore_factory(data_dir, pipeline_factory, request):
                 # We may have made a report earlier when calling Pipeline.setup_datastore,
                 #   so we need to remove that one from the database now that we've replaced it.
                 if ds.report is not None:
-                    with Psycopg2Connection() as conn:
+                    with PsycopgConnection() as conn:
                         cursor = conn.cursor()
                         cursor.execute( "DELETE FROM reports WHERE _id=%(id)s",
                                         { 'id': ds.report.id } )

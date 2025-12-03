@@ -4,7 +4,7 @@ import uuid
 
 import sqlalchemy as sa
 
-from models.base import SmartSession, Psycopg2Connection
+from models.base import SmartSession, PsycopgConnection
 from models.instrument import SensorSection
 from models.exposure import Exposure
 from models.image import Image
@@ -60,11 +60,11 @@ def test_make_prov_tree( decam_exposure, decam_reference ):
                      set( ds.prov_tree[u].id for u in ds.prov_tree.upstream_steps[step] ) )
 
         # Make sure no provenance tag was created
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
-            cursor.execute( "SELECT _id FROM provenance_tags WHERE provenance_id IN %(pid)s",
-                            { 'pid': tuple( v.id for k, v in ds.prov_tree.items() if k not in ( 'starting_point',
-                                                                                                'referencing' ) ) } )
+            cursor.execute( "SELECT _id FROM provenance_tags WHERE provenance_id=ANY(%(pid)s)",
+                            { 'pid': [ v.id for k, v in ds.prov_tree.items() if k not in ( 'starting_point',
+                                                                                           'referencing' ) ] } )
             assert len(cursor.fetchall()) == 0
 
         # Make sure we can create the provenance tag
@@ -90,10 +90,10 @@ def test_make_prov_tree( decam_exposure, decam_reference ):
 
     finally:
         if len(provs_created) > 0:
-            with Psycopg2Connection() as conn:
+            with PsycopgConnection() as conn:
                 cursor = conn.cursor()
-                cursor.execute( "DELETE FROM provenances WHERE _id IN %(id)s",
-                                { 'id': tuple( [ p.id for p in provs_created ] ) } )
+                cursor.execute( "DELETE FROM provenances WHERE _id=ANY(%(id)s)",
+                                { 'id': [ p.id for p in provs_created ] } )
                 cursor.execute( "DELETE FROM provenance_tags WHERE tag='test_data_store_test_make_prov_tree'" )
                 conn.commit()
 
@@ -119,10 +119,10 @@ def test_make_prov_tree_no_ref_prov( decam_exposure ):
 
     finally:
         if len(provs_created) > 0:
-            with Psycopg2Connection() as conn:
+            with PsycopgConnection() as conn:
                 cursor = conn.cursor()
-                cursor.execute( "DELETE FROM provenances WHERE _id IN %(id)s",
-                                { 'id': tuple( [ p.id for p in provs_created ] ) } )
+                cursor.execute( "DELETE FROM provenances WHERE _id=ANY(%(id)s)",
+                                { 'id': [ p.id for p in provs_created ] } )
                 conn.commit()
 
 

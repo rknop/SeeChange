@@ -6,14 +6,13 @@ import multiprocessing
 import logging
 import psutil
 
-import psycopg2
-import psycopg2.extras
+import psycopg
 
 from util.logger import SCLogger
 from util.util import asUUID
 from util.config import Config
 
-from models.base import Psycopg2Connection
+from models.base import PsycopgConnection
 from models.enums_and_bitflags import KnownExposureStateConverter
 from models.instrument import get_instrument_instance
 from models.exposure import Exposure
@@ -96,7 +95,7 @@ class ExposureProcessor:
 
 
     def finish_work( self ):
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( "LOCK TABLE knownexposures" )
             cursor.execute( "SELECT cluster_id, start_time FROM knownexposures "
@@ -168,8 +167,8 @@ class ExposureProcessor:
         exposureid = None
         exposure_to_delete = None
         ke = None
-        with Psycopg2Connection() as conn:
-            cursor = conn.cursor( cursor_factory=psycopg2.extras.RealDictCursor )
+        with PsycopgConnection() as conn:
+            cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
             cursor.execute( "LOCK TABLE knownexposures" )
             cursor.execute( "SELECT * FROM knownexposures WHERE instrument=%(inst)s AND identifier=%(iden)s",
                             { 'inst': self.instrument.name, 'iden': self.identifier } )
@@ -252,7 +251,7 @@ class ExposureProcessor:
             SCLogger.info( f"Downloading exposure {self.identifier}..." )
             self.exposure = self.instrument.acquire_and_commit_origin_exposure( self.identifier, params )
             SCLogger.info( "...downloaded." )
-            with Psycopg2Connection() as conn:
+            with PsycopgConnection() as conn:
                 cursor = conn.cursor()
                 cursor.execute( "UPDATE knownexposures SET exposure_id=%(expid)s "
                                 "WHERE instrument=%(inst)s AND identifier=%(iden)s",
@@ -327,7 +326,7 @@ class ExposureProcessor:
 
         origconfig = Config._default
         try:
-            with Psycopg2Connection() as conn:
+            with PsycopgConnection() as conn:
                 cursor = conn.cursor()
                 cursor.execute( "UPDATE knownexposures SET start_time=%(t)s "
                                 "WHERE instrument=%(inst)s AND identifier=%(iden)s",

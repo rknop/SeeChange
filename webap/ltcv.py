@@ -8,13 +8,12 @@ import flask
 import h5py
 import numpy as np
 import PIL
-import psycopg2
-import psycopg2.extras
+import psycopg
 
 from util.config import Config
 from util.util import asUUID
 from util.logger import SCLogger
-from models.base import Psycopg2Connection
+from models.base import PsycopgConnection
 # NOTE: for get_instrument_instrance to work, must manually import all
 #  known instrument classes we might want to use here.
 # If models.instrument gets imported somewhere else before this file
@@ -37,7 +36,7 @@ class BaseLtcvView( BaseView ):
         except ValueError:
             objname = objid_or_name
 
-        with Psycopg2Connection( dbcon ) as conn:
+        with PsycopgConnection( dbcon ) as conn:
             cursor = conn.cursor()
             if objid is not None:
                 cursor.execute( "SELECT _id FROM objects WHERE _id=%(id)s", { 'id': objid } )
@@ -67,9 +66,9 @@ class Ltcv( BaseLtcvView ):
 
 class ObjectInfo( BaseLtcvView ):
     def do_the_things( self, objid_or_name ):
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             objuuid = self._get_objid( objid_or_name, dbcon=conn )
-            cursor = conn.cursor( cursor_factory=psycopg2.extras.RealDictCursor )
+            cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
             cursor.execute( "SELECT _id,name,ra,dec FROM objects WHERE _id=%(id)s", { 'id': objuuid } )
             rows = cursor.fetchall()
             if len(rows) == 0:
@@ -90,7 +89,7 @@ class ObjectLtcv( BaseLtcvView ):
     def do_the_things( self, objid_or_name, provtag, argstr=None ):
         args = self.argstr_to_args( argstr, { 'zp': 31.4,
                                               'zpunits': 'nJy' } )
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             objid = self._get_objid( objid_or_name, dbcon=conn )
             cursor = conn.cursor()
             cursor.execute( "SELECT m._id,subim.instrument,subim.mjd,subim.filter,m.flux_psf,m.flux_psf_err,z.zp "
@@ -149,7 +148,7 @@ class ObjectLtcv( BaseLtcvView ):
 class ObjectCutouts( BaseLtcvView ):
     def do_the_things( self, objid_or_name, provtag ):
         cfg = Config.get()
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             objid = self._get_objid( objid_or_name, dbcon=conn )
             cursor = conn.cursor()
             cursor.execute( "SELECT cu.filepath AS cutoutfilepath, "

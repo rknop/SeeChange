@@ -13,12 +13,12 @@ import numpy as np
 
 import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError
-from psycopg2.errors import UniqueViolation
+from psycopg.errors import UniqueViolation
 
 import util.config as config
 from util.logger import SCLogger
 import models.base
-from models.base import Base, SmartSession, Psycopg2Connection, UUIDMixin, FileOnDiskMixin, FourCorners
+from models.base import Base, SmartSession, PsycopgConnection, UUIDMixin, FileOnDiskMixin, FourCorners
 from models.image import Image
 from models.datafile import DataFile
 from models.object import Object
@@ -88,7 +88,7 @@ def test_insert( provenance_base ):
         df = DataFile( _id=curid, filepath="foo", md5sum=uuid.uuid4(), provenance_id=provenance_base.id )
 
         # Make sure we get an error if we don't pass the right kind of thing
-        with pytest.raises( TypeError, match="session must be a sa Session or psycopg2.extensions.connection or None" ):
+        with pytest.raises( TypeError, match="session must be a sa Session or psycopg.Connection or None" ):
             df.insert( 2 )
 
         # Make sure we can insert
@@ -126,11 +126,11 @@ def test_insert( provenance_base ):
             sess.rollback()
         make_sure_its_not_there( curid, "foo3" )
 
-        # Make sure we can insert passing a psycopg2 connection
+        # Make sure we can insert passing a psycopg connection
         curid = uuid.uuid4()
         uuidstodel.append( curid )
         df = DataFile( _id=curid, filepath="foo4", md5sum=uuid.uuid4(), provenance_id=provenance_base.id )
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             df.insert( conn )
         make_sure_its_there( curid, "foo4" )
 
@@ -138,7 +138,7 @@ def test_insert( provenance_base ):
         curid = uuid.uuid4()
         uuidstodel.append( curid )
         df = DataFile( _id=curid, filepath="foo5", md5sum=uuid.uuid4(), provenance_id=provenance_base.id )
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             df.insert( conn, nocommit=True )
         make_sure_its_not_there( curid, "foo5" )
 

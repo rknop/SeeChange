@@ -12,7 +12,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.wait import WebDriverWait
 from selenium.webdriver.support.ui import Select
 
-from models.base import SmartSession, Psycopg2Connection
+from models.base import SmartSession, PsycopgConnection
 from models.provenance import Provenance, ProvenanceTag
 
 from util.logger import SCLogger
@@ -88,10 +88,10 @@ def test_webap_clone_provtag( webap_admin_client, provenance_base, provenance_ex
         res = webap_admin_client.send( '/cloneprovtag/xyzzy/current' )
         assert 'status' in res and res['status'] == 'ok'
 
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( "SELECT tag, provenance_id FROM provenance_tags "
-                            "WHERE tag IN ('xyzzy', 'current')" )
+                            "WHERE tag=ANY( ARRAY['xyzzy', 'current'] )" )
             rows = cursor.fetchall()
             assert set( r[0] for r in rows ) == { 'xyzzy', 'current' }
             assert all( r[1] == provenance_base.id for r in rows )
@@ -104,10 +104,10 @@ def test_webap_clone_provtag( webap_admin_client, provenance_base, provenance_ex
         res = webap_admin_client.send( '/cloneprovtag/plugh/current/1' )
         assert 'status' in res and res['status'] == 'ok'
 
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( "SELECT tag, provenance_id FROM provenance_tags "
-                            "WHERE tag IN ( 'xyzzy', 'plugh', 'current' )" )
+                            "WHERE tag=ANY( ARRAY['xyzzy', 'plugh', 'current'] )" )
             rows = cursor.fetchall()
             foundtags = {}
             for row in rows:
@@ -121,7 +121,7 @@ def test_webap_clone_provtag( webap_admin_client, provenance_base, provenance_ex
             assert foundtags['plugh'] == foundtags['current']
 
     finally:
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( "DELETE FROM provenance_tags WHERE tag='current'" )
             conn.commit()
@@ -362,7 +362,7 @@ def test_webap( webap_browser_logged_in, webap_url, decam_datastore, admin_user 
         # Clean up the junk Provenance, and the ProvenanceTags we created
         with SmartSession() as session:
             session.execute( sa.text( "DELETE FROM provenance_tags "
-                                      "WHERE tag IN ('test_webap', 'no_such_tag')" ) )
+                                      "WHERE tag=ANY( ARRAY['test_webap', 'no_such_tag'] )" ) )
             if junkprov is not None:
                 session.execute( sa.text( "DELETE FROM provenances WHERE _id=:id" ), { 'id': junkprov.id } )
             session.commit()

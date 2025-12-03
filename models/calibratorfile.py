@@ -8,14 +8,15 @@ import uuid
 import threading
 import multiprocessing
 
-import psycopg2.extras
+import psycopg
+import psycopg.errors
 
 import sqlalchemy as sa
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.schema import UniqueConstraint
 
-from models.base import Base, UUIDMixin, Psycopg2Connection
+from models.base import Base, UUIDMixin, PsycopgConnection
 from models.enums_and_bitflags import CalibratorTypeConverter, CalibratorSetConverter, FlatTypeConverter
 
 from util.logger import SCLogger
@@ -264,7 +265,7 @@ class CalibratorFileDownloadLock(Base, UUIDMixin):
                     return
 
             # SCLogger.debug( "Updating heartbeat." )
-            with Psycopg2Connection() as conn:
+            with PsycopgConnection() as conn:
                 cursor = conn.cursor()
                 q = ( f"UPDATE calibfile_downloadlock SET modified=%(now)s "
                       f"WHERE instrument=%(inst)s "
@@ -401,11 +402,11 @@ class CalibratorFileDownloadLock(Base, UUIDMixin):
             done = False
             while not done:
                 tsleep = min( sleepmax, sleepmin + math.fabs( random.normalvariate( mu=0., sigma=sleepsigma ) ) )
-                with Psycopg2Connection() as conn:
-                    cursor = conn.cursor( cursor_factory=psycopg2.extras.RealDictCursor )
+                with PsycopgConnection() as conn:
+                    cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
                     try:
                         cursor.execute( "LOCK TABLE calibfile_downloadlock NOWAIT" )
-                    except psycopg2.errors.LockNotAvailable:
+                    except psycopg.errors.LockNotAvailable:
                         if totsleep > maxsleep:
                             raise RuntimeError( f"Failed to get the lock on calibfile_downloadlock after "
                                                 f"{totsleep:.1f} seconds." )
@@ -491,7 +492,7 @@ class CalibratorFileDownloadLock(Base, UUIDMixin):
             # kill us.  (That is, we'll end up with a couple of processes trying to download
             # the same file at the same time, which isn't enough to overload things.)
             if gotlock:
-                with Psycopg2Connection() as conn:
+                with PsycopgConnection() as conn:
                     cursor = conn.cursor()
                     cursor.execute( f"DELETE FROM calibfile_downloadlock {whereclause}", subdict )
                     conn.commit()

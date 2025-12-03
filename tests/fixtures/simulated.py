@@ -12,7 +12,7 @@ from astropy.io import fits
 from astropy.wcs import WCS
 from astropy.coordinates import SkyCoord
 
-from models.base import SmartSession, Psycopg2Connection
+from models.base import SmartSession, PsycopgConnection
 from models.provenance import Provenance
 from models.exposure import Exposure
 from models.image import Image
@@ -688,7 +688,7 @@ def sim_lightcurve_image_parameters():
 
     yield imageinfo, imageargs
 
-    with Psycopg2Connection() as con:
+    with PsycopgConnection() as con:
         cursor = con.cursor()
         cursor.execute( "DELETE FROM provenances WHERE _id=%(id)s", { 'id': improv.id } )
         con.commit()
@@ -834,7 +834,7 @@ def sim_lightcurve_reference_image_unsaved( sim_lightcurve_image_parameters, sim
     # saved stuff cleaned up after itself.  But, just to be sure....
 
     ds.delete_everything()
-    with Psycopg2Connection() as conn:
+    with PsycopgConnection() as conn:
         cursor = conn.cursor()
         cursor.execute( "DELETE FROM provenance_tags WHERE tag='sim_lightcurve_reference'" )
         conn.commit()
@@ -863,7 +863,7 @@ def sim_lightcurve_reference( sim_lightcurve_reference_image_unsaved ):
         yield ref, ds
     finally:
         if ref is not None:
-            with Psycopg2Connection() as conn:
+            with PsycopgConnection() as conn:
                 cursor = conn.cursor()
                 cursor.execute( "DELETE FROM refsets WHERE name='sim_lightcurve_reference'" )
                 cursor.execute( "DELETE FROM refs WHERE _id=%(id)s", { 'id': ref.id } )
@@ -881,7 +881,7 @@ def sim_lightcurve_reference_module(  sim_lightcurve_reference_image_unsaved ):
         yield ref, ds
     finally:
         if ref is not None:
-            with Psycopg2Connection() as conn:
+            with PsycopgConnection() as conn:
                 cursor = conn.cursor()
                 cursor.execute( "DELETE FROM refsets WHERE name='sim_lightcurve_reference'" )
                 cursor.execute( "DELETE FROM refs WHERE _id=%(id)s", { 'id': ref.id } )
@@ -1032,7 +1032,7 @@ def sim_lightcurve_new_ds_factory( sim_lightcurve_image_parameters,
 
     for ds in dsentodel:
         ds.delete_everything()
-    with Psycopg2Connection() as conn:
+    with PsycopgConnection() as conn:
         cursor = conn.cursor()
         cursor.execute( "DELETE FROM provenance_tags WHERE tag='sim_lightcurve'" )
         conn.commit()
@@ -1058,7 +1058,7 @@ def sim_lightcurve_new_ds_factory_module( sim_lightcurve_image_parameters,
 
     for ds in dsentodel:
         ds.delete_everything()
-    with Psycopg2Connection() as conn:
+    with PsycopgConnection() as conn:
         cursor = conn.cursor()
         cursor.execute( "DELETE FROM provenance_tags WHERE tag='sim_lightcurve'" )
         conn.commit()

@@ -3,7 +3,6 @@ import os
 import io
 import copy
 import argparse
-import multiprocessing
 import multiprocessing.pool
 import traceback
 import logging

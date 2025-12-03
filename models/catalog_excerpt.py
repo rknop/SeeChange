@@ -12,7 +12,7 @@ import util.ldac
 from util.util import ensure_file_does_not_exist
 from util.logger import SCLogger
 from models.base import Base, SeeChangeBase, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners
-from models.base import Psycopg2Connection
+from models.base import PsycopgConnection
 from models.enums_and_bitflags import CatalogExcerptFormatConverter, CatalogExcerptOriginConverter
 from sqlalchemy.dialects.postgresql import ARRAY
 
@@ -309,7 +309,7 @@ class GaiaDR3DownloadLock(Base, UUIDMixin):
             return q, subdict
 
         try:
-            with Psycopg2Connection() as conn:
+            with PsycopgConnection() as conn:
                 gotit = False
                 cursor = None
                 while not gotit:
@@ -344,7 +344,7 @@ class GaiaDR3DownloadLock(Base, UUIDMixin):
             # This is in a "finally" so that if the thing that we
             #  yielded to gets an exception, this stuff still gets
             #  executed.
-            with Psycopg2Connection() as conn:
+            with PsycopgConnection() as conn:
                 cursor = conn.cursor()
                 q = "DELETE FROM gaiadr3_downloadlock "
                 conds, subdict = sqlconds( minra, maxra, minmag, maxmag )

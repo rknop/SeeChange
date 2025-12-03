@@ -10,9 +10,9 @@ from astropy.wcs import WCS
 
 from util.logger import SCLogger
 
-import models.instrument
-import models.decam
-from models.base import Psycopg2Connection
+import models.instrument  # noqa: F401
+import models.decam  # noqa: F401
+from models.base import PsycopgConnection
 from models.image import Image
 from models.reference import Reference
 from models.provenance import Provenance
@@ -158,7 +158,7 @@ def import_decam_reference( image, weight, mask, target, hdu, section_id, refset
                                  upstreams=[ds.prov_tree['photocal']] )
     reference_prov.insert_if_needed()
 
-    with Psycopg2Connection() as conn:
+    with PsycopgConnection() as conn:
         cursor = conn.cursor()
         cursor.execute( "LOCK TABLE refsets" )
         cursor.execute( "SELECT _id,provenance_id FROM refsets WHERE name=%(name)s", { 'name': refset } )

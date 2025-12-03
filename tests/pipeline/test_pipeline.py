@@ -8,7 +8,7 @@ import numpy as np
 import sqlalchemy as sa
 import sqlalchemy.orm as orm
 
-from models.base import SmartSession, FileOnDiskMixin, Psycopg2Connection
+from models.base import SmartSession, FileOnDiskMixin, PsycopgConnection
 from models.provenance import Provenance, ProvenanceTag
 from models.exposure import Exposure
 from models.image import Image
@@ -354,7 +354,7 @@ def test_full_run_zogy( decam_exposure, decam_reference, decam_default_calibrato
     finally:
         if 'ds' in locals():
             ds.delete_everything()
-        with Psycopg2Connection() as con:
+        with PsycopgConnection() as con:
             cursor = con.cursor()
             cursor.execute( "DELETE FROM provenance_tags WHERE tag='test_full_run_zogy'" )
             con.commit()
@@ -420,7 +420,7 @@ def test_full_run_hotpants( decam_exposure, decam_reference, decam_default_calib
     finally:
         if 'ds' in locals():
             ds.delete_everything()
-        with Psycopg2Connection() as con:
+        with PsycopgConnection() as con:
             cursor = con.cursor()
             cursor.execute( "DELETE FROM provenance_tags WHERE tag='test_full_run_hotpants'" )
             con.commit()

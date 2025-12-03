@@ -239,8 +239,10 @@ def test_decam_download_and_commit_reduced_origin_exposure( decam_reduced_origin
     # See test_decam_download_and_commit_exposure for downloading a raw
     #  exposure.  That one pokes into details a bit more too.
     exps = []
+    exps_to_del = []
     try:
         exps = decam_reduced_origin_exposures.download_and_commit_exposures( indexes=[0] )
+        exps_to_del.extend( exps )
         assert len(exps) == 1
         assert isinstance( exps[0], Exposure )
         assert exps[0].components == [ 'image', 'weight', 'flags' ]
@@ -255,16 +257,18 @@ def test_decam_download_and_commit_reduced_origin_exposure( decam_reduced_origin
         #   not do anything.
         t0 = time.perf_counter()
         indexes, exps = decam_reduced_origin_exposures.download_exposures( indexes=[0], skip_existing=True )
+        exps_to_del.extend( exps )
         assert time.perf_counter() - t0 < 1
         assert len(indexes) == 0
         assert len(exps) == 0
         t0 = time.perf_counter()
         exps = decam_reduced_origin_exposures.download_and_commit_exposures( indexes=[0], skip_existing=True )
+        exps_to_del.extend( exps )
         assert time.perf_counter() - t0 < 1
         assert len(exps) == 0
 
     finally:
-        for e in exps:
+        for e in exps_to_del:
             e.delete_from_disk_and_database()
 
 

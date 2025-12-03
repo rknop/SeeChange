@@ -4,7 +4,7 @@ import os
 import pathlib
 import uuid
 
-import psycopg2.errors
+import psycopg.errors
 
 from astropy.wcs import WCS
 
@@ -59,7 +59,7 @@ def test_world_coordinates( ztf_datastore_uncommitted, provenance_base, provenan
         wcobj2.provenance_id = provenance_base.id
         wcobj2.save( image=ds.image ) # overwrite the save of wcobj
 
-        with pytest.raises( psycopg2.errors.UniqueViolation,
+        with pytest.raises( psycopg.errors.UniqueViolation,
                             match='duplicate key value violates unique constraint "_wcs_source_list_provenance_uc"' ):
             wcobj2.insert()
 
@@ -68,7 +68,7 @@ def test_world_coordinates( ztf_datastore_uncommitted, provenance_base, provenan
                          filepath="foo", md5sum=uuid.uuid4() )
         sl.insert()
         wcobj2.sources_id = sl.id
-        with pytest.raises( psycopg2.errors.UniqueViolation,
+        with pytest.raises( psycopg.errors.UniqueViolation,
                             match='duplicate key value violates unique constraint "ix_world_coordinates_filepath"' ):
             wcobj2.insert()
         sl.delete_from_disk_and_database()

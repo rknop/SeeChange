@@ -5,9 +5,9 @@ from multiprocessing import Process
 
 import numpy as np
 import sqlalchemy as sa
-import psycopg2.errors
+import psycopg.errors
 
-from models.base import SmartSession, Psycopg2Connection
+from models.base import SmartSession, PsycopgConnection
 from models.image import Image
 from models.zero_point import ZeroPoint
 from models.object import Object, ObjectLegacySurveyMatch
@@ -22,7 +22,7 @@ def test_object_creation():
     obj = Object(ra=ra, dec=dec, is_test=True, is_bad=False)
 
     try:
-        with pytest.raises( psycopg2.errors.NotNullViolation, match='null value in column "name"' ):
+        with pytest.raises( psycopg.errors.NotNullViolation, match='null value in column "name"' ):
             obj.insert()
 
         obj.name = "foo"
@@ -39,7 +39,7 @@ def test_object_creation():
 
     finally:
         if obj._id is not None:
-            with Psycopg2Connection() as conn:
+            with PsycopgConnection() as conn:
                 cursor = conn.cursor()
                 cursor.execute( "DELETE FROM objects WHERE _id=%(id)s", { 'id': obj._id } )
                 conn.commit()
@@ -50,7 +50,7 @@ def test_generate_names():
     dec0 = 72.93697309565587
     try:
         # make sure that things in the year range 3500 aren't in the object_name_max_used table
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( "SELECT * FROM object_name_max_used WHERE year>=2090 AND year<3600" )
             rows = cursor.fetchall()
@@ -121,7 +121,7 @@ def test_generate_names():
         # TODO: test more failures?
 
     finally:
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( "DELETE FROM object_name_max_used WHERE year>=2090 AND year<3600" )
             cursor.execute( "DELETE FROM objects WHERE name LIKE 'test_gen_name%'" )
@@ -138,7 +138,7 @@ def test_generate_names_race_condition():
     measur = Measurements( ra=ra, dec=dec  )
 
     def associator():
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             Object.associate_measurements( [ measur ], year=2025, connection=conn, nocommit=True )
             # Put a sleep here in order to trigger the race condition if
             #   the table lock in associate_measurements is commented
@@ -151,7 +151,7 @@ def test_generate_names_race_condition():
 
     try:
         # Count how many objects there are before we begin
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( "SELECT COUNT(*) FROM objects" )
             orignobj = cursor.fetchone()[0]
@@ -167,7 +167,7 @@ def test_generate_names_race_condition():
         p2.join()
 
         # Count how many objects there are now
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( "SELECT COUNT(*) FROM objects" )
             newnobj = cursor.fetchone()[0]
@@ -177,7 +177,7 @@ def test_generate_names_race_condition():
 
     finally:
         # Delete the objects we created
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( "DELETE FROM objects WHERE q3c_radial_query(ra, dec, %(ra)s, %(dec)s, 1./3600.)",
                             { "ra": ra, "dec": dec } )
@@ -252,7 +252,7 @@ def test_associate_measurements( sim_lightcurve_complete_dses_module,
 
     sourcesobjects = set()
     objsourceids = set()
-    with Psycopg2Connection() as conn:
+    with PsycopgConnection() as conn:
         cursor = conn.cursor()
         for i, source in enumerate( sources ):
             cursor.execute( "SELECT _id, name, ra, dec FROM objects "
@@ -277,11 +277,11 @@ def test_associate_measurements( sim_lightcurve_complete_dses_module,
         # Look at all the other objects and make sure that none of them are associated with
         #   any of our measurements
 
-        cursor.execute( "SELECT _id FROM objects WHERE _id NOT IN %(objids)s", { 'objids': tuple( sourcesobjects ) } )
+        cursor.execute( "SELECT _id FROM objects WHERE NOT _id=ANY(%(objids)s)", { 'objids': list(sourcesobjects) } )
         rows = cursor.fetchall()
         assert len( rows ) > 0
         for row in rows:
-            cursor.execute( "SELECT _id FROM measurements WHERE object_id=%(objid)s", { 'objid': rows[0] } )
+            cursor.execute( "SELECT _id FROM measurements WHERE object_id=%(objid)s", { 'objid': row[0] } )
             meases = set( r[0] for r in cursor.fetchall() )
             assert len( meases.intersection( objsourceids ) ) == 0
 
@@ -412,7 +412,7 @@ def test_object_legacy_survey_match():
             _ = ObjectLegacySurveyMatch.create_new_object_matches( obj.id, obj.ra, obj.dec )
 
         # Twiddle one of the magnitudes and make sure we get yelled at if we try to verify_existing
-        with Psycopg2Connection() as con:
+        with PsycopgConnection() as con:
             cursor = con.cursor()
             cursor.execute( "UPDATE object_legacy_survey_match SET white_mag=19.90 "
                             "WHERE object_id=%(oid)s AND lsid=%(lsid)s",
@@ -429,7 +429,7 @@ def test_object_legacy_survey_match():
         assert matches[0].white_mag != firstmatches[0].white_mag
 
         # Unmung, and add a new match to verify that it yells at us if the number doesn't match
-        with Psycopg2Connection() as con:
+        with PsycopgConnection() as con:
             cursor = con.cursor()
             cursor.execute( "UPDATE object_legacy_survey_match SET white_mag=19.93 "
                             "WHERE object_id=%(oid)s AND lsid=%(lsid)s",
@@ -459,7 +459,7 @@ def test_object_legacy_survey_match():
         assert matches[1].white_mag == pytest.approx( 19.93, abs=0.01 )
 
     finally:
-        with Psycopg2Connection() as con:
+        with PsycopgConnection() as con:
             cursor = con.cursor()
             cursor.execute( "DELETE FROM object_legacy_survey_match WHERE object_id=%(id)s", { 'id': objid } )
             cursor.execute( "DELETE FROM objects WHERE _id=%(id)s", { 'id': objid } )

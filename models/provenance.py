@@ -10,13 +10,12 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.schema import UniqueConstraint
-import psycopg2.extras
-import psycopg2.errors
+import psycopg
 
 from util.util import NumpyAndUUIDJsonEncoder, asUUID
 from util.logger import SCLogger
 
-from models.base import Base, UUIDMixin, SeeChangeBase, SmartSession, Psycopg2Connection
+from models.base import Base, UUIDMixin, SeeChangeBase, SmartSession, PsycopgConnection
 
 
 
@@ -415,8 +414,8 @@ class Provenance(Base):
 
             codebase_semver = CodeVersion.CODE_VERSION_DICT[process]  # (major, minor, patch) eg. (2,0,1)
 
-            with Psycopg2Connection() as conn:
-                cursor = conn.cursor( cursor_factory=psycopg2.extras.RealDictCursor )
+            with PsycopgConnection() as conn:
+                cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
                 cursor.execute( "LOCK TABLE code_versions" )
                 cursor.execute( "SELECT * FROM code_versions "
                                 "WHERE process=%(proc)s AND version_major=%(maj)s "
@@ -601,8 +600,8 @@ class ProvenanceTag(Base, UUIDMixin):
         # Use direct postgres connection rather than SQLAlchemy so that we can
         # lock tables without a world of hurt.  (See massive comment in
         # base.SmartSession.)
-        with Psycopg2Connection() as conn:
-            cursor = conn.cursor( cursor_factory=psycopg2.extras.RealDictCursor )
+        with PsycopgConnection() as conn:
+            cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
             cursor.execute( "LOCK TABLE provenance_tags" )
             cursor.execute( "SELECT t.tag,p._id,p.process FROM provenance_tags t "
                             "INNER JOIN provenances p ON t.provenance_id=p._id "

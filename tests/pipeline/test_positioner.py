@@ -10,7 +10,7 @@ from models.image import Image
 from models.source_list import SourceList
 from models.cutouts import Cutouts
 from models.measurements import MeasurementSet, Measurements
-from models.base import SmartSession, Psycopg2Connection
+from models.base import SmartSession, PsycopgConnection
 from pipeline.positioner import Positioner
 
 
@@ -171,7 +171,7 @@ def fake_data_for_position_tests( provenance_base ):
 
             yield ra0, dec0
     finally:
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor=conn.cursor()
             cursor.execute( "DELETE FROM measurements WHERE _id=ANY(%(id)s)",
                             { 'id': [ m._id for m in measurementses ] } )

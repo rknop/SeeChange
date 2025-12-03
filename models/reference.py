@@ -423,12 +423,12 @@ class Reference(Base, UUIDMixin, HasBitFlagBadness):
             # Additional criteria
 
             if refset is not None:
-                q += " AND r.provenance_id IN "
-                q += " ( SELECT rs.provenance_id FROM refsets rs "
+                q += " AND r.provenance_id=ANY( "
+                q += "   SELECT rs.provenance_id FROM refsets rs "
                 # TODO : be fancier with collections.abc.Sequence or something
                 if isinstance( refset, list ):
-                    q += "  WHERE rs.name IN :refsets ) "
-                    subdict['refsets'] = tuple( refset )
+                    q += "  WHERE rs.name=ANY(:refsets) ) "
+                    subdict['refsets'] = refset
                 else:
                     q += "  WHERE rs.name=:refset ) "
                     subdict['refset'] = refset
@@ -441,12 +441,11 @@ class Reference(Base, UUIDMixin, HasBitFlagBadness):
                     q += " AND r.provenance_id=:prov"
                     subdict['prov'] = provenance_ids.id
                 elif isinstance( provenance_ids, list ):
-                    q += " AND r.provenance_id IN :provs"
+                    q += " AND r.provenance_id=ANY(:provs)"
                     subdict['provs'] = []
                     for pid in provenance_ids:
                         subdict['provs'].append( pid if isinstance( pid, str ) or isinstance( pid, UUID )
                                                  else pid.id )
-                    subdict['provs'] = tuple( subdict['provs'] )
 
             if instrument is not None:
                 q += " AND i.instrument=:instrument "
