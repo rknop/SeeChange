@@ -178,6 +178,23 @@ class DECam(Instrument):
         if not 1 <= number <= 31:
             raise ValueError(f"The section_id number must be in the range [1, 31]. Got {number}. ")
 
+
+    def _make_new_section(self, section_id):
+        """Make a single section for the DECam instrument.
+
+        The section_id must be a valid section identifier (Si or Ni, where i is an int in [1,31])
+
+        Returns
+        -------
+        section: SensorSection
+            A new section for this instrument.
+        """
+        (dx, dy) = self.get_section_offsets(section_id)
+        defective = section_id in { 'N30', 'S7' }
+        return SensorSection(section_id, self.name, size_x=2048, size_y=4096,
+                             offset_x=dx, offset_y=dy, defective=defective)
+
+
     def get_section_offsets(self, section_id):
         """Find the offset for a specific section.
 
@@ -221,26 +238,18 @@ class DECam(Instrument):
         return ( -self._chip_radec_off[section_id]['ddec'] * 3600. / self.pixel_scale ,
                  self._chip_radec_off[section_id]['dra'] * 3600. / self.pixel_scale )
 
-    def _make_new_section(self, section_id):
-        """Make a single section for the DECam instrument.
 
-        The section_id must be a valid section identifier (Si or Ni, where i is an int in [1,31])
+    @classmethod
+    def get_filename_regex(cls):
+        return [r'c4d.*\.fits']
 
-        Returns
-        -------
-        section: SensorSection
-            A new section for this instrument.
-        """
-        (dx, dy) = self.get_section_offsets(section_id)
-        defective = section_id in { 'N30', 'S7' }
-        return SensorSection(section_id, self.name, size_x=2048, size_y=4096,
-                             offset_x=dx, offset_y=dy, defective=defective)
 
     def get_ra_dec_for_section( self, ra, dec, section_id ):
         if section_id not in self._chip_radec_off:
             raise ValueError( f"Unknown DECam section_id {section_id}" )
         return ( ra + self._chip_radec_off[section_id]['dra'] / math.cos( dec * math.pi / 180. ),
                  dec + self._chip_radec_off[section_id]['ddec'] )
+
 
     def get_ra_dec_corners_for_section( self, ra, dec, section_id ):
         self.fetch_sections()
@@ -263,40 +272,6 @@ class DECam(Instrument):
                  'mindec': mindec,
                  'maxdec': maxdec
                 }
-
-    @classmethod
-    def _get_header_keyword_translations( cls ):
-        t = dict(
-            ra = [ 'TELRA', 'RA' ],
-            dec = [ 'TELDEC, DEC' ],
-            mjd = [ 'MJD-OBS' ],
-            project = [ 'PROPID' ],
-            target = [ 'OBJECT' ],
-            width = [ 'NAXIS1' ],
-            height = [ 'NAXIS2' ],
-            exp_time = [ 'EXPTIME' ],
-            filter = [ 'FILTER' ],
-            instrument = [ 'INSTRUME' ],
-            telescope = [ 'TELESCOP' ],
-            gain = [ 'GAINA' ],
-            airmass = [ 'AIRMASS' ]
-        )
-        return t
-
-    @classmethod
-    def _get_header_values_converters( cls ):
-        t = dict(
-            ra = lambda r: util.radec.parse_sexigesimal_degrees( r, hours=True ),
-            dec = util.radec.parse_sexigesimal_degrees
-        )
-        return t
-
-    def overscan_trim_keywords_to_strip( self ):
-        yanklist = [ 'DETSIZE' ]
-        for base in [ 'TRIMSEC', 'DATASEC', 'DETSEC', 'CCDSEC', 'PRESEC', 'POSTSEC', 'BIASSEC', 'AMPSEC' ]:
-            for suffix in [ '', 'A', 'B' ]:
-                yanklist.append( f"{base}{suffix}" )
-        return yanklist
 
 
     def get_standard_flags_image( self, section_id ):
@@ -328,6 +303,7 @@ class DECam(Instrument):
 
         return bpm
 
+
     def get_gain_at_pixel( self, image, x, y, section_id=None ):
         if image is None:
             return Instrument.get_gain_at_pixel( image, x, y, section_id=section_id )
@@ -351,6 +327,7 @@ class DECam(Instrument):
             else:
                 return self.gain
 
+
     def average_gain( self, image, section_id=None ):
         if image is None:
             return Instrument.average_again( self, None, section_id=section_id )
@@ -360,6 +337,7 @@ class DECam(Instrument):
             return float( image.header['GAIN'] )
         else:
             raise ValueError( "Unable to find gain level in header" )
+
 
     def average_saturation_limit( self, image, section_id=None ):
         if image is None:
@@ -376,6 +354,36 @@ class DECam(Instrument):
         else:
             raise ValueError( "Unable to find saturation level in header" )
 
+
+    @classmethod
+    def _get_header_keyword_translations( cls ):
+        t = dict(
+            ra = [ 'TELRA', 'RA' ],
+            dec = [ 'TELDEC, DEC' ],
+            mjd = [ 'MJD-OBS' ],
+            project = [ 'PROPID' ],
+            target = [ 'OBJECT' ],
+            width = [ 'NAXIS1' ],
+            height = [ 'NAXIS2' ],
+            exp_time = [ 'EXPTIME' ],
+            filter = [ 'FILTER' ],
+            instrument = [ 'INSTRUME' ],
+            telescope = [ 'TELESCOP' ],
+            gain = [ 'GAINA' ],
+            airmass = [ 'AIRMASS' ]
+        )
+        return t
+
+
+    @classmethod
+    def _get_header_values_converters( cls ):
+        t = dict(
+            ra = lambda r: util.radec.parse_sexigesimal_degrees( r, hours=True ),
+            dec = util.radec.parse_sexigesimal_degrees
+        )
+        return t
+
+
     @classmethod
     def _get_fits_hdu_index_from_section_id(cls, section_id):
         """Return the index of the HDU in the FITS file for the DECam files.
@@ -386,14 +394,17 @@ class DECam(Instrument):
         cls.check_section_id(section_id)
         return section_id
 
+
     @classmethod
-    def get_filename_regex(cls):
-        return [r'c4d.*\.fits']
+    def _get_file_index_from_section_id( cls, section_id ):
+        raise NotImplementedError( "_get_file_index_from_section_id doesn't make sense for DECam" )
+
 
     @classmethod
     def get_short_instrument_name(cls):
         """Get a short name used for e.g., making filenames."""
         return 'c4d'
+
 
     @classmethod
     def get_short_filter_name(cls, filter):
@@ -492,6 +503,7 @@ class DECam(Instrument):
         trans_magerr = np.sqrt(catdata['MAGERR_G'] ** 2 + (trns[np.newaxis, :] * coltonerr).sum(axis=1) ** 2)
 
         return trans_mag, trans_magerr
+
 
     def _get_default_calibrator( self, mjd, section, calibtype='dark', filter=None ):
         # Just going to use the 56876 versions for everything
@@ -649,6 +661,16 @@ class DECam(Instrument):
 
         return calfile
 
+
+    def overscan_trim_keywords_to_strip( self ):
+        yanklist = [ 'DETSIZE' ]
+        for base in [ 'TRIMSEC', 'DATASEC', 'DETSEC', 'CCDSEC', 'PRESEC', 'POSTSEC', 'BIASSEC', 'AMPSEC' ]:
+            for suffix in [ '', 'A', 'B' ]:
+                yanklist.append( f"{base}{suffix}" )
+        return yanklist
+
+
+
     def linearity_correct( self, *args, linearitydata=None ):
         if not isinstance( linearitydata, DataFile ):
             raise TypeError( 'DECam.linearity_correct: linearitydata must be a DataFile' )
@@ -714,6 +736,7 @@ class DECam(Instrument):
         retry_download( params['url'], outfile, retries=5, sleeptime=5, exists_ok=True,
                         clobber=True, md5sum=params['md5sum'], sizelog='GiB', logger=SCLogger.get() )
         return outfile
+
 
     def _commit_exposure( self, origin_identifier, expfile, obs_type='Sci', proc_type='raw',
                           preproc_bitflag=0, wtfile=None, flgfile=None, session=None ):

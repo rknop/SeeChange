@@ -655,10 +655,7 @@ class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBad
         )
 
         if self.components is None:
-            if self.format == 'fits':
-                filepath += ".fits"
-            else:
-                raise ValueError( f"Unknown format for exposures: {self.format}" )
+            filepath += self._file_suffix()
 
         return filepath
 

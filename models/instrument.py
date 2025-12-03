@@ -740,6 +740,8 @@ class Instrument:
         If the instrument does not have multiple sections, set section_ids=0.
 
         THIS FUNCTION SHOULD GENERALLY NOT BE OVERRIDEN BY SUBCLASSES.
+        Instead, override load_section_image if necessary; often you can
+        get by by just overriding _get_fits_hdu_index_from_section_id.
 
         Parameters
         ----------
@@ -758,6 +760,7 @@ class Instrument:
         -------
         data: np.ndarray or list of np.ndarray
             The data from the exposure file.
+
         """
         if section_ids is None:
             section_ids = self.get_section_ids()
@@ -780,7 +783,9 @@ class Instrument:
         which is a basic FITS reader utility. More advanced instruments should
         override this function to use more complex file reading code.
 
-        THIS FUNCTION CAN BE OVERRIDEN BY EACH INSTRUMENT IMPLEMENTATION.
+        THIS FUNCTION CAN BE OVERRIDEN BY EACH INSTRUMENT
+        IMPLEMENTATION.  You may be able to get by just overriding
+        _get_fits_hdu_index_from_section_id.
 
         Parameters
         ----------
@@ -794,6 +799,7 @@ class Instrument:
         -------
         data: np.ndarray
             The data from the exposure file.
+
         """
         self.check_section_id(section_id)
         idx = self._get_fits_hdu_index_from_section_id(section_id)
@@ -825,9 +831,11 @@ class Instrument:
         Parameters
         ----------
         filepath: str, Path or list of str or Path
-            The filename (and full path) of the exposure file.
-            If an Exposure is associated with multiple files,
-            this will be a list of filenames.
+            The filename (and full path) of the exposure file.  If an
+            Exposure is associated with multiple files, this will be a
+            list of filenames.  In that case, the header of the first
+            file in the list is what's read.
+
         section_id: int or str (optional)
             The identifier of the section to load.
             If None (default), will load the header for the entire detector,
@@ -838,26 +846,23 @@ class Instrument:
         -------
         header: astropy.io.fits.Header
             The header from the exposure file, as an astropy.io.fits.Header object.
+
         """
-        if isinstance(filepath, (str, pathlib.Path)):
-            if section_id is None:
-                return read_fits_image(filepath, ext=0, output='header')
-            else:
-                self.check_section_id(section_id)
-                idx = self._get_fits_hdu_index_from_section_id(section_id)
-                return read_fits_image(filepath, ext=idx, output='header')
-        elif isinstance(filepath, list) and all( (isinstance(f, (str, pathlib.Path))) for f in filepath):
-            if section_id is None:
-                # just read the header of the first file
-                return read_fits_image(filepath[0], ext=0, output='header')
-            else:
-                self.check_section_id(section_id)
-                idx = self._get_file_index_from_section_id(section_id)
-                return read_fits_image(filepath[idx], ext=0, output='header')
+        if isinstance( filepath, list ):
+            if not all( isinstance( f, (str, pathlib.Path) ) for f in filepath ):
+                raise TypeError( "If you pass a list to read_header, it must be a list of file paths." )
+            filepath = filepath[0]
+
+        if not isinstance( filepath, (str, pathlib.Path) ):
+            raise TypeError( f"filepath must be a string or path. Got {type(filepath)}" )
+
+        if section_id is None:
+            return read_fits_image(filepath, ext=0, output='header')
         else:
-            raise ValueError(
-                f"filepath must be a string or list of strings. Got {type(filepath)}"
-            )
+            self.check_section_id(section_id)
+            idx = self._get_fits_hdu_index_from_section_id(section_id)
+            return read_fits_image(filepath, ext=idx, output='header')
+
 
     @staticmethod
     def normalize_keyword(key):
@@ -886,7 +891,7 @@ class Instrument:
           ls4cam.py::LS4Cam.extract_header_info
 
         .)
-        
+
         Parameters
         ----------
         header: fits.Header
@@ -1956,6 +1961,7 @@ class Instrument:
         """
         raise NotImplementedError( f"{self.__class__.__name__} needs to impldment linearity_correct" )
 
+
     def get_exposure_provenance( self, proc_type='raw', method='download', code_version=None, **kwargs ):
         """Get the provenance for an exposure from this instrument.
 
@@ -2001,6 +2007,159 @@ class Instrument:
         )
         provenance.insert_if_needed()
         return provenance
+
+
+    def manually_load_exposure( self, filepath, origin_identifier=None, params=None ):
+        """Load an exposure into the database from a file on disk.
+
+        USE THIS WITH CARE.  EXTREME CARE.  Subclasses that implement
+        this need to make sure that what they do with origin_identifier
+        is the right thing!  The conductor will use this field to decide
+        if an exposure it finds via find_origin_exposures is the same as
+        one that's already loaded into the database.  So, if you're
+        manually loading exposures rather than going througha ll the
+        acquire_and_commit_origin_exposures process, make sure that you
+        aren't going to end up with duplicate exposires!
+
+        Parameters
+        ----------
+          filepath : str or pathlib.Path
+              Path to file with exposure to load
+
+          origin_identifier : str
+              VERY IMPORTANT.  See warning above.
+
+          params : ...something
+              Instrument dependent.
+
+        Returns
+        -------
+          Exposure
+
+        """
+        raise NotImplementedError( f"{self.__class__.__name__} hasn't implemented manually_load_exposure" )
+
+
+    def acquire_origin_exposure( self, identifier, params, outdir=None ):
+        """Does the same thing as InstrumentOriginExposures.download_exposures.
+
+        Works outside of the context of find_origin exposures.
+
+        Parameters
+        ----------
+          identifier : str
+            Identifies the image at the source of exposures.  (See
+            KnownExposure.identifier or Exposure.origin_identifier.)
+
+          params : defined differently for each subclass
+            Necessary parameters for this instrument to download an
+            origin exposure
+
+          outdir : str or Path
+             Directory where to write the downloaded file.  Defaults to
+             FileOnDiskMixin.temp_path.
+
+        Returns
+        -------
+          outpath : pathlib.Path
+            The written file.
+
+        """
+        raise NotImplementedError( f"Instrument class {self.__class__.__name__} hasn't "
+                                   f"implemented acquire_origin_exposure" )
+
+
+    def acquire_and_commit_origin_exposure( self, identifier, params ):
+        """Call acquire_origin_exposure and add the exposure to the database.
+
+        Parameters
+        ----------
+          identifier : str
+            Identifies the image at the source of exposures.  (See
+            KnownExposure.identfier or Exposure.origin_identifier.)
+
+          params : defined differently for each subclass
+            Necessary parameters for this instrument to download an
+            origin exposure
+
+        Returns
+        -------
+          Exposure
+
+        """
+        raise NotImplementedError( f"Instrument class {self.__class__.__name__} hasn't "
+                                   f"implemented acquire_and_commit_origin_exposure" )
+
+
+    def find_origin_exposures( self,
+                               skip_exposures_in_database=True,
+                               skip_known_exposures=True,
+                               minmjd=None,
+                               maxmjd=None,
+                               filters=None,
+                               containing_ra=None,
+                               containing_dec=None,
+                               ctr_ra=None,
+                               ctr_dec=None,
+                               radius=None,
+                               minexptime=None,
+                               projects=None
+                              ):
+        """Search the external repository associated with this instrument.
+
+        Search the external image/exposure repository for this
+        instrument for exposures that the database doesn't know about
+        already.  For example, for DECam, this searches the noirlab data
+        archive.
+
+        WARNING : do not call this without some parameters that limit
+        the search; otherwise, too many things will be returned, and the
+        query is likely to time out or get an error from the external
+        repository. E.g., a good idea is to search only for exposure from the last week.
+
+        Parameters
+        ----------
+        skip_exposures_in_databse: bool
+           If True (default), will filter out any exposures that (as
+           best can be determined) are already known in the SeeChange
+           database.  If False, will include all exposures.
+
+        skip_known_exposures: bool
+           If True (default), will filter out any exposures that are
+           already in the knownexposures table in the database.
+
+        minmjd: float
+           The earliest time of exposure to search (default: no limit)
+
+        maxmjd: float
+           The latest time of exposure to search (default: no limit)
+
+        filters: str or list of str
+           Filters to search.  The actual strings are
+           instrument-dependent, and will match what is expected on the
+           external repository.  By default, doesn't limit by filter.
+
+        containing_ra, containing_dec: float
+           Search for exposures that include this position (degrees, J2000);
+           default, no position constraint.
+
+        ctr_ra, ctr_dec, radius: float
+           Search for exposures within radius degrees of these coordinates.
+
+        minexptime: float
+           Search for exposures that have this minimum exposure time in
+           seconds; default, no limit.
+
+        projects: str or list of str
+           Name of the projects to search for exposures from
+
+        Returns
+        -------
+        A InstrumentOriginExposures object, or None if nothing is found.
+
+        """
+        raise NotImplementedError( f"Instrument class {self.__class__.__name__} hasn't "
+                                   f"implemented find_origin_exposures." )
 
 
 
@@ -2116,125 +2275,6 @@ class DemoInstrument(Instrument):
     def get_short_instrument_name(cls):
         """Get a short name used for e.g., making filenames."""
         return 'Demo'
-
-    def acquire_origin_exposure( self, identifier, params, outdir=None ):
-        """Does the same thing as InstrumentOriginExposures.download_exposures.
-
-        Works outside of the context of find_origin exposures.
-
-        Parameters
-        ----------
-          identifier : str
-            Identifies the image at the source of exposures.  (See
-            KnownExposure.identifier or Exposure.origin_identifier.)
-
-          params : defined differently for each subclass
-            Necessary parameters for this instrument to download an
-            origin exposure
-
-          outdir : str or Path
-             Directory where to write the downloaded file.  Defaults to
-             FileOnDiskMixin.temp_path.
-
-        Returns
-        -------
-          outpath : pathlib.Path
-            The written file.
-
-        """
-        raise NotImplementedError( f"Instrument class {self.__class__.__name__} hasn't "
-                                   f"implemented acquire_origin_exposure" )
-
-    def acquire_and_commit_origin_exposure( self, identifier, params ):
-        """Call acquire_origin_exposure and add the exposure to the database.
-
-        Parameters
-        ----------
-          identifier : str
-            Identifies the image at the source of exposures.  (See
-            KnownExposure.identfier or Exposure.origin_identifier.)
-
-          params : defined differently for each subclass
-            Necessary parameters for this instrument to download an
-            origin exposure
-
-        Returns
-        -------
-          Exposure
-
-        """
-        raise NotImplementedError( f"Instrument class {self.__class__.__name__} hasn't "
-                                   f"implemented acquire_and_commit_origin_exposure" )
-
-    def find_origin_exposures( self,
-                               skip_exposures_in_database=True,
-                               skip_known_exposures=True,
-                               minmjd=None,
-                               maxmjd=None,
-                               filters=None,
-                               containing_ra=None,
-                               containing_dec=None,
-                               ctr_ra=None,
-                               ctr_dec=None,
-                               radius=None,
-                               minexptime=None,
-                               projects=None
-                              ):
-        """Search the external repository associated with this instrument.
-
-        Search the external image/exposure repository for this
-        instrument for exposures that the database doesn't know about
-        already.  For example, for DECam, this searches the noirlab data
-        archive.
-
-        WARNING : do not call this without some parameters that limit
-        the search; otherwise, too many things will be returned, and the
-        query is likely to time out or get an error from the external
-        repository. E.g., a good idea is to search only for exposure from the last week.
-
-        Parameters
-        ----------
-        skip_exposures_in_databse: bool
-           If True (default), will filter out any exposures that (as
-           best can be determined) are already known in the SeeChange
-           database.  If False, will include all exposures.
-
-        skip_known_exposures: bool
-           If True (default), will filter out any exposures that are
-           already in the knownexposures table in the database.
-
-        minmjd: float
-           The earliest time of exposure to search (default: no limit)
-
-        maxmjd: float
-           The latest time of exposure to search (default: no limit)
-
-        filters: str or list of str
-           Filters to search.  The actual strings are
-           instrument-dependent, and will match what is expected on the
-           external repository.  By default, doesn't limit by filter.
-
-        containing_ra, containing_dec: float
-           Search for exposures that include this position (degrees, J2000);
-           default, no position constraint.
-
-        ctr_ra, ctr_dec, radius: float
-           Search for exposures within radius degrees of these coordinates.
-
-        minexptime: float
-           Search for exposures that have this minimum exposure time in
-           seconds; default, no limit.
-
-        projects: str or list of str
-           Name of the projects to search for exposures from
-
-        Returns
-        -------
-        A InstrumentOriginExposures object, or None if nothing is found.
-
-        """
-        raise NotImplementedError( f"Instrument class {self.__class__.__name__} hasn't "
-                                   f"implemented find_origin_exposures." )
 
 
 class InstrumentOriginExposures:
