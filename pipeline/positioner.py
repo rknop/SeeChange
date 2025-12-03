@@ -3,11 +3,11 @@ import pytz
 
 import numpy as np
 import astropy.time
-import psycopg2.errors
+import psycopg.errors
 
 from models.provenance import Provenance
 from models.object import Object, ObjectPosition
-from models.base import Psycopg2Connection, SmartSession
+from models.base import PsycopgConnection, SmartSession
 from pipeline.parameters import Parameters
 
 from util.logger import SCLogger
@@ -166,7 +166,7 @@ class Positioner:
             dt = pytz.utc.localize( dt )
         mjdcut = astropy.time.Time( dt, format='datetime' ).mjd
 
-        with Psycopg2Connection() as con:
+        with PsycopgConnection() as con:
             cursor = con.cursor()
 
             # Find all measurements in the appropriate band that go with this object
@@ -217,7 +217,7 @@ class Positioner:
                 subdict = { 'filt': self.pars.filter, 'mjdcut': mjdcut,
                             'measprov': self.pars.measuring_provenance_id,
                             'ra': curra, 'dec': curdec, 'rad': self.pars.radius/3600. }
-                SCLogger.debug( f"Running query: {cursor.mogrify(q, subdict)}" )
+                # SCLogger.debug( f"Running query: {cursor.mogrify(q, subdict)}" )
                 cursor.execute( q, subdict )
                 rows = cursor.fetchall()
                 srcra = np.array( [ r[0] for r in rows ] )
@@ -292,7 +292,7 @@ class Positioner:
 
         try:
             objpos.insert()
-        except psycopg2.errors.UniqueViolation():
+        except psycopg.errors.UniqueViolation():
             # This means that somebody else calculated and saved this
             # ObjectPosition between back when we made sure it didn't
             # exist and now.  In that case, all is well, we just wasted

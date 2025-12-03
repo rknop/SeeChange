@@ -1,6 +1,6 @@
 import pytest
 import uuid
-import psycopg2
+import psycopg.errors
 
 import sqlalchemy as sa
 
@@ -27,7 +27,7 @@ def test_codeversion_uniqueness():
             cv_count_final = len(session.scalars(sa.select( CodeVersion )).all())
         assert cv_count_final - cv_count_initial == 4
 
-        with pytest.raises( psycopg2.errors.UniqueViolation,
+        with pytest.raises( psycopg.errors.UniqueViolation,
                            match='violates unique constraint "_codeversion_process_versions_uc"'):
             cv5 = CodeVersion( process='cv_test', version_major=-1, version_minor=-1, version_patch=-1)
             cv5.insert()

@@ -6,12 +6,13 @@ import datetime
 import pytz
 import traceback
 
-import psycopg2.extras
+import psycopg
+import psycopg.types.json
 
 import flask
 
 from util.util import asUUID
-from models.base import SmartSession, Psycopg2Connection
+from models.base import SmartSession, PsycopgConnection
 from models.enums_and_bitflags import KnownExposureStateConverter
 from models.knownexposure import PipelineWorker
 # NOTE: for get_instrument_instrance to work, must manually import all
@@ -43,7 +44,7 @@ class ConductorBaseView( BaseView ):
     def restore_conductor_state( cls ):
         """This class method is called once upon module init."""
 
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( "LOCK TABLE conductor_config" )
             cursor.execute( "SELECT * FROM conductor_config" )
@@ -206,14 +207,14 @@ class UpdateParameters( ConductorBaseView ):
         res['oldsconfig'] = curstatus
 
         ConductorBaseView.configchangetime = res['configchangetime']
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( "UPDATE conductor_config SET instrument_name=%(inst)s, updateargs=%(upda)s, "
                             "                            update_timeout=%(updt)s, pause_updates=%(pause)s, "
                             "                            hold_new_exposures=%(hold)s, configchangetime=%(t)s, "
                             "                            throughstep=%(through)s, pickuppartial=%(partial)s ",
                             { 'inst': res['instrument'],
-                              'upda': res['updateargs'],
+                              'upda': psycopg.types.json.Jsonb(res['updateargs']),
                               'updt': res['timeout'],
                               'pause': bool( res['pause'] ),
                               'hold': bool( res['hold'] ),
@@ -335,8 +336,8 @@ class RequestExposure( ConductorBaseView ):
         if 'cluster_id' not in args.keys():
             return "cluster_id is required for RequestExposure", 500
         knownexp_id = None
-        with Psycopg2Connection() as dbcon:
-            cursor = dbcon.cursor( cursor_factory=psycopg2.extras.RealDictCursor )
+        with PsycopgConnection() as dbcon:
+            cursor = dbcon.cursor( row_factory=psycopg.rows.dict_row )
             cursor.execute( "LOCK TABLE knownexposures" )
             # Select the lowest-mjd exposure in the "ready" state (1)
             cursor.execute( "SELECT _id, cluster_id FROM knownexposures "
@@ -381,8 +382,8 @@ class GetKnownExposures( ConductorBaseView ):
                                              } )
         args['minmjd'] = float( args['minmjd'] ) if args['minmjd'] is not None else None
         args['maxmjd'] = float( args['maxmjd'] ) if args['maxmjd'] is not None else None
-        with Psycopg2Connection() as conn:
-            cursor = conn.cursor( cursor_factory=psycopg2.extras.RealDictCursor )
+        with PsycopgConnection() as conn:
+            cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
             q = ( "SELECT ke.*,e.filepath FROM knownexposures ke "
                   "LEFT JOIN exposures e ON ke.exposure_id=e._id " )
             _and = "WHERE"
@@ -413,8 +414,8 @@ class GetKnownExposures( ConductorBaseView ):
                 subdict['minexp'] = float( args['minexptime'] )
                 _and = "AND"
             if args['state'] is not None:
-                q += f"{_and} ke._state IN %(state)s"
-                subdict['state'] = tuple( KnownExposureStateConverter.to_int( s ) for s in args['state'].split(",") )
+                q += f"{_and} ke._state=ANY(%(state)s)"
+                subdict['state'] = [ KnownExposureStateConverter.to_int( s ) for s in args['state'].split(",") ]
             if args['maxclaimtime'] is not None:
                 claimtime = datetime.datetime.fromisoformat( args['maxclaimtime'] )
                 if claimtime.tzinfo is None:
@@ -463,10 +464,10 @@ class SetKnownExposureState( ConductorBaseView ):
         if len( args['knownexposure_ids'] ) == 0:
             raise ValueError( "Must have at least one in knownexposure_ids to do anything" )
 
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
-            cursor.execute( "UPDATE knownexposures SET _state=%(state)s WHERE _id IN %(ids)s",
-                            { 'state': state, 'ids': tuple( args['knownexposure_ids'] ) } )
+            cursor.execute( "UPDATE knownexposures SET _state=%(state)s WHERE _id=ANY(%(ids)s)",
+                            { 'state': state, 'ids': args['knownexposure_ids'] } )
             conn.commit()
 
         return { 'status': 'ok',
@@ -481,10 +482,10 @@ class DeleteKnownExposures( ConductorBaseView ):
         args = flask.request.json
         if 'knownexposure_ids' not in args:
             return "Error, must pass knownexposure_ids in JSON post body", 500
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
-            cursor.execute( "DELETE FROM knownexposures WHERE _id IN %(expids)s",
-                            { 'expids': tuple( args['knownexposure_ids'] ) } )
+            cursor.execute( "DELETE FROM knownexposures WHERE _id=ANY(%(expids)s)",
+                            { 'expids': args['knownexposure_ids'] } )
             ndel = cursor.rowcount
             conn.commit()
             return { 'status': 'ok', 'num_deleted': ndel }
@@ -497,12 +498,12 @@ class FullyClearClusterClaim( ConductorBaseView ):
         args = flask.request.json
         if 'knownexposure_ids' not in args:
             return "Error, must pass knownexposure_ids in JSON post body", 500
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( "UPDATE knownexposures SET cluster_id=NULL, node_id=NULL, machine_name=NULL, "
                             "  claim_time=NULL, start_time=NULL, release_time=NULL "
-                            "WHERE _id IN %(expids)s",
-                            { 'expids': tuple( args['knownexposure_ids'] ) } )
+                            "WHERE _id=ANY(%(expids)s)",
+                            { 'expids': args['knownexposure_ids'] } )
             nmod = cursor.rowcount
             conn.commit()
             return { 'status': 'ok', 'num_cleared': nmod }

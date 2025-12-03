@@ -3,7 +3,7 @@ import os
 import time
 import logging
 
-from models.base import SmartSession, Psycopg2Connection
+from models.base import SmartSession, PsycopgConnection
 from models.knownexposure import KnownExposure
 from models.exposure import Exposure
 from models.image import Image
@@ -120,7 +120,7 @@ def test_exposure_launcher_conductor_through_step( conductor_connector,
         unhold_decam_exposure( conductor_connector, decam_exposure_name )
 
         conductor_connector.send( "/conductor/updateparameters/throughstep=photocal" )
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( "SELECT throughstep FROM conductor_config" )
             assert cursor.fetchone()[0] == 'photocal'
@@ -141,7 +141,7 @@ def test_exposure_launcher_conductor_through_step( conductor_connector,
         #   ready exposure and that make sure the pipeline runs all the
         #   way to the end.
         conductor_connector.send( "/conductor/updateparameters/throughstep=scoring" )
-        conductor_connector.send( "/conductor/setknownexposurestate", { 'knownexposure_ids': [ keid ],
+        conductor_connector.send( "/conductor/setknownexposurestate", { 'knownexposure_ids': [ str(keid) ],
                                                                         'state': 'ready' } )
         elaunch = ExposureLauncher( 'testcluster', 'testnode', numprocs=2, onlychips=['S2', 'N16'], verify=False,
                                     worker_log_level=logging.DEBUG )
@@ -178,7 +178,7 @@ def test_exposure_launcher_through_step( conductor_connector,
         unhold_decam_exposure( conductor_connector, decam_exposure_name )
 
         conductor_connector.send( "/conductor/updateparameters/throughstep=photocal" )
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( "SELECT throughstep FROM conductor_config" )
             assert cursor.fetchone()[0] == 'photocal'

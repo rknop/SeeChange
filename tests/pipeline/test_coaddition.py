@@ -6,7 +6,7 @@ from astropy.io import fits
 import numpy as np
 from numpy.fft import fft2, ifft2, fftshift
 
-from models.base import Psycopg2Connection
+from models.base import PsycopgConnection
 from models.provenance import Provenance
 from models.image import Image
 from models.source_list import SourceList
@@ -395,7 +395,7 @@ def test_coaddition_run(coadder, ptf_reference_image_datastores, ptf_aligned_ima
         assert np.all( ref_image.weight[ ref_image.flags == 0 ] == 1 )
 
     finally:
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( "DELETE FROM images WHERE _id=%(id)s", { 'id': ref_image.id } )
             conn.commit()

@@ -6,7 +6,7 @@ import uuid
 import numpy as np
 
 import sqlalchemy as sa
-import psycopg2.errors
+import psycopg.errors
 
 from pipeline.ref_maker import RefMaker
 
@@ -124,7 +124,7 @@ def test_finding_references( provenance_base, provenance_extra ):
         refset_extra.insert()
 
         # Make sure we can't create a duplicate refset
-        with pytest.raises( psycopg2.errors.UniqueViolation,
+        with pytest.raises( psycopg.errors.UniqueViolation,
                             match='duplicate key value violates unique constraint "ix_refsets_name"' ):
             oops = RefSet( name="base", description="wrong", provenance_id=extrarefprov.id )
             oops.insert()

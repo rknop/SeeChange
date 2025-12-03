@@ -7,7 +7,7 @@ import requests
 #  given that we're using a self-signed cert for the server in the test environment
 requests.packages.urllib3.disable_warnings()
 
-from models.base import SmartSession, Psycopg2Connection
+from models.base import SmartSession, PsycopgConnection
 from models.enums_and_bitflags import KnownExposureStateConverter
 from models.knownexposure import KnownExposure, PipelineWorker
 
@@ -182,7 +182,7 @@ def test_request_knownexposure( conductor_connector, conductor_config_for_decam_
 
     # Make sure that we don't get held exposures
 
-    with Psycopg2Connection() as conn:
+    with PsycopgConnection() as conn:
         cursor = conn.cursor()
         cursor.execute( "Update knownexposures SET _state=%(state)s",
                         { 'state': KnownExposureStateConverter.to_int("held") } )

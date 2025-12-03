@@ -1,7 +1,7 @@
 import pytest
 import uuid
 
-import psycopg2.errors
+import psycopg.errors
 
 from models.image import Image
 from models.source_list import SourceList
@@ -82,7 +82,7 @@ def test_zeropoint_committing(provenance_base, provenance_extra):
         zp2.wcs_id = ds.wcs.id
         zp2.provenance_id = provenance_extra.id
 
-        with pytest.raises( psycopg2.errors.UniqueViolation,
+        with pytest.raises( psycopg.errors.UniqueViolation,
                             match='duplicate key value violates unique constraint "_zp_wcs_provenance_uc"' ):
             zp2.insert()
 

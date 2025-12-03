@@ -16,7 +16,8 @@ import shapely
 
 from astropy.coordinates import SkyCoord
 
-import psycopg2
+import psycopg
+# import psycopg.adapt
 
 import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql
@@ -43,24 +44,23 @@ from util.radec import radec_to_gal_ecl
 from util.util import asUUID, NumpyAndUUIDJsonEncoder
 
 # Postgres adapters to allow insertion of some numpy types
-import psycopg2.extensions
+# ...let's see if we can get by without these in psycopg3
+
+# def _adapt_numpy_float_psycopg2( val ):
+#     if np.isnan( val ):
+#         return psycopg2.extensions.AsIs( "'NaN'::float" )
+#     else:
+#         return psycopg2.extensions.AsIs( val )
 
 
-def _adapt_numpy_float_psycopg2( val ):
-    if np.isnan( val ):
-        return psycopg2.extensions.AsIs( "'NaN'::float" )
-    else:
-        return psycopg2.extensions.AsIs( val )
+# def _adapt_numpy_int_psycopg2( val ):
+#     return psycopg2.extensions.AsIs( val )
 
 
-def _adapt_numpy_int_psycopg2( val ):
-    return psycopg2.extensions.AsIs( val )
-
-
-psycopg2.extensions.register_adapter( np.float64, _adapt_numpy_float_psycopg2 )
-psycopg2.extensions.register_adapter( np.float32, _adapt_numpy_float_psycopg2 )
-psycopg2.extensions.register_adapter( np.int64, _adapt_numpy_int_psycopg2 )
-psycopg2.extensions.register_adapter( np.int32, _adapt_numpy_int_psycopg2 )
+# psycopg2.extensions.register_adapter( np.float64, _adapt_numpy_float_psycopg2 )
+# psycopg2.extensions.register_adapter( np.float32, _adapt_numpy_float_psycopg2 )
+# psycopg2.extensions.register_adapter( np.int64, _adapt_numpy_int_psycopg2 )
+# psycopg2.extensions.register_adapter( np.int32, _adapt_numpy_int_psycopg2 )
 
 
 # this is the root SeeChange folder
@@ -118,7 +118,7 @@ setup_warning_filters()  # need to call this here and also call it explicitly wh
 
 _engine = None
 _Session = None
-_psycopg2params = None
+_psycopg_params = None
 
 
 def Session():
@@ -140,7 +140,7 @@ def Session():
     if _Session is None:
         cfg = config.Config.get()
 
-        if cfg.value("db.engine") != "postgresql":
+        if cfg.value("db.engine") != "postgresql+psycopg":
             raise ValueError( "This pipeline only supports PostgreSQL as a database engine" )
 
         password = cfg.value( "db.password" )
@@ -151,7 +151,8 @@ def Session():
                 password = ifp.readline().strip()
 
         url = (f'{cfg.value("db.engine")}://{cfg.value("db.user")}:{password}'
-               f'@{cfg.value("db.host")}:{cfg.value("db.port")}/{cfg.value("db.database")}')
+               f'@{cfg.value("db.host")}:{cfg.value("db.port")}/{cfg.value("db.database")}'
+               f'?client_encoding=utf8')
         _engine = sa.create_engine( url,
                                     future=True,
                                     poolclass=sa.pool.NullPool,
@@ -234,7 +235,7 @@ def SmartSession(*args):
             # anything else.  (There is irony here.)
             #
             # OK, lets try grabbing the connection from the session and
-            # manually rolling back with psycopg2 or whatever is
+            # manually rolling back with psycopg or whatever is
             # underneath.  I'm not sure this will do what I want either,
             # because I don't know if session.bind.raw_connection() gets
             # me the connection that session is using, or if it gets
@@ -266,22 +267,22 @@ def SmartSession(*args):
 
 
 @contextmanager
-def Psycopg2Connection( current=None ):
-    """Get a direct psycopg2 connection to the database; use this in a with statement.
+def PsycopgConnection( current=None ):
+    """Get a direct psycopg3 connection to the database; use this in a with statement.
 
     Useful if you don't want to fight with SQLAlchemy, e.g. if you
     want to use table locks (see comment above in SmartSession).
 
     Parameters
     ----------
-      current : psycopg2.extensions.connection or None (default None)
+      current : psycopg.Connection or None (default None)
          Pass an existing connection, get it back.  Useful if you are in
          nested functions that might want to be working within the same
          transaction.
 
     Returns
     -------
-       psycopg2.extensions.connection
+       psycopg.Connection
 
        After the with block, the connection will be rolled back and
        closed.  So, if you want what you've done committed, make sure to
@@ -289,11 +290,11 @@ def Psycopg2Connection( current=None ):
        block exits.
 
     """
-    global _psycopg2params
+    global _psycopg_params
 
     if current is not None:
-        if not isinstance( current, psycopg2.extensions.connection ):
-            raise TypeError( "Must pass a psycopg2.extensions.connection or None to Pyscopg2Conection" )
+        if not isinstance( current, psycopg.Connection ):
+            raise TypeError( "Must pass a psycopg.Connection or None to PyscopgConection" )
         yield current
         # Don't roll back or close, because whoever created it in the
         #   first place is responsible for that.
@@ -301,9 +302,9 @@ def Psycopg2Connection( current=None ):
 
     # If a connection wasn't passed, make one, and then be sure to roll it back and close it when we're done
 
-    if _psycopg2params is None:
+    if _psycopg_params is None:
         cfg = config.Config.get()
-        if cfg.value( "db.engine" ) != "postgresql":
+        if cfg.value( "db.engine" ) != "postgresql+psycopg":
             raise ValueError( "This pipeline only supports PostgreSQL as a database engine" )
 
         password = cfg.value( 'db.password' )
@@ -313,14 +314,17 @@ def Psycopg2Connection( current=None ):
             with open( cfg.value( "db.password_file" ) ) as ifp:
                 password = ifp.readline().strip()
 
-        _psycopg2params = { 'host': cfg.value('db.host'),
+        # psycopg docs seems to suggest that the client_encoding parameter isn't necessary,
+        #   but empirically it is.
+        _psycopg_params = { 'host': cfg.value('db.host'),
                             'port': cfg.value('db.port'),
                             'dbname': cfg.value('db.database'),
                             'user': cfg.value('db.user'),
-                            'password': password }
+                            'password': password,
+                            'client_encoding': 'UTF8' }
 
     try:
-        conn = psycopg2.connect( **_psycopg2params )
+        conn = psycopg.connect( **_psycopg_params )
         yield conn
 
     finally:
@@ -551,9 +555,9 @@ class SeeChangeBase:
                 val = list( val )
 
             # if isinstance( val, list ):
-            #     # Gotta handle nans manually; it looks like psycopg2
+            #     # Gotta handle nans manually; it looks like psycopg
             #     #   doesn't do this right in sql arrays :(
-            #     # TODO : look into doing this with psycopg2.extensions.register_adapter
+            #     # TODO : look into doing this with an adapter
             #     val = [ v if not( isinstance(v, float) and np.isnan(v) ) else None for v in val ]
 
             # In our case, everything nullable has a default of NULL.  So,
@@ -587,7 +591,7 @@ class SeeChangeBase:
 
         Parameters
         ----------
-          session: SQLALchemy Session, or psycopg2.extensions.connection, or None
+          session: SQLALchemy Session, or psycopg.Connection, or None
             Usually you do not want to pass this; it's mostly for other
             upsert etc. methods that cascade to this.
 
@@ -596,7 +600,7 @@ class SeeChangeBase:
             actually commit the database.  Do this if you want the
             insert to be inside a transaction you've started on session.
             It doesn't make sense to set nocommit=True unless you've
-            passed either a Session or a psycopg2 connection.
+            passed either a Session or a psycopg connection.
 
         """
 
@@ -634,13 +638,13 @@ class SeeChangeBase:
                     sess.commit()
             return
 
-        if ( session is not None ) and ( not isinstance( session, psycopg2.extensions.connection ) ):
-            raise TypeError( f"session must be a sa Session or psycopg2.extensions.connection or None, "
+        if ( session is not None ) and ( not isinstance( session, psycopg.Connection ) ):
+            raise TypeError( f"session must be a sa Session or psycopg.Connection or None, "
                              f"not a {type(session)}" )
 
         q = f'INSERT INTO {self.__tablename__}({",".join(notmod)}) VALUES (%({")s,%(".join(notmod)})s) '
         subdict = { c: v for c, v in zip( cols, values ) if c != 'modified' }
-        with Psycopg2Connection( session ) as conn:
+        with PsycopgConnection( session ) as conn:
             cursor = conn.cursor()
             cursor.execute( q, subdict )
             if not nocommit:
@@ -2187,8 +2191,8 @@ class FourCorners:
                 query += f" AND {provtable}.provenance_id=:prov"
                 subdict['prov'] = prov_id
             elif isinstance( prov_id, list ):
-                query += f" AND {provtable}.provenance_id IN :prov"
-                subdict['prov'] = tuple( prov_id )
+                query += f" AND {provtable}.provenance_id=ANY(:prov)"
+                subdict['prov'] = prov_id
             else:
                 raise TypeError( "prov_id must be a a str or a list of str" )
 
@@ -2315,8 +2319,8 @@ class FourCorners:
                 query += f" AND {provtable}.provenance_id=:prov"
                 subdict['prov'] = prov_id
             elif isinstance( prov_id, list ):
-                query += f" AND {provtable}.provenance_id IN :prov"
-                subdict['prov'] = tuple( prov_id )
+                query += f" AND {provtable}.provenance_id=ANY(:prov)"
+                subdict['prov'] = prov_id
             else:
                 raise TypeError( "prov_id must be a a str or a list of str" )
 

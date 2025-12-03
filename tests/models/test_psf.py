@@ -11,15 +11,14 @@ import numpy as np
 import scipy.ndimage
 
 import sqlalchemy as sa
-import psycopg2.errors
-import psycopg2.extras
+import psycopg.errors
 import astropy
 from astropy.io import fits
 
 from util.config import Config
 from util.util import env_as_bool, asUUID
 from util.logger import SCLogger
-from models.base import SmartSession, Psycopg2Connection, FileOnDiskMixin, CODE_ROOT, get_archive_object
+from models.base import SmartSession, PsycopgConnection, FileOnDiskMixin, CODE_ROOT, get_archive_object
 from models.provenance import Provenance
 from models.psf import PSF, PSFExPSF, DeltaPSF, GaussianPSF, ImagePSF
 from models.enums_and_bitflags import PSFFormatConverter
@@ -73,10 +72,10 @@ def test_psf_polymorphism( bogus_image_factory, bogus_sources_factory ):
         psfdel.append( ipsf )
 
         # Make sure that they all got stuck in the database
-        with Psycopg2Connection() as con:
-            cursor = con.cursor( cursor_factory=psycopg2.extras.RealDictCursor )
-            cursor.execute( "SELECT * FROM psfs WHERE _id IN %(ids)s",
-                            { 'ids': ( ppsf.id, dpsf.id, gpsf.id, ipsf.id ) } )
+        with PsycopgConnection() as con:
+            cursor = con.cursor( row_factory=psycopg.rows.dict_row )
+            cursor.execute( "SELECT * FROM psfs WHERE _id=ANY(%(ids)s)",
+                            { 'ids': [ ppsf.id, dpsf.id, gpsf.id, ipsf.id ] } )
             psfs = cursor.fetchall()
             assert len(psfs) == 4
             for psf in psfs:
@@ -108,9 +107,9 @@ def test_psf_polymorphism( bogus_image_factory, bogus_sources_factory ):
                     raise RuntimeError( "This should never happen." )
 
     finally:
-        with Psycopg2Connection() as con:
+        with PsycopgConnection() as con:
             cursor = con.cursor()
-            cursor.execute( "DELETE FROM psfs WHERE _id=ANY(%(id)s)", { 'id': ([i.id for i in psfdel],) } )
+            cursor.execute( "DELETE FROM psfs WHERE _id=ANY(%(id)s)", { 'id': [i.id for i in psfdel] } )
             con.commit()
         for src in srcdel:
             src.delete_from_disk_and_database()
@@ -368,7 +367,7 @@ def test_save_psfex_psf( ztf_datastore_uncommitted, provenance_base, provenance_
         psf2.fwhm_pixels = psf.fwhm_pixels * 2  # make it a little different
         psf2.save( filename=uuid.uuid4().hex[:10], image=im, sources=src )
 
-        with pytest.raises( psycopg2.errors.UniqueViolation,
+        with pytest.raises( psycopg.errors.UniqueViolation,
                             match='duplicate key value violates unique constraint "ix_psfs_sources_id"' ):
             psf2.insert()
 

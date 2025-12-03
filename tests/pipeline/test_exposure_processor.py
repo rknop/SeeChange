@@ -2,9 +2,9 @@ import pytest
 import datetime
 import logging
 
-import psycopg2.extras
+import psycopg
 
-from models.base import Psycopg2Connection, SmartSession
+from models.base import PsycopgConnection, SmartSession
 from models.enums_and_bitflags import KnownExposureStateConverter
 from models.exposure import Exposure
 from models.knownexposure import KnownExposure
@@ -22,8 +22,8 @@ def test_exposure_processor( decam_default_calibrators,
     zpid = None
     try:
         # Make sure that the exposure is currently held
-        with Psycopg2Connection() as conn:
-            cursor = conn.cursor( cursor_factory=psycopg2.extras.RealDictCursor )
+        with PsycopgConnection() as conn:
+            cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
             cursor.execute( "SELECT * FROM knownexposures WHERE instrument='DECam' AND identifier=%(iden)s",
                             { 'iden': decam_exposure_name } )
             ke = cursor.fetchone()
@@ -41,7 +41,7 @@ def test_exposure_processor( decam_default_calibrators,
                                        onlychips=['S2'], through_step='photocal', worker_log_level=logging.DEBUG )
 
         # Make sure it yells at us if we don't assume_claimed and the exposure is claimed by somebody else
-        with Psycopg2Connection() as conn:
+        with PsycopgConnection() as conn:
             cursor = conn.cursor()
             for state in [ 'claimed', 'running' ]:
                 # for clust, node, mach in zip ( ['nottest', 'test', 'test'], ['test', 'nottest', 'test'],
@@ -70,8 +70,8 @@ def test_exposure_processor( decam_default_calibrators,
         # Make sure we can download the exposure
         t0 = datetime.datetime.now( tz=datetime.UTC )
         processor.secure_exposure()
-        with Psycopg2Connection() as conn:
-            cursor = conn.cursor( cursor_factory = psycopg2.extras.RealDictCursor )
+        with PsycopgConnection() as conn:
+            cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
             cursor.execute( "SELECT * FROM knownexposures WHERE instrument='DECam' AND identifier=%(iden)s",
                             { 'iden': decam_exposure_name } )
             ke = cursor.fetchone()
@@ -97,8 +97,8 @@ def test_exposure_processor( decam_default_calibrators,
         # Run that puppy, make sure it only goes through photocal
         processor()
 
-        with Psycopg2Connection() as conn:
-            cursor = conn.cursor( cursor_factory=psycopg2.extras.RealDictCursor )
+        with PsycopgConnection() as conn:
+            cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
             cursor.execute( "SELECT * FROM knownexposures WHERE instrument='DECam' AND identifier=%(iden)s",
                             { 'iden': decam_exposure_name } )
             ke = cursor.fetchone()
@@ -149,8 +149,8 @@ def test_exposure_processor( decam_default_calibrators,
         # cont defaults to True
         t0 = datetime.datetime.now( tz=datetime.UTC )
         processor.secure_exposure()
-        with Psycopg2Connection() as conn:
-            cursor = conn.cursor( cursor_factory=psycopg2.extras.RealDictCursor )
+        with PsycopgConnection() as conn:
+            cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
             cursor.execute( "SELECT * FROM knownexposures WHERE instrument='DECam' AND identifier=%(iden)s",
                             { 'iden': decam_exposure_name } )
             ke = cursor.fetchone()
@@ -170,8 +170,8 @@ def test_exposure_processor( decam_default_calibrators,
         t2 = datetime.datetime.now( tz=datetime.UTC )
         processor()
 
-        with Psycopg2Connection() as conn:
-            cursor = conn.cursor( cursor_factory=psycopg2.extras.RealDictCursor )
+        with PsycopgConnection() as conn:
+            cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
             cursor.execute( "SELECT * FROM knownexposures WHERE instrument='DECam' AND identifier=%(iden)s",
                             { 'iden': decam_exposure_name } )
             ke = cursor.fetchone()

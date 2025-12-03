@@ -1,7 +1,7 @@
 import pytest
 import uuid
 import sqlalchemy as sa
-from models.base import SmartSession, Psycopg2Connection
+from models.base import SmartSession, PsycopgConnection
 from models.provenance import Provenance
 from models.exposure import Exposure
 from models.image import Image
@@ -28,7 +28,7 @@ def test_image_upstreams_downstreams( ptf_ref, ptf_supernova_image_datastores, p
     assert prov.process == 'coaddition'
 
     # Test upstreams of a coadd image
-    with Psycopg2Connection() as conn:
+    with PsycopgConnection() as conn:
         cursor = conn.cursor()
         cursor.execute( "SELECT zp_id FROM image_coadd_component WHERE coadd_image_id=%(id)s",
                         { 'id': refimg.id } )

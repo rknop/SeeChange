@@ -266,7 +266,7 @@ class Report(Base, UUIDMixin):
 
           A query and a subdict.  The query is useful for adding to a
           query string as a subquery, and the dict ius useful for
-          updating a substitution dict, to pass to psycopg2's
+          updating a substitution dict, to pass to psycopg's
           cursor.execute.
 
         """
