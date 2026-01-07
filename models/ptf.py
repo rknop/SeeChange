@@ -31,15 +31,17 @@ class PTF(Instrument):
         self.preprocessing_steps_done = ['overscan', 'linearity', 'flat', 'fringe']
 
     @classmethod
-    def get_section_ids(cls):
+    def get_filename_regex(cls):
+        return [r'PTF.*\.fits']
+
+    def get_section_ids(self):
         """Get a list of SensorSection identifiers for this instrument.
 
         Includes all 12 CCDs.
         """
         return [str(sid) for sid in range(0, 12)]
 
-    @classmethod
-    def check_section_id(cls, section_id):
+    def check_section_id(self, section_id):
         """Check that the type and value of the section is compatible with the instrument.
 
         In this case, it must be an integer in the range [0, 11].
@@ -54,12 +56,7 @@ class PTF(Instrument):
         if not 0 <= section_id <= 11:
             raise ValueError(f"The section_id must be in the range [0, 11]. Got {section_id}. ")
 
-    @classmethod
-    def get_filename_regex(cls):
-        return [r'PTF.*\.fits']
-
-    @classmethod
-    def _get_header_keyword_translations(cls):
+    def _get_header_keyword_translations(self):
         output = super()._get_header_keyword_translations()
         output['ra'] = ['TELRA']
         output['dec'] = ['TELDEC']
@@ -68,13 +65,11 @@ class PTF(Instrument):
 
         return output
 
-    @classmethod
-    def _get_header_values_converters(cls):
+    def _get_header_values_converters(self):
         return {'instrument': lambda x: 'PTF'}
 
-    @classmethod
-    def _get_fits_hdu_index_from_section_id(cls, section_id):
-        cls.check_section_id(section_id)
+    def _get_fits_hdu_index_from_section_id(self, section_id):
+        self.check_section_id(section_id)
         return 0  # TODO: improve this if we ever get multiple HDUs per file
 
     def _make_new_section(self, section_id):
@@ -95,8 +90,7 @@ class PTF(Instrument):
     def _get_default_calibrator(self, mjd, section, calibtype='dark', filter=None, session=None):
         pass
 
-    @classmethod
-    def gaia_dr3_to_instrument_mag(cls, filter, catdata):
+    def gaia_dr3_to_instrument_mag(self, filter, catdata):
         """Transform Gaia DR3 magnitudes to instrument magnitudes.
 
         Uses a polynomial transformation from Gaia MAG_G to instrument magnitude.

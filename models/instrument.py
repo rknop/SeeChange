@@ -410,8 +410,21 @@ class Instrument:
         filts = [] if self.allowed_filters is None else [",".join(self.allowed_filters)]
         return f'<Instrument {self.name} on {self.telescope} ({ap}, {sc}, {filts})'
 
+
     @classmethod
-    def get_section_ids(cls):
+    def get_filename_regex(cls):
+        """Get the regular expressions used to match filenames for this instrument.
+
+        This is used to guess the correct instrument class to load the file
+        based only on the filename. Must return a list of regular expressions.
+
+        THIS FUNCTION MUST BE OVERRIDEN BY EACH SUBCLASS.
+
+        """
+        raise NotImplementedError("This method must be implemented by the subclass.")
+
+
+    def get_section_ids(self):
         """Get a list of SensorSection identifiers for this instrument.
 
         Returns
@@ -422,8 +435,7 @@ class Instrument:
         """
         raise NotImplementedError("This method must be implemented by the subclass.")
 
-    @classmethod
-    def check_section_id(cls, section_id):
+    def check_section_id(self, section_id):
         """Check that the type and value of the section is compatible with the instrument.
 
         For example, many instruments will key the section by a running
@@ -805,18 +817,6 @@ class Instrument:
         idx = self._get_fits_hdu_index_from_section_id(section_id)
         return read_fits_image(filepath, idx)
 
-    @classmethod
-    def get_filename_regex(cls):
-        """Get the regular expressions used to match filenames for this instrument.
-
-        This is used to guess the correct instrument class to load the file
-        based only on the filename. Must return a list of regular expressions.
-
-        THIS FUNCTION MUST BE OVERRIDEN BY EACH SUBCLASS.
-
-        """
-        raise NotImplementedError("This method must be implemented by the subclass.")
-
     def read_header(self, filepath, section_id=None):
         """Load the header from file.
 
@@ -872,8 +872,7 @@ class Instrument:
         """
         return key.upper().replace(' ', '').replace('_', '').replace('-', '')
 
-    @classmethod
-    def extract_header_info(cls, header, names):
+    def extract_header_info(self, header, names):
         """Get information from the raw header into common column names.
 
         This includes keywords that are required for non-nullable columns (like MJD),
@@ -905,10 +904,10 @@ class Instrument:
             A dictionary with some of the required values from the header.
 
         """
-        header = {cls.normalize_keyword(key): value for key, value in header.items()}
+        header = {self.normalize_keyword(key): value for key, value in header.items()}
         output_values = {}
-        translations = cls._get_header_keyword_translations()
-        converters = cls._get_header_values_converters()
+        translations = self._get_header_keyword_translations()
+        converters = self._get_header_values_converters()
         for name in names:
             translation_list = translations.get(name, [])
             if isinstance(translation_list, str):
@@ -923,8 +922,7 @@ class Instrument:
 
         return output_values
 
-    @classmethod
-    def get_auxiliary_exposure_header_keys(cls):
+    def get_auxiliary_exposure_header_keys(self):
         """Additional header keys that can be useful to have on the Exposure header.
 
         This could include instrument specific items that are saved to
@@ -1133,8 +1131,7 @@ class Instrument:
         """
         return self.saturation_limit
 
-    @classmethod
-    def _get_header_keyword_translations(cls):
+    def _get_header_keyword_translations(self):
         """Get a dictionary that translates the header keywords into normalized column names.
 
         Each column name has a list of possible header keywords that can be used to populate it.
@@ -1160,8 +1157,7 @@ class Instrument:
         return t
         # TODO: add more!
 
-    @classmethod
-    def _get_header_values_converters(cls):
+    def _get_header_values_converters(self):
         """Get a dictionary with information needed to turn raw header values into values with correct units.
 
         Get a dictionary with some keywords
@@ -1179,8 +1175,7 @@ class Instrument:
         """
         return {}
 
-    @classmethod
-    def _get_fits_hdu_index_from_section_id(cls, section_id):
+    def _get_fits_hdu_index_from_section_id(self, section_id):
         """Translate the section_id into the index of the HDU in the FITS file.
 
         For example, if we have an instrument with 10 CCDs, numbered 0
@@ -1210,11 +1205,10 @@ class Instrument:
             FITS file.
 
         """
-        cls.check_section_id(section_id)
+        self.check_section_id(section_id)
         return int(section_id) + 1
 
-    @classmethod
-    def _get_file_index_from_section_id(cls, section_id):
+    def _get_file_index_from_section_id(self, section_id):
         """Translate the section_id into the file index in an array of filenames.
 
         For example, if we have an instrument with 10 CCDs, numbered 0 to 9,
@@ -1235,19 +1229,17 @@ class Instrument:
             The list index for the file that corresponds to the section_id.
             The list of filenames must be in the correct order for this to work.
         """
-        cls.check_section_id(section_id)
+        self.check_section_id(section_id)
         return int(section_id)
 
-    @classmethod
-    def get_short_instrument_name(cls):
+    def get_short_instrument_name(self):
         """Get a short name used for e.g., making filenames.
 
         The default instrument just spits out the instrument class name.
         """
-        return cls.__name__
+        return self.__name__
 
-    @classmethod
-    def get_short_filter_name(cls, filter):
+    def get_short_filter_name(self, filter):
         """Translate the full filter name into a shorter version,
 
         e.g., for using in filenames.
@@ -1258,8 +1250,7 @@ class Instrument:
 
         return filter
 
-    @classmethod
-    def get_full_filter_name(cls, shortfilter):
+    def get_full_filter_name(self, shortfilter):
         """Translate the short filter name into the full version.
 
         The default is to just return the short filter name,
@@ -1269,8 +1260,7 @@ class Instrument:
         # should be overridden: default is to return the input
         return shortfilter
 
-    @classmethod
-    def standard_apertures( cls ):
+    def standard_apertures( self ):
         """Return standard photometry aperture radii in FWHMs.
 
         The first aperture on the list is the one that will be used for
@@ -1289,8 +1279,7 @@ class Instrument:
         return RuntimeError('We should no longer depend on instruments to give the standard apertures')
         return [ 0.6732, 1., 2., 3., 4., 5., 7., 10. ]
 
-    @classmethod
-    def fiducial_aperture( cls ):
+    def fiducial_aperture( self ):
         """Return the aperture number assumed to be 'infinite' for aperture corrections.
 
         Defaults to 5, which is 5*FWHM if using the base
@@ -1322,8 +1311,7 @@ class Instrument:
     # For gaia_dr3, catdata has fields:
     # X_WORLD, Y_WORLD, MAG_G, MAGERR_G, MAG_BP, MAGERR_BP, MAG_RP, MAGERR_RP, STARPROB
 
-    @classmethod
-    def gaia_dr3_prune_star_cat(cls, catdata, gaiaminbp_rp=0.5, gaiamaxbp_rp=3.0):
+    def gaia_dr3_prune_star_cat(self, catdata, gaiaminbp_rp=0.5, gaiamaxbp_rp=3.0):
         """Choose only rows from a catalog that have stars.
 
         Usually this is done by choosing a subset of the catalog
@@ -1369,8 +1357,7 @@ class Instrument:
 
         return output
 
-    @classmethod
-    def gaia_dr3_get_skycoords(cls, catdata, image_mjd=None):
+    def gaia_dr3_get_skycoords(self, catdata, image_mjd=None):
         """Use the RA/Dec from a Gaia catalog data array to initialize an array of SkyCoord objects
 
         Parameters
@@ -1406,8 +1393,7 @@ class Instrument:
 
         return coords
 
-    @classmethod
-    def gaia_dr3_to_instrument_mag( cls, filter, catdata ):
+    def gaia_dr3_to_instrument_mag( self, filter, catdata ):
         """Transform Gaia DR3 magnitudes to instrument magnitudes.
 
         Could use a polynomial based on the colors, or any other method.
@@ -1436,7 +1422,7 @@ class Instrument:
         trans_magerr: float or numpy array
             The instrument magnitude error(s).
         """
-        raise NotImplementedError( f"{cls.__name__} needs to implement gaia_dr3_to_instrument_mag" )
+        raise NotImplementedError( f"{self.__name__} needs to implement gaia_dr3_to_instrument_mag" )
 
     # ----------------------------------------
     # Preprocessing functions.  These live here rather than
@@ -1444,8 +1430,7 @@ class Instrument:
     # may need specific overrides for some of the steps.  For many
     # instruments, the defaults should work.
 
-    @classmethod
-    def get_filter_bandpasses(cls):
+    def get_filter_bandpasses(self):
         """Get a dictionary of filter name -> Bandpass object for a list of common filters.
 
         The default Instrument just gives some generic filters and their bandpasses,
@@ -2189,8 +2174,13 @@ class DemoInstrument(Instrument):
         self.preprocessing_steps_available = []
         self.preprocessing_steps_done = ['overscan', 'linearity', 'flat', 'fringe']
 
+
     @classmethod
-    def get_section_ids(cls):
+    def get_filename_regex(cls):
+        return [r'Demo']
+
+
+    def get_section_ids(self):
         """Get a list of SensorSection identifiers for this instrument.
 
         See Instrument.get_section_ids for interface.
@@ -2198,8 +2188,7 @@ class DemoInstrument(Instrument):
 
         return [ '0' ]
 
-    @classmethod
-    def check_section_id(cls, section_id):
+    def check_section_id(self, section_id):
         """Check if the section_id is valid for this instrument.
 
         The demo instrument only has one section, so the section_id must be 0.
@@ -2267,12 +2256,7 @@ class DemoInstrument(Instrument):
     def get_gain_at_pixel( self, image, x, y, section_id=None ):
         return self.gain
 
-    @classmethod
-    def get_filename_regex(cls):
-        return [r'Demo']
-
-    @classmethod
-    def get_short_instrument_name(cls):
+    def get_short_instrument_name(self):
         """Get a short name used for e.g., making filenames."""
         return 'Demo'
 

@@ -1,8 +1,10 @@
 import pytest
 import pathlib
 
+import numpy as np
+
 import models.ls4cam  # noqa: F401
-from models.instrument import get_instrument_instance
+from models.instrument import get_instrument_instance, SensorSection
 from models.exposure import Exposure
 from util.retrydownload import retry_download
 
@@ -50,3 +52,65 @@ def test_manual_load_exposure( loaded_dualamp_exposure ):
     dbexp = Exposure.get_by_id( exp.id )
     for prop in [ 'id', 'filepath', 'instrument', 'filter', 'type', 'format' ]:
         assert getattr( exp, prop ) == getattr( dbexp, prop )
+
+
+def test_section_stuff():
+    ls4cam = get_instrument_instance( 'LS4Cam' )
+
+    expectedsecs = []
+    for quadrant in [ 'NE', 'NW', 'SE', 'SW' ]:
+        for chipinquad in [ 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H' ]:
+            expectedsecs.append( f"{quadrant}_{chipinquad}" )
+
+    assert ls4cam.get_section_ids() == expectedsecs
+    for sec in expectedsecs:
+        ls4cam.check_section_id( sec )
+    with pytest.raises( ValueError, match=r'section_id must start with one of .*, not AB' ):
+        ls4cam.check_section_id( 'AB_C' )
+    with pytest.raises( ValueError, match=r'section_id\[2\] must be _, not -' ):
+        ls4cam.check_section_id( 'NE-C' )
+    with pytest.raises( ValueError, match=r'section_id\[3\] must be in the range A..H, not X' ):
+        ls4cam.check_section_id( 'NE_X' )
+    with pytest.raises( ValueError, match=r'All LS4 section_ids are length 4; got 3' ):
+        ls4cam.check_section_id( 'foo' )
+    with pytest.raises( ValueError, match=r'The section_id must be a string.  Got' ):
+        ls4cam.check_section_id( 1 )
+    
+    sec = ls4cam._make_new_section( 'NE_A' )
+    assert isinstance( sec, SensorSection )
+    assert sec.instrument == 'LS4Cam'
+    assert sec.identifier == 'NE_A'
+    assert sec.size_x == 2048
+    assert sec.size_y == 4096
+    assert sec.filter_array_index == 0
+    # TODO : other properties once we know them better
+
+    # TODO : get section offsets
+
+    for sec in expectedsecs:
+        dex = ls4cam.get_section_filter_array_index( sec )
+        if sec[:2] == 'NE':
+            assert dex == 0
+        elif sec[:2] == 'NW':
+            assert dex == 1
+        elif sec[:2] == 'SE':
+            assert dex == 2
+        elif sec[:2] == 'SW':
+            assert dex == 3
+
+
+def test_dualamp_load_section_image( loaded_dualamp_exposure ):
+    ls4cam = get_instrument_instance( 'LS4Cam_dualamp' )
+    data = ls4cam.load_section_image( loaded_dualamp_exposure.get_fullpath(), 'NW_C' )
+    assert data.shape == ( 4120, 2100 )
+    assert np.median( data ) == pytest.approx( 4338.0, abs=0.1 )
+    assert np.mean( data ) == pytest.approx( 4374.0, abs=0.1 )
+    assert np.std( data ) == pytest.approx( 315.0, abs=0.1 )
+
+
+def test_dualamp_read_header( loaded_dualamp_exposure ):
+    ls4cam = get_instrument_instance( 'LS4Cam_dualamp' )
+    hdr = ls4cam.read_header( loaded_dualamp_exposure.get_fullpath(), 'NW_C' )
+    import pdb; pdb.set_trace()
+    pass
+

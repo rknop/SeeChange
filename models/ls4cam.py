@@ -18,7 +18,8 @@ from util.fits import read_fits_image
 
 
 class LS4Cam(Instrument):
-
+    """LS4Cam exposures are assumed to always be raw."""
+    
     def __init__( self, _save_to_call=False, **kwargs ):
         self.name = 'LS4Cam'
         self.telescope = 'ESO 1.0-m Schmidt'
@@ -42,8 +43,14 @@ class LS4Cam(Instrument):
         self.preprocessing_steps_available = [ 'overscan', 'bias', 'dark', 'linearity', 'flat' ]
         self.preprocessing_steps_done = []
 
+
     @classmethod
-    def get_section_ids( cls ):
+    def get_filename_regex( cls ):
+        # TODO MAKE SURE THIS IS CURRENT
+        return [ r'\d{13}s_\d{5}.fits(.fz)?' ]
+
+
+    def get_section_ids( self ):
         """LS4 chip ids."""
 
         seclist = []
@@ -52,8 +59,7 @@ class LS4Cam(Instrument):
                 seclist.append( f"{quadrant}_{chipinquad}" )
         return seclist
 
-    @classmethod
-    def check_section_id( cls, section_id ):
+    def check_section_id( self, section_id ):
         """Raise an exception if section_id is not valid."""
         if not isinstance( section_id, str ):
             raise ValueError( f"The section_id must be a string.  Got {type(section_id)}." )
@@ -64,7 +70,7 @@ class LS4Cam(Instrument):
         if section_id[2] != "_":
             raise ValueError( f"section_id[2] must be _, not {section_id[2]}." )
         if section_id[3] not in [ 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H' ]:
-            raise ValueError( f"section_id[3] must be in the range A..H not {section_id[3]}." )
+            raise ValueError( f"section_id[3] must be in the range A..H, not {section_id[3]}." )
 
     def _make_new_section( self, section_id ):
         """Make a SensorSection for the LS4 instrument."""
@@ -73,10 +79,12 @@ class LS4Cam(Instrument):
         SCLogger.warning( "_make_new_section doesn't have right offsets yet for LS4Cam!  FIX THIS!" )
         dx = 0
         dy = 0
+        filter_array_index = self.get_section_filter_array_index( section_id )
         # TODO get defective right
         defective = False
         return SensorSection( section_id, self.name, size_x=2048, size_y=4096,
-                              offset_x=dx, offset_y=dy, defective=defective )
+                              offset_x=dx, offset_y=dy, defective=defective,
+                              filter_array_index=filter_array_index )
 
 
     def get_section_offsets( self, section_id ):
@@ -110,12 +118,6 @@ class LS4Cam(Instrument):
         raise RuntimeError( f"Didn't find section {section_id} in exposure file {filepath}" )
 
 
-    @classmethod
-    def get_filename_regex( cls ):
-        # TODO MAKE SURE THIS IS CURRENT
-        return [ r'\d{13}s_\d{5}.fits(.fz)?' ]
-
-
     def read_header( self, filepath, section_id=None ):
         if isinstance( filepath, list ):
             if not all( isinstance( f, (str, pathlib.Path) ) for f in filepath ):
@@ -131,7 +133,7 @@ class LS4Cam(Instrument):
             # TODO make sure this stays true.
             return read_fits_image( filepath, ext=1, output='header' )
         else:
-            self.check-section_id( section_id )
+            self.check_section_id( section_id )
             with fits.open( filepath ) as hdul:
                 for hdu in hdul:
                     if ( 'CCD_LOC' in hdu.header ) and ( hdu.header['CCD_LOC'] == section_id ):
@@ -139,8 +141,7 @@ class LS4Cam(Instrument):
             raise ValueError( f"Failed to find section {section_id} in FITS file." )
 
 
-    @classmethod
-    def extract_header_info( cls, header, names ):
+    def extract_header_info( self, header, names ):
         """Get header information from the raw header into common column names.
 
         The method doc in instrument.dy says that this method is not
@@ -191,8 +192,7 @@ class LS4Cam(Instrument):
         return self.gain
 
 
-    @classmethod
-    def _get_header_keyword_translations( cls ):
+    def _get_header_keyword_translations( self ):
         t = dict(
             ra=['CHIP-RA'],          # TODO, figure out if this is really going to be right!
             dec=['CHIP-DEC'],
@@ -211,33 +211,28 @@ class LS4Cam(Instrument):
         return t
 
 
-    @classmethod
-    def _get_header_values_converters( cls ):
+    def _get_header_values_converters( self ):
         c = dict(
             mjd=lambda x: astropy.time.Time( x, scale='utc', format='isot' ).mjd
         )
         return c
 
 
-    @classmethod
-    def _get_fits_hdu_index_from_section_id( cls, section_id ):
+    def _get_fits_hdu_index_from_section_id( self, section_id ):
         raise RuntimeError( "LS4Cam doesn't know how to get the FITS HDU index just from the section id. "
                             "You should never see this error; if you do, it means that something in "
                             "LS4Cam or LS4Cam_dualamp isn't implemented that needs to be." )
 
 
 
-    @classmethod
-    def _get_file_index_from_section_id( cls, section_id ):
+    def _get_file_index_from_section_id( self, section_id ):
         raise NotImplementedError( "_get_file_index_from_section_id doesn't make sense for LS4Cam." )
 
 
-    @classmethod
-    def get_short_instrument_name( cls ):
+    def get_short_instrument_name( self ):
         return 'ls4'
 
-    @classmethod
-    def get_short_filter_name( cls, band ):
+    def get_short_filter_name( self, band ):
         # For an exposure, the filter will be None, or, in the header, '0'
         if ( band is None ) or ( band == '0' ):
             return None
@@ -246,13 +241,11 @@ class LS4Cam(Instrument):
         return band
 
 
-    @classmethod
-    def gaia_dr3_to_instrument_mag( cls, filter, catdata ):
+    def gaia_dr3_to_instrument_mag( self, filter, catdata ):
         raise NotImplementedError( "Need to implement gaia_dr3_to_instrument_mag for LS4Cam" )
 
 
-    # @classmethod
-    # def get_filter_bandpasses( cls ):
+    # def get_filter_bandpasses( self ):
     #     # TODO: verify this!  Right now we're just using the lsst values in the base class.
 
 
@@ -260,7 +253,6 @@ class LS4Cam(Instrument):
         raise NotImplementedError( "Do." )
 
 
-    # @classmethod
     # def preprocessing_calibrator_files( self, calibset, flattype, section, filter, mjd, nofetch=False ):
     #     # TODO: figure out if we have to override preprocessing_calibrator_files.  I hope not.
 
@@ -329,7 +321,7 @@ class LS4Cam(Instrument):
             else:
                 raise ValueError( f"Can't figure out the format of exposure file {filepath}" )
 
-            exphdrinfo = LS4Cam.extract_header_info( hdr, [ 'mjd', 'exp_time', 'project', 'target', 'airmass' ] )
+            exphdrinfo = self.extract_header_info( hdr, [ 'mjd', 'exp_time', 'project', 'target', 'airmass' ] )
             if ( exphdrinfo['exp_time'] == 0 ) and obs_type == 'Dark':
                 obs_type = 'Bias'
 
@@ -376,19 +368,21 @@ class LS4Cam_dualamp(LS4Cam):
         # raise NotImplementedError( "I think I have more to do" )
 
 
-    @classmethod
-    def _mangle_header_to_single( cls, hdr ):
+    def _mangle_header_to_single( self, hdr ):
         """Pass the *left* amp header.  Will edit the *SEC* fields to match a stiched raw image, return a new header."""
 
         newhdr = hdr.copy()
 
         arrparse = re.compile( r'^\s*\[\s*(?P<x0>\d+)\s*:\s*(?P<x1>\d+)\s*,\s*(?P<y0>\d+)\s*:\s*(?P<y1>\d+)\s*\]\s*$' )
-        datamatchr = arrparse.search( newhdr['DATASECR'] )
-        biasmatchr = arrparse.search( newhdr['BIASSECR'] )
-        prematchr = arrparse.search( newhdr['PRESECR'] )
+        datamatchr = arrparse.search( newhdr['DATASECL'] )
+        biasmatchr = arrparse.search( newhdr['BIASSECL'] )
+        prematchr = arrparse.search( newhdr['PRESECL'] )
         if any( i is None for i in [ datamatchr, biasmatchr, prematchr ] ):
             raise RuntimeError( "Failed to parse DATASECR, BAISSECR, and/or PRESECR" )
-        for kw in [ 'DATASECR', 'BIASSECR', 'PRESECR' ]:
+        # The "LEFT" amp is to the right (i.e. West) of the "RIGHT" amp (images are
+        #   oriented north up, east left, it seems).  So, have to edit the *L header
+        #   keywords.
+        for kw in [ 'DATASECL', 'BIASSECL', 'PRESECL' ]:
             secmatch = arrparse.search( newhdr[kw] )
             if secmatch is None:
                 raise ValueError( f"Failed to parse image section from {newhdr[kw]} for {kw}" )
@@ -415,11 +409,15 @@ class LS4Cam_dualamp(LS4Cam):
                 raise RuntimeError( f"Failed to find the two HDUs for section {section_id} of "
                                     f"exposure file {filepath}" )
 
-        if lefthdu.shape[0] != righthdu.shape[0]:
-            raise RuntimeError( "Left and right amp vertical shape doesn't match." )
-        newimg = np.empty( ( lefthdu.shape[0], lefthdu.shape[1] + righthdu.shape[1] ) )
-        newimg[ :, 0:lefthdu.shape[1] ] = lefthdu.data
-        newimg[ :, lefthdu.shape[1]: ] = righthdu.data
+            if lefthdu.shape[0] != righthdu.shape[0]:
+                raise RuntimeError( "Left and right amp vertical shape doesn't match." )
+
+            # The "LEFT" amp is actually to the right (i.e. West) of the "RIGHT" amp.
+            # Both are already oriented north up, east left, I think.
+            
+            newimg = np.empty( ( lefthdu.shape[0], lefthdu.shape[1] + righthdu.shape[1] ) )
+            newimg[ :, 0:righthdu.shape[1] ] = righthdu.data
+            newimg[ :, righthdu.shape[1]: ] = lefthdu.data
 
         # astropy will read FITS files as big-endian
         # But, the sep library depends on native byte ordering

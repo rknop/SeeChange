@@ -147,8 +147,13 @@ class DECam(Instrument):
         self.preprocessing_steps_available = [ 'overscan', 'linearity', 'flat', 'illumination', 'fringe' ]
         self.preprocessing_steps_done = []
 
+
     @classmethod
-    def get_section_ids(cls):
+    def get_filename_regex(cls):
+        return [r'c4d.*\.fits']
+
+
+    def get_section_ids(self):
         """Get a list of SensorSection identifiers for this instrument.
 
         We are using the names of the FITS extensions (e.g., N12, S22, etc.).
@@ -160,8 +165,7 @@ class DECam(Instrument):
         s_list = [ f'S{i}' for i in range(1, 32) if i != 7 ]
         return n_list + s_list
 
-    @classmethod
-    def check_section_id(cls, section_id):
+    def check_section_id(self, section_id):
         """Check that the type and value of the section is compatible with the instrument.
 
         In this case, it must be a string starting with 'N' or 'S' and a number between 1 and 31.
@@ -237,11 +241,6 @@ class DECam(Instrument):
         # x increases to the south, y increases to the east
         return ( -self._chip_radec_off[section_id]['ddec'] * 3600. / self.pixel_scale ,
                  self._chip_radec_off[section_id]['dra'] * 3600. / self.pixel_scale )
-
-
-    @classmethod
-    def get_filename_regex(cls):
-        return [r'c4d.*\.fits']
 
 
     def get_ra_dec_for_section( self, ra, dec, section_id ):
@@ -355,8 +354,7 @@ class DECam(Instrument):
             raise ValueError( "Unable to find saturation level in header" )
 
 
-    @classmethod
-    def _get_header_keyword_translations( cls ):
+    def _get_header_keyword_translations( self ):
         t = dict(
             ra = [ 'TELRA', 'RA' ],
             dec = [ 'TELDEC, DEC' ],
@@ -375,8 +373,7 @@ class DECam(Instrument):
         return t
 
 
-    @classmethod
-    def _get_header_values_converters( cls ):
+    def _get_header_values_converters( self ):
         t = dict(
             ra = lambda r: util.radec.parse_sexigesimal_degrees( r, hours=True ),
             dec = util.radec.parse_sexigesimal_degrees
@@ -384,30 +381,26 @@ class DECam(Instrument):
         return t
 
 
-    @classmethod
-    def _get_fits_hdu_index_from_section_id(cls, section_id):
+    def _get_fits_hdu_index_from_section_id(self, section_id):
         """Return the index of the HDU in the FITS file for the DECam files.
 
         Since the HDUs have extension names, we can use the section_id directly
         to index into the HDU list.
         """
-        cls.check_section_id(section_id)
+        self.check_section_id(section_id)
         return section_id
 
 
-    @classmethod
-    def _get_file_index_from_section_id( cls, section_id ):
+    def _get_file_index_from_section_id( self, section_id ):
         raise NotImplementedError( "_get_file_index_from_section_id doesn't make sense for DECam" )
 
 
-    @classmethod
-    def get_short_instrument_name(cls):
+    def get_short_instrument_name(self):
         """Get a short name used for e.g., making filenames."""
         return 'c4d'
 
 
-    @classmethod
-    def get_short_filter_name(cls, filter):
+    def get_short_filter_name(self, filter):
         """Return the short version of each filter used by DECam.
 
         In this case we just return the first character of the filter name,
@@ -425,8 +418,7 @@ class DECam(Instrument):
         except Exception as e:
             raise KeyError( f"No shortname for filter name: {filter} ") from e
 
-    @classmethod
-    def get_full_filter_name(cls, shortfilter):
+    def get_full_filter_name(self, shortfilter):
         """Return the full version of each filter used by DECam from the shortname.
 
         e.g., returning "g" to "g DECam SDSS c0001 4720.0 1520.0".
@@ -434,8 +426,7 @@ class DECam(Instrument):
         return FILTER_NAME_CONVERSIONS[shortfilter]
 
 
-    @classmethod
-    def gaia_dr3_to_instrument_mag( cls, filter, catdata ):
+    def gaia_dr3_to_instrument_mag( self, filter, catdata ):
         """Transform Gaia DR3 magnitudes to instrument magnitudes.
 
         Uses a polynomial transformation from Gaia MAG_G to instrument magnitude.
@@ -472,7 +463,7 @@ class DECam(Instrument):
         if not isinstance(filter, str):
             raise ValueError(f"The filter must be a string. Got {type(filter)}. ")
         if len(filter) > 1:
-            filter_short = cls.get_short_filter_name(filter)
+            filter_short = self.get_short_filter_name(filter)
         else:
             filter_short = filter
 
