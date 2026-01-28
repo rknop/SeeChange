@@ -312,7 +312,7 @@ class Object(Base, UUIDMixin, SpatiallyIndexed):
             Normally, when a new object is created, call
             ObjectGaiaMatch.create_new_object_matches on the object.
             Set this to False to skip that step.
-        
+
           is_testing : bool, default False
             Never use this.  If True, the only associate measurements
             with objects that have the is_test property set to True, and
@@ -960,8 +960,8 @@ class ObjectGaiaMatch( Base, UUIDMixin ):
 
             ogms.sort( key=lambda o: o.dist )
             return ogms
-                
-                       
+
+
     @classmethod
     def create_new_object_matches( cls, objid, ra, dec, radius=None, con=None, commit=None, exist_ok=False,
                                    verify_existing=True, gaiacat=None, **kwargs ):
@@ -987,7 +987,7 @@ class ObjectGaiaMatch( Base, UUIDMixin ):
             Radius in arseconds that objects will be found in.  You
             almost always want to leave this as None so it uses the
             configured default!
-        
+
           con : PsycopgConnection, default None
             Database connection to use.  If None, makes and closes a new one.
 
@@ -1038,7 +1038,7 @@ class ObjectGaiaMatch( Base, UUIDMixin ):
             maxdec = dec + radius
             if maxdec > 90.:
                 mnaxdec = 90.
-            
+
             gaiacat = download_gaia_dr3( minra, maxra, mindec, maxdec, padding=0., minmag=None, maxmag=None )
 
         sourceids = gaiacat.data[ 'GAIA_DR3_ID' ]
@@ -1069,5 +1069,5 @@ class ObjectGaiaMatch( Base, UUIDMixin ):
         sep = sep.value[ mindex ]
 
         ROB YOU ARE HERE
-        
-        
+
+

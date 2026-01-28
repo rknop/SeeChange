@@ -32,21 +32,6 @@
       "default": null,
       "doc": "Upper limits of previous difference images containing this object that did not have a detection"
     },
-    { "name": "mpcRadius",
-      "type": [ "float", null ],
-      "default": null,
-      "doc": "Radius in arcseconds of match to minor planets"
-    },
-    { "name": "mpcID",
-      "type": [ "long", "null" ],
-      "default": null,
-      "doc": "IAU Minor Planet Center id of closest minor planet within mpcRadius."
-    },
-    { "name": "mpcAngularDist",
-      "type": [ "float", "null" ],
-      "default": null,
-      "doc": "Distance in arseconds to matched minor planet"
-    },
     { "name": "cutoutDifference",
       "type": [  "bytes", "null" ],
       "default": null,

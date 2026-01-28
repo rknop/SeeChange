@@ -598,11 +598,11 @@ gaiamatch:
 
 
 # ======================================================================
-# MPC Matching
+# MPC Matching -- not yet implemented
 
-mpcmatch:
-  do_match: true
-  radius: 5
+# mpcmatch:
+#   do_match: true
+#   radius: 5
 
 
 # ======================================================================
