@@ -584,8 +584,25 @@ alerts:
 # just relevant for alerts.
 
 liumatch:
+  do_match: true
   radius: 10
   server: https://ls-xgboost.lbl.gov
+
+
+# ======================================================================
+# GAIA Object matching
+
+gaiamatch:
+  do_match: true
+  radius: 5
+
+
+# ======================================================================
+# MPC Matching -- not yet implemented
+
+# mpcmatch:
+#   do_match: true
+#   radius: 5
 
 
 # ======================================================================

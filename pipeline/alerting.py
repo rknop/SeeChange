@@ -213,23 +213,26 @@ class Alerting:
                    'dec': obj.dec,
                    'decErr': None,
                    'ra_dec_Cov': None,
-                   'xgmatchRadius': cfg.value( 'liumatch.radius' ),
-                   'ls-xgboost': []
+                   'xgmatchRadius': cfg.value( 'liumatch.radius' ) if cfg.value( 'liumatch.do_match' ) else None,
+                   'ls-xgboost': [] if cfg.value( 'liumatch.do_match' ) else None
                   }
         # NOTE!  It's possible this is inconsistent!  We're assuming
         # that the liumatch.radius config value has not changed since
         # the database object_legacy_survey_match table started getting
         # populated.
-        with SmartSession( session ) as sess:
-            lsmatches = sess.query( ObjectLegacySurveyMatch ).filter( ObjectLegacySurveyMatch.object_id==obj.id ).all()
-        for lsmatch in lsmatches:
-            objdict['ls-xgboost'].append( { 'lsid': lsmatch.lsid,
-                                            'ra': lsmatch.ra,
-                                            'dec': lsmatch.dec,
-                                            'dist': lsmatch.dist,
-                                            'white_mag': lsmatch.white_mag,
-                                            'xgboost': lsmatch.xgboost,
-                                            'is_star': lsmatch.is_star } )
+        if cfg.value( 'liumatch.do_match' ):
+            with SmartSession( session ) as sess:
+                lsmatches = ( sess.query( ObjectLegacySurveyMatch )
+                              .filter( ObjectLegacySurveyMatch.object_id==obj.id )
+                              .all() )
+            for lsmatch in lsmatches:
+                objdict['ls-xgboost'].append( { 'lsid': lsmatch.lsid,
+                                                'ra': lsmatch.ra,
+                                                'dec': lsmatch.dec,
+                                                'dist': lsmatch.dist,
+                                                'white_mag': lsmatch.white_mag,
+                                                'xgboost': lsmatch.xgboost,
+                                                'is_star': lsmatch.is_star } )
 
         return objdict
 
@@ -290,11 +293,13 @@ class Alerting:
                 subdata[ cutouts.co_dict[cdex]['sub_flags'] != 0 ] = np.nan
 
                 alert = { 'alertId': str(uuid.uuid4()),
+                          'diaObject': {},
                           'diaSource': {},
                           'prvDiaSources': [],
                           'prvDiaForcedSources': None,
                           'prvDiaNonDetectionLimits': [],
-                          'diaObject': {},
+                          'mpcID': None,
+                          'mpcAngularDist': None,
                           'cutoutDifference': subdata.tobytes(),
                           'cutoutScience': newdata.tobytes(),
                           'cutoutTemplate': refdata.tobytes() }

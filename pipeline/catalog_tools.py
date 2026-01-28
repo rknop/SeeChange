@@ -1,4 +1,4 @@
-# an assortment of tools that relate to getting and manipulating source catalogs
+M# an assortment of tools that relate to getting and manipulating source catalogs
 
 import os
 import time
@@ -246,11 +246,11 @@ def download_gaia_dr3( minra, maxra, mindec, maxdec, padding=0.1, minmag=18., ma
             SCLogger.info( 'Querying NOIRLab Astro Data Archive for Gaia DR3 stars' )
 
             gaia_query = (
-                f"SELECT ra, dec, ra_error, dec_error, pm, pmra, pmdec, "
+                f"SELECT source_id, ra, dec, ra_error, dec_error, pm, pmra, pmdec, "
                 f"       phot_g_mean_mag, phot_g_mean_flux_over_error, "
                 f"       phot_bp_mean_mag, phot_bp_mean_flux_over_error, "
                 f"       phot_rp_mean_mag, phot_rp_mean_flux_over_error, "
-                f"       classprob_dsc_combmod_star "
+                f"       classprob_dsc_combmod_star, classprob_dsc_combmod_quasar, classprob_dsc_combmod_galaxy "
                 f"FROM gaia_dr3.gaia_source "
                 f"WHERE ra>={ralow} AND ra<={rahigh} AND dec>={declow} AND dec<={dechigh} "
             )
@@ -288,6 +288,7 @@ def download_gaia_dr3( minra, maxra, mindec, maxdec, padding=0.1, minmag=18., ma
 
     df.rename(
         columns={
+            "source_id": "GAIA_DR3_ID",
             "ra": "X_WORLD",
             "dec": "Y_WORLD",
             "ra_error": "ERRA_WORLD",
@@ -301,7 +302,9 @@ def download_gaia_dr3( minra, maxra, mindec, maxdec, padding=0.1, minmag=18., ma
             "pm": "PM",
             "pmra": "PMRA",
             "pmdec": "PMDEC",
-            "classprob_dsc_combmod_star": "STARPROB" },
+            "classprob_dsc_combmod_star": "STARPROB",
+            "classprob_dsc_combmod_quasar": "QUASARPROB",
+            "classprob_dsc_combmod_galaxy": "GALAXYPROB" },
         inplace=True
     )
     # Make the errors actual magnitude errors.  (1.0857 = 2.5/ln(10))
@@ -340,7 +343,8 @@ def download_gaia_dr3( minra, maxra, mindec, maxdec, padding=0.1, minmag=18., ma
 
 # ----------------------------------------------------------------------
 
-def fetch_gaia_dr3_excerpt( image, minstars=50, maxmags=22, magrange=None, session=None, onlycached=False ):
+def fetch_gaia_dr3_excerpt( image, minstars=50, maxmags=None, magrange=None,
+                            session=None, onlycached=False, nosave=False ):
     """Search catalog excerpts for a compatible gaia_dr3 excerpt; if not found, make one.
 
     If multiple matching catalogs are found, will return the first
@@ -367,24 +371,49 @@ def fetch_gaia_dr3_excerpt( image, minstars=50, maxmags=22, magrange=None, sessi
         aligned bounding square containing the image, which is then
         expanded by 5% on all sides.  Any catalog excerpt that fully
         includes that footprint is a potential match.
+
       minstars: int, default 50
         The minimum number of stars to require in the catalog excerpt.
-      maxmags: sequence of float, default 22
+        Set this to 0 to allow returning of CatalogExcerpt objects with
+        nothing in them.
+
+      maxmags: sequence of float, float, or None
         The maximum magnitudes to try pulling, using them in order
         until we get a catalog excerpt with at least minstars.
+
+        If you leave this at None, it means don't do any maximum
+        magnitude filtering, but keep everything that's in Gaia.
+
       magrange: float, default None
         If not None, then the minimum magnitude of stars fetched
         from the catalog would be this many magnitudes lower
         than the maximum magnitude.
+
         If None (default) there is no lower limit (the brightest
         stars will be included).
+
+        This must be None if maxmags is None.
+
       session : sqlalchemy.orm.session.Session, optional
         If not None, use this session for communication with the
         database; otherwise, will create and close a new
         SmartSession.
+
       onlycached : bool, default False
         If True, only search cached excerpts, don't make a new one
         if a matching one isn't found.
+
+      nosave : bool, default False
+        If True, don't save a newly created catalog excerpt to the
+        database, just return it.  In this case, the filepath field of
+        the CatalogExceprt file has the full absolute path to where the
+        file is stored, *not* the relative path in the file store as is
+        usually the case.  (This absolute file will be underneath
+        FileOnDiskMixin.temp_path.)  Do NOT try to save this
+        CatalogExcerpt to the database later, it will probably break.
+
+        IMPORTANT: it's the caller's responsibility to delete this file
+        whne done with it, to avoid using up the temp directory.
 
     Returns
     -------
@@ -392,8 +421,8 @@ def fetch_gaia_dr3_excerpt( image, minstars=50, maxmags=22, magrange=None, sessi
 
     """
 
-    ras = np.array( [ [ image.ra_corner_00, image.ra_corner_01], [ image.ra_corner_10, image.ra_corner_11 ] ] )
-    decs = np.array( [ [ image.dec_corner_00, image.dec_corner_01], [ image.dec_corner_10, image.dec_corner_11 ] ] )
+    ras = np.array( [ image.ra_corner_00, image.ra_corner_01, image.ra_corner_10, image.ra_corner_11 ] )
+    decs = np.array( [ image.dec_corner_00, image.dec_corner_01, image.dec_corner_10, image.dec_corner_11 ] )
 
     # Detect ra spanning 0
     if ( ras.max() - ras.min() > 180. ):
@@ -418,6 +447,10 @@ def fetch_gaia_dr3_excerpt( image, minstars=50, maxmags=22, magrange=None, sessi
     dechigh = maxdec + 0.05 * ddec
 
     maxmags = listify( maxmags )
+    if maxmags is None:
+        maxmags = [ None ]
+        if magrange is not None:
+            raise ValueError( "magrange must be None when maxmags is None" )
 
     catexp = None
     # Cycle through the given limiting magnitudes to see if we
@@ -465,24 +498,25 @@ def fetch_gaia_dr3_excerpt( image, minstars=50, maxmags=22, magrange=None, sessi
                       .filter( CatalogExcerpt.dec_corner_10 <= declow )
                       .filter( CatalogExcerpt.dec_corner_01 >= dechigh )
                       .filter( CatalogExcerpt.dec_corner_11 >= dechigh )
-                      .filter( CatalogExcerpt.maxmag >= maxmag-0.1 )
-                      .filter( CatalogExcerpt.maxmag <= maxmag+0.1 )
                       .filter( CatalogExcerpt.num_items >= minstars )
                      )
+                if maxmag is not None:
+                    q = ( q.filter( CatalogExcerpt.maxmag >= maxmag-0.1 )
+                          .filter( CatalogExcerpt.maxmag <= maxmag+0.1 ) )
+                else:
+                    q = q.filter( CatalogExcerpt.maxmag.is_( None ) )
                 if minmag is not None:
                     q = ( q.filter( CatalogExcerpt.minmag >= minmag-0.1 )
                           .filter( CatalogExcerpt.minmag <= minmag+0.1 ) )
-                if q.count() > 0:
+                else:
+                    q = q.filter( CatalogExcept.minmag.is_( None ) )
+
+               if q.count() > 0:
                     catexp = q.first()
 
                     if not os.path.isfile( catexp.get_fullpath() ):
-                        SCLogger.warning( f"CatalogExcerpt {catexp.id} has no file at {catexp.filepath}, "
-                                          f"deleting the database row!" )
-                        dbsess.delete( catexp )
-                        dbsess.commit()
-                        catexp = None
-                    else:
-                        break
+                        SCLogger.error( f"CatalogExcerpt {catexp.id} has no file at {catexp.filepath}!" )
+                        raise RuntimeError( f"CatalogExcerpt {catexp.id} has no file at {catexp.filepath}!" )
 
             if catexp is None and not onlycached:
                 # No cached catalog excerpt, so query the NOIRLab server
@@ -495,18 +529,20 @@ def fetch_gaia_dr3_excerpt( image, minstars=50, maxmags=22, magrange=None, sessi
                     maxmag=maxmag,
                 )
                 if catexp.num_items >= minstars:
-                    catexp.filepath = dbfile
-                    catexp.save( localfile )
-                    with SmartSession( session ) as dbsess:
-                        existing_catexp = dbsess.scalars(
-                            sa.select(CatalogExcerpt).where(CatalogExcerpt.filepath == dbfile)
-                        ).first()
-                        if existing_catexp is None:
-                            dbsess.add( catexp )  # add if it doesn't exist
-                        else:
-                            raise RuntimeError(f'CatalogExcerpt {dbfile} already exists in the database!')
-                        dbsess.commit()
-                        break
+                    if nosave:
+                        catexp.filepath = localfile
+                    else:
+                        catexp.filepath = dbfile
+                        with SmartSession( session ) as dbsess:
+                            existing_catexp = dbsess.scalars(
+                                sa.select(CatalogExcerpt).where(CatalogExcerpt.filepath == dbfile)
+                            ).first()
+                            if existing_catexp is None:
+                                dbsess.add( catexp )  # add if it doesn't exist
+                            else:
+                                raise RuntimeError(f'CatalogExcerpt {dbfile} already exists in the database!')
+                            dbsess.commit()
+                    break
                 else:
                     catexp = None
                     pathlib.Path( localfile ).unlink( missing_ok=True )

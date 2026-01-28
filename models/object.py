@@ -9,6 +9,7 @@ from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.schema import UniqueConstraint
 
 from astropy.coordinates import SkyCoord
+import astropy.units
 
 from models.base import Base, SeeChangeBase, SmartSession, PsycopgConnection, UUIDMixin, SpatiallyIndexed
 from models.image import Image
@@ -18,6 +19,7 @@ from models.zero_point import ZeroPoint
 from models.measurements import Measurements, MeasurementSet
 from models.deepscore import DeepScore, DeepScoreSet
 from models.reference import image_subtraction_components
+from pipeline.catalog_tools import fetch_gaia_dr3_excerpt
 from util.config import Config
 from util.retrypost import retry_post
 from util.logger import SCLogger
@@ -258,8 +260,8 @@ class Object(Base, UUIDMixin, SpatiallyIndexed):
 
     @classmethod
     def associate_measurements( cls, measurements, radius=None, year=None, month=None, day=None,
-                                no_new=False, no_associate_legacy_survey=False, is_testing=False,
-                                connection=None, nocommit=False ):
+                                no_new=False, no_associate_legacy_survey=False, no_associate_gaia=False,
+                                is_testing=False, connection=None, nocommit=False ):
         """Associate an object with each member of a list of measurements.
 
         Will create new objects (saving them to the database) unless
@@ -304,7 +306,12 @@ class Object(Base, UUIDMixin, SpatiallyIndexed):
           no_associate_legacy_survey : bool, default False
             Normally, when a new object is created, call
             ObjectLegacySurveyMatch.create_new_object_matches on the
-            objec.t Set this to False to skip that step.
+            object. Set this to False to skip that step.
+
+          no_associate_gaia : bool, default False
+            Normally, when a new object is created, call
+            ObjectGaiaMatch.create_new_object_matches on the object.
+            Set this to False to skip that step.
 
           is_testing : bool, default False
             Never use this.  If True, the only associate measurements
@@ -757,7 +764,7 @@ class ObjectLegacySurveyMatch(Base, UUIDMixin):
           ra, dec : double
             Coordinates of the object.  Nominally, this is redundant,
             because we can get it from the database using objid, but
-            it's here for convenience.  (Also, so we can run this
+            it's here for efficiency.  (Also, so we can run this
             routine in case the object isn't yet saved to the database.)
 
           con : PsycopgConnection, default None
@@ -895,3 +902,172 @@ class ObjectLegacySurveyMatch(Base, UUIDMixin):
                     dbcon.commit()
 
             return olsms
+
+
+class ObjectGaiaMatch( Base, UUIDMixin ):
+    """Stores matches between objects and Gaia DR3 catalog sources.
+
+    WARNING.  Because this is stored in the database, changes to the
+    distance for parameter searches will not be applied to
+    already-existing objects without a massive database update procedure
+    (for which there is currently no code).
+
+    """
+
+    __tablename__ = "object_gaia_match"
+
+    object_id = sa.Column(
+        sa.ForeignKey( 'objects._id', ondelete='CASCADE', name='object_gaia_match_object_id_fkey' ),
+        nullable=False,
+        index=True,
+        doc='ID of the object this is a match for'
+    )
+
+    gaia_sourceid = sa.Column( sa.BigInteger, nullable=True, index=False, doc="Gaia DR3 source_id" )
+    gaia_starprob = sa.Column( sa.REAL, nullable=False, index=False, doc="Gaia DR3 classprob_dsc_combmod_star" )
+    gaia_quasarprob = sa.Column( sa.REAL, nullable=False, index=False, doc="Gaia DR3 classprob_dsc_combmod_quasar" )
+    gaia_galaxyprob = sa.Column( sa.REAL, nullable=False, index=False, doc="Gaia DR3 classprob_dsc_combmod_galaxy" )
+
+    @classmethod
+    def get_object_matches( cls, objid, con=None ):
+        """Pull gaia DR3 matches from the database.
+
+        Parameters
+        ----------
+          objid : uuid
+            Object ID
+
+          con : psycopg.Connection, default None
+            Database connection.  If not given, makes and closes a new one.
+
+        Returns
+        -------
+          list of ObjectGaiaMatch
+
+        """
+        with PsycopgConnection( con ) as dbcon:
+            cursor = dbcon.cursor()
+            cursor.execute( "SELECT _id, object_id, gaia_sourceid, gaia_starprob, gaia_quasarprob, gaia_galaxyprob "
+                            "FROM object_gaia_match "
+                            "WHERE objet_id=%(objid)s",
+                            { 'objid': objid } )
+            columns = { cursor.description[i][0]: i for i in range( len(cursor.description) ) }
+            rows = cursor.fetchall()
+
+            ogms = []
+            for i in range( len(rows) ):
+                ogms.append( ObjectGaiaMatch( **{ k: rows[i][v] for k, v in columns.items() } ) )
+
+            ogms.sort( key=lambda o: o.dist )
+            return ogms
+
+
+    @classmethod
+    def create_new_object_matches( cls, objid, ra, dec, radius=None, con=None, commit=None, exist_ok=False,
+                                   verify_existing=True, gaiacat=None, **kwargs ):
+        """Create new Gaia DR3 matches.
+
+        Searches Gaia DR3 for enarby objects, creates database entries.
+        May or may nto commit them.  (If you pass a Psycopg2Connection
+        and don't set commit=True, then the added entries will *not* be
+        committed to the database.)
+
+        Parametrs
+        ---------
+          objid : Uuid
+            ID of the object we're matching to
+
+          ra, dec : float
+            Coordinates of the object.  Nominally, this is redundant,
+            because we can get it from the database using objid, but
+            it's here for efficiency.  (Also, so we can run this
+            routine in case the object isn't yet saved to the database.)
+
+          radius : float, default config item gaiamatch.radius
+            Radius in arseconds that objects will be found in.  You
+            almost always want to leave this as None so it uses the
+            configured default!
+
+          con : PsycopgConnection, default None
+            Database connection to use.  If None, makes and closes a new one.
+
+          commit : boolean, default None
+            Should we commit the changes to the database?  If True, then commit,
+            if False, then don't.  If None, then if con is None, treat commit as
+            True; if con is not None, treat commit as False.
+
+          exist_ok : boolean, default False
+            If False, then raise an exception if the database already has matches
+            for this object.
+
+          verify_existing : boolean, default True
+            Ignored if exist_ok is False.  If exist_ok is True and if
+            verify_existing is False, then we just return what's already
+            in the database and don't search for new stuff.  This may be
+            a bad idea, though if you trust that things have already
+            worked, it may be what you want. If exist_ok is True and if
+            verify_existing is also True, then raise an exception if the
+            new stuff found doesn't match what's in the database.
+
+          gaiacat : CatalogExcerpt or None
+            If gaiacat is none, then this class method will query an
+            online gaia database to get dia objects.  If this is not
+            None, then it will filter this catalog to find dia objects.
+
+            WARNING : catalog_tools.fetch_gaia_dr3_excerpt was written
+            with the point of view of finding stars for astrometric
+            calibration.  As such, for passing to this function here,
+            you may not want to use the defaults from that function, as
+            you may want to have (say) no magnitude limit.
+
+        """
+
+        cfg = Config.get()
+        radius = cfg.value( gaiamatch.radius ) if radius is None else radius
+
+        if gaiacat is None:
+            minra = ra - radius    # Leave out cos(dec), we'll do a distance filter later anyway
+            if minra < 0.:
+                minra += 360.
+            maxra = ra + radius
+            if maxra > 360.:
+                maxra -= 360.
+            mindec = dec - radius
+            if mindec < -90.:
+                mindex = -90.
+            maxdec = dec + radius
+            if maxdec > 90.:
+                mnaxdec = 90.
+
+            gaiacat = download_gaia_dr3( minra, maxra, mindec, maxdec, padding=0., minmag=None, maxmag=None )
+
+        sourceids = gaiacat.data[ 'GAIA_DR3_ID' ]
+        starprobs = gaiacat.data[ 'STARPROB' ]
+        quasarprobs = gaiacat.data[ 'QUASARPROB' ]
+        galaxyprobs = gaiacat.data[ 'GALAXYPROB' ]
+
+        coords = SkyCoord( gaiacat.object_ras, gaiacat.object_decs, unit='deg' )
+        ctrcoord = SkyCoord( ra, dec, unit='deg' )
+        sep = coords.separation( ctrcoord ).to( astropy.units.arcsec )
+        wclose = sep.value < radius
+        if len(wclose) = 0:
+            # Nothing to save
+            return
+
+        sourceids = sourceids[ wclose ]
+        starprobs = starprobs[ wclose ]
+        quasarprobs = quasarprobs[ wclose ]
+        galaxyprobs = galaxyprobs[ wclose ]
+        sep = sep.value[ wclose ]
+
+        mindex = np.argmin( sep.value )
+
+        sourceid = sourceids[ mindex ]
+        starprob = starprob[ mindex ]
+        quasarprob = quasarprob[ mindex ]
+        galaxyprob = galaxyprob[ mindex ]
+        sep = sep.value[ mindex ]
+
+        ROB YOU ARE HERE
+
+

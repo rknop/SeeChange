@@ -1,0 +1,51 @@
+{ "type": "record",
+  "namespace": "ls4.v0_3",
+  "name": "alert",
+  "doc": "LS4 alert schema v0.3",
+  "fields": [
+    { "name": "alertId",
+      "type": "string",
+      "logicalType": "uuid",
+      "doc": "unique alert identifer"
+    },
+    { "name": "diaObject",
+      "type": [ "ls4.v0_3.diaObject", "null" ],
+      "default": null,
+      "doc": "Object of source that triggered alert; diaObject.diaObjectId should match diaSource.diaObjectId"
+    },
+    { "name": "diaSource",
+      "type": "ls4.v0_3.diaSource",
+      "doc": "The diaSource that triggered this alert"
+    },
+    { "name": "prvDiaSources",
+      "type": [ { "type": "array", "items": "ls4.v0_3.diaSource" }, "null" ],
+      "default": null,
+      "doc": "Previous DIA detections of this object"
+    },
+    { "name": "prvDiaForcedSources",
+      "type": [ { "type": "array", "items": "ls4.v0_3.diaForcedSource" }, "null" ],
+      "default": null,
+      "doc": "Previous forced photometry of this object if available (null if not)"
+    },
+    { "name": "prvDiaNonDetectionLimits",
+      "type": [ { "type": "array", "items": "ls4.v0_3.diaNonDetectionLimit"}, "null" ],
+      "default": null,
+      "doc": "Upper limits of previous difference images containing this object that did not have a detection"
+    },
+    { "name": "cutoutDifference",
+      "type": [  "bytes", "null" ],
+      "default": null,
+      "doc": "Big-endian 32-bit IEEE float byte array: square cutout on the difference image centered on the source"
+    },
+    { "name": "cutoutScience",
+      "type": [ "bytes", "null" ],
+      "default": null,
+      "doc": "Big-endian 32-bit IEEE float byte array: square cutout on the science image centered on the source"
+    },
+    { "name": "cutoutTemplate",
+      "type": [ "bytes", "null" ],
+      "default": null,
+      "doc": "Big-endian 32-bit IEEE float byte array: square cutout on the template image centered on the source"
+    }
+  ]
+}
