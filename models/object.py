@@ -4,6 +4,7 @@ import numbers
 
 import numpy as np
 
+import psycopg
 import sqlalchemy as sa
 from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.schema import UniqueConstraint
@@ -19,7 +20,7 @@ from models.zero_point import ZeroPoint
 from models.measurements import Measurements, MeasurementSet
 from models.deepscore import DeepScore, DeepScoreSet
 from models.reference import image_subtraction_components
-from pipeline.catalog_tools import fetch_gaia_dr3_excerpt
+from pipeline.catalog_tools import download_gaia_dr3
 from util.config import Config
 from util.retrypost import retry_post
 from util.logger import SCLogger
@@ -259,13 +260,16 @@ class Object(Base, UUIDMixin, SpatiallyIndexed):
         return ra_mean, dec_mean
 
     @classmethod
-    def associate_measurements( cls, measurements, radius=None, year=None, month=None, day=None,
-                                no_new=False, no_associate_legacy_survey=False, no_associate_gaia=False,
+    def associate_measurements( cls, measurements, radius=None, year=None, month=None, day=None, no_new=False,
+                                no_associate_legacy_survey=False, liumatch_radius=None, liumatch_server=None,
+                                no_associate_gaia=False, gaiamatch_radius=None, gaiacat=None,
                                 is_testing=False, connection=None, nocommit=False ):
         """Associate an object with each member of a list of measurements.
 
-        Will create new objects (saving them to the database) unless
-        no_new is True.
+        Will create new objects (saving them to the database), and will
+        create ObjectLegacySurveyMatch and ObjectGaiaMatch rows in the
+        database if no_associate_* is True, unless no_new is True, in
+        which case nothing is added to the database.
 
         Does not update any of the measurements in the database.
         Indeed, the measurements probably can't already be in the
@@ -285,8 +289,8 @@ class Object(Base, UUIDMixin, SpatiallyIndexed):
             The search radius in arseconds.  If an existing object is
             within this distance on the sky of a Measurements' ra/dec,
             then that Measurements will be associated with that object.
-            If None, will be set to measuring.association_radius in the
-            config.
+            If None, will be set to measuring.association_radius from
+            the config.
 
           year, month, day : int, default None
             The UTC date of the time of exposure of the image from which
@@ -308,10 +312,31 @@ class Object(Base, UUIDMixin, SpatiallyIndexed):
             ObjectLegacySurveyMatch.create_new_object_matches on the
             object. Set this to False to skip that step.
 
+          liumatch_radius : float, default None
+            Radius in arcseconds to match to Legacy Survey objects.  If
+            no_associate_legacy_survey is False, then something must be
+            passed here.
+
+          liumatch_server : str, default None
+            Location of the liumatch server for Legacy Survey object
+            mathcing.  If no_associate_legacy_survey is False, then
+            something must be passed here.
+
           no_associate_gaia : bool, default False
             Normally, when a new object is created, call
             ObjectGaiaMatch.create_new_object_matches on the object.
             Set this to False to skip that step.
+
+          gaiamatch_radius : bool, default False
+            Radius in arcseconds to match to Gaia DR3 objects.  If
+            no_associate_gaia is False, then something must be passed
+            here.
+
+          gaiacat : CatalogExerpt or None
+            Catalog of gaia objects to pass on to the association with
+            Gaia objects in the case of new objects.  If None, will
+            search the external gaia server in a small patch around the
+            object position.
 
           is_testing : bool, default False
             Never use this.  If True, the only associate measurements
@@ -336,6 +361,14 @@ class Object(Base, UUIDMixin, SpatiallyIndexed):
             radius = Config.get().value( "measuring.association_radius" )
         else:
             radius = float( radius )
+
+        if not no_associate_legacy_survey:
+            if ( liumatch_radius is None ) or ( liumatch_server is None ):
+                raise ValueError( "Must supply liumatch_radius and liumatch_server" )
+
+        if not no_associate_gaia:
+            if gaiamatch_radius is None:
+                raise ValueError( "Must supply gaiamatch_radius" )
 
         with PsycopgConnection( connection ) as conn:
             neednew = []
@@ -371,11 +404,22 @@ class Object(Base, UUIDMixin, SpatiallyIndexed):
                                       "VALUES(%(id)s, %(ra)s, %(dec)s, %(name)s, %(testing)s, FALSE)" ),
                                     { 'id': objid, 'name': name, 'ra': m.ra, 'dec': m.dec, 'testing': is_testing } )
                     m.object_id = objid
-                    if not no_associate_legacy_survey:
-                        ObjectLegacySurveyMatch.create_new_object_matches( objid, m.ra, m.dec, con=conn )
+                    if not nocommit:
+                        # Make sure the object is committed even if one
+                        #  of the get_object_matches does a database
+                        #  rollback.
+                        conn.commit()
 
-                if not nocommit:
-                    conn.commit()
+                        # Don't care about the return value for the matches,
+                        #   just making sure the database is loaded for
+                        #   later alert purposes
+                        if not no_associate_legacy_survey:
+                            ObjectLegacySurveyMatch.get_object_matches( objid, con=conn )
+
+                        if not no_associate_gaia:
+                            ObjectGaiaMatch.get_object_matches( objid, gaiacat=gaiacat, con=conn )
+
+
 
 
     @classmethod
@@ -677,14 +721,176 @@ class ObjectPosition( Base, UUIDMixin, SpatiallyIndexed ):
     ra_dec_cov = sa.Column( sa.REAL, nullable=True, doc="Covariance on RA/Dec if available" )
 
 
+class ObjectCatalogMatch:
+    """A mixin for tables that match to an external catalog and store an arcsec radius object_match_config.
 
-class ObjectLegacySurveyMatch(Base, UUIDMixin):
+       Tables of subclasses must have at least four columns:
+        object_id : UUID
+        {cls.matchidcolumn} : as appropriate for subclass
+        match_radius : int ; the search radius in milliarcseconds
+        and dist : float ; the distance from the object postiion (in Object, not ObjectPosition) to the thing
+
+       Have indexes on object_id and radius.  Make (object_id,
+       {cls.matchidcolumn}, match_radius) unique.
+
+       Subclasses must define the following class properties:
+          matchidcolumn : the name of the column that has the id of the matched catalog row
+          tablekeys : list of column names.  Please do not encode SQL injection attacks
+
+       Subclasses must implement _generate_new_matches, and _compare_matches
+
+    """
+
+    @classmethod
+    def _get_existing_matches( cls, objid, radius, cursor ):
+        mrad = int( radius * 1000. )
+        cursor.execute( f"SELECT {','.join(cls.tablekeys)} FROM {cls.__tablename__} "
+                        f"WHERE object_id=%(objid)s AND radius=%(rad)s ",
+                        { 'objid': objid, 'rad': mrad } )
+        rows = cursor.fetchall()
+
+        found_existing = False
+        matches = []
+        if len(rows) > 0:
+            found_existing = True
+            if any( r[0][ cls.matchidcolumn ] is None for r in rows ):
+                if len(rows) > 1:
+                    # ...this may actually be impossible if the right unique constraints
+                    #    were created in the table.  Actually, no, it can happen; I would have
+                    #    to figure out how to set the postgres NULLS_NOT_DISTINCT values on
+                    #    the UniqueIndex in SA.  (Preferred solution: Issue #516.)
+                    raise RuntimeError( f"Database corruption: {cls.__tablename__} has more than one row "
+                                        f"for object {objid} radius {mrad}, but {cls.matchidcolumn} is None "
+                                        f"for at least one of them." )
+            else:
+                matches = [ cls( **r ) for r in rows ]
+                matches.sort( key=lambda o: o.dist )
+
+        return found_existing, matches
+
+
+    @classmethod
+    def get_object_matches( cls, objid, radius=None,
+                            ignore_existing=False, verify_existing=False, commit=True,
+                            con=None, **kwargs ):
+        """Pull object matches to some sort of external catalog (Legacy Survey, Gaia), maybe cached in the database.
+
+        You will never call this from ObjectCatalogMatch directly, but
+        rather from a subclass.
+
+        Parameters
+        ----------
+          objid : uuid
+            Object ID
+
+          radius : float
+            Radius in arseconds to match around.  You almost always want
+            to leave this at None so the configured value will be used.
+            If this is not None, you probably want to set
+            ignore_existing to False, and commit will be made False
+            regardless of what you pass.
+
+          ignore_existing : bool, default False
+            Don't look in the database for existing matches to the
+            object, but go out to the external server and find the matches
+            afresh.  Requires a non-None radius.
+
+          verify_existing : bool, default False
+            If True, always go to the external server to get matches and
+            verify that any existing matches are the same.  Doesn't make
+            sense to set this True if ignore_existing is True.
+
+          commit : bool, default True
+            Set this to False to not commit found matches to the
+            database.  If radius is non-None, this will be forced to
+            True regardless of what you pass.
+
+          con : psycopg.Connection, default None
+            Database connection.  If not given, makes and closes a new
+            one.  WARNING: even if commit=False, this connection will be
+            rolled back!
+
+          **kwargs : passed on to the subclass' _generate_new_matches method
+
+        Returns
+        -------
+          list of objects of type cls (which will be a subclass of ObjectCatalogMatch)
+
+        """
+
+        if not isinstance( radius, numbers.Real ):
+            raise TypeError( f"Radius {radius} isn't a float." )
+
+        commit = False
+
+        with PsycopgConnection( con ) as dbcon:
+            try:
+                cursor = dbcon.cursor( row_factory=psycopg.rows.dict_row )
+                matches = None
+
+                # Get existing matches
+                found_existing, matches = cls._get_existing_matches( objid, radius, cursor )
+                if found_existing and not verify_existing:
+                    return matches
+
+                # For one reason or another, we have to find new matches
+                cursor.execute( "SELECT ra,dec FROM objects WHERE _id=%(id)s", { 'id': objid } )
+                rows = cursor.fetchone()
+                ra = rows[0]['ra']
+                dec = rows[0]['dec']
+                newmatches = cls._generate_new_matches( objid, ra, dec, radius, **kwargs )
+
+                if found_existing:
+                    if not cls._compare_matches( matches, newmatches ):
+                        raise RuntimeError( f"Catalog matches for {cls.__name__} don't match what is "
+                                            f"already saved in the database!" )
+
+                elif commit:
+                    # There were no existing matches, so we should save
+                    #   the new ones.  But, it's possible another
+                    #   process found and saved matches since we last
+                    #   searched for existing matches, so we should
+                    #   check again for existing matches.  This time
+                    #   we're going to lock the table, to avoid the race
+                    #   condition of two processes inserting at once.
+                    #   We didn't lock the table before the first search
+                    #   for existing matches because we didn't want to
+                    #   hold a table lock through the whole
+                    #   _generate_new_matches process, which could be
+                    #   long.  (An external server could be slow, for
+                    #   example.)
+                    cursor.execute( "LOCK TABLE {cls.__tablename__}" )
+                    found_existing, matches = cls._get_existing_matches( objid, radius, cursor )
+                    if found_existing:
+                        if not cls._compare_matches( matches, newmatches ):
+                            raise RuntimeError( f"Another process acquired and saved catalog matches for "
+                                                f"{cls.__name__} as us, but got a different list!" )
+                    else:
+                        keys = ",".join( cls.tablekeys )
+                        valuesmess = ",".join( f"%({k})s" for k in cls.tablekeys )
+                        if len(newmatches) == 0:
+                            # Create the entry that flags that there were no matches
+                            values = { k: None for k in cls.tablekeys }
+                            values['object_id'] = objid
+                            values['match_radius'] = int( radius * 1000 )
+                            cursor.execute( f"INSERT INTO {cls.__tablename__}({keys}) VALUES({valuesmess})",
+                                            values )
+                        else:
+                            for mat in newmatches:
+                                values = { k: getattr( mat, k ) for k in cls.tablekeys }
+                                cursor.execute( f"INSERT INTO {cls.__tablename__}({keys}) VALUES({valuesmess})",
+                                                values )
+                        dbcon.commit()
+
+                return newmatches
+
+            finally:
+                # Make sure any held table locks are released
+                dbcon.rollback()
+
+
+class ObjectLegacySurveyMatch( Base, ObjectCatalogMatch ):
     """Stores matches bewteen objects and Legacy Survey catalog sources.
-
-    WARNING.  Because this is stored in the database, changes to the
-    distance for parameter searches will not be applied to
-    already-existing objects without a massive database update procedure
-    (for which there is currently no code).
 
     Liu et al., 2025, https://ui.adsabs.harvard.edu/abs/2025arXiv250517174L/abstract
     (submitted to PASP)
@@ -694,61 +900,44 @@ class ObjectLegacySurveyMatch(Base, UUIDMixin):
     """
 
     __tablename__ = "object_legacy_survey_match"
+    matchconfig = 'measuring.liumatch_radius'
+    matchidcolumn = 'lsid'
+    tablekeys = [ 'object_id', 'lsid', 'ra', 'dec', 'dist', 'white_mag', 'xgboost', 'is_star' ]
 
     object_id = sa.Column(
         sa.ForeignKey('objects._id', ondelete='CASCADE', name='object_ls_match_object_id_fkey'),
         nullable=False,
-        index=True,
+        index=False,
+        primary_key=True,
         doc="ID of the object this is a match for"
     )
 
-    lsid = sa.Column( sa.BigInteger, nullable=False, index=False, doc="Legacy Survey ID" )
-    ra = sa.Column( sa.Double, nullable=False, index=False, doc="Legacy Survey object RA" )
-    dec = sa.Column( sa.Double, nullable=False, index=False, doc="Legacy Survey object Dec" )
-    dist = sa.Column( sa.Double, nullable=False, index=False, doc="Distance from obj to LS obj in arcsec" )
-    white_mag = sa.Column( sa.Double, nullable=False, index=False, doc="Legacy Survey object white magnitude" )
-    xgboost = sa.Column( sa.REAL, nullable=False, index=False, doc="Legacy Survey object xgboost statistic" )
-    is_star = sa.Column( sa.Boolean, nullable=False, index=False, doc="True if xgboost≥0.5, else False" )
+    match_radius = sa.Column(
+        sa.Integer,
+        nullable=False,
+        index=False,
+        primary_key=True,
+        doc="Search radius in milliarcsec" )
+
+    lsid = sa.Column( sa.BigInteger, nullable=True, primary_key=True, index=False, doc="Legacy Survey ID" )
+
+    ra = sa.Column( sa.Double, nullable=True, index=False, doc="Legacy Survey object RA" )
+    dec = sa.Column( sa.Double, nullable=True, index=False, doc="Legacy Survey object Dec" )
+    dist = sa.Column( sa.Double, nullable=True, index=False, doc="Distance from obj to LS obj in arcsec" )
+
+    white_mag = sa.Column( sa.Double, nullable=True, index=False, doc="Legacy Survey object white magnitude" )
+
+    xgboost = sa.Column( sa.REAL, nullable=True, index=False, doc="Legacy Survey object xgboost statistic" )
+
+    is_star = sa.Column( sa.Boolean, nullable=True, index=False, doc="True if xgboost≥0.5, else False" )
+
+    @declared_attr
+    def __table_args__(cls):  # noqa: N805
+        return ( sa.Index( "olsm_specifier", 'object_id', 'match_radius' ), )
 
 
     @classmethod
-    def get_object_matches( cls, objid, con=None ):
-        """Pull object legacy survey matches from the database.
-
-        Parameters
-        ----------
-          objid : uuid
-            Object ID
-
-          con : psycopg.Connection, default None
-            Database connection.  If not given, makes and closes a new one.
-
-        Returns
-        -------
-          list of ObjectLegacySurveyMatch
-
-        """
-        with PsycopgConnection( con ) as dbcon:
-            # Check for existing matches:
-            cursor = dbcon.cursor()
-            cursor.execute( "SELECT _id,object_id, lsid, ra, dec, dist, white_mag, xgboost, is_star "
-                            "FROM object_legacy_survey_match "
-                            "WHERE object_id=%(objid)s",
-                            { 'objid': objid } )
-            columns = { cursor.description[i][0]: i for i in range( len(cursor.description) ) }
-            rows = cursor.fetchall()
-
-        olsms = []
-        for i in range( len(rows) ):
-            olsms.append( ObjectLegacySurveyMatch( **{ k: rows[i][v] for k, v in columns.items() } ) )
-
-        olsms.sort( key=lambda o: o.dist )
-        return olsms
-
-
-    @classmethod
-    def create_new_object_matches( cls, objid, ra, dec, con=None, commit=None, exist_ok=False,
-                                   verify_existing=True, **kwargs ):
+    def _generate_new_matches( cls, objid, ra, dec, radius, liuserver=None, **kwargs ):
         """Create new object match entries.
 
         Searches the liuserver for nearby objects, creates database
@@ -762,34 +951,19 @@ class ObjectLegacySurveyMatch(Base, UUIDMixin):
             ID of the object we're matching to
 
           ra, dec : double
-            Coordinates of the object.  Nominally, this is redundant,
-            because we can get it from the database using objid, but
-            it's here for efficiency.  (Also, so we can run this
-            routine in case the object isn't yet saved to the database.)
+            Coordinates of the object.  Required.  Nominally, this is
+            redundant, because we can get it from the database using
+            objid, but it's here for efficiency.  (Also, so we can run
+            this routine in case the object isn't yet saved to the
+            database.)
 
-          con : PsycopgConnection, default None
-            Database connection to use.  If None, makes and closes a new one.
+          radius : float
+            radius in arcseconds to find objects
 
-          commit : boolean, default None
-            Should we commit the changes to the database?  If True, then commit,
-            if False, then don't.  If None, then if con is None, treat commit as
-            True; if con is not None, treat commit as False.
+          liuserver: str
+             Location of the liu server.  Required.
 
-          exist_ok : boolean, default False
-            If False, then raise an exception if the database already has matches
-            for this object.
-
-          verify_existing : boolean, default True
-            Ignored if exist_ok is False.  If exist_ok is True and if
-            verify_existing is False, then we just return what's already
-            in the database and don't search for new stuff.  This may be
-            a bad idea, though if you trust that things have already
-            worked, it may be what you want. If exist_ok is True and if
-            verify_existing is also True, then raise an exception if the
-            new stuff found doesn't match what's in the database.
-
-          retries, timeout0, timeoutfac, timeoutjitter : int, double, double, double
-            Passed on to util/retrypost.py::retry_post
+          **kwargs : passed on to retry_post to liuserver
 
         Returns
         -------
@@ -797,25 +971,10 @@ class ObjectLegacySurveyMatch(Base, UUIDMixin):
 
         """
 
-        # Pull down things already in the database, and do checks if necessary
+        if liuserver is None:
+            raise ValueError( "Must supply liuserver." )
 
-        existing = cls.get_object_matches( objid, con=con )
-
-        if len( existing ) > 0:
-            if not exist_ok:
-                raise RuntimeError( f"Object {objid} already has {len(existing)} legacy survey matches in the "
-                                    f"object_legacy_survey_match table." )
-            if not verify_existing:
-                return existing
-
-        # Post to the liuserver to get LS object matches
-
-        cfg = Config.get()
-        server = cfg.value( "liumatch.server" )
-        radius = cfg.value( "liumatch.radius" )
-        commit = commit if commit is not None else ( con is None )
-
-        res = retry_post( f"{server}/getsources/{ra}/{dec}/{radius}", returnjson=True, **kwargs )
+        res = retry_post( f"{liuserver}/getsources/{ra}/{dec}/{radius}", returnjson=True, **kwargs )
 
         expected_keys = [ 'lsid', 'ra', 'dec', 'dist', 'white_mag', 'xgboost', 'is_star' ]
         if ( ( not isinstance( res, dict ) ) or
@@ -828,6 +987,7 @@ class ObjectLegacySurveyMatch(Base, UUIDMixin):
         for i in range( len( res['lsid'] ) ):
             olsms.append( ObjectLegacySurveyMatch( _id=uuid.uuid4(),
                                                    object_id=objid,
+                                                   match_radius=int( radius * 1000 ),
                                                    lsid=res['lsid'][i],
                                                    ra=res['ra'][i],
                                                    dec=res['dec'][i],
@@ -837,140 +997,100 @@ class ObjectLegacySurveyMatch(Base, UUIDMixin):
                                                    is_star=res['is_star'][i] ) )
         olsms.sort( key=lambda o: o.dist )
 
-        # If there are pre-existing matches in the variable existing,
-        #   verify that the things we got from the liuserver (now in
-        #   olsms) match them.  (If len(existing) is >0, we know that
-        #   verify_existing is True, because earlier we would have
-        #   already returned from this class method if len(existing) is
-        #   >0 and verify_existing is False.)
+        return olsms
 
-        if len( existing ) > 0:
-            if len( existing ) != len( olsms ):
-                raise ValueError( f"Object {objid} has {len(existing)} legacy survey matches in the "
-                                  f"object_legacy_survey_match table, but I just found {len(olsms)}!" )
+    @classmethod
+    def _compare_matches( cls, Alist, Blist ):
+        if len( Alist ) != len( Blist ):
+            SCLogger.error( "ObjectLegacySurveyMatch inconsistency: different list lengths." )
+            return False
 
-            ok = True
-            for oldolsm, newolsm in zip( existing, olsms ):
-                cosdec = np.cos( oldolsm.dec * np.pi / 180. )
-                if any( [ oldolsm != newolsm.lsid,
-                          not np.isclose( oldolsm.ra, newolsm.ra, atol=2.8e-5/cosdec ),
-                          not np.isclose( oldolsm.dec, newolsm.dec, atol=2.8e-5 ),
-                          not np.isclose( oldolsm.dist, newolsm.dist, atol=0.1 ),
-                          not np.isclose( oldolsm.white_mag, newolsm.white_mag, atol=0.01 ),
-                          not np.isclose( oldolsm.xgboost, newolsm.xgboost, atol=0.001 ),
-                          oldolsm.is_star == newolsm.is_star ] ):
-                    ok = False
-                    break
+        ok = True
+        for a, b in zip( Alist, Blist ):
+            cosdec = np.cos( a.dec * np.pi / 180. )
+            if any( [ a.object_id != b.object_id,
+                      a.lsid != b.lsid,
+                      not np.isclose( a.ra, b.ra, atol=2.8e-5/cosdec ),
+                      not np.isclose( a.dec, b.dec, atol=2.8e-5 ),
+                      not np.isclose( a.dist, b.dist, atol=0.1 ),
+                      not np.isclose( a.white_mag, b.white_mag, atol=0.01 ),
+                      not np.isclose( a.xgboost, b.xgboost, atol=0.001 ),
+                      a.is_star != b.is_star ] ):
+                ok = False
+                break
 
-            if not ok:
-                strio = io.StringIO()
-                strio.write( f"Object {objid} already has legacy survey matches, "
-                             f"but they aren't the same as what I found:\n" )
-                strio.write( f"  {'Old LSID':20s} {'New LSID':20s}  {'Old RA':9s} {'New RA':9s}  "
-                             f"{'Old Dec':9s} {'New Dec':9s}  {'Old d':6s} {'New d':6s}  "
-                             f"{'Old m':5s} {'New m':5s}  {'Old xg':6s} {'New xg':6s}  "
-                             f"{'Old is':6s} {'New is':5s}\n" )
-                strio.write( "  ==================== ====================  ========= =========  "
-                             "========= =========  ====== ======  ===== =====  ====== ======  ====== ======\n" )
-                for oldolsm, newolsm in zip( existing, olsms ):
-                    strio.write( f"  {oldolsm.lsid:20d} {newolsm.lsid:20d}  "
-                                 f"{oldolsm.ra:9.5f} {newolsm.ra:9.5f}  "
-                                 f"{oldolsm.dec:9.5f} {newolsm.dec:9.5f}  "
-                                 f"{oldolsm.dist:6.2f} {newolsm.dist:6.2f}  "
-                                 f"{oldolsm.white_mag:5.2f} {newolsm.white_mag:5.2f}  "
-                                 f"{oldolsm.xgboost:6.3f} {newolsm.xgboost:6.3f}  "
-                                 f"{str(oldolsm.is_star):5s} {str(newolsm.is_star):5s}\n" )
-                SCLogger.error( strio.getvalue() )
-                raise ValueError( f"Object {objid} already has legacy survey matches, "
-                                  f"but they aren't the same as what I found." )
+        if not ok:
+            strio = io.StringIO()
+            strio.write( "ObjectLegacySurveyMatch inconsistency:\n" )
+            strio.write( f"  {'Old LSID':20s} {'New LSID':20s}  {'Old RA':9s} {'New RA':9s}  "
+                         f"{'Old Dec':9s} {'New Dec':9s}  {'Old d':6s} {'New d':6s}  "
+                         f"{'Old m':5s} {'New m':5s}  {'Old xg':6s} {'New xg':6s}  "
+                         f"{'Old is':6s} {'New is':5s}\n" )
+            strio.write( "  ==================== ====================  ========= =========  "
+                         "========= =========  ====== ======  ===== =====  ====== ======  ====== ======\n" )
+            for oldolsm, newolsm in zip( Alist, Blist ):
+                strio.write( f"  {oldolsm.lsid:20d} {newolsm.lsid:20d}  "
+                             f"{oldolsm.ra:9.5f} {newolsm.ra:9.5f}  "
+                             f"{oldolsm.dec:9.5f} {newolsm.dec:9.5f}  "
+                             f"{oldolsm.dist:6.2f} {newolsm.dist:6.2f}  "
+                             f"{oldolsm.white_mag:5.2f} {newolsm.white_mag:5.2f}  "
+                             f"{oldolsm.xgboost:6.3f} {newolsm.xgboost:6.3f}  "
+                             f"{str(oldolsm.is_star):5s} {str(newolsm.is_star):5s}\n" )
+            SCLogger.error( strio.getvalue() )
 
-            return existing
-
-        if len(olsms) == 0:
-            return []
-        else:
-            with PsycopgConnection( con ) as dbcon:
-                cursor = dbcon.cursor()
-                for olsm in olsms:
-                    subdict = { k: getattr( olsm, k ) for k in expected_keys }
-                    subdict['object_id'] = olsm.object_id
-                    subdict['_id'] = olsm.id
-                    cursor.execute( f"INSERT INTO object_legacy_survey_match(_id,object_id,{','.join(expected_keys)}) "
-                                    f"VALUES(%(_id)s,%(object_id)s,{','.join(f'%({k})s' for k in expected_keys)})",
-                                    subdict )
-                if commit:
-                    dbcon.commit()
-
-            return olsms
+        return ok
 
 
-class ObjectGaiaMatch( Base, UUIDMixin ):
-    """Stores matches between objects and Gaia DR3 catalog sources.
 
-    WARNING.  Because this is stored in the database, changes to the
-    distance for parameter searches will not be applied to
-    already-existing objects without a massive database update procedure
-    (for which there is currently no code).
-
-    """
+class ObjectGaiaMatch( Base, ObjectCatalogMatch ):
+    """Stores matches between objects and Gaia DR3 catalog sources."""
 
     __tablename__ = "object_gaia_match"
+    matchconfig = "measuring.gaiamatch_radius"
+    matchidcolumn = "gaia_sourceid"
+    tablekeys = [ 'object_id', 'gaia_sourceid', 'dist', 'gaia_starprob', 'gaia_quasarprob', 'gaia_galaxyprob' ]
 
     object_id = sa.Column(
         sa.ForeignKey( 'objects._id', ondelete='CASCADE', name='object_gaia_match_object_id_fkey' ),
         nullable=False,
-        index=True,
+        index=False,
+        primary_key=True,
         doc='ID of the object this is a match for'
     )
 
+    match_radius = sa.Column(
+        sa.Integer,
+        nullable=False,
+        index=False,
+        primary_key=True,
+        doc="Search radius in milliarcsec" )
+
     gaia_sourceid = sa.Column( sa.BigInteger, nullable=True, index=False, doc="Gaia DR3 source_id" )
-    gaia_starprob = sa.Column( sa.REAL, nullable=False, index=False, doc="Gaia DR3 classprob_dsc_combmod_star" )
-    gaia_quasarprob = sa.Column( sa.REAL, nullable=False, index=False, doc="Gaia DR3 classprob_dsc_combmod_quasar" )
-    gaia_galaxyprob = sa.Column( sa.REAL, nullable=False, index=False, doc="Gaia DR3 classprob_dsc_combmod_galaxy" )
+    dist = sa.Column( sa.Double, nullable=True, index=False, doc="Arcsec between object and Gaia DR3 source" )
+    gaia_starprob = sa.Column( sa.REAL, nullable=True, index=False, doc="Gaia DR3 classprob_dsc_combmod_star" )
+    gaia_quasarprob = sa.Column( sa.REAL, nullable=True, index=False, doc="Gaia DR3 classprob_dsc_combmod_quasar" )
+    gaia_galaxyprob = sa.Column( sa.REAL, nullable=True, index=False, doc="Gaia DR3 classprob_dsc_combmod_galaxy" )
+
+    @declared_attr
+    def __table_args__(cls):     #noqa: N805
+        return ( sa.Index( "gaiamatch_specifier", 'object_id', 'match_radius' ), )
+
 
     @classmethod
-    def get_object_matches( cls, objid, con=None ):
-        """Pull gaia DR3 matches from the database.
+    def _generate_new_matches( cls, objid, ra, dec, radius, gaiacat=None ):
+        """Create new Gaia DR3 matches.
 
-        Parameters
-        ----------
-          objid : uuid
-            Object ID
+        Searches Gaia DR3 for enarby objects, creates database entries.
+        May or may not commit them.  (If you pass a Psycopg2Connection
+        and don't set commit=True, then the added entries will *not* be
+        committed to the database.)
 
-          con : psycopg.Connection, default None
-            Database connection.  If not given, makes and closes a new one.
+        Will probably fail very near the poles around that coordinate
+        singularity.
 
         Returns
         -------
           list of ObjectGaiaMatch
-
-        """
-        with PsycopgConnection( con ) as dbcon:
-            cursor = dbcon.cursor()
-            cursor.execute( "SELECT _id, object_id, gaia_sourceid, gaia_starprob, gaia_quasarprob, gaia_galaxyprob "
-                            "FROM object_gaia_match "
-                            "WHERE objet_id=%(objid)s",
-                            { 'objid': objid } )
-            columns = { cursor.description[i][0]: i for i in range( len(cursor.description) ) }
-            rows = cursor.fetchall()
-
-            ogms = []
-            for i in range( len(rows) ):
-                ogms.append( ObjectGaiaMatch( **{ k: rows[i][v] for k, v in columns.items() } ) )
-
-            ogms.sort( key=lambda o: o.dist )
-            return ogms
-
-
-    @classmethod
-    def create_new_object_matches( cls, objid, ra, dec, radius=None, con=None, commit=None, exist_ok=False,
-                                   verify_existing=True, gaiacat=None, **kwargs ):
-        """Create new Gaia DR3 matches.
-
-        Searches Gaia DR3 for enarby objects, creates database entries.
-        May or may nto commit them.  (If you pass a Psycopg2Connection
-        and don't set commit=True, then the added entries will *not* be
-        committed to the database.)
 
         Parametrs
         ---------
@@ -978,41 +1098,27 @@ class ObjectGaiaMatch( Base, UUIDMixin ):
             ID of the object we're matching to
 
           ra, dec : float
-            Coordinates of the object.  Nominally, this is redundant,
-            because we can get it from the database using objid, but
-            it's here for efficiency.  (Also, so we can run this
-            routine in case the object isn't yet saved to the database.)
+            Coordinates of the object.  Required.  Nominally, this is
+            redundant, because we can get it from the database using
+            objid, but it's here for efficiency.  (Also, so we can run
+            this routine in case the object isn't yet saved to the
+            database.)
 
           radius : float, default config item gaiamatch.radius
             Radius in arseconds that objects will be found in.  You
             almost always want to leave this as None so it uses the
             configured default!
 
-          con : PsycopgConnection, default None
-            Database connection to use.  If None, makes and closes a new one.
-
-          commit : boolean, default None
-            Should we commit the changes to the database?  If True, then commit,
-            if False, then don't.  If None, then if con is None, treat commit as
-            True; if con is not None, treat commit as False.
-
-          exist_ok : boolean, default False
-            If False, then raise an exception if the database already has matches
-            for this object.
-
-          verify_existing : boolean, default True
-            Ignored if exist_ok is False.  If exist_ok is True and if
-            verify_existing is False, then we just return what's already
-            in the database and don't search for new stuff.  This may be
-            a bad idea, though if you trust that things have already
-            worked, it may be what you want. If exist_ok is True and if
-            verify_existing is also True, then raise an exception if the
-            new stuff found doesn't match what's in the database.
-
           gaiacat : CatalogExcerpt or None
             If gaiacat is none, then this class method will query an
             online gaia database to get dia objects.  If this is not
             None, then it will filter this catalog to find dia objects.
+
+            This is here for efficiency.  If you're going to match a
+            bunch of objects on one image to Gaia, just get a gaia
+            catalog for the whole image once and pass that here.
+            Otherwise, it will make a connection to an external server
+            for each object.
 
             WARNING : catalog_tools.fetch_gaia_dr3_excerpt was written
             with the point of view of finding stars for astrometric
@@ -1022,22 +1128,20 @@ class ObjectGaiaMatch( Base, UUIDMixin ):
 
         """
 
-        cfg = Config.get()
-        radius = cfg.value( gaiamatch.radius ) if radius is None else radius
-
         if gaiacat is None:
-            minra = ra - radius    # Leave out cos(dec), we'll do a distance filter later anyway
+            cosdec = np.cos( dec * np.pi / 180. )
+            minra = ra - radius / cosdec
             if minra < 0.:
                 minra += 360.
-            maxra = ra + radius
+            maxra = ra + radius / cosdec
             if maxra > 360.:
                 maxra -= 360.
             mindec = dec - radius
             if mindec < -90.:
-                mindex = -90.
+                mindec = -90.
             maxdec = dec + radius
             if maxdec > 90.:
-                mnaxdec = 90.
+                maxdec = 90.
 
             gaiacat = download_gaia_dr3( minra, maxra, mindec, maxdec, padding=0., minmag=None, maxmag=None )
 
@@ -1049,10 +1153,10 @@ class ObjectGaiaMatch( Base, UUIDMixin ):
         coords = SkyCoord( gaiacat.object_ras, gaiacat.object_decs, unit='deg' )
         ctrcoord = SkyCoord( ra, dec, unit='deg' )
         sep = coords.separation( ctrcoord ).to( astropy.units.arcsec )
-        wclose = sep.value < radius
-        if len(wclose) = 0:
-            # Nothing to save
-            return
+        wclose = np.where( sep.value < radius )[0]
+        if len(wclose) == 0:
+            # Nothing close
+            return []
 
         sourceids = sourceids[ wclose ]
         starprobs = starprobs[ wclose ]
@@ -1060,14 +1164,51 @@ class ObjectGaiaMatch( Base, UUIDMixin ):
         galaxyprobs = galaxyprobs[ wclose ]
         sep = sep.value[ wclose ]
 
-        mindex = np.argmin( sep.value )
+        matches = [ ObjectGaiaMatch( object_id=objid,
+                                     match_radius=int( radius * 1000 ),
+                                     gaia_sourceid=sourceids[i],
+                                     dist=sep[i],
+                                     gaia_starprob=starprobs[i],
+                                     gaia_quasarprob=quasarprobs[i],
+                                     gaia_galaxyprob=galaxyprobs[i]
+                                    )
+                    for i in range(len(sourceids)) ]
 
-        sourceid = sourceids[ mindex ]
-        starprob = starprob[ mindex ]
-        quasarprob = quasarprob[ mindex ]
-        galaxyprob = galaxyprob[ mindex ]
-        sep = sep.value[ mindex ]
-
-        ROB YOU ARE HERE
+        matches.sort( key=lambda o: o.dist )
+        return matches
 
 
+    @classmethod
+    def _compare_matches( cls, Alist, Blist ):
+        if len( Alist ) != len( Blist ):
+            SCLogger.error( "ObjectGaiaMatch inconsistency: different list lengths." )
+            return False
+
+        ok = True
+        for a, b in zip( Alist, Blist ):
+            if any ( [ a.object_id != b.object_id,
+                       a.gaia_sourceid != b.gaia_sourceid,
+                       not np.isclose( a.gaia_starprob, b.gaia_starprob, atol=1e-4 ),
+                       not np.isclose( a.gaia_quasarprob, b.gaia_quasarprob, atol=1e-4 ),
+                       not np.isclose( a.gaia_galaxyprob, b.gaia_galaxyprob, atol=1e-4 )
+                      ] ):
+                ok = False
+                break
+
+        if not ok:
+            strio = io.StringIO()
+            strio.write( "ObjectGaiaMatch inconsistency:\n" )
+            strio.write( f"  {'Old Objectid':20s} {'New Objectid':20s}  {'O.Gaia ID':10s} {'N.Gaia ID':10s}  "
+                         f"{'O.Star':7s} {'N.Star':7s}  {'O.QSO':7s} {'N.QSO':7s}  {'O.Gal':7s} {'N.Gal':7s}\n" )
+            strio.write( "  ==================== ====================  ========== ==========  "
+                         "======= =======  ======= =======  ======= =======\n" )
+            for a, b in zip( Alist, Blist ):
+                strio.write( f"  {a.object_id:20s} {b.object_id:20s}  "
+                             f"{a.gaia_sourceid:10s} {b.gaia_sourceid:10d}  "
+                             f"{a.gaia_starprob:7.4f} {b.gaia_starprob:7.4f}  "
+                             f"{a.gaia_quasarprob:7.4f} {b.gaia_quasarprob:7.4f}  "
+                             f"{a.gaia_galaxyprob:7.4f} {b.gaia_galaxyprob:7.4f}\n" )
+
+            SCLogger.error( strio.getvalue() )
+
+        return ok

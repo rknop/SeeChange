@@ -15,7 +15,7 @@ import hop.models
 from models.base import SmartSession
 from models.image import Image
 from models.deepscore import DeepScoreSet
-from models.object import Object, ObjectLegacySurveyMatch
+from models.object import Object, ObjectLegacySurveyMatch, ObjectGaiaMatch
 from util.config import Config
 from util.logger import SCLogger
 
@@ -206,6 +206,10 @@ class Alerting:
 
     def dia_object_alert( self, obj, session=None ):
         cfg = Config.get()
+        includeliu = cfg.value( 'measuring.do_liumatch' )
+        liumatch_radius = cfg.value( 'measuring.liumatch_radius' )
+        includegaia = cfg.value( 'measuring.do_gaiamatch' )
+        gaiamatch_radius = cfg.value( 'measuring.gaiamatch_radius' )
         objdict= { 'diaObjectId': str( obj.id ),
                    'name': obj.name,
                    'ra': obj.ra,
@@ -213,26 +217,42 @@ class Alerting:
                    'dec': obj.dec,
                    'decErr': None,
                    'ra_dec_Cov': None,
-                   'xgmatchRadius': cfg.value( 'liumatch.radius' ) if cfg.value( 'liumatch.do_match' ) else None,
-                   'ls-xgboost': [] if cfg.value( 'liumatch.do_match' ) else None
+                   'xgmatchRadius': liumatch_radius if includeliu else None,
+                   'ls-xgboost': [] if includeliu else None,
+                   'gaiaDR3Radius': gaiamatch_radius if includegaia else None,
+                   'gaiaDR3_id': [] if includegaia else None,
+                   'gaiaStarProb': [] if includegaia else None,
+                   'gaiaQuasarProb': [] if includegaia else None,
+                   'gaiaGalaxyProb': [] if includegaia else None,
                   }
-        # NOTE!  It's possible this is inconsistent!  We're assuming
-        # that the liumatch.radius config value has not changed since
-        # the database object_legacy_survey_match table started getting
-        # populated.
-        if cfg.value( 'liumatch.do_match' ):
+        if includeliu or includegaia:
             with SmartSession( session ) as sess:
-                lsmatches = ( sess.query( ObjectLegacySurveyMatch )
-                              .filter( ObjectLegacySurveyMatch.object_id==obj.id )
-                              .all() )
-            for lsmatch in lsmatches:
-                objdict['ls-xgboost'].append( { 'lsid': lsmatch.lsid,
-                                                'ra': lsmatch.ra,
-                                                'dec': lsmatch.dec,
-                                                'dist': lsmatch.dist,
-                                                'white_mag': lsmatch.white_mag,
-                                                'xgboost': lsmatch.xgboost,
-                                                'is_star': lsmatch.is_star } )
+                if includeliu:
+                    lsmatches = ( sess.query( ObjectLegacySurveyMatch )
+                                  .filter( ObjectLegacySurveyMatch.object_id==obj.id )
+                                  .filter( ObjectLegacySurveyMatch.match_radius==int(liumatch_radius * 1000) )
+                                  .all() )
+                    if ( len(lsmatches) > 0 ) and ( lsmatches[0].lsid is not None ):
+                        for lsmatch in lsmatches:
+                            objdict['ls-xgboost'].append( { 'lsid': lsmatch.lsid,
+                                                            'ra': lsmatch.ra,
+                                                            'dec': lsmatch.dec,
+                                                            'dist': lsmatch.dist,
+                                                            'white_mag': lsmatch.white_mag,
+                                                            'xgboost': lsmatch.xgboost,
+                                                            'is_star': lsmatch.is_star } )
+
+                if includegaia:
+                    gaiamatches = ( sess.query( ObjectGaiaMatch )
+                                    .filter( ObjectGaiaMatch.object_id==obj.id )
+                                    .filter( ObjectGaiaMatch.match_radius==int(gaiamatch_radius * 1000) )
+                                    .all() )
+                    if ( len(gaiamatches) > 0 ) and ( gaiamatches[0].gaia_sourceid is not None ):
+                        for gaiamatch in gaiamatches:
+                            objdict['gaiaDR3_id'].append( gaiamatch.gaia_sourceid )
+                            objdict['gaiaStarProb'].append( gaiamatch.gaia_starprob )
+                            objdict['gaiaQuasarProb'].append( gaiamatch.gaia_quasarprob )
+                            objdict['gaiaGalaxyProb'].append( gaiamatch.gaia_galaxyprob )
 
         return objdict
 
@@ -298,8 +318,6 @@ class Alerting:
                           'prvDiaSources': [],
                           'prvDiaForcedSources': None,
                           'prvDiaNonDetectionLimits': [],
-                          'mpcID': None,
-                          'mpcAngularDist': None,
                           'cutoutDifference': subdata.tobytes(),
                           'cutoutScience': newdata.tobytes(),
                           'cutoutTemplate': refdata.tobytes() }

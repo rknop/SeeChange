@@ -1,4 +1,4 @@
-M# an assortment of tools that relate to getting and manipulating source catalogs
+# an assortment of tools that relate to getting and manipulating source catalogs
 
 import os
 import time
@@ -509,9 +509,9 @@ def fetch_gaia_dr3_excerpt( image, minstars=50, maxmags=None, magrange=None,
                     q = ( q.filter( CatalogExcerpt.minmag >= minmag-0.1 )
                           .filter( CatalogExcerpt.minmag <= minmag+0.1 ) )
                 else:
-                    q = q.filter( CatalogExcept.minmag.is_( None ) )
+                    q = q.filter( CatalogExcerpt.minmag.is_( None ) )
 
-               if q.count() > 0:
+                if q.count() > 0:
                     catexp = q.first()
 
                     if not os.path.isfile( catexp.get_fullpath() ):

@@ -50,22 +50,22 @@
       "doc": "Radius in arcseconds of match to Gaia DR3 objects"
     },
     { "name": "gaiaDR3_id",
-      "type": [ "long", "null" ],
+      "type": [ { "type": "array", "items": "long" }, "null" ],
       "default": null,
-      "doc": "source_id of the closest matched Gaia DR3 object within gaia_dr3_radius (ignoring PM)"
+      "doc": "source_id of matched Gaia DR3 objects within gaia_dr3_radius (ignoring PM)"
     },
     { "name": "gaiaStarProb",
-      "type": [ "float", "null" ],
+      "type": [ { "type": "array", "items": "float" }, "null" ],
       "default": null,
       "doc": "classprob_dsc_combmod_star from Gaia DR3"
     },
     { "name": "gaiaQuasarProb",
-      "type": [ "float", "null" ],
+      "type": [ { "type": "array", "items": "float" }, "null" ],
       "default": null,
       "doc": "classprob_dsc_combmod_quasar from Gaia DR3"
     },
     { "name": "gaiaGalaxyProb",
-      "type": [ "float", "null" ],
+      "type": [ { "type": "array", "items": "float" }, "null" ],
       "default": null,
       "doc": "classprob_dsc_combmod_galaxy from Gaia DR3"
     },

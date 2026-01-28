@@ -11,6 +11,7 @@ from models.object import Object
 
 from pipeline.parameters import Parameters
 from pipeline.data_store import DataStore
+from pipeline.catalog_tools import fetch_gaia_dr3_excerpt
 
 from util.logger import SCLogger
 
@@ -114,7 +115,51 @@ class ParsMeasurer(Parameters):
             False,
             bool,
             'By default, Object.associate_measurements is called for measurements, which will commit new '
-            'Object rowss to the database.  Set this flag to skip this step.'
+            'Object rows to the database.  Set this flag to skip this step.'
+        )
+
+        # All the match parameters are non-critical because they don't change the content of the
+        #   Measurement object, only whether or not match rows are created in the database.
+        #   Those rows really exist just as a cache for alerting.
+
+        self.do_liumatch = self.add_par(
+            'do_liumatch',
+            True,
+            bool,
+            'When new objects are found, create object_legacy_survey_match rows?',
+            critical=False
+        )
+
+        self.limatch_radius = self.add_par(
+            'liumatch_radius',
+            10.0,
+            float,
+            'Radius in arcseconds for matches to Legacy Survey objects',
+            critical=False
+        )
+
+        self.liumatch_server = self.add_par(
+            'liumatch_server',
+            'https://ls-xgboost.lbl.gov',
+            str,
+            'Location of the liuserver',
+            critical=False
+        )
+
+        self.do_gaiamatch = self.add_par(
+            'do_gaiamatch',
+            True,
+            bool,
+            'When new objects are found, create object_gaia_match rows?',
+            critical=False
+        )
+
+        self.gaiamatch_radius = self.add_par(
+            'gaiamatch_radius',
+            5.,
+            float,
+            'Radius in arcseconds for match to Gaia DR3',
+            critical=False
         )
 
         self._enforce_no_new_attrs = True
@@ -341,8 +386,20 @@ class Measurer:
 
                 # Associate objects with measurements that passed deletion thresholds
                 if not self.pars.do_not_associate:
-                    year = int( np.floor( astropy.time.Time( sub_image.mjd, format='mjd' ).jyear ) )
-                    Object.associate_measurements( measurements, self.pars.association_radius, year=year )
+                    gaiacat = None
+                    if self.pars.do_gaiamatch:
+                        gaiacat, _, _ = fetch_gaia_dr3_excerpt( ds.get_image(), minstars=0,
+                                                                maxmags=None, magrange=None )
+
+                    t = astropy.time.Time( sub_image.mjd, format='mjd' ).to_datetime()
+                    Object.associate_measurements( measurements, self.pars.association_radius,
+                                                   year=t.year, month=t.month, day=t.day,
+                                                   no_associate_leagcy=not self.pars.do_liumatch,
+                                                   liumatch_radius=self.pars.liumatch_radius,
+                                                   liuserver=self.pars.liumatch_server,
+                                                   no_associate_gaia=not self.pars.do_gaiamatch,
+                                                   gaiamatch_radius=self.pars.gaiamatch_radius,
+                                                   gaiacat=gaiacat )
 
                 # Make sure the upstream bitflag is set for all measurements
                 measurement_set._upstream_bitflag = ds.cutouts.bitflag
