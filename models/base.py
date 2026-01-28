@@ -377,7 +377,7 @@ def get_all_database_objects(display=False, session=None):
     from models.cutouts import Cutouts
     from models.measurements import Measurements
     from models.deepscore import DeepScore
-    from models.object import Object, ObjectLegacySurveyMatch
+    from models.object import Object
     from models.calibratorfile import CalibratorFile, CalibratorFileDownloadLock
     from models.catalog_excerpt import CatalogExcerpt
     from models.reference import Reference
@@ -388,7 +388,7 @@ def get_all_database_objects(display=False, session=None):
     models = [
         CodeVersion, Provenance, ProvenanceTag, DataFile, Exposure, Image,
         SourceList, PSF, WorldCoordinates, ZeroPoint, Cutouts, Measurements, DeepScore,
-        Object, ObjectLegacySurveyMatch, CalibratorFile, CalibratorFileDownloadLock, CatalogExcerpt, Reference,
+        Object, CalibratorFile, CalibratorFileDownloadLock, CatalogExcerpt, Reference,
         RefSet, SensorSection, AuthUser, AuthGroup, PasswordLink, KnownExposure, PipelineWorker
     ]
 

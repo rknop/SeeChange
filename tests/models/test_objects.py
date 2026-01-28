@@ -10,7 +10,7 @@ import psycopg.errors
 from models.base import SmartSession, PsycopgConnection
 from models.image import Image
 from models.zero_point import ZeroPoint
-from models.object import Object, ObjectLegacySurveyMatch
+from models.object import Object, ObjectLegacySurveyMatch, ObjectGaiaMatch
 from models.measurements import Measurements, MeasurementSet
 from models.deepscore import DeepScore, DeepScoreSet
 from util.util import asUUID
@@ -373,7 +373,8 @@ def test_get_measurements_et_al( sim_lightcurve_complete_dses_module,
     # TODO : test thresholds when those are implmeneted
 
 
-def test_object_legacy_survey_match():
+def test_object_legacy_survey_match( test_config ):
+    liuserver = test_config.value( 'measuring.liumatch_server' )
     objid = uuid.uuid4()
     try:
         obj = Object( _id=objid, ra=7.01241, dec=-42.96943, name='test_olsm_object',
@@ -385,8 +386,20 @@ def test_object_legacy_survey_match():
             sess.add( obj )
             sess.commit()
 
+        def compare_matches( Alist, BList, no_match_radius=False ):
+            assert len( Alist ) == len( BList )
+            for a, b in zip( Alist, BList ):
+                assert asUUID(a.object_id) == asUUID(b.object_id)
+                assert no_match_radius or ( a.match_radius == b.match_radius )
+                assert a.lsid == b.lsid
+                assert a.ra == pytest.approx( b.ra, abs=0.1/3600. / np.cos( a.dec * np.pi / 180. ) )
+                assert a.dec == pytest.approx( b.dec, abs=0.1/3600. )
+                assert a.dist == pytest.approx( b.dist, abs=0.01 )
+                assert a.xgboost == pytest.approx( b.xgboost, abs=0.001 )
+                assert a.is_star == b.is_star
+            
         # Try to find and commit new objects
-        firstmatches = ObjectLegacySurveyMatch.create_new_object_matches( obj.id, obj.ra, obj.dec )
+        firstmatches = ObjectLegacySurveyMatch.get_object_matches( obj.id, radius=10, liuserver=liuserver )
         assert len(firstmatches) == 4
         assert all( asUUID(m.object_id) == asUUID(objid) for m in firstmatches )
         assert firstmatches[0].lsid == 10995226531340506
@@ -395,21 +408,24 @@ def test_object_legacy_survey_match():
         assert not firstmatches[0].is_star
         assert firstmatches[0].xgboost < 0.002
 
+        # Make sure they got committed
+        with SmartSession() as sess:
+            savedmatches = ( sess.query( ObjectLegacySurveyMatch )
+                             .filter( ObjectLegacySurveyMatch.object_id==obj.id,
+                                      ObjectLegacySurveyMatch.match_radius==int( 10. * 1000 ) )
+                             .order_by( ObjectLegacySurveyMatch.dist )
+                             .all() )
+            compare_matches( firstmatches, savedmatches )
+        
         # See if we get the same matches when we ask for matches
-        matches = ObjectLegacySurveyMatch.get_object_matches( obj.id )
-        for first, mat in zip( firstmatches, matches ):
-            assert asUUID(first._id) == asUUID(mat._id)
-            assert first.lsid == mat.lsid
-            assert asUUID(first.object_id) == asUUID(mat.object_id)
-            assert first.ra == pytest.approx( mat.ra, abs=0.1/3600. / np.cos( first.dec * np.pi / 180. ) )
-            assert first.dec == pytest.approx( mat.dec, abs=0.1/3600. )
-            assert first.dist == pytest.approx( mat.dist, abs=0.01 )
-            assert first.xgboost == pytest.approx( mat.xgboost, abs=0.001 )
-            assert first.is_star == mat.is_star
+        # (Also, don't pass a liuserver, since the code that uses it shouldn't be run.)
+        matches = ObjectLegacySurveyMatch.get_object_matches( obj.id, radius=10 )
+        compare_matches( firstmatches, matches )
 
-        # Make sure we get yelled at if we try to match when there are existing matches
-        with pytest.raises( RuntimeError, match="Object .* already has 4 legacy survey matches" ):
-            _ = ObjectLegacySurveyMatch.create_new_object_matches( obj.id, obj.ra, obj.dec )
+        # Ask for a different radius and make sure we get fewer matches
+        matches_r5 = ObjectLegacySurveyMatch.get_object_matches( obj.id, radius=5, liuserver=liuserver )
+        assert len(matches_r5) < len(matches)
+        compare_matches( matches_r5, firstmatches[0:2], no_match_radius=True )
 
         # Twiddle one of the magnitudes and make sure we get yelled at if we try to verify_existing
         with PsycopgConnection() as con:
@@ -418,14 +434,16 @@ def test_object_legacy_survey_match():
                             "WHERE object_id=%(oid)s AND lsid=%(lsid)s",
                             { 'oid': objid, 'lsid': 10995226531340506 } )
             con.commit()
-        with pytest.raises( ValueError, match="Object .* already has legacy survey matches, but they aren't" ):
-            _ = ObjectLegacySurveyMatch.create_new_object_matches( obj.id, obj.ra, obj.dec, exist_ok=True )
+        with pytest.raises( RuntimeError, match=( "Catalog matches for ObjectLegacySurveyMatch don't match "
+                                                  "what is already saved in the database!" ) ):
+            _ = ObjectLegacySurveyMatch.get_object_matches( obj.id, radius=10, liuserver=liuserver,
+                                                            verify_existing=True )
 
         # But if we turn off verify_existing, we should get the thing I just munged
-        matches = ObjectLegacySurveyMatch.create_new_object_matches( obj.id, obj.ra, obj.dec,
-                                                                       exist_ok=True, verify_existing=False )
-        assert asUUID(matches[0]._id) == asUUID(firstmatches[0]._id)
+        matches = ObjectLegacySurveyMatch.get_object_matches( obj.id, radius=10 )
+        assert matches[0].object_id == firstmatches[0].object_id
         assert matches[0].lsid == firstmatches[0].lsid
+        assert matches[0].match_radius == firstmatches[0].match_radius
         assert matches[0].white_mag != firstmatches[0].white_mag
 
         # Unmung, and add a new match to verify that it yells at us if the number doesn't match
@@ -434,11 +452,10 @@ def test_object_legacy_survey_match():
             cursor.execute( "UPDATE object_legacy_survey_match SET white_mag=19.93 "
                             "WHERE object_id=%(oid)s AND lsid=%(lsid)s",
                             { 'oid': objid, 'lsid': 10995226531340506 } )
-            cursor.execute( "INSERT INTO object_legacy_survey_match(_id,object_id,lsid,ra,dec,dist,"
+            cursor.execute( "INSERT INTO object_legacy_survey_match(object_id,match_radius,lsid,ra,dec,dist,"
                             "                                       white_mag,xgboost, is_star) "
-                            "VALUES(%(id)s,%(objid)s,%(lsid)s,%(ra)s,%(dec)s,%(dist)s,%(mag)s,%(xgb)s,%(iss)s)",
-                            { 'id': uuid.uuid4(),
-                              'objid': objid,
+                            "VALUES(%(objid)s,10000,%(lsid)s,%(ra)s,%(dec)s,%(dist)s,%(mag)s,%(xgb)s,%(iss)s)",
+                            { 'objid': objid,
                               'lsid': 666,
                               'ra': obj.ra,
                               'dec': obj.dec,
@@ -448,12 +465,13 @@ def test_object_legacy_survey_match():
                               'iss': True } )
             con.commit()
 
-        with pytest.raises( ValueError, match="Object .* has 5 legacy survey matches.*but I just found 4" ):
-            _ = ObjectLegacySurveyMatch.create_new_object_matches( obj.id, obj.ra, obj.dec, exist_ok=True )
+        with pytest.raises( RuntimeError, match=( "Catalog matches for ObjectLegacySurveyMatch don't match "
+                                                  "what is already saved in the database!" ) ):
+            _ = ObjectLegacySurveyMatch.get_object_matches( obj.id, radius=10, liuserver=liuserver,
+                                                            verify_existing=True )
 
         # Make sure we get what I patched in if we don't verify existing:
-        matches = ObjectLegacySurveyMatch.create_new_object_matches( obj.id, obj.ra, obj.dec,
-                                                                       exist_ok=True, verify_existing=False )
+        matches = ObjectLegacySurveyMatch.get_object_matches( obj.id, radius=10 )
         assert len(matches) == 5
         assert matches[0].white_mag == pytest.approx( 19.99, abs=0.01 )
         assert matches[1].white_mag == pytest.approx( 19.93, abs=0.01 )
@@ -464,3 +482,26 @@ def test_object_legacy_survey_match():
             cursor.execute( "DELETE FROM object_legacy_survey_match WHERE object_id=%(id)s", { 'id': objid } )
             cursor.execute( "DELETE FROM objects WHERE _id=%(id)s", { 'id': objid } )
             con.commit()
+
+
+def test_object_gaia_match():
+    objid = uuid.uuid4()
+    try:
+        # Make an object on a gaia star where I know there are 3 other stars within 20"
+        obj = Object( _id=objid, ra=180.10710589163787, dec=-30.099665448859035, name='test_gaiamatch_object',
+                      is_test=True, is_bad=False )
+        obj.calculate_coordinates()
+        with SmartSession() as sess:
+            sess.add( obj )
+            sess.commit()
+
+        gaias = ObjectGaiaMatch.get_object_matches( obj.id, radius=20 )
+        pass
+
+    finally:
+        with PsycopgConnection() as con:
+            cursor = con.cursor()
+            cursor.execute( "DELETE FROM object_gaia_match WHERE object_id=%(id)s", { 'id': objid } )
+            cursor.execute( "DELETE FROM objects WHERE _id=%(id)s", { 'id': objid } )
+            con.commit()
+    

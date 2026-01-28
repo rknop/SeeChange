@@ -745,7 +745,7 @@ class ObjectCatalogMatch:
     def _get_existing_matches( cls, objid, radius, cursor ):
         mrad = int( radius * 1000. )
         cursor.execute( f"SELECT {','.join(cls.tablekeys)} FROM {cls.__tablename__} "
-                        f"WHERE object_id=%(objid)s AND radius=%(rad)s ",
+                        f"WHERE object_id=%(objid)s AND match_radius=%(rad)s ",
                         { 'objid': objid, 'rad': mrad } )
         rows = cursor.fetchall()
 
@@ -753,7 +753,7 @@ class ObjectCatalogMatch:
         matches = []
         if len(rows) > 0:
             found_existing = True
-            if any( r[0][ cls.matchidcolumn ] is None for r in rows ):
+            if any( r[ cls.matchidcolumn ] is None for r in rows ):
                 if len(rows) > 1:
                     # ...this may actually be impossible if the right unique constraints
                     #    were created in the table.  Actually, no, it can happen; I would have
@@ -821,8 +821,6 @@ class ObjectCatalogMatch:
         if not isinstance( radius, numbers.Real ):
             raise TypeError( f"Radius {radius} isn't a float." )
 
-        commit = False
-
         with PsycopgConnection( con ) as dbcon:
             try:
                 cursor = dbcon.cursor( row_factory=psycopg.rows.dict_row )
@@ -835,9 +833,9 @@ class ObjectCatalogMatch:
 
                 # For one reason or another, we have to find new matches
                 cursor.execute( "SELECT ra,dec FROM objects WHERE _id=%(id)s", { 'id': objid } )
-                rows = cursor.fetchone()
-                ra = rows[0]['ra']
-                dec = rows[0]['dec']
+                row = cursor.fetchone()
+                ra = row['ra']
+                dec = row['dec']
                 newmatches = cls._generate_new_matches( objid, ra, dec, radius, **kwargs )
 
                 if found_existing:
@@ -859,7 +857,7 @@ class ObjectCatalogMatch:
                     #   _generate_new_matches process, which could be
                     #   long.  (An external server could be slow, for
                     #   example.)
-                    cursor.execute( "LOCK TABLE {cls.__tablename__}" )
+                    cursor.execute( f"LOCK TABLE {cls.__tablename__}" )
                     found_existing, matches = cls._get_existing_matches( objid, radius, cursor )
                     if found_existing:
                         if not cls._compare_matches( matches, newmatches ):
@@ -902,12 +900,12 @@ class ObjectLegacySurveyMatch( Base, ObjectCatalogMatch ):
     __tablename__ = "object_legacy_survey_match"
     matchconfig = 'measuring.liumatch_radius'
     matchidcolumn = 'lsid'
-    tablekeys = [ 'object_id', 'lsid', 'ra', 'dec', 'dist', 'white_mag', 'xgboost', 'is_star' ]
+    tablekeys = [ 'object_id', 'match_radius', 'lsid', 'ra', 'dec', 'dist', 'white_mag', 'xgboost', 'is_star' ]
 
     object_id = sa.Column(
         sa.ForeignKey('objects._id', ondelete='CASCADE', name='object_ls_match_object_id_fkey'),
         nullable=False,
-        index=False,
+        index=True,
         primary_key=True,
         doc="ID of the object this is a match for"
     )
@@ -933,7 +931,7 @@ class ObjectLegacySurveyMatch( Base, ObjectCatalogMatch ):
 
     @declared_attr
     def __table_args__(cls):  # noqa: N805
-        return ( sa.Index( "olsm_specifier", 'object_id', 'match_radius' ), )
+        return ( sa.Index( "ix_object_legacy_survey_match_objidmatchr", 'object_id', 'match_radius' ), )
 
 
     @classmethod
@@ -985,8 +983,7 @@ class ObjectLegacySurveyMatch( Base, ObjectCatalogMatch ):
 
         olsms = []
         for i in range( len( res['lsid'] ) ):
-            olsms.append( ObjectLegacySurveyMatch( _id=uuid.uuid4(),
-                                                   object_id=objid,
+            olsms.append( ObjectLegacySurveyMatch( object_id=objid,
                                                    match_radius=int( radius * 1000 ),
                                                    lsid=res['lsid'][i],
                                                    ra=res['ra'][i],
@@ -1048,12 +1045,13 @@ class ObjectGaiaMatch( Base, ObjectCatalogMatch ):
     __tablename__ = "object_gaia_match"
     matchconfig = "measuring.gaiamatch_radius"
     matchidcolumn = "gaia_sourceid"
-    tablekeys = [ 'object_id', 'gaia_sourceid', 'dist', 'gaia_starprob', 'gaia_quasarprob', 'gaia_galaxyprob' ]
+    tablekeys = [ 'object_id', 'match_radius', 'gaia_sourceid', 'dist',
+                  'gaia_starprob', 'gaia_quasarprob', 'gaia_galaxyprob' ]
 
     object_id = sa.Column(
         sa.ForeignKey( 'objects._id', ondelete='CASCADE', name='object_gaia_match_object_id_fkey' ),
         nullable=False,
-        index=False,
+        index=True,
         primary_key=True,
         doc='ID of the object this is a match for'
     )
@@ -1065,7 +1063,7 @@ class ObjectGaiaMatch( Base, ObjectCatalogMatch ):
         primary_key=True,
         doc="Search radius in milliarcsec" )
 
-    gaia_sourceid = sa.Column( sa.BigInteger, nullable=True, index=False, doc="Gaia DR3 source_id" )
+    gaia_sourceid = sa.Column( sa.BigInteger, nullable=True, primary_key=True, index=False, doc="Gaia DR3 source_id" )
     dist = sa.Column( sa.Double, nullable=True, index=False, doc="Arcsec between object and Gaia DR3 source" )
     gaia_starprob = sa.Column( sa.REAL, nullable=True, index=False, doc="Gaia DR3 classprob_dsc_combmod_star" )
     gaia_quasarprob = sa.Column( sa.REAL, nullable=True, index=False, doc="Gaia DR3 classprob_dsc_combmod_quasar" )
@@ -1073,7 +1071,7 @@ class ObjectGaiaMatch( Base, ObjectCatalogMatch ):
 
     @declared_attr
     def __table_args__(cls):     #noqa: N805
-        return ( sa.Index( "gaiamatch_specifier", 'object_id', 'match_radius' ), )
+        return ( sa.Index( "ix_gaia_match_objidmatchr", 'object_id', 'match_radius' ), )
 
 
     @classmethod
@@ -1130,20 +1128,21 @@ class ObjectGaiaMatch( Base, ObjectCatalogMatch ):
 
         if gaiacat is None:
             cosdec = np.cos( dec * np.pi / 180. )
-            minra = ra - radius / cosdec
+            minra = ra - radius / 3600. / cosdec
             if minra < 0.:
                 minra += 360.
-            maxra = ra + radius / cosdec
+            maxra = ra + radius / 3600. / cosdec
             if maxra > 360.:
                 maxra -= 360.
-            mindec = dec - radius
+            mindec = dec - radius / 3600.
             if mindec < -90.:
                 mindec = -90.
-            maxdec = dec + radius
+            maxdec = dec + radius / 3600.
             if maxdec > 90.:
                 maxdec = 90.
 
-            gaiacat = download_gaia_dr3( minra, maxra, mindec, maxdec, padding=0., minmag=None, maxmag=None )
+            gaiacat, fpath, _ = download_gaia_dr3( minra, maxra, mindec, maxdec, padding=0., minmag=None, maxmag=None )
+            gaiacat.filepath = fpath
 
         sourceids = gaiacat.data[ 'GAIA_DR3_ID' ]
         starprobs = gaiacat.data[ 'STARPROB' ]
