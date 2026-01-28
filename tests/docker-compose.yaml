@@ -1,8 +1,8 @@
 services:
   make-archive-directories:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/upload-connector:${IMGTAG:-test20260109}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/file-archive-server:${IMGTAG:-test20260109}
     build:
-      context: ../extern/nersc-upload-connector
+      context: ../extern/file-archive-server
       args:
         UID: 0
         GID: 0
@@ -20,9 +20,9 @@ services:
     depends_on:
       make-archive-directories:
         condition: service_completed_successfully
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/upload-connector:${IMGTAG:-test20260109}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/file-archive-server:${IMGTAG:-test20260109}
     build:
-      context: ../extern/nersc-upload-connector
+      context: ../extern/file-archive-server
       args:
         UID: 0
         GID: 0
