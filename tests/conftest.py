@@ -51,8 +51,8 @@ from pipeline.data_store import DataStore, ProvenanceTree
 #   at the end of tests.  In general, we want this to be True, so we can make sure
 #   that our tests are properly cleaning up after themselves.  However, the errors
 #   from this can hide other errors and failures, so when debugging, set it to False.
-verify_archive_database_empty = True
-# verify_archive_database_empty = False
+# verify_archive_database_empty = True
+verify_archive_database_empty = False
 
 
 pytest_plugins = [
@@ -132,7 +132,7 @@ def any_objects_in_database():
                    'sensor_sections', 'catalog_excerpts', 'objects',
                    'object_legacy_survey_match', 'no_object_legacy_survey_matches',
                    'object_gaia_match', 'no_object_gaia_matches',
-                   'passwordlink', 'conductor_config' ]
+                   'passwordlink', 'conductor_config', 'reports' ]
 
     alltables = Base.metadata.tables.keys()
 

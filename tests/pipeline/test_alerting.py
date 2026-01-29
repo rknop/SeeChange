@@ -49,13 +49,17 @@ def test_build_avro_alert_structures( test_config, decam_datastore_through_scori
     at_least_some_had_matches = False
     for a, m in zip( alerts, ds.measurements ):
         obj = Object.get_by_id( m.object_id )
-        lsmatches = ObjectLegacySurveyMatch.get_object_matches( obj.id )
+        lsmatches = ObjectLegacySurveyMatch.get_object_matches(
+            obj.id,
+            liuserver=test_config.value('measuring.liumatch_server'),
+            radius=test_config.value('measuring.liumatch_radius')
+        )
         if len(lsmatches) > 0:
             at_least_some_had_matches = True
         assert a['diaObject']['name'] == obj.name
         assert a['diaObject']['ra'] == pytest.approx( obj.ra, abs=0.1/3600. )
         assert a['diaObject']['dec'] == pytest.approx( obj.dec, abs=0.1/3600. )
-        assert a['diaObject']['xgmatchRadius'] == test_config.value( 'liumatch.radius' )
+        assert a['diaObject']['xgmatchRadius'] == test_config.value( 'measuring.liumatch_radius' )
         # Matches should always be sorted by distance
         zippy = zip( lsmatches, a['diaObject']['ls-xgboost'] )
         assert all(m.lsid == am['lsid'] for m, am in zippy )
@@ -166,7 +170,11 @@ def test_send_alerts( test_config, decam_datastore_through_scoring ):
                 assert alert['diaSource']['apFluxErr'] == pytest.approx( measurements[dex].flux_apertures_err[0]
                                                                          * fluxscale, rel=1e-5 )
             assert alert['diaObject']['diaObjectId'] == str( measurements[dex].object_id )
-            lsmatches = ObjectLegacySurveyMatch.get_object_matches( measurements[dex].object_id )
+            lsmatches = ObjectLegacySurveyMatch.get_object_matches(
+                measurements[dex].object_id,
+                liuserver=test_config.value('measuring.liumatch_server'),
+                radius=test_config.value('measuring.liumatch_radius')
+            )
             zippy = zip( lsmatches, alert['diaObject']['ls-xgboost'] )
             assert all(m.lsid == am['lsid'] for m, am in zippy )
             assert all(m.ra == pytest.approx( am['ra'], abs=0.1/3600 ) for m, am in zippy )
