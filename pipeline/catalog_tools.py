@@ -533,6 +533,7 @@ def fetch_gaia_dr3_excerpt( image, minstars=50, maxmags=None, magrange=None,
                         catexp.filepath = localfile
                     else:
                         catexp.filepath = dbfile
+                        catexp.save( localfile )
                         with SmartSession( session ) as dbsess:
                             existing_catexp = dbsess.scalars(
                                 sa.select(CatalogExcerpt).where(CatalogExcerpt.filepath == dbfile)

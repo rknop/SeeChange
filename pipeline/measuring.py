@@ -388,15 +388,15 @@ class Measurer:
                 if not self.pars.do_not_associate:
                     gaiacat = None
                     if self.pars.do_gaiamatch:
-                        gaiacat, _, _ = fetch_gaia_dr3_excerpt( ds.get_image(), minstars=0,
-                                                                maxmags=None, magrange=None )
+                        gaiacat = fetch_gaia_dr3_excerpt( ds.get_image(), minstars=0,
+                                                          maxmags=None, magrange=None )
 
                     t = astropy.time.Time( sub_image.mjd, format='mjd' ).to_datetime()
                     Object.associate_measurements( measurements, self.pars.association_radius,
                                                    year=t.year, month=t.month, day=t.day,
-                                                   no_associate_leagcy=not self.pars.do_liumatch,
+                                                   no_associate_legacy_survey=not self.pars.do_liumatch,
                                                    liumatch_radius=self.pars.liumatch_radius,
-                                                   liuserver=self.pars.liumatch_server,
+                                                   liumatch_server=self.pars.liumatch_server,
                                                    no_associate_gaia=not self.pars.do_gaiamatch,
                                                    gaiamatch_radius=self.pars.gaiamatch_radius,
                                                    gaiacat=gaiacat )

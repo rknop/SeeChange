@@ -414,10 +414,13 @@ class Object(Base, UUIDMixin, SpatiallyIndexed):
                         #   just making sure the database is loaded for
                         #   later alert purposes
                         if not no_associate_legacy_survey:
-                            ObjectLegacySurveyMatch.get_object_matches( objid, con=conn )
+                            ObjectLegacySurveyMatch.get_object_matches( objid, con=conn,
+                                                                        radius=liumatch_radius,
+                                                                        liuserver=liumatch_server )
 
                         if not no_associate_gaia:
-                            ObjectGaiaMatch.get_object_matches( objid, gaiacat=gaiacat, con=conn )
+                            ObjectGaiaMatch.get_object_matches( objid, radius=gaiamatch_radius,
+                                                                gaiacat=gaiacat, con=conn )
 
 
 
@@ -734,6 +737,7 @@ class ObjectCatalogMatch:
        {cls.matchidcolumn}, match_radius) unique.
 
        Subclasses must define the following class properties:
+          nomatchtable : the name of the table that flags there are no matches
           matchidcolumn : the name of the column that has the id of the matched catalog row
           tablekeys : list of column names.  Please do not encode SQL injection attacks
 
@@ -753,18 +757,14 @@ class ObjectCatalogMatch:
         matches = []
         if len(rows) > 0:
             found_existing = True
-            if any( r[ cls.matchidcolumn ] is None for r in rows ):
-                if len(rows) > 1:
-                    # ...this may actually be impossible if the right unique constraints
-                    #    were created in the table.  Actually, no, it can happen; I would have
-                    #    to figure out how to set the postgres NULLS_NOT_DISTINCT values on
-                    #    the UniqueIndex in SA.  (Preferred solution: Issue #516.)
-                    raise RuntimeError( f"Database corruption: {cls.__tablename__} has more than one row "
-                                        f"for object {objid} radius {mrad}, but {cls.matchidcolumn} is None "
-                                        f"for at least one of them." )
-            else:
-                matches = [ cls( **r ) for r in rows ]
-                matches.sort( key=lambda o: o.dist )
+            matches = [ cls( **r ) for r in rows ]
+            matches.sort( key=lambda o: o.dist )
+        else:
+            cursor.execute( f"SELECT * FROM {cls.nomatchtable} WHERE object_id=%(objid)s AND match_radius=%(rad)s",
+                            { 'objid': objid, 'rad': mrad } )
+            rows = cursor.fetchall()
+            if len(rows) > 0:
+                found_existing = True
 
         return found_existing, matches
 
@@ -864,16 +864,14 @@ class ObjectCatalogMatch:
                             raise RuntimeError( f"Another process acquired and saved catalog matches for "
                                                 f"{cls.__name__} as us, but got a different list!" )
                     else:
-                        keys = ",".join( cls.tablekeys )
-                        valuesmess = ",".join( f"%({k})s" for k in cls.tablekeys )
                         if len(newmatches) == 0:
                             # Create the entry that flags that there were no matches
-                            values = { k: None for k in cls.tablekeys }
-                            values['object_id'] = objid
-                            values['match_radius'] = int( radius * 1000 )
-                            cursor.execute( f"INSERT INTO {cls.__tablename__}({keys}) VALUES({valuesmess})",
-                                            values )
+                            cursor.execute( f"INSERT INTO {cls.nomatchtable}(object_id, match_radius) "
+                                            f"VALUES(%(objid)s, %(mrad)s)",
+                                            { 'objid': objid, 'mrad': int( radius * 1000 ) } )
                         else:
+                            keys = ",".join( cls.tablekeys )
+                            valuesmess = ",".join( f"%({k})s" for k in cls.tablekeys )
                             for mat in newmatches:
                                 values = { k: getattr( mat, k ) for k in cls.tablekeys }
                                 cursor.execute( f"INSERT INTO {cls.__tablename__}({keys}) VALUES({valuesmess})",
@@ -887,6 +885,27 @@ class ObjectCatalogMatch:
                 dbcon.rollback()
 
 
+class NoLegacySurveyMatches( Base ):
+    """Flag that a given object_id / match radius has no gaia matches"""
+
+    __tablename__ = "no_object_legacy_survey_matches"
+
+    object_id = sa.Column(
+        sa.ForeignKey( 'objects._id', ondelete='CASCADE', name='no_object_legacy_survey_match_fkey' ),
+        nullable=False,
+        index=True,
+        primary_key=True,
+        doc='ID of the object that has no matches'
+    )
+
+    match_radius = sa.Column(
+        sa.Integer,
+        nullable=False,
+        index=False,
+        primary_key=True,
+        doc="Search radius in milliarcsec" )
+
+
 class ObjectLegacySurveyMatch( Base, ObjectCatalogMatch ):
     """Stores matches bewteen objects and Legacy Survey catalog sources.
 
@@ -898,7 +917,7 @@ class ObjectLegacySurveyMatch( Base, ObjectCatalogMatch ):
     """
 
     __tablename__ = "object_legacy_survey_match"
-    matchconfig = 'measuring.liumatch_radius'
+    nomatchtable = "no_object_legacy_survey_matches"
     matchidcolumn = 'lsid'
     tablekeys = [ 'object_id', 'match_radius', 'lsid', 'ra', 'dec', 'dist', 'white_mag', 'xgboost', 'is_star' ]
 
@@ -917,7 +936,7 @@ class ObjectLegacySurveyMatch( Base, ObjectCatalogMatch ):
         primary_key=True,
         doc="Search radius in milliarcsec" )
 
-    lsid = sa.Column( sa.BigInteger, nullable=True, primary_key=True, index=False, doc="Legacy Survey ID" )
+    lsid = sa.Column( sa.BigInteger, nullable=False, primary_key=True, index=False, doc="Legacy Survey ID" )
 
     ra = sa.Column( sa.Double, nullable=True, index=False, doc="Legacy Survey object RA" )
     dec = sa.Column( sa.Double, nullable=True, index=False, doc="Legacy Survey object Dec" )
@@ -1038,12 +1057,32 @@ class ObjectLegacySurveyMatch( Base, ObjectCatalogMatch ):
         return ok
 
 
+class NoGaiaMatches( Base ):
+    """Flag that a given object_id / match radius has no gaia matches"""
+
+    __tablename__ = "no_object_gaia_matches"
+
+    object_id = sa.Column(
+        sa.ForeignKey( 'objects._id', ondelete='CASCADE', name='no_object_gaia_match_fkey' ),
+        nullable=False,
+        index=True,
+        primary_key=True,
+        doc='ID of the object that has no matches'
+    )
+
+    match_radius = sa.Column(
+        sa.Integer,
+        nullable=False,
+        index=False,
+        primary_key=True,
+        doc="Search radius in milliarcsec" )
+
 
 class ObjectGaiaMatch( Base, ObjectCatalogMatch ):
     """Stores matches between objects and Gaia DR3 catalog sources."""
 
     __tablename__ = "object_gaia_match"
-    matchconfig = "measuring.gaiamatch_radius"
+    nomatchtable = "no_object_gaia_matches"
     matchidcolumn = "gaia_sourceid"
     tablekeys = [ 'object_id', 'match_radius', 'gaia_sourceid', 'dist',
                   'gaia_starprob', 'gaia_quasarprob', 'gaia_galaxyprob' ]
@@ -1063,7 +1102,7 @@ class ObjectGaiaMatch( Base, ObjectCatalogMatch ):
         primary_key=True,
         doc="Search radius in milliarcsec" )
 
-    gaia_sourceid = sa.Column( sa.BigInteger, nullable=True, primary_key=True, index=False, doc="Gaia DR3 source_id" )
+    gaia_sourceid = sa.Column( sa.BigInteger, nullable=False, primary_key=True, index=False, doc="Gaia DR3 source_id" )
     dist = sa.Column( sa.Double, nullable=True, index=False, doc="Arcsec between object and Gaia DR3 source" )
     gaia_starprob = sa.Column( sa.REAL, nullable=True, index=False, doc="Gaia DR3 classprob_dsc_combmod_star" )
     gaia_quasarprob = sa.Column( sa.REAL, nullable=True, index=False, doc="Gaia DR3 classprob_dsc_combmod_quasar" )

@@ -21,11 +21,11 @@ import selenium.webdriver
 
 from util.config import Config
 from models.base import (
+    Base,
     FileOnDiskMixin,
     SmartSession,
     PsycopgConnection,
     CODE_ROOT,
-    get_all_database_objects,
     setup_warning_filters,
     get_archive_object
 )
@@ -110,16 +110,12 @@ def pytest_sessionstart(session):
         session.commit()
 
 
-def any_objects_in_database( dbsession ):
+def any_objects_in_database():
     """Look in the database, print errors and return False if things are left behind.
 
     The "allowed" tables (CodeVersion, SensorSection,
     CatalogExcerpt, Provenance, Object, PasswordLink) will not cause
     False to be returned, but will just print a debug message.
-
-    Parameters
-    ----------
-      dbsession: Session
 
     Returns
     -------
@@ -128,46 +124,31 @@ def any_objects_in_database( dbsession ):
 
     """
 
-    objects = get_all_database_objects( session=dbsession )
+    # There are some tables where we don't demand the test clean up.  One should question
+    #   if this is a good idea.  Many of these tables are things that get loaded as side
+    #   effects, so it's harder to know when writing a test that it will happen.  Still,
+    #   we could see what the tests do and put in cleanup.
+    ok_to_stay = [ 'code_versions', 'provenances', 'provenance_upstreams', 'object_name_max_used',
+                   'sensor_sections', 'catalog_excerpts', 'objects',
+                   'object_legacy_survey_match', 'no_object_legacy_survey_matches',
+                   'object_gaia_match', 'no_object_gaia_matches',
+                   'passwordlink', 'conductor_config' ]
+
+    alltables = Base.metadata.tables.keys()
+
     any_objects = False
-    for Class, ids in objects.items():
-        # TODO: check that surviving provenances have test_parameter
-        # ...I don't think this should be a TODO.  Check this, but I
-        #    think the pipeline will automatically add provenances if
-        #    they don't exist.  As such, the tests may implicitly
-        #    add provenances they don't explicitly track.
-        if Class.__name__ in ['CodeVersion', 'SensorSection', 'CatalogExcerpt',
-                              'Provenance', 'Object', 'ObjectLegacySurveyMatch', 'PasswordLink']:
-            if len(ids) > 0:
-                SCLogger.debug(f'There are {len(ids)} {Class.__name__} objects in the database. These are OK to stay.')
-            continue
+    with PsycopgConnection() as con:
+        cursor = con.cursor()
+        for table in alltables:
+            cursor.execute( f"SELECT COUNT(*) FROM {table}" )
+            n = cursor.fetchone()[0]
 
-        # Special case handling for the 'current' Provenance Tag, which may have
-        #   been added automatically by top_level.py
-        if Class.__name__ == "ProvenanceTag":
-            currents = []
-            notcurrents = []
-            for id in ids:
-                obj = Class.get_by_id( id, session=dbsession )
-                if obj.tag == 'current':
-                    currents.append( obj )
+            if n > 0:
+                if table in ok_to_stay:
+                    SCLogger.debug( f"There are {n} rows in table {table}.  These are OK to stay." )
                 else:
-                    notcurrents.append( obj )
-            if len(currents) > 0:
-                SCLogger.debug( f'There are {len(currents)} {Class.__name__} "current" objects in the database. '
-                                F'These are OK to stay.' )
-            objs = notcurrents
-        else:
-            objs = [ Class.get_by_id( i, session=dbsession) for i in ids ]
-
-        if len(objs) > 0:
-            any_objects = True
-            strio = io.StringIO()
-            strio.write( f'There are {len(objs)} {Class.__name__} objects in the database. '
-                         f'Please make sure to cleanup!')
-            for obj in objs:
-                strio.write( f'\n    {obj}' )
-            SCLogger.error( strio.getvalue() )
+                    any_objects = True
+                    SCLogger.error( f"There are {n} rows in table {table}.  Some test isn't cleaning up" )
 
     return any_objects
 
@@ -201,10 +182,11 @@ def pytest_sessionfinish(session, exitstatus):
     global verify_archive_database_empty
 
     # SCLogger.debug('Final teardown fixture executing! ')
-    with SmartSession() as dbsession:
-        # ISSUE 479 this will find and DEBUG report the codeversions that are about to get killed in the next line.
-        any_objects = any_objects_in_database( dbsession )
 
+    # ISSUE 479 this will find and DEBUG report the codeversions that are about to get killed in the next line.
+    any_objects = any_objects_in_database()
+
+    with SmartSession() as dbsession:
         # We'll need the catalog excerpts later after we delete the table
         catexps = dbsession.scalars(sa.select(CatalogExcerpt)).all()
 

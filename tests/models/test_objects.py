@@ -1,10 +1,12 @@
 import pytest
 import uuid
 import time
+import types
 from multiprocessing import Process
 
 import numpy as np
 import sqlalchemy as sa
+import psycopg
 import psycopg.errors
 
 from models.base import SmartSession, PsycopgConnection
@@ -14,6 +16,15 @@ from models.object import Object, ObjectLegacySurveyMatch, ObjectGaiaMatch
 from models.measurements import Measurements, MeasurementSet
 from models.deepscore import DeepScore, DeepScoreSet
 from util.util import asUUID
+from pipeline.catalog_tools import fetch_gaia_dr3_excerpt
+
+
+@pytest.fixture( scope="module" )
+def associate_measurements_kwargs( test_config ):
+    return { 'liumatch_radius': test_config.value( 'measuring.liumatch_radius' ),
+             'liumatch_server': test_config.value( 'measuring.liumatch_server' ),
+             'gaiamatch_radius': test_config.value( 'measuring.gaiamatch_radius' )
+            }
 
 
 def test_object_creation():
@@ -128,18 +139,19 @@ def test_generate_names():
             conn.commit()
 
 
-def test_generate_names_race_condition():
+def test_generate_names_race_condition( associate_measurements_kwargs ):
     # If this ra and dec is used in any other test
     #   and they leave behind an object, it will
     #   break this test, and also that object
     #   will get deleted by cleanup of this test.
-    ra=154.4032444540051
-    dec=-15.32714749020748
+    ra = 154.4032444540051
+    dec = -15.32714749020748
     measur = Measurements( ra=ra, dec=dec  )
 
     def associator():
         with PsycopgConnection() as conn:
-            Object.associate_measurements( [ measur ], year=2025, connection=conn, nocommit=True )
+            Object.associate_measurements( [ measur ], year=2025, connection=conn, nocommit=True,
+                                           **associate_measurements_kwargs )
             # Put a sleep here in order to trigger the race condition if
             #   the table lock in associate_measurements is commented
             #   out.  (I have verified that in fact the
@@ -195,6 +207,9 @@ def test_generate_names_race_condition():
 # (This is really sort of a test of the whole pipeline in the
 #   oversimplified case of the new images being perfectly aligned with
 #   the ref image and having exactly the same seeing.)
+#
+# TODO : make a test of this where the measurements should match to
+#    legacy and/or gaia
 def test_associate_measurements( sim_lightcurve_complete_dses_module,
                                  sim_lightcurve_persistent_sources,
                                  sim_lightcurve_image_parameters ):
@@ -397,7 +412,7 @@ def test_object_legacy_survey_match( test_config ):
                 assert a.dist == pytest.approx( b.dist, abs=0.01 )
                 assert a.xgboost == pytest.approx( b.xgboost, abs=0.001 )
                 assert a.is_star == b.is_star
-            
+
         # Try to find and commit new objects
         firstmatches = ObjectLegacySurveyMatch.get_object_matches( obj.id, radius=10, liuserver=liuserver )
         assert len(firstmatches) == 4
@@ -416,7 +431,7 @@ def test_object_legacy_survey_match( test_config ):
                              .order_by( ObjectLegacySurveyMatch.dist )
                              .all() )
             compare_matches( firstmatches, savedmatches )
-        
+
         # See if we get the same matches when we ask for matches
         # (Also, don't pass a liuserver, since the code that uses it shouldn't be run.)
         matches = ObjectLegacySurveyMatch.get_object_matches( obj.id, radius=10 )
@@ -476,6 +491,8 @@ def test_object_legacy_survey_match( test_config ):
         assert matches[0].white_mag == pytest.approx( 19.99, abs=0.01 )
         assert matches[1].white_mag == pytest.approx( 19.93, abs=0.01 )
 
+        # TODO : test that the "null" entry gets added when there are no matches
+
     finally:
         with PsycopgConnection() as con:
             cursor = con.cursor()
@@ -484,24 +501,116 @@ def test_object_legacy_survey_match( test_config ):
             con.commit()
 
 
-def test_object_gaia_match():
+def test_object_gaia_match( test_config ):
     objid = uuid.uuid4()
+    objid2 = uuid.uuid4()
+    catex = None
     try:
-        # Make an object on a gaia star where I know there are 3 other stars within 20"
+        # Make an object on a gaia star where I know there are 3 other stars within 20",
+        #  and an object where I know there is no gaia star within 20"
         obj = Object( _id=objid, ra=180.10710589163787, dec=-30.099665448859035, name='test_gaiamatch_object',
                       is_test=True, is_bad=False )
         obj.calculate_coordinates()
+        obj2 = Object( _id=objid2, ra=180., dec=-30., name='test_gaiamatch_object_2', is_test=True, is_bad=False )
         with SmartSession() as sess:
             sess.add( obj )
+            sess.add( obj2 )
             sess.commit()
 
-        gaias = ObjectGaiaMatch.get_object_matches( obj.id, radius=20 )
-        pass
+        def compare_gaias( AList, BList, no_match_radius=False ):
+            assert len(AList) == len(BList)
+            for a, b in zip( AList, BList ):
+                assert asUUID(a.object_id) == asUUID(b.object_id)
+                assert no_match_radius or ( a.match_radius == b.match_radius )
+                assert a.gaia_sourceid == b.gaia_sourceid
+                assert a.gaia_starprob == pytest.approx( b.gaia_starprob, abs=0.001 )
+                assert a.gaia_quasarprob == pytest.approx( b.gaia_quasarprob, abs=0.001 )
+                assert a.gaia_galaxyprob == pytest.approx( b.gaia_galaxyprob, abs=0.001 )
+
+        firstgaias = ObjectGaiaMatch.get_object_matches( obj.id, radius=20 )
+        assert len(firstgaias) == 4
+        assert all( [ g.dist <= 20. for g in firstgaias ] )
+
+        # Make sure we get only the first 2 asking for a 15" radius
+        gaias = ObjectGaiaMatch.get_object_matches( obj.id, radius=15 )
+        compare_gaias( firstgaias[0:2], gaias, no_match_radius=True )
+
+        # Get a catalog excerpt for later usage
+        fakeimage = types.SimpleNamespace()
+        fakeimage.ra = 180.25
+        fakeimage.dec = -30.25
+        fakeimage.ra_corner_00, fakeimage.ra_corner_01, fakeimage.minra = 180.0, 180.0, 180.0
+        fakeimage.ra_corner_10, fakeimage.ra_corner_11, fakeimage.maxra = 180.5, 180.5, 180.5
+        fakeimage.dec_corner_00, fakeimage.dec_corner_10, fakeimage.mindec = -30.5, -30.5, -30.5
+        fakeimage.dec_corner_01, fakeimage.dec_corner_11, fakeimage.maxdec = -30., -30., -30.
+        catex = fetch_gaia_dr3_excerpt( fakeimage, maxmags=None, magrange=None )
+
+        # NEVER DO THIS IN REAL LIFE.  I'm editing the config to make
+        #   the gaia server not-contactable, to make sure the next
+        #   couple get_object_matches calls do not contact the gaia
+        #   server.  You are not supposed to muck about with the config
+        #   like this.
+        orig_gaia_url = test_config.value( 'catalog_gaiadr3.server_url' )
+        orig_static = test_config._static
+        try:
+            test_config._static = False
+            test_config.set_value( 'catalog_gaiadr3.server_url', 'https://localhost:666' )
+
+            # Make sure that if we ask for a set that's already there, we get it
+            gaias = ObjectGaiaMatch.get_object_matches( obj.id, radius=20 )
+            compare_gaias( firstgaias, gaias )
+
+            #  Make sure that we can work with a pre-existing catalog excerpt.  Use a
+            #    new radius so it won't just grab the pre-existing ones
+            gaias = ObjectGaiaMatch.get_object_matches( obj.id, radius=18., gaiacat=catex )
+            compare_gaias( firstgaias[0:3], gaias, no_match_radius=True )
+
+        finally:
+            test_config.set_value( 'catalog_gaiadr3.server_url', orig_gaia_url )
+            test_config._static = orig_static
+
+        # At this point there should be 9 entries in the object_gaia_match table for
+        #   our object : 4 from radius 20, 2 from 15, and 3 from 18
+        with PsycopgConnection() as con:
+            cursor = con.cursor( row_factory=psycopg.rows.dict_row )
+            cursor.execute( "SELECT * FROM object_gaia_match WHERE object_id=%(id)s", { 'id': objid } )
+            rows = cursor.fetchall()
+            assert len(rows) == 9
+            assert len( [ r for r in rows if r['match_radius'] == 20000 ] ) == 4
+            assert len( [ r for r in rows if r['match_radius'] == 18000 ] ) == 3
+            assert len( [ r for r in rows if r['match_radius'] == 15000 ] ) == 2
+
+        # Test that the "null" entry gets added when there are no matches, and that once
+        #   it's there the external server isn't hit again
+
+        gaias = ObjectGaiaMatch.get_object_matches( obj2.id, radius=5 )
+        assert len(gaias) == 0
+        with PsycopgConnection() as con:
+            cursor = con.cursor( row_factory=psycopg.rows.dict_row )
+            cursor.execute( "SELECT * FROM no_object_gaia_matches WHERE object_id=%(id)s", { 'id': objid2 } )
+            rows = cursor.fetchall()
+            assert len(rows) == 1
+            assert rows[0]['match_radius'] == 5000
+
+        orig_gaia_url = test_config.value( 'catalog_gaiadr3.server_url' )
+        orig_static = test_config._static
+        try:
+            test_config._static = False
+            test_config.set_value( 'catalog_gaiadr3.server_url', 'https://localhost:666' )
+            gaias = ObjectGaiaMatch.get_object_matches( obj2.id, radius=5 )
+            assert len(gaias) == 0
+        finally:
+            test_config.set_value( 'catalog_gaiadr3.server_url', orig_gaia_url )
+            test_config._static = orig_static
+
+        # MORE -- test failure modes, etc.
 
     finally:
+        if catex is not None:
+            catex.delete_from_disk_and_database()
         with PsycopgConnection() as con:
             cursor = con.cursor()
             cursor.execute( "DELETE FROM object_gaia_match WHERE object_id=%(id)s", { 'id': objid } )
-            cursor.execute( "DELETE FROM objects WHERE _id=%(id)s", { 'id': objid } )
+            cursor.execute( "DELETE FROM no_object_gaia_matches WHERE object_id=%(id)s", { 'id': objid } )
+            cursor.execute( "DELETE FROM objects WHERE _id=ANY(%(ids)s)", { 'ids': [ objid, objid2 ] } )
             con.commit()
-    
