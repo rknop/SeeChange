@@ -147,7 +147,7 @@ def any_objects_in_database():
                 cursor.execute( f"SELECT COUNT(*) FROM {table}" )
             except psycopg.errors.UndefinedTable:
                 con.rollback()
-                continue                
+                continue
             n = cursor.fetchone()[0]
 
             if n > 0:
