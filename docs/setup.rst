@@ -169,7 +169,12 @@ In addition to the running SeeChange code, there are a few servers that need to 
 
 TODO DOCUMENT THIS
 
+Setting up a database
+---------------------
 
+TODO: give more information.
+
+Broadly, you need a PostgreSQL database running that all machines that will run the pipeline (as well as the machine running the webserver) can connect directly to on port 5432.  The database should have the extensions ``q3c`` and ``pg_hint_plan`` installed.  Configure the database by editing the ``db`` block of the config.  Do *not* change the value of ``engine``; anything other than ``postgresql+psycopg`` will break the code.  We recommend that you make ``password`` equal to ``null`` and then stick the password in a non-world-readable file pointed to by ``password_file``.  (That file location must be the in-container location of the file if you're running in a container, which is the usual case.)
 
 
 
