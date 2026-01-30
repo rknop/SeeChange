@@ -61,8 +61,15 @@ def test_build_avro_alert_structures( test_config, decam_datastore_through_scori
         assert a['diaObject']['dec'] == pytest.approx( obj.dec, abs=0.1/3600. )
         assert a['diaObject']['xgmatchRadius'] == test_config.value( 'measuring.liumatch_radius' )
         # Matches should always be sorted by distance
-        zippy = zip( lsmatches, a['diaObject']['ls-xgboost'] )
+        zippy = list( zip( lsmatches, a['diaObject']['ls-xgboost'] ) )
         assert all(m.lsid == am['lsid'] for m, am in zippy )
+        # # ****
+        # if all( m.lsid == am['lsid'] for m, am in zippy ):
+        #     assert False
+        # else:
+        #     import pdb; pdb.set_trace()
+        #     pass
+        # # ****
         assert all(m.ra == pytest.approx( am['ra'], abs=0.1/3600 ) for m, am in zippy )
         assert all(m.dec == pytest.approx( am['dec'], abs=0.1/3600 ) for m, am in zippy )
         assert all(m.dist == pytest.approx( am['dist'], abs=0.1/3600 ) for m, am in zippy )
