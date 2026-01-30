@@ -63,18 +63,11 @@ def test_build_avro_alert_structures( test_config, decam_datastore_through_scori
         # Matches should always be sorted by distance
         zippy = list( zip( lsmatches, a['diaObject']['ls-xgboost'] ) )
         assert all(m.lsid == am['lsid'] for m, am in zippy )
-        # # ****
-        # if all( m.lsid == am['lsid'] for m, am in zippy ):
-        #     assert False
-        # else:
-        #     import pdb; pdb.set_trace()
-        #     pass
-        # # ****
         assert all(m.ra == pytest.approx( am['ra'], abs=0.1/3600 ) for m, am in zippy )
         assert all(m.dec == pytest.approx( am['dec'], abs=0.1/3600 ) for m, am in zippy )
         assert all(m.dist == pytest.approx( am['dist'], abs=0.1/3600 ) for m, am in zippy )
         assert all(m.white_mag == pytest.approx( am['white_mag'], abs=0.001 ) for m, am in zippy )
-        assert all(m.xgboost == pytest.approx( am['ls-xbgoost'], abs=0.001 ) for m, am in zippy )
+        assert all(m.xgboost == pytest.approx( am['xbgoost'], abs=0.001 ) for m, am in zippy )
         assert all(m.is_star == am['is_star'] for m, am in zippy )
     assert at_least_some_had_matches
     assert all( len(a['cutoutScience']) == 41 * 41 * 4 for a in alerts )
