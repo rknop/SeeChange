@@ -67,7 +67,7 @@ def test_build_avro_alert_structures( test_config, decam_datastore_through_scori
         assert all(m.dec == pytest.approx( am['dec'], abs=0.1/3600 ) for m, am in zippy )
         assert all(m.dist == pytest.approx( am['dist'], abs=0.1/3600 ) for m, am in zippy )
         assert all(m.white_mag == pytest.approx( am['white_mag'], abs=0.001 ) for m, am in zippy )
-        assert all(m.xgboost == pytest.approx( am['xbgoost'], abs=0.001 ) for m, am in zippy )
+        assert all(m.xgboost == pytest.approx( am['xgboost'], abs=0.001 ) for m, am in zippy )
         assert all(m.is_star == am['is_star'] for m, am in zippy )
     assert at_least_some_had_matches
     assert all( len(a['cutoutScience']) == 41 * 41 * 4 for a in alerts )
