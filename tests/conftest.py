@@ -146,7 +146,8 @@ def any_objects_in_database():
                 #  SQLAlchmey doesn't forget about them.  Issue #516.
                 cursor.execute( f"SELECT COUNT(*) FROM {table}" )
             except psycopg.errors.UndefinedTable:
-                continue
+                con.rollback()
+                continue                
             n = cursor.fetchone()[0]
 
             if n > 0:
