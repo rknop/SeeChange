@@ -12,6 +12,7 @@ import subprocess
 import numpy as np
 from scipy.integrate import dblquad
 
+import psycopg.errors
 import sqlalchemy as sa
 import sqlalchemy.orm
 
@@ -140,7 +141,12 @@ def any_objects_in_database():
     with PsycopgConnection() as con:
         cursor = con.cursor()
         for table in alltables:
-            cursor.execute( f"SELECT COUNT(*) FROM {table}" )
+            try:
+                # Some tests create tables they then delete, but
+                #  SQLAlchmey doesn't forget about them.  Issue #516.
+                cursor.execute( f"SELECT COUNT(*) FROM {table}" )
+            except psycopg.errors.UndefinedTable:
+                continue
             n = cursor.fetchone()[0]
 
             if n > 0:
