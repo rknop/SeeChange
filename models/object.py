@@ -749,7 +749,8 @@ class ObjectCatalogMatch:
     def _get_existing_matches( cls, objid, radius, cursor ):
         mrad = int( radius * 1000. )
         cursor.execute( f"SELECT {','.join(cls.tablekeys)} FROM {cls.__tablename__} "
-                        f"WHERE object_id=%(objid)s AND match_radius=%(rad)s ",
+                        f"WHERE object_id=%(objid)s AND match_radius=%(rad)s "
+                        f"ORDER BY dist",
                         { 'objid': objid, 'rad': mrad } )
         rows = cursor.fetchall()
 
@@ -760,7 +761,7 @@ class ObjectCatalogMatch:
             matches = [ cls( **r ) for r in rows ]
             matches.sort( key=lambda o: o.dist )
         else:
-            cursor.execute( f"SELECT * FROM {cls.nomatchtable} WHERE object_id=%(objid)s AND match_radius=%(rad)s",
+            cursor.execute( f"SELECT * FROM {cls.nomatchtable} WHERE object_id=%(objid)s AND match_radius=%(rad)s ",
                             { 'objid': objid, 'rad': mrad } )
             rows = cursor.fetchall()
             if len(rows) > 0:
