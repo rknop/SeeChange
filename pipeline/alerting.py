@@ -231,6 +231,7 @@ class Alerting:
                     lsmatches = ( sess.query( ObjectLegacySurveyMatch )
                                   .filter( ObjectLegacySurveyMatch.object_id==obj.id )
                                   .filter( ObjectLegacySurveyMatch.match_radius==int(liumatch_radius * 1000) )
+                                  .order_by( ObjectLegacySurveyMatch.dist )
                                   .all() )
                     if ( len(lsmatches) > 0 ) and ( lsmatches[0].lsid is not None ):
                         for lsmatch in lsmatches:
@@ -246,6 +247,7 @@ class Alerting:
                     gaiamatches = ( sess.query( ObjectGaiaMatch )
                                     .filter( ObjectGaiaMatch.object_id==obj.id )
                                     .filter( ObjectGaiaMatch.match_radius==int(gaiamatch_radius * 1000) )
+                                    .order_by( ObjectGaiaMatch.dist )
                                     .all() )
                     if ( len(gaiamatches) > 0 ) and ( gaiamatches[0].gaia_sourceid is not None ):
                         for gaiamatch in gaiamatches:
