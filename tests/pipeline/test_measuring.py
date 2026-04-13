@@ -56,6 +56,15 @@ def test_measuring( diagnostic_injections ):
         measparam[ 'diag_box_halfsize' ] = 2.
         measparam[ 'bad_thresholds' ] = threshes
         measparam[ 'deletion_thresholds' ] = nullthreshes
+        measparam[ 'do_liumatch' ] = False
+        measparam[ 'do_gaiamatch' ] = False
+
+        # We're going to need to build a provenance later, so remove the
+        #   non crticial paramters.
+        measparam_crit = copy.deepcopy( measparam )
+        for noncrit in [ 'do_liumatch', 'liumatch_radius', 'liumatch_server', 'do_gaiamatch', 'gaiamatch_radius' ]:
+            del measparam_crit[ noncrit ]
+
 
         # By putting test_measuring=True in starting_prov, it should ensure that all of the
         #   downstream provenances are things unique to this test, so when we delete them
@@ -76,7 +85,7 @@ def test_measuring( diagnostic_injections ):
                        'subtraction': { 'total_bs': True, 'refset': 'test_measuring_refset' },
                        'detection': { 'total_bs': True },
                        'cutting': cutparam,
-                       'measuring': measparam,
+                       'measuring': measparam_crit,
                        'scoring': { 'total_bs': True },
                        'alerting': { 'total_bs': True }
                       }
@@ -256,7 +265,8 @@ def test_measuring( diagnostic_injections ):
         # to measurement thresdholds.  Only the four brightest of the regular psfs should be kept.
         ds.measurement_set = None
         measparam[ 'deletion_thresholds' ] = threshes
-        ds.edit_prov_tree( 'measuring', params_dict=measparam, newprovtag='test_measuring_1'  )
+        measparam_crit[ 'deletion_thresholds' ] = threshes
+        ds.edit_prov_tree( 'measuring', params_dict=measparam_crit, newprovtag='test_measuring_1'  )
         nukeprovs = nukeprovs.union( set( v for v in ds.prov_tree.values() ) )
         measer = Measurer( **measparam )
         ds = measer.run( ds )

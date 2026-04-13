@@ -1,1 +1,1 @@
-../extern/nersc-upload-connector/archive.py
+../extern/file-archive-server/archive.py

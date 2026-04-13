@@ -353,7 +353,7 @@ class DiskFile(Base, UUIDMixin, FileOnDiskMixin):
         return []
 
 
-@pytest.fixture(scope='session')
+@pytest.fixture(scope='module')
 def diskfiletable():
     with SmartSession() as session:
         DiskFile.__table__.create( session.bind )
