@@ -1,19 +1,30 @@
 import pytest
 import uuid
 import time
+import types
 from multiprocessing import Process
 
 import numpy as np
 import sqlalchemy as sa
+import psycopg
 import psycopg.errors
 
 from models.base import SmartSession, PsycopgConnection
 from models.image import Image
 from models.zero_point import ZeroPoint
-from models.object import Object, ObjectLegacySurveyMatch
+from models.object import Object, ObjectLegacySurveyMatch, ObjectGaiaMatch
 from models.measurements import Measurements, MeasurementSet
 from models.deepscore import DeepScore, DeepScoreSet
 from util.util import asUUID
+from pipeline.catalog_tools import fetch_gaia_dr3_excerpt
+
+
+@pytest.fixture( scope="module" )
+def associate_measurements_kwargs( test_config ):
+    return { 'liumatch_radius': test_config.value( 'measuring.liumatch_radius' ),
+             'liumatch_server': test_config.value( 'measuring.liumatch_server' ),
+             'gaiamatch_radius': test_config.value( 'measuring.gaiamatch_radius' )
+            }
 
 
 def test_object_creation():
@@ -128,18 +139,19 @@ def test_generate_names():
             conn.commit()
 
 
-def test_generate_names_race_condition():
+def test_generate_names_race_condition( associate_measurements_kwargs ):
     # If this ra and dec is used in any other test
     #   and they leave behind an object, it will
     #   break this test, and also that object
     #   will get deleted by cleanup of this test.
-    ra=154.4032444540051
-    dec=-15.32714749020748
+    ra = 154.4032444540051
+    dec = -15.32714749020748
     measur = Measurements( ra=ra, dec=dec  )
 
     def associator():
         with PsycopgConnection() as conn:
-            Object.associate_measurements( [ measur ], year=2025, connection=conn, nocommit=True )
+            Object.associate_measurements( [ measur ], year=2025, connection=conn, nocommit=True,
+                                           **associate_measurements_kwargs )
             # Put a sleep here in order to trigger the race condition if
             #   the table lock in associate_measurements is commented
             #   out.  (I have verified that in fact the
@@ -195,6 +207,9 @@ def test_generate_names_race_condition():
 # (This is really sort of a test of the whole pipeline in the
 #   oversimplified case of the new images being perfectly aligned with
 #   the ref image and having exactly the same seeing.)
+#
+# TODO : make a test of this where the measurements should match to
+#    legacy and/or gaia
 def test_associate_measurements( sim_lightcurve_complete_dses_module,
                                  sim_lightcurve_persistent_sources,
                                  sim_lightcurve_image_parameters ):
@@ -373,7 +388,8 @@ def test_get_measurements_et_al( sim_lightcurve_complete_dses_module,
     # TODO : test thresholds when those are implmeneted
 
 
-def test_object_legacy_survey_match():
+def test_object_legacy_survey_match( test_config ):
+    liuserver = test_config.value( 'measuring.liumatch_server' )
     objid = uuid.uuid4()
     try:
         obj = Object( _id=objid, ra=7.01241, dec=-42.96943, name='test_olsm_object',
@@ -385,8 +401,20 @@ def test_object_legacy_survey_match():
             sess.add( obj )
             sess.commit()
 
+        def compare_matches( Alist, BList, no_match_radius=False ):
+            assert len( Alist ) == len( BList )
+            for a, b in zip( Alist, BList ):
+                assert asUUID(a.object_id) == asUUID(b.object_id)
+                assert no_match_radius or ( a.match_radius == b.match_radius )
+                assert a.lsid == b.lsid
+                assert a.ra == pytest.approx( b.ra, abs=0.1/3600. / np.cos( a.dec * np.pi / 180. ) )
+                assert a.dec == pytest.approx( b.dec, abs=0.1/3600. )
+                assert a.dist == pytest.approx( b.dist, abs=0.01 )
+                assert a.xgboost == pytest.approx( b.xgboost, abs=0.001 )
+                assert a.is_star == b.is_star
+
         # Try to find and commit new objects
-        firstmatches = ObjectLegacySurveyMatch.create_new_object_matches( obj.id, obj.ra, obj.dec )
+        firstmatches = ObjectLegacySurveyMatch.get_object_matches( obj.id, radius=10, liuserver=liuserver )
         assert len(firstmatches) == 4
         assert all( asUUID(m.object_id) == asUUID(objid) for m in firstmatches )
         assert firstmatches[0].lsid == 10995226531340506
@@ -395,21 +423,24 @@ def test_object_legacy_survey_match():
         assert not firstmatches[0].is_star
         assert firstmatches[0].xgboost < 0.002
 
-        # See if we get the same matches when we ask for matches
-        matches = ObjectLegacySurveyMatch.get_object_matches( obj.id )
-        for first, mat in zip( firstmatches, matches ):
-            assert asUUID(first._id) == asUUID(mat._id)
-            assert first.lsid == mat.lsid
-            assert asUUID(first.object_id) == asUUID(mat.object_id)
-            assert first.ra == pytest.approx( mat.ra, abs=0.1/3600. / np.cos( first.dec * np.pi / 180. ) )
-            assert first.dec == pytest.approx( mat.dec, abs=0.1/3600. )
-            assert first.dist == pytest.approx( mat.dist, abs=0.01 )
-            assert first.xgboost == pytest.approx( mat.xgboost, abs=0.001 )
-            assert first.is_star == mat.is_star
+        # Make sure they got committed
+        with SmartSession() as sess:
+            savedmatches = ( sess.query( ObjectLegacySurveyMatch )
+                             .filter( ObjectLegacySurveyMatch.object_id==obj.id,
+                                      ObjectLegacySurveyMatch.match_radius==int( 10. * 1000 ) )
+                             .order_by( ObjectLegacySurveyMatch.dist )
+                             .all() )
+            compare_matches( firstmatches, savedmatches )
 
-        # Make sure we get yelled at if we try to match when there are existing matches
-        with pytest.raises( RuntimeError, match="Object .* already has 4 legacy survey matches" ):
-            _ = ObjectLegacySurveyMatch.create_new_object_matches( obj.id, obj.ra, obj.dec )
+        # See if we get the same matches when we ask for matches
+        # (Also, don't pass a liuserver, since the code that uses it shouldn't be run.)
+        matches = ObjectLegacySurveyMatch.get_object_matches( obj.id, radius=10 )
+        compare_matches( firstmatches, matches )
+
+        # Ask for a different radius and make sure we get fewer matches
+        matches_r5 = ObjectLegacySurveyMatch.get_object_matches( obj.id, radius=5, liuserver=liuserver )
+        assert len(matches_r5) < len(matches)
+        compare_matches( matches_r5, firstmatches[0:2], no_match_radius=True )
 
         # Twiddle one of the magnitudes and make sure we get yelled at if we try to verify_existing
         with PsycopgConnection() as con:
@@ -418,14 +449,16 @@ def test_object_legacy_survey_match():
                             "WHERE object_id=%(oid)s AND lsid=%(lsid)s",
                             { 'oid': objid, 'lsid': 10995226531340506 } )
             con.commit()
-        with pytest.raises( ValueError, match="Object .* already has legacy survey matches, but they aren't" ):
-            _ = ObjectLegacySurveyMatch.create_new_object_matches( obj.id, obj.ra, obj.dec, exist_ok=True )
+        with pytest.raises( RuntimeError, match=( "Catalog matches for ObjectLegacySurveyMatch don't match "
+                                                  "what is already saved in the database!" ) ):
+            _ = ObjectLegacySurveyMatch.get_object_matches( obj.id, radius=10, liuserver=liuserver,
+                                                            verify_existing=True )
 
         # But if we turn off verify_existing, we should get the thing I just munged
-        matches = ObjectLegacySurveyMatch.create_new_object_matches( obj.id, obj.ra, obj.dec,
-                                                                       exist_ok=True, verify_existing=False )
-        assert asUUID(matches[0]._id) == asUUID(firstmatches[0]._id)
+        matches = ObjectLegacySurveyMatch.get_object_matches( obj.id, radius=10 )
+        assert matches[0].object_id == firstmatches[0].object_id
         assert matches[0].lsid == firstmatches[0].lsid
+        assert matches[0].match_radius == firstmatches[0].match_radius
         assert matches[0].white_mag != firstmatches[0].white_mag
 
         # Unmung, and add a new match to verify that it yells at us if the number doesn't match
@@ -434,11 +467,10 @@ def test_object_legacy_survey_match():
             cursor.execute( "UPDATE object_legacy_survey_match SET white_mag=19.93 "
                             "WHERE object_id=%(oid)s AND lsid=%(lsid)s",
                             { 'oid': objid, 'lsid': 10995226531340506 } )
-            cursor.execute( "INSERT INTO object_legacy_survey_match(_id,object_id,lsid,ra,dec,dist,"
+            cursor.execute( "INSERT INTO object_legacy_survey_match(object_id,match_radius,lsid,ra,dec,dist,"
                             "                                       white_mag,xgboost, is_star) "
-                            "VALUES(%(id)s,%(objid)s,%(lsid)s,%(ra)s,%(dec)s,%(dist)s,%(mag)s,%(xgb)s,%(iss)s)",
-                            { 'id': uuid.uuid4(),
-                              'objid': objid,
+                            "VALUES(%(objid)s,10000,%(lsid)s,%(ra)s,%(dec)s,%(dist)s,%(mag)s,%(xgb)s,%(iss)s)",
+                            { 'objid': objid,
                               'lsid': 666,
                               'ra': obj.ra,
                               'dec': obj.dec,
@@ -448,19 +480,137 @@ def test_object_legacy_survey_match():
                               'iss': True } )
             con.commit()
 
-        with pytest.raises( ValueError, match="Object .* has 5 legacy survey matches.*but I just found 4" ):
-            _ = ObjectLegacySurveyMatch.create_new_object_matches( obj.id, obj.ra, obj.dec, exist_ok=True )
+        with pytest.raises( RuntimeError, match=( "Catalog matches for ObjectLegacySurveyMatch don't match "
+                                                  "what is already saved in the database!" ) ):
+            _ = ObjectLegacySurveyMatch.get_object_matches( obj.id, radius=10, liuserver=liuserver,
+                                                            verify_existing=True )
 
         # Make sure we get what I patched in if we don't verify existing:
-        matches = ObjectLegacySurveyMatch.create_new_object_matches( obj.id, obj.ra, obj.dec,
-                                                                       exist_ok=True, verify_existing=False )
+        matches = ObjectLegacySurveyMatch.get_object_matches( obj.id, radius=10 )
         assert len(matches) == 5
         assert matches[0].white_mag == pytest.approx( 19.99, abs=0.01 )
         assert matches[1].white_mag == pytest.approx( 19.93, abs=0.01 )
+
+        # TODO : test that the "null" entry gets added when there are no matches
 
     finally:
         with PsycopgConnection() as con:
             cursor = con.cursor()
             cursor.execute( "DELETE FROM object_legacy_survey_match WHERE object_id=%(id)s", { 'id': objid } )
             cursor.execute( "DELETE FROM objects WHERE _id=%(id)s", { 'id': objid } )
+            con.commit()
+
+
+def test_object_gaia_match( test_config ):
+    objid = uuid.uuid4()
+    objid2 = uuid.uuid4()
+    catex = None
+    try:
+        # Make an object on a gaia star where I know there are 3 other stars within 20",
+        #  and an object where I know there is no gaia star within 20"
+        obj = Object( _id=objid, ra=180.10710589163787, dec=-30.099665448859035, name='test_gaiamatch_object',
+                      is_test=True, is_bad=False )
+        obj.calculate_coordinates()
+        obj2 = Object( _id=objid2, ra=180., dec=-30., name='test_gaiamatch_object_2', is_test=True, is_bad=False )
+        with SmartSession() as sess:
+            sess.add( obj )
+            sess.add( obj2 )
+            sess.commit()
+
+        def compare_gaias( AList, BList, no_match_radius=False ):
+            assert len(AList) == len(BList)
+            for a, b in zip( AList, BList ):
+                assert asUUID(a.object_id) == asUUID(b.object_id)
+                assert no_match_radius or ( a.match_radius == b.match_radius )
+                assert a.gaia_sourceid == b.gaia_sourceid
+                assert a.gaia_starprob == pytest.approx( b.gaia_starprob, abs=0.001 )
+                assert a.gaia_quasarprob == pytest.approx( b.gaia_quasarprob, abs=0.001 )
+                assert a.gaia_galaxyprob == pytest.approx( b.gaia_galaxyprob, abs=0.001 )
+
+        firstgaias = ObjectGaiaMatch.get_object_matches( obj.id, radius=20 )
+        assert len(firstgaias) == 4
+        assert all( [ g.dist <= 20. for g in firstgaias ] )
+
+        # Make sure we get only the first 2 asking for a 15" radius
+        gaias = ObjectGaiaMatch.get_object_matches( obj.id, radius=15 )
+        compare_gaias( firstgaias[0:2], gaias, no_match_radius=True )
+
+        # Get a catalog excerpt for later usage
+        fakeimage = types.SimpleNamespace()
+        fakeimage.ra = 180.25
+        fakeimage.dec = -30.25
+        fakeimage.ra_corner_00, fakeimage.ra_corner_01, fakeimage.minra = 180.0, 180.0, 180.0
+        fakeimage.ra_corner_10, fakeimage.ra_corner_11, fakeimage.maxra = 180.5, 180.5, 180.5
+        fakeimage.dec_corner_00, fakeimage.dec_corner_10, fakeimage.mindec = -30.5, -30.5, -30.5
+        fakeimage.dec_corner_01, fakeimage.dec_corner_11, fakeimage.maxdec = -30., -30., -30.
+        catex = fetch_gaia_dr3_excerpt( fakeimage, maxmags=None, magrange=None )
+
+        # NEVER DO THIS IN REAL LIFE.  I'm editing the config to make
+        #   the gaia server not-contactable, to make sure the next
+        #   couple get_object_matches calls do not contact the gaia
+        #   server.  You are not supposed to muck about with the config
+        #   like this.
+        orig_gaia_url = test_config.value( 'catalog_gaiadr3.server_url' )
+        orig_static = test_config._static
+        try:
+            test_config._static = False
+            test_config.set_value( 'catalog_gaiadr3.server_url', 'https://localhost:666' )
+
+            # Make sure that if we ask for a set that's already there, we get it
+            gaias = ObjectGaiaMatch.get_object_matches( obj.id, radius=20 )
+            compare_gaias( firstgaias, gaias )
+
+            #  Make sure that we can work with a pre-existing catalog excerpt.  Use a
+            #    new radius so it won't just grab the pre-existing ones
+            gaias = ObjectGaiaMatch.get_object_matches( obj.id, radius=18., gaiacat=catex )
+            compare_gaias( firstgaias[0:3], gaias, no_match_radius=True )
+
+        finally:
+            test_config.set_value( 'catalog_gaiadr3.server_url', orig_gaia_url )
+            test_config._static = orig_static
+
+        # At this point there should be 9 entries in the object_gaia_match table for
+        #   our object : 4 from radius 20, 2 from 15, and 3 from 18
+        with PsycopgConnection() as con:
+            cursor = con.cursor( row_factory=psycopg.rows.dict_row )
+            cursor.execute( "SELECT * FROM object_gaia_match WHERE object_id=%(id)s", { 'id': objid } )
+            rows = cursor.fetchall()
+            assert len(rows) == 9
+            assert len( [ r for r in rows if r['match_radius'] == 20000 ] ) == 4
+            assert len( [ r for r in rows if r['match_radius'] == 18000 ] ) == 3
+            assert len( [ r for r in rows if r['match_radius'] == 15000 ] ) == 2
+
+        # Test that the "null" entry gets added when there are no matches, and that once
+        #   it's there the external server isn't hit again
+
+        gaias = ObjectGaiaMatch.get_object_matches( obj2.id, radius=5 )
+        assert len(gaias) == 0
+        with PsycopgConnection() as con:
+            cursor = con.cursor( row_factory=psycopg.rows.dict_row )
+            cursor.execute( "SELECT * FROM no_object_gaia_matches WHERE object_id=%(id)s", { 'id': objid2 } )
+            rows = cursor.fetchall()
+            assert len(rows) == 1
+            assert rows[0]['match_radius'] == 5000
+
+        orig_gaia_url = test_config.value( 'catalog_gaiadr3.server_url' )
+        orig_static = test_config._static
+        try:
+            test_config._static = False
+            test_config.set_value( 'catalog_gaiadr3.server_url', 'https://localhost:666' )
+            gaias = ObjectGaiaMatch.get_object_matches( obj2.id, radius=5 )
+            assert len(gaias) == 0
+        finally:
+            test_config.set_value( 'catalog_gaiadr3.server_url', orig_gaia_url )
+            test_config._static = orig_static
+
+        # MORE -- test failure modes, etc.
+
+    finally:
+        if catex is not None:
+            catex.delete_from_disk_and_database()
+        with PsycopgConnection() as con:
+            cursor = con.cursor()
+            cursor.execute( "DELETE FROM object_gaia_match WHERE object_id=%(id)s", { 'id': objid } )
+            cursor.execute( "DELETE FROM no_object_gaia_matches WHERE object_id=%(id)s", { 'id': objid } )
+            cursor.execute( "DELETE FROM objects WHERE _id=ANY(%(ids)s)", { 'ids': [ objid, objid2 ] } )
             con.commit()

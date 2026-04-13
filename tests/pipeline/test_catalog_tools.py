@@ -1,5 +1,6 @@
 import os
 import pathlib
+import types
 import pytest
 
 from util.exceptions import CatalogNotFoundError
@@ -43,6 +44,74 @@ def test_download_gaia_dr3(data_dir):
             pathlib.Path( firstfilepath ).unlink( missing_ok=True )
         if secondfilepath is not None:
             pathlib.Path( secondfilepath ).unlink( missing_ok=True )
+
+
+def test_fetch_gaia_dr3_excerpt( test_config ) :
+    fakeimage = types.SimpleNamespace()
+    fakeimage.ra = 180.25
+    fakeimage.dec = -30.25
+    fakeimage.ra_corner_00 = 180.0
+    fakeimage.ra_corner_01 = 180.0
+    fakeimage.ra_corner_10 = 180.5
+    fakeimage.ra_corner_11 = 180.5
+    fakeimage.dec_corner_00 = -30.5
+    fakeimage.dec_corner_10 = -30.5
+    fakeimage.dec_corner_01 = -30.
+    fakeimage.dec_corner_11 = -30.
+    fakeimage.minra = 180.0
+    fakeimage.maxra = 180.5
+    fakeimage.mindec = -30.5
+    fakeimage.maxdec = -30.
+
+    catexp_list = {}
+    try:
+        firstcatexp = fetch_gaia_dr3_excerpt( fakeimage )
+        catexp_list[ firstcatexp.id ] = firstcatexp
+        assert len( firstcatexp.data ) == 3139
+
+        catexp = fetch_gaia_dr3_excerpt( fakeimage, maxmags=21, magrange=2 )
+        catexp_list[ catexp.id ] = catexp
+        assert len( catexp.data ) < len( firstcatexp.data )
+        assert all( catexp.data['MAG_G'] >= 19 )
+        assert all( catexp.data['MAG_G'] <= 21 )
+        assert catexp.id != firstcatexp.id
+
+        # WARNING.  Playing with config here
+        # in ways you never should, so don't use this test as an example
+        # of things you should do.  We're screwing up the gaia server to
+        # that we'll get an error if the gaiaserver is contacted.
+        orig_gaia_url = test_config.value( 'catalog_gaiadr3.server_url' )
+        orig_static = test_config._static
+        try:
+            test_config._static = False
+            test_config.set_value( 'catalog_gaiadr3.server.url', 'https://localhost:666' )
+
+            # Make sure if we ask for something we've already received, we
+            # get the same thing back.
+            recatexp = fetch_gaia_dr3_excerpt( fakeimage, maxmags=21, magrange=2 )
+            catexp_list[ recatexp.id ] = recatexp
+            assert recatexp.id == catexp.id
+
+            # One weird thing is that if we ask for something that's a subset of an
+            # already-saved excerpt, we should get the bigger excerpt back
+            fakeimage2 = types.SimpleNamespace()
+            fakeimage.ra, fakeimage.dec = 180.1, -30.1
+            fakeimage2.ra_corner_00, fakeimage2.ra_corner_01, fakeimage2.minra = 180.05, 180.05, 180.05
+            fakeimage2.ra_corner_10, fakeimage2.ra_corner_11, fakeimage2.maxra = 180.15, 180.15, 180.15
+            fakeimage2.dec_corner_00, fakeimage2.dec_corner_10, fakeimage2.mindec = -30.15, -30.15, -30.15
+            fakeimage2.dec_corner_01, fakeimage2.dec_corner_11, fakeimage2.maxdec = -30.05, -30.05, -30.05
+            catexp = fetch_gaia_dr3_excerpt( fakeimage2 )
+            catexp_list[ catexp.id ] = catexp
+            assert catexp.id == firstcatexp.id
+        finally:
+            test_config.set_value( 'catalog_gaiadr3.server_url', orig_gaia_url )
+            test_config._static = orig_static
+
+
+    finally:
+        for catexp in catexp_list.values():
+            catexp.delete_from_disk_and_database()
+
 
 
 def test_gaia_dr3_excerpt_failures( ztf_datastore_uncommitted, ztf_gaia_dr3_excerpt ):

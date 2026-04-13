@@ -1,0 +1,73 @@
+{ "type": "record",
+  "namespace": "ls4.v0_3",
+  "name": "diaObject",
+  "fields": [
+    { "name": "diaObjectId",
+      "type": "string",
+      "logicalType": "uuid",
+      "doc": "Unique identifier of this DiaObject."
+    },
+    { "name": "name",
+      "type": "string",
+      "doc": "Human-readable unique name of this DiaObject."
+    },
+    { "name": "ra",
+      "type": "double",
+      "doc": "Fiducial right ascension coordinate of the position of the object; not a best position."
+    },
+    { "name": "raErr",
+      "type": [ "float", "null" ],
+      "default": null,
+      "doc": "Uncertainty of ra."
+    },
+    { "name": "dec",
+      "type": "double",
+      "doc": "Fiducial declination coordinate of the position of the object; not a best position."
+    },
+    { "name": "decErr",
+      "type": [ "float", "null" ],
+      "default": null,
+      "doc": "Uncertainty of dec."
+    },
+    { "name": "ra_dec_Cov",
+      "type": [ "float", "null" ],
+      "default": null,
+      "doc": "Covariance between ra and dec."
+    },
+    { "name": "xgmatchRadius",
+      "type": [ "float", "null" ],
+      "default": null,
+      "doc": "Radius in arcseconds of match to leagcy survey xgboost objects"
+    },
+    { "name": "ls-xgboost",
+      "type": [ { "type": "array", "items": "ls4.v0_3.ls4xgboost"}, "null" ],
+      "default": null,
+      "doc": "Matched legacy survey objects with Liu et al. 2025 xgboost star/galaxy score"
+    },
+    { "name": "gaiaDR3Radius",
+      "type": [ "float", "null" ],
+      "default": null,
+      "doc": "Radius in arcseconds of match to Gaia DR3 objects"
+    },
+    { "name": "gaiaDR3_id",
+      "type": [ { "type": "array", "items": "long" }, "null" ],
+      "default": null,
+      "doc": "source_id of matched Gaia DR3 objects within gaia_dr3_radius (ignoring PM)"
+    },
+    { "name": "gaiaStarProb",
+      "type": [ { "type": "array", "items": "float" }, "null" ],
+      "default": null,
+      "doc": "classprob_dsc_combmod_star from Gaia DR3"
+    },
+    { "name": "gaiaQuasarProb",
+      "type": [ { "type": "array", "items": "float" }, "null" ],
+      "default": null,
+      "doc": "classprob_dsc_combmod_quasar from Gaia DR3"
+    },
+    { "name": "gaiaGalaxyProb",
+      "type": [ { "type": "array", "items": "float" }, "null" ],
+      "default": null,
+      "doc": "classprob_dsc_combmod_galaxy from Gaia DR3"
+    },
+  ]
+}

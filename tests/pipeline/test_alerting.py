@@ -49,21 +49,25 @@ def test_build_avro_alert_structures( test_config, decam_datastore_through_scori
     at_least_some_had_matches = False
     for a, m in zip( alerts, ds.measurements ):
         obj = Object.get_by_id( m.object_id )
-        lsmatches = ObjectLegacySurveyMatch.get_object_matches( obj.id )
+        lsmatches = ObjectLegacySurveyMatch.get_object_matches(
+            obj.id,
+            liuserver=test_config.value('measuring.liumatch_server'),
+            radius=test_config.value('measuring.liumatch_radius')
+        )
         if len(lsmatches) > 0:
             at_least_some_had_matches = True
         assert a['diaObject']['name'] == obj.name
         assert a['diaObject']['ra'] == pytest.approx( obj.ra, abs=0.1/3600. )
         assert a['diaObject']['dec'] == pytest.approx( obj.dec, abs=0.1/3600. )
-        assert a['diaObject']['xgmatchRadius'] == test_config.value( 'liumatch.radius' )
+        assert a['diaObject']['xgmatchRadius'] == test_config.value( 'measuring.liumatch_radius' )
         # Matches should always be sorted by distance
-        zippy = zip( lsmatches, a['diaObject']['ls-xgboost'] )
+        zippy = list( zip( lsmatches, a['diaObject']['ls-xgboost'] ) )
         assert all(m.lsid == am['lsid'] for m, am in zippy )
         assert all(m.ra == pytest.approx( am['ra'], abs=0.1/3600 ) for m, am in zippy )
         assert all(m.dec == pytest.approx( am['dec'], abs=0.1/3600 ) for m, am in zippy )
         assert all(m.dist == pytest.approx( am['dist'], abs=0.1/3600 ) for m, am in zippy )
         assert all(m.white_mag == pytest.approx( am['white_mag'], abs=0.001 ) for m, am in zippy )
-        assert all(m.xgboost == pytest.approx( am['ls-xbgoost'], abs=0.001 ) for m, am in zippy )
+        assert all(m.xgboost == pytest.approx( am['xgboost'], abs=0.001 ) for m, am in zippy )
         assert all(m.is_star == am['is_star'] for m, am in zippy )
     assert at_least_some_had_matches
     assert all( len(a['cutoutScience']) == 41 * 41 * 4 for a in alerts )
@@ -166,14 +170,18 @@ def test_send_alerts( test_config, decam_datastore_through_scoring ):
                 assert alert['diaSource']['apFluxErr'] == pytest.approx( measurements[dex].flux_apertures_err[0]
                                                                          * fluxscale, rel=1e-5 )
             assert alert['diaObject']['diaObjectId'] == str( measurements[dex].object_id )
-            lsmatches = ObjectLegacySurveyMatch.get_object_matches( measurements[dex].object_id )
-            zippy = zip( lsmatches, alert['diaObject']['ls-xgboost'] )
+            lsmatches = ObjectLegacySurveyMatch.get_object_matches(
+                measurements[dex].object_id,
+                liuserver=test_config.value('measuring.liumatch_server'),
+                radius=test_config.value('measuring.liumatch_radius')
+            )
+            zippy = list( zip( lsmatches, alert['diaObject']['ls-xgboost'] ) )
             assert all(m.lsid == am['lsid'] for m, am in zippy )
             assert all(m.ra == pytest.approx( am['ra'], abs=0.1/3600 ) for m, am in zippy )
             assert all(m.dec == pytest.approx( am['dec'], abs=0.1/3600 ) for m, am in zippy )
             assert all(m.dist == pytest.approx( am['dist'], abs=0.1/3600 ) for m, am in zippy )
             assert all(m.white_mag == pytest.approx( am['white_mag'], abs=0.001 ) for m, am in zippy )
-            assert all(m.xgboost == pytest.approx( am['ls-xbgoost'], abs=0.001 ) for m, am in zippy )
+            assert all(m.xgboost == pytest.approx( am['xgboost'], abs=0.001 ) for m, am in zippy )
             assert all(m.is_star == am['is_star'] for m, am in zippy )
 
             assert alert['diaSource']['rbtype'] == ds.deepscore_set.algorithm
@@ -268,7 +276,7 @@ def test_alerts_with_previous( test_config, sim_lightcurve_complete_dses ):
             # I'm depending on newdsen being sorted by mjd here, so that
             #    the previous measurements and previous nondetections#
             #    will be found in the same order as they arein the alerts.
-            zippy = zip( oldmeas, alert['prvDiaSources'] )
+            zippy = list( zip( oldmeas, alert['prvDiaSources'] ) )
             assert all( str(m.id) == a['diaSourceId'] for m, a in zippy )
             # Can't compare flux directly without getting more stuff out of the
             #   database; we'd need the sub image zeropoint.  (The alert has
@@ -276,7 +284,7 @@ def test_alerts_with_previous( test_config, sim_lightcurve_complete_dses ):
             assert all( m.ra == pytest.approx( a['ra'], abs=0.1/3600. ) for m, a in zippy )
             assert all( m.dec == pytest.approx( a['dec'], abs=0.1/3600. ) for m, a in zippy )
 
-            zippy = zip( nondet, alert['prvDiaNonDetectionLimits'] )
+            zippy = list( zip( nondet, alert['prvDiaNonDetectionLimits'] ) )
             assert all( nondet[0] == pytest.approx( a['MJD'], abs=1./3600./24. ) for n, a in zippy )
             assert all( nondet[1] == a['band'] for n, a in zippy )
             assert all( nondet[2] == pytest.approx( a['limitingMag'], abs=0.01 ) for n, a in zippy )

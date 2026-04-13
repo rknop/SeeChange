@@ -35,7 +35,7 @@ from improc.bitmask_tools import make_saturated_flag
 
 
 @pytest.fixture(scope='session')
-def datastore_factory(data_dir, pipeline_factory, request):
+def datastore_factory(data_dir, pipeline_factory, request, test_config):
     """Provide a function that returns a datastore with all the products based on the given exposure and section ID.
 
     To use this data store in a test where new data is to be generated,
@@ -834,8 +834,13 @@ def datastore_factory(data_dir, pipeline_factory, request):
                 # that in which they were created.  Currently, no tests using cached datastores
                 # look at actual object names.)
                 year = int( np.floor( astropy.time.Time( ds.image.mjd, format='mjd' ).jyear ) )
+
                 Object.associate_measurements( ds.measurements, p.measurer.pars.association_radius, year=year,
-                                               is_testing=ds.prov_tree['measuring'].is_testing )
+                                               is_testing=ds.prov_tree['measuring'].is_testing,
+                                               liumatch_radius=test_config.value('measuring.liumatch_radius'),
+                                               liumatch_server=test_config.value('measuring.liumatch_server'),
+                                               gaiamatch_radius=test_config.value('measuring.gaiamatch_radius')
+                                              )
 
             if ds.measurements is None:
                 SCLogger.debug( "make_datastore running measurer to create measurements" )
