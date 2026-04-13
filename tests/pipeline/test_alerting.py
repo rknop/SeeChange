@@ -11,7 +11,6 @@ import confluent_kafka
 from models.object import Object, ObjectLegacySurveyMatch
 from models.deepscore import DeepScoreSet
 from pipeline.alerting import Alerting
-from util.logger import SCLogger
 
 
 def test_build_avro_alert_structures( test_config, decam_datastore_through_scoring ):
