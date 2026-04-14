@@ -1,9 +1,12 @@
+import re
 import numpy as np
 
 from models.instrument import Instrument, InstrumentOrientation, SensorSection
 
 
 class PTF(Instrument):
+
+    _file_re = re.compile( r'^PTF.*\.fits(.fz)?$' )
 
     def __init__(self, **kwargs):
         self.name = 'PTF'
@@ -32,7 +35,7 @@ class PTF(Instrument):
 
     @classmethod
     def get_filename_regex(cls):
-        return [r'PTF.*\.fits']
+        return [ cls._file_re ]
 
     def get_section_ids(self):
         """Get a list of SensorSection identifiers for this instrument.

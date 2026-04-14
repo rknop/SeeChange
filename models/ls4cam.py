@@ -1,5 +1,6 @@
 import re
 import pathlib
+import subprocess
 
 import numpy as np
 
@@ -8,6 +9,7 @@ import astropy.time
 import astropy.units as u
 from astropy.io import fits
 
+from models.base import FileOnDiskMixin
 from models.instrument import ( Instrument,
                                 InstrumentOrientation,
                                 InstrumentOriginExposures,
@@ -19,7 +21,33 @@ from util.fits import read_fits_image
 
 class LS4Cam(Instrument):
     """LS4Cam exposures are assumed to always be raw."""
-    
+
+    # LS4 filenames:
+    #
+    #
+    # Unpacked images:
+    #   20260410004924sC0_00025_00.fits
+    #
+    #     First 14 are YYYYMMDDHHMMSS
+    #
+    #     s = "sky" (shutter opened) ; could be "d" for dark
+    #
+    #     C? = which controller; ? is 0 through 3
+    #
+    #     00025 is just an incrementing number
+    #
+    #     _00 is the chip within the controller.
+    #        will be 0-7 for single-amp, 0-15 for dual-amp
+    #
+    # Packed images:
+    #   20260409005320s_00014.fits.fz
+    #
+    #     Has 33 HDUs if in single-amp mode, so 1 per chip plus dataless HDU 0 (fpack)
+
+    _file_re = re.compile( r'^(?P<filebase>(?P<datetime>\d{14})(?P<sd>[sd])(?P<C>C(?P<ctrlr>\d))?)'
+                           r'_(?P<num>\d+)(?P<chipthing>_(?P<chip>\d\d))?\.fits(?P<fz>\.fz)?$' )
+
+
     def __init__( self, _save_to_call=False, **kwargs ):
         self.name = 'LS4Cam'
         self.telescope = 'ESO 1.0-m Schmidt'
@@ -46,8 +74,7 @@ class LS4Cam(Instrument):
 
     @classmethod
     def get_filename_regex( cls ):
-        # TODO MAKE SURE THIS IS CURRENT
-        return [ r'\d{13}s_\d{5}.fits(.fz)?' ]
+        return [ cls._file_re ]
 
 
     def get_section_ids( self ):
@@ -167,9 +194,21 @@ class LS4Cam(Instrument):
             # I suppose we could be really anal and try to use the chip ra and dec, but hopefully
             #   this will be good enough.  (Plus, the header doesn't currently have the chip ra
             #   and dec....)
-            radec = SkyCoord( header['TELE-RA'], header['TELE-DEC'], unit=u.deg )
+            # NOTE : I'm making the assumption that TELE-RA is decimal degrees, because
+            #   that's what it was in a test file I looked at.  I hope this stays right!
+            radec = SkyCoord( float(header['TELE-RA'])*15., float(header['TELE-DEC']), unit=u.deg )
             altaz = radec.transform_to( AltAz( obstime=tim, location=loc ) )
             output_values['airmass'] = altaz.secz.value
+
+        # ****
+        # HACK WARNING
+        # We probably don't want to leave this as is, but this is here so I can proceed
+        #   with images that are missing header stuff
+        if ( 'project' in names ) and ( 'project' not in output_values ):
+            output_values['project'] = 'unknown'
+        if ( 'target' in names ) and ( 'target' not in output_values ):
+            output_values['target'] = 'unknown'
+        # ****
 
         return output_values
 
@@ -276,9 +315,14 @@ class LS4Cam(Instrument):
         raise NotImplementedError( "Do." )
 
 
-    def manually_load_exposure( self, filepath, origin_identifier=None, params=None ):
+    def _load_exposure_from_file_or_files( self, filepath, origin_identifier=None, params=None ):
         # Have this here to avoid circular imports (instrument.py)
         from models.exposure import Exposure
+
+        # OK, strict object-oriented design be damned.  This function
+        # handles stuff for both this class (LS4Cam) and LS4Cam_dualamp,
+        # and knows about both.
+        isdualamp = ( self.name == 'LS4Cam_dualamp' )
 
         filepath = pathlib.Path( filepath )
         obs_type_map = { 'dark': 'Dark',
@@ -286,60 +330,137 @@ class LS4Cam(Instrument):
                          'sky': 'Sci' }
 
         provenance = self.get_exposure_provenance()
-        if origin_identifier is None:
-            origin_identifier = filepath.name
 
-        with fits.open( filepath ) as ifp:
-            # Going to look at HDU 1, becasue the global HDU 0 doesn't have everything we need,
-            #   but I *think* HDU 1 does.  -oo- think ahead and see if this stays true,
-            #   things are still evolving right now.
-            hdr = ifp[1].header
-            dualamp = ( hdr['amp_direction'] == 'both' )
-            if dualamp:
-                if self.name != 'LS4Cam_dualamp':
-                    raise RuntimeError( "Trying to load a dual-amp FITS file with LS4Cam instead of LS4Cam_dualamp" )
-                if len( ifp ) < 40:
-                    raise RuntimeError( f"FITS file had {len(ifp)} FITS extensions; we expect more for dual amp" )
+        # Try to identify if it's a whole bunch of files, or if it's a single file.
+        # If it's a whole bunch of files, then the convention is to pass any one
+        #   of the files, and we have to figure out the rest.
+        # TODO : compare file parsed controller, chip, sd to what's in the header?
+        filematch = self._file_re.search( filepath.name )
+        # filecontroller = None
+        # filechip = None
+        if filematch is None:
+            manyfiles = False
+            isfz = ( ( len(filepath.name) >= 3 ) and ( filepath.name[-3:] == '.fz' ) )
+        else:
+            filebase = filematch.group( 'filebase' )
+            # filesd = filematch.group( 'sd' )
+            filenum = filematch.group( 'num' )
+            manyfiles = ( filematch.group('C') is not None )
+            isfz = ( filematch.group('fz') is not None )
+            if manyfiles:
+                if filematch.group('chipthing') is None:
+                    raise ValueError( f'Error prasing ls4cam exposure filename "{filepath.name}": '
+                                      f'filename has a C?, but doesn\'t have a chip.' )
+                # filecontroller = int( filematch.group('ctrlr') )
+                # filechip = int( filematch.group('chip') )
             else:
-                if self.name != 'LS4Cam':
-                    raise RuntimeError( "Trying to load a dual-amp FITS file with LS4Cam_dualamp instead of LS4Cam" )
-                if len( ifp ) > 40:
-                    raise RuntimeError( f"FITS file had {len(ifp)} FITS extensions; we expect fewer for single amp" )
+                if filematch.group('chipthing') is not None:
+                    raise ValueError( f'Error prasing ls4cam exposure filename "{filepath.name}": '
+                                      f'filename has a chip, but doesn\'t have C?.' )
 
-            instrument = self.name
+        # ****
+        # One of the example files I had ended in .fits.fz but was impervious to funpack.
+        # Not sure what's wrong.
+        if not manyfiles:
+            raise NotImplementedError( "LS4 packed exposures are broken right now." )
+        # ****
 
-            ra = hdr['TELE-RA']
-            dec = hdr['TELE-DEC']
-            obs_type = obs_type_map[ hdr['IMAGETYP'] ]
-            filter = None
-            filter_array = [ 'i', 'z', 'g', 'i' ]
+        if manyfiles:
+            exposurename = f'{filebase}_{filenum}.fits'
+            if origin_identifier is None:
+                origin_identifier = exposurename
+            exposurepath = pathlib.Path( FileOnDiskMixin.temp_path ) / exposurename
+            exposurepathfz = exposurepath.parent / f"{exposurepath.name}.fz"
+            try:
+                # Make sure we can find all the files
+                nsubchip = 16 if isdualamp else 8
+                nneeded = 64 if isdualamp else 32
+                files = []
+                missing = []
+                for ctrlr in range(0, 4):
+                    for subchip in range(0, nsubchip):
+                        fz = ( ".fz" if isfz else "" )
+                        p = filepath.parent / f'{filebase}_{filenum}_{subchip:02d}.fits{fz}'
+                        if p.is_file():
+                            files.append( p )
+                        else:
+                            missing.append( p.name )
+                if len(missing) > 0:
+                    raise RuntimeError( f"Tried to the {nneeded} individual files that make up the exposure that "
+                                        f"goes with {filepath.name}, but some files were missing: {missing}" )
 
-            if filepath.name[-8:] == '.fits.fz':
-                format = 'fitsfz'
-            elif filepath.name[-5:] == '.fits':
-                format = 'fits'
-            else:
-                raise ValueError( f"Can't figure out the format of exposure file {filepath}" )
+                # Assemble all of these togther into a single exposure
+                hdu0 = None
+                ra = None
+                dec = None
+                obs_type = None
+                hdus = []
+                exphdrinfo = None
+                for fitsfile in files:
+                    with fits.open( fitsfile ) as hdul:
+                        if ( isfz and ( len(hdul) != 2 ) ) or ( ( not isfz ) and ( len(hdul) != 1 ) ):
+                            raise RuntimeError( f"Unexpected number of HDUs in file {fitsfile.name}: "
+                                                f"expected {2 if isfz else 1} but got {len(hdul)}" )
+                        hdu = hdul[1] if isfz else hdul[0]
+                        hdr = hdu.header
+                        if ( hdr['amp_direction'] == 'both' ) != isdualamp:
+                            raise ValueError( f"Header of {fitsfile.name} has amp_direction={hdr['amp_direction']}, "
+                                              f"which is not what {self.__class__.name} expects." )
+                        # TODO, verify chip and controller vs. filename!!!
 
-            exphdrinfo = self.extract_header_info( hdr, [ 'mjd', 'exp_time', 'project', 'target', 'airmass' ] )
-            if ( exphdrinfo['exp_time'] == 0 ) and obs_type == 'Dark':
-                obs_type = 'Bias'
+                        if hdu0 is None:
+                            # There is code elsewhere that will interpret a string ra as h:m:s
+                            # WORRY AND THINK : the header doesn't have comments saying the units
+                            #   are hours or degrees.  Because in my test image, I got an airmass
+                            #   of -3.5 if I interpreted it as degrees, but 1.05 if I interpreted
+                            #   it as hours, I'm guessing it's hours.
+                            ra = float( hdr['TELE-RA'] ) * 15.
+                            dec = float( hdr['TELE-DEC'] )
+                            obs_type = obs_type_map[ hdr['IMAGETYP'] ]
+                            exphdrinfo = self.extract_header_info( hdr, [ 'mjd', 'exp_time', 'project',
+                                                                          'target', 'airmass' ] )
+                            if ( exphdrinfo['exp_time'] == 0 ) and ( obs_type == 'Dark' ):
+                                obs_type = 'Bias'
+                            allhdrinfo = exphdrinfo.copy()
+                            allhdrinfo.update( { 'TELE-RA': ra, 'TELE-DEC': dec, 'IMAGETYP': obs_type } )
+                            hdu0 = fits.PrimaryHDU( header=fits.Header(allhdrinfo) )
+                            hdus.append( hdu0 )
 
-        expobj= Exposure( current_file=filepath, invent_filepath=True, type=obs_type, ra=ra, dec=dec,
-                          format=format, filter=filter, filter_array=filter_array, instrument=instrument,
-                          provenance_id=provenance.id, origin_identifier=origin_identifier, header=hdr,
-                          preprocc_bitflag=0, components=None, **exphdrinfo )
-        expobj.save( filepath )
-        expobj.insert()
+                        hdus.append( fits.ImageHDU( data=hdu.data, header=hdu.header ) )
 
-        return expobj
+                # Write the exposure to temp and fpack it
+                exphdul = fits.HDUList( hdus )
+                exphdul.writeto( exposurepath )
+                exphdul = None
+                del exphdul
+                _result = subprocess.run( [ "fpack", str(exposurepath) ], capture_output=True )
 
+                # Load it and save the loaded object to the right place
+
+                expobj = Exposure( current_file=exposurepathfz, invent_filepath=True, type=obs_type,
+                                   ra=ra, dec=dec, format='fitsfz', instrument=self.name,
+                                   filter=None, filter_array=['i', 'z', 'g', 'i'],
+                                   provenance=provenance.id, origin_identifier=origin_identifier,
+                                   header=hdu0.header, preprocc_bitflag=0, components=None, **exphdrinfo )
+                expobj.save( exposurepathfz )
+                expobj.insert()
+
+                return expobj
+
+            finally:
+                # Clean up the temp files if we made them
+                if exposurepath.exists():
+                    exposurepath.unlink()
+                if exposurepathfz.exists():
+                    exposurepathfz.unlink()
+
+
+    def manually_load_exposure( self, filepath, origin_identifier=None, params=None ):
+        return self._load_exposure_from_file_or_files( filepath, origin_identifier=origin_identifier, params=params )
 
 
     def acquire_and_commit_origin_exposure( self, identifier, params ):
-        expfile = pathlib.Path( self.acquire_origin_exposure( identifier, params ) )
-        return self.manually_load_exposure( expfile, origin_identifier=identifier )
-
+        raise NotImplementedError( "acquire_and_commit_origin_exposure needs to be implemented for LS4Cam" )
 
 
     def find_origin_exposures( self,
@@ -414,7 +535,7 @@ class LS4Cam_dualamp(LS4Cam):
 
             # The "LEFT" amp is actually to the right (i.e. West) of the "RIGHT" amp.
             # Both are already oriented north up, east left, I think.
-            
+
             newimg = np.empty( ( lefthdu.shape[0], lefthdu.shape[1] + righthdu.shape[1] ) )
             newimg[ :, 0:righthdu.shape[1] ] = righthdu.data
             newimg[ :, righthdu.shape[1]: ] = lefthdu.data

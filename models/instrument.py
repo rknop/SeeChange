@@ -60,6 +60,9 @@ def register_all_instruments():
         INSTRUMENT_CLASSNAME_TO_CLASS[i.__name__] = i
         if i.get_filename_regex() is not None:
             for regex in i.get_filename_regex():
+                if not isinstance( regex, re.Pattern ):
+                    raise TypeError( r"Coding error: at least one of the returns of get_instrument_regex() for "
+                                     r"{i.__name__} is not a re.Pattern" )
                 INSTRUMENT_FILENAME_REGEX[regex] = i.__name__
 
 
@@ -86,7 +89,7 @@ def guess_instrument(filename):
 
     instrument_list = []
     for k, v in INSTRUMENT_FILENAME_REGEX.items():
-        if re.search(k, filename):
+        if k.search( filename ):
             instrument_list.append(v)
 
     if len(instrument_list) == 0:
@@ -2177,7 +2180,7 @@ class DemoInstrument(Instrument):
 
     @classmethod
     def get_filename_regex(cls):
-        return [r'Demo']
+        return [ re.compile(r'^Demo') ]
 
 
     def get_section_ids(self):

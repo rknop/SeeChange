@@ -156,7 +156,7 @@ def test_instrument_inheritance_full_example():
 
         @classmethod
         def get_filename_regex(cls):
-            return [r'TestInstrument']
+            return [ r'^.*/?TestInstrument[^/]*$']
 
         @classmethod
         def get_auxiliary_exposure_header_keys(cls):

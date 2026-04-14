@@ -133,8 +133,8 @@ storage:
   #   default in the code, but is the default I wish was in the code.
   # exposures:
   #   name_convention: "{inst_name}/exposures/{date}/{inst_name}_{date}_{time}_{prov_hash:.6s}"
-    
-    
+
+
 # ======================================================================
 # Archive:
 #

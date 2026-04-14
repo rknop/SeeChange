@@ -45,6 +45,8 @@ FILTER_NAME_CONVERSIONS = {
 
 class DECam(Instrument):
 
+    _file_re = re.compile(r'^c4d.*\.fits(.fz)?$')
+
     def __init__(self, **kwargs):
         self.name = 'DECam'
         self.telescope = 'CTIO 4.0-m telescope'
@@ -150,7 +152,7 @@ class DECam(Instrument):
 
     @classmethod
     def get_filename_regex(cls):
-        return [r'c4d.*\.fits']
+        return [ cls._file_re ]
 
 
     def get_section_ids(self):
