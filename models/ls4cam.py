@@ -20,7 +20,11 @@ from util.fits import read_fits_image
 
 
 class LS4Cam(Instrument):
-    """LS4Cam exposures are assumed to always be raw."""
+    """Default operation mode for LS4Cam: single amp, sorta.
+
+    It's complicated because of optimizations Kenneth made.
+
+    LS4Cam exposures are assumed to always be raw."""
 
     # LS4 filenames:
     #
@@ -68,7 +72,8 @@ class LS4Cam(Instrument):
         # will apply kwargs to attributes, and register instrument in the INSTRUMENT_INSTANCE_CACHE
         Instrument.__init__(self, **kwargs)
 
-        self.preprocessing_steps_available = [ 'overscan', 'bias', 'dark', 'linearity', 'flat' ]
+        # self.preprocessing_steps_available = [ 'overscan', 'bias', 'dark', 'linearity', 'flat' ]
+        self.preprocessing_steps_available = [ 'overscan' ]
         self.preprocessing_steps_done = []
 
 
@@ -103,7 +108,7 @@ class LS4Cam(Instrument):
         """Make a SensorSection for the LS4 instrument."""
 
         # TODO get dx and dy right
-        SCLogger.warning( "_make_new_section doesn't have right offsets yet for LS4Cam!  FIX THIS!" )
+        SCLogger.warning( "_make_new_section doesn't have yet right offsets yet for LS4Cam!  FIX THIS!" )
         dx = 0
         dy = 0
         filter_array_index = self.get_section_filter_array_index( section_id )
@@ -213,8 +218,30 @@ class LS4Cam(Instrument):
         return output_values
 
 
+    _chip_offsets = None
+
     def get_ra_dec_for_section( self, ra, dec, section_id ):
-        raise NotImplementedError( "LS4Cam needs to implement get_ra_dec_for_section" )
+        if self.__class__._chip_offsets is None:
+            SCLogger.warning( "ra/dec offsets for LS4 cam are currently approximate, need to be measured!" )
+            # Kenneth tells me 13.33 pixels is the size of the chip gap
+            secgrid = [ [ 'NE_H', 'NE_G', 'NE_F', 'NE_E', 'NW_D', 'NW_D', 'NW_B', 'NW_A' ],
+                        [ 'NE_D', 'NE_C', 'NE_B', 'NW_A', 'NW_H', 'NW_G', 'NW_F', 'NW_E' ],
+                        [ 'SE_H', 'SE_G', 'SE_F', 'SE_E', 'SW_D', 'SW_D', 'SW_B', 'SW_A' ],
+                        [ 'SE_D', 'SE_C', 'SE_B', 'SW_A', 'SW_H', 'SW_G', 'SW_F', 'SW_E' ] ]
+            offsets = {}
+            for ix, arr in enumerate( secgrid ):
+                # - because E to the left is + in RA
+                dx = - ( ( ix - 3.5 ) * ( 2048./3600. + 13.33 ) )
+                for iy, chip in enumerate( arr ):
+                    # - because in secgrid, I listed chips from top to bottom, not bottom to top
+                    dy = - ( ( iy - 1.5 ) * ( 4096/3600. + 13.33 ) )
+                    offsets[chip] = ( dx, dy )
+            self.__class__._chip_offsets = offsets
+
+        ra += self.__class__._chip_offsets[section_id][0] / np.cos( dec * np.pi / 180. )
+        dec += self.__class__._chip_offsets[section_id][1]
+
+        return ra, dec
 
 
     def get_ra_dec_corners_for_section( self, ra, dec, section_id ):
@@ -297,11 +324,81 @@ class LS4Cam(Instrument):
 
 
     def overscan_sections( self, header ):
-        raise NotImplementedError( "Still need to do this for one-amp readout." )
+        if header['amp_direction'].strip() != 'left':
+            raise RuntimeError( f"{self.__class__.__name} assumes that readout is on the 'left' amp." )
+
+        # Some people, when confronted with a problem, think "I know,
+        #   I'll use regular expressions." Now they have two problems.
+        #     --Jamie Zawinski
+        extractor = re.compile( r'^\s*\[\s*(?P<x0>\d+)\s*:\s*(?P<x1>\d+)\s*,'
+                                r'\s*(?P<y0>\d+)\s*:\s*(?P<y1>\d+)\s*\]\s*$' )
+
+        # .... OK.  If you ds9 one of the raw images, the stuff towards
+        # the left on the screen is the Right amp, and the stuff towards
+        # the right on the screen is the Left amp.  Oh well.
+        #
+        # All the -1's are to go from FITS coords to numpy coords.
+        # However, we omit it on the high side, so we get what
+        # we'd index numpy with (where the upper index is one past
+        # the last pixel).
+        # (Also, remember numpy arrays are indexed [y,x].)
+        mat = extractor.search( header['BIASSECL'] )
+        biasl_x0 = int(mat.group('x0')) - 1
+        biasl_x1 = int(mat.group('x1'))
+        # biasl_y0 = int(mat.group('y0')) - 1
+        # biasl_y1 = int(mat.group('y1'))
+        # mat = extractor.search( header['BIASSECR'] )
+        # biasr_x0 = int(mat.group('x0')) - 1
+        # biasr_x1 = int(mat.group('x1'))
+        # biasr_y0 = int(mat.group('y0')) - 1
+        # biasr_y1 = int(mat.group('y1'))
+        mat = extractor.search( header['DATASECL'] )
+        datal_x0 = int(mat.group('x0')) - 1
+        datal_x1 = int(mat.group('x1'))
+        datal_y0 = int(mat.group('y0')) - 1
+        datal_y1 = int(mat.group('y1'))
+        mat = extractor.search( header['DATASECR'] )
+        datar_x0 = int(mat.group('x0')) - 1
+        datar_x1 = int(mat.group('x1'))
+        # datar_y0 = int(mat.group('y0')) - 1
+        # datar_y1 = int(mat.group('y1'))
+        mat = extractor.search( header['PRESECL'] )
+        # prel_x0 = int(mat.group('x0')) - 1
+        prel_x1 = int(mat.group('x1'))
+        # prel_y0 = int(mat.group('y0')) - 1
+        # prel_y1 = int(mat.group('y1'))
+        # mat = extractor.search( header['PRESECR'] )
+        # prer_x0 = int(mat.group('x0')) - 1
+        # prer_x1 = int(mat.group('x1'))
+        # prer_y0 = int(mat.group('y0')) - 1
+        # prer_y1 = int(mat.group('y1'))
+
+        # OK, these numbers are really confusing.  I think the model is,
+        #   the numbers assume dual-amp readout.  The files we get have
+        #   the L values pasted to the right of the R values, but there
+        #   is no R biassec because there was no R readout.  The prescan
+        #   is on the left side and comes from presec L because that was
+        #   the samp that was actually read out.  The L biassec needs to
+        #   be bumped to the right by the size of the R data because the
+        #   numbers assume that the R data is not there.  I think.
+        #   ZOMG.
+        # (Or maybe the left side really is the left side?)
+        # (Or the dark side?  If only you knew the power....)
+        biassec_x0 = biasl_x0 + ( datar_x1 - datar_x0 )
+        biassec_x1 = biassec_x0 + ( biasl_x1 - biasl_x0 )
+        datasec_x0 = prel_x1
+        datasec_x1 = datasec_x0 + ( datal_x1 - datal_x0 ) + ( datar_x1 - datar_x0 )
+        y0 = datal_y0
+        y1 = datal_y1
+
+        return [ { 'secname': "",
+                   'biassec': { 'x0': biassec_x0, 'x1': biassec_x1, 'y0': y0, 'y1': y1 },
+                   'datasec': { 'x0': datasec_x0, 'x1': datasec_x1, 'y0': y0, 'y1': y1 } } ]
 
 
     def overscan_trim_keywords_to_strip( self ):
-        return [ 'DATASECL', 'BIASSECL', 'PRESECL',
+        return [ 'CCDSEC', 'BIASSEC',
+                 'DATASECL', 'BIASSECL', 'PRESECL',
                  'DATASECR', 'BAISSECR', 'PRESECR' ]
 
 
@@ -336,14 +433,18 @@ class LS4Cam(Instrument):
         #   of the files, and we have to figure out the rest.
         # TODO : compare file parsed controller, chip, sd to what's in the header?
         filematch = self._file_re.search( filepath.name )
-        # filecontroller = None
+        filesd = None
+        # filectrlr = None
         # filechip = None
         if filematch is None:
+            # If we can't parse the filename, assume it's all chips packed in one file
             manyfiles = False
             isfz = ( ( len(filepath.name) >= 3 ) and ( filepath.name[-3:] == '.fz' ) )
         else:
             filebase = filematch.group( 'filebase' )
-            # filesd = filematch.group( 'sd' )
+            filedatetime = filematch.group( 'datetime' )
+            filesd = filematch.group( 'sd' )
+            # filectrlr = filematch.group( 'ctrlr' )
             filenum = filematch.group( 'num' )
             manyfiles = ( filematch.group('C') is not None )
             isfz = ( filematch.group('fz') is not None )
@@ -380,7 +481,7 @@ class LS4Cam(Instrument):
                 for ctrlr in range(0, 4):
                     for subchip in range(0, nsubchip):
                         fz = ( ".fz" if isfz else "" )
-                        p = filepath.parent / f'{filebase}_{filenum}_{subchip:02d}.fits{fz}'
+                        p = filepath.parent / f'{filedatetime}{filesd}C{ctrlr}_{filenum}_{subchip:02d}.fits{fz}'
                         if p.is_file():
                             files.append( p )
                         else:
@@ -388,6 +489,8 @@ class LS4Cam(Instrument):
                 if len(missing) > 0:
                     raise RuntimeError( f"Tried to the {nneeded} individual files that make up the exposure that "
                                         f"goes with {filepath.name}, but some files were missing: {missing}" )
+                if len(files) != nneeded:
+                    raise RuntimeError( "This should never happen." )
 
                 # Assemble all of these togther into a single exposure
                 hdu0 = None
@@ -485,6 +588,7 @@ class LS4Cam_dualamp(LS4Cam):
     def __init__( self, **kwargs ):
         super().__init__( **kwargs )
         self.name = 'LS4Cam_dualamp'
+        raise NotImplementedError( "LS4Cam_dualamp needs to be tested and finished" )
         # TODO : Gain might be different.  Readout time is definitely different.
         # raise NotImplementedError( "I think I have more to do" )
 

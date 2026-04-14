@@ -5,6 +5,8 @@ import models.ls4cam  # noqa: F401
 from models.base import FileOnDiskMixin
 from models.exposure import Exposure
 from models.instrument import get_instrument_instance, SensorSection
+from pipeline.data_store import DataStore
+from pipeline.top_level import Pipeline
 from util.retrydownload import retry_download
 
 
@@ -32,7 +34,7 @@ from util.retrydownload import retry_download
 def loaded_singleamp_multifile_exposure( download_url, cache_dir ):
     expobj = None
     try:
-        for ctrlr in range(3):
+        for ctrlr in range(4):
             for chip in range(8):
                 relpath = pathlib.Path( f"LS4/20260410/20260410004924sC{ctrlr}_00025_{chip:02d}.fits" )
                 cachepath = pathlib.Path( cache_dir ) / relpath
@@ -109,7 +111,7 @@ def test_section_stuff():
 def test_manual_load_exposure( loaded_singleamp_multifile_exposure ):
     expobj = loaded_singleamp_multifile_exposure
 
-    assert expobj.origin_identifier == '20260410004924sC2_00025.fits'
+    assert expobj.origin_identifier == '20260410004924sC3_00025.fits'
     assert expobj.instrument == 'LS4Cam'
     assert expobj.instrument_object.__class__.__name__ == 'LS4Cam'
     assert expobj.telescope == 'ESO 1.0-m Schmidt'
@@ -127,6 +129,12 @@ def test_manual_load_exposure( loaded_singleamp_multifile_exposure ):
     assert expobj.exp_time == pytest.approx( 60., abs=0.01 )
     assert expobj.airmass == pytest.approx( 1.049, abs=0.001 )
 
+    # Make sure we have all the sections we expect
+    chips = set( f'{quadrant}_{letter}' for quadrant in ['NW', 'NE', 'SW', 'SE'] for letter in 'ABCDEFGH' )
+    for chip in chips:
+        sechdr = expobj.section_headers[chip]
+        assert sechdr['CCD_LOC'] == chip
+
     # TODO : look at data?
 
     # Make sure the file is there and it's really in the database
@@ -134,6 +142,21 @@ def test_manual_load_exposure( loaded_singleamp_multifile_exposure ):
     dbexp = Exposure.get_by_id( expobj.id )
     for prop in [ 'id', 'filepath', 'instrument', 'filter', 'type', 'format' ]:
         assert getattr( expobj, prop ) == getattr( dbexp, prop )
+
+
+def test_overscan( loaded_singleamp_multifile_exposure ):
+    expobj = loaded_singleamp_multifile_exposure
+
+    # SE_F and SE_E are the ones that are half-bad
+    chipstodo = [ 'NE_G', 'SE_F', 'SE_E', 'NW_B' ]
+
+    for chip in chipstodo:
+        pip = Pipeline( pipeline={ 'through_step': 'preprocessing' },
+                        preprocessing={ 'steps_required': ['overscan'] } )
+        ds = DataStore( expobj, chip )
+        ds = pip( ds )
+        import pdb; pdb.set_trace()
+        pass
 
 
 # def test_dualamp_manual_load__exposure( loaded_dualamp_exposure ):

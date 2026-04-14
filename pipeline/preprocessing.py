@@ -136,22 +136,25 @@ class Preprocessor:
             known_steps = self.instrument.preprocessing_steps_available
             known_steps += self.instrument.preprocessing_steps_done
             known_steps = set(known_steps)
-            needed_steps = set(self.pars.steps_required)
-            if not needed_steps.issubset(known_steps):
+            steps_to_do = set(self.pars.steps_required)
+            needed_steps = steps_to_do - set( self.instrument.preprocessing_steps_done )
+            if not steps_to_do.issubset(known_steps):
                 raise ValueError(
-                    f'Missing some preprocessing steps {needed_steps - known_steps} '
+                    f'Missing some preprocessing steps {steps_to_do - known_steps} '
                     f'for instrument {self.instrument.name}'
                 )
 
             # Get the calibrator files
-            SCLogger.debug("preprocessing: getting calibrator files")
-            preprocparam = self.instrument.preprocessing_calibrator_files( self.pars.calibset,
-                                                                           self.pars.flattype,
-                                                                           ds.section_id,
-                                                                           baseobj.filter,
-                                                                           baseobj.mjd )
-
-            SCLogger.debug("preprocessing: got calibrator files")
+            if not all( step in self.instrument.preprocessing_nofile_steps for step in needed_steps ):
+                SCLogger.debug("preprocessing: getting calibrator files")
+                preprocparam = self.instrument.preprocessing_calibrator_files( self.pars.calibset,
+                                                                               self.pars.flattype,
+                                                                               ds.section_id,
+                                                                               baseobj.filter,
+                                                                              baseobj.mjd )
+                SCLogger.debug("preprocessing: got calibrator files")
+            else:
+                preprocparam = {}
 
             # get the provenance for this step, using the current parameters:
             prov = ds.get_provenance('preprocessing', self.pars.get_critical_pars())
@@ -172,9 +175,6 @@ class Preprocessor:
                 image.preproc_bitflag = 0
 
             # Figure out what steps are generally needed.
-            # Needed steps started above at set(self.pars.steps_required).
-            # Subtract off what is *always* done by this instrument.
-            needed_steps -= set(self.instrument.preprocessing_steps_done)
             filter_skips = self.instrument.preprocessing_step_skip_by_filter.get(baseobj.filter, [])
             if not isinstance(filter_skips, list):
                 raise ValueError(f'Filter skips parameter for {baseobj.filter} must be a list')
@@ -215,7 +215,12 @@ class Preprocessor:
                     SCLogger.debug('preprocessing: overscan and trim')
                     image.data = self.instrument.overscan_and_trim( image )
                     # Update the header ra/dec calculations now that we know the real width/height
-                    image.set_corners_from_header_wcs(setradec=True)
+                    try:
+                        image.set_corners_from_header_wcs(setradec=True)
+                    except Exception as ex:
+                        # No header WCS.  (Probably that's why there's an exception.)
+                        SCLogger.warning( "No header WCS, not setting corners for {image.filepath}" )
+                        SCLogger.debug( str(ex) )
                     image.preproc_bitflag |= string_to_bitflag( 'overscan', image_preprocessing_inverse )
 
                 # At this point, we won't use image.raw_data again.  Set it
