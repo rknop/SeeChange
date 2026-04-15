@@ -32,7 +32,6 @@ from util.retrydownload import retry_download
 
 @pytest.fixture( scope='module' )
 def loaded_singleamp_multifile_exposure( download_url, cache_dir ):
-    import pdb; pdb.set_trace()
     expobj = None
     try:
         for ctrlr in range(4):
@@ -150,12 +149,16 @@ def test_overscan( loaded_singleamp_multifile_exposure ):
 
     # SE_F and SE_E are the ones that are half-bad
     chipstodo = [ 'NE_G', 'SE_F', 'SE_E', 'NW_B' ]
+    bands = [ 'i', 'g', 'g', 'z' ]
 
-    for chip in chipstodo:
+    for chip, band in zip( chipstodo, bands ):
         pip = Pipeline( pipeline={ 'through_step': 'preprocessing' },
                         preprocessing={ 'steps_required': ['overscan'] } )
         ds = DataStore( expobj, chip )
         ds = pip( ds )
+        im = ds.image
+        assert im.filter == band
+        assert im.data.shape == (4096, 2048)
         import pdb; pdb.set_trace()
         pass
 

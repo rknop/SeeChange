@@ -223,18 +223,18 @@ class LS4Cam(Instrument):
     def get_ra_dec_for_section( self, ra, dec, section_id ):
         if self.__class__._chip_offsets is None:
             SCLogger.warning( "ra/dec offsets for LS4 cam are currently approximate, need to be measured!" )
-            # Kenneth tells me 13.33 pixels is the size of the chip gap
             secgrid = [ [ 'NE_H', 'NE_G', 'NE_F', 'NE_E', 'NW_D', 'NW_D', 'NW_B', 'NW_A' ],
                         [ 'NE_D', 'NE_C', 'NE_B', 'NW_A', 'NW_H', 'NW_G', 'NW_F', 'NW_E' ],
                         [ 'SE_H', 'SE_G', 'SE_F', 'SE_E', 'SW_D', 'SW_D', 'SW_B', 'SW_A' ],
                         [ 'SE_D', 'SE_C', 'SE_B', 'SW_A', 'SW_H', 'SW_G', 'SW_F', 'SW_E' ] ]
             offsets = {}
+            # Kenneth tells me 13.33 pixels is the size of the chip gap
             for ix, arr in enumerate( secgrid ):
                 # - because E to the left is + in RA
-                dx = - ( ( ix - 3.5 ) * ( 2048./3600. + 13.33 ) )
+                dx = - ( ( ix - 3.5 ) * ( 2048. + 13.33 ) / 3600. )
                 for iy, chip in enumerate( arr ):
                     # - because in secgrid, I listed chips from top to bottom, not bottom to top
-                    dy = - ( ( iy - 1.5 ) * ( 4096/3600. + 13.33 ) )
+                    dy = - ( ( iy - 1.5 ) * ( 4096 + 13.33 ) / 3600. )
                     offsets[chip] = ( dx, dy )
             self.__class__._chip_offsets = offsets
 
@@ -302,8 +302,8 @@ class LS4Cam(Instrument):
         # For an exposure, the filter will be None, or, in the header, '0'
         if ( band is None ) or ( band == '0' ):
             return None
-        if band not in ['g', 'r', 'i']:
-            raise ValueError( f"I only understand filters g, r, and i, not {band}" )
+        if band not in ['g', 'i', 'z']:
+            raise ValueError( f"I only understand filters g, i, and z, not {band}" )
         return band
 
 
