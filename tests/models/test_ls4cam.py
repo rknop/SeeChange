@@ -5,6 +5,7 @@ import models.ls4cam  # noqa: F401
 from models.base import FileOnDiskMixin
 from models.exposure import Exposure
 from models.instrument import get_instrument_instance, SensorSection
+from models.enums_and_bitflags import string_to_bitflag, image_preprocessing_inverse
 from pipeline.data_store import DataStore
 from pipeline.top_level import Pipeline
 from util.retrydownload import retry_download
@@ -159,6 +160,8 @@ def test_overscan( loaded_singleamp_multifile_exposure ):
         im = ds.image
         assert im.filter == band
         assert im.data.shape == (4096, 2048)
+        # Only overscan done
+        assert im.preproc_bitflag == string_to_bitflag( 'overscan', image_preprocessing_inverse )
         import pdb; pdb.set_trace()
         pass
 
