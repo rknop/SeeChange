@@ -65,8 +65,9 @@ class ExposureProcessor:
         onlychips : list, default None
           If not None, will only process the sensor sections whose names
           match something in this list.  If None, will process all
-          sensor sections returned by the instrument's get_section_ids()
-          class method.
+          sensor sections returned by the instrument's fetch_sections(),
+          skipping chips marked as defective.
+
 
         through_step : str or None
           Passed on to top_level.py::Pipeline
@@ -342,9 +343,12 @@ class ExposureProcessor:
             config_chooser = ConfigChooser()
             config_chooser.run( self.exposure )
 
-            chips = self.instrument.get_section_ids()
+            chips = [ c.identifier for c in self.instrument.fetch_sections() if not c.defective ]
             if self.onlychips is not None:
                 chips = [ c for c in chips if c in self.onlychips ]
+                if set(chips) != set(self.onlychips):
+                    SCLogger.warning( f"Asked for some chips that are not non-defective known chips; "
+                                      f"will not be doing: {set(self.onlychips)-set(chips)}" )
             self.results = {}
 
             if self.numprocs > 1:

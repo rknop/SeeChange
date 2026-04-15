@@ -55,8 +55,8 @@ class ExposureLauncher:
         onlychips : list, default None
           If not None, will only process the sensor sections whose names
           match something in this list.  If None, will process all
-          sensor sections returned by the instrument's get_section_ids()
-          class method.
+          sensor sections returned by the instrument's fetch_sections()
+          method, skipping the sections marked defective.
 
         through_step : str or None
           Parameter passed on to top_level.py::Pipeline, unless it is "exposure"

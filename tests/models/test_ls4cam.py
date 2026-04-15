@@ -1,6 +1,8 @@
 import pytest
 import pathlib
 
+import numpy as np
+
 import models.ls4cam  # noqa: F401
 from models.base import FileOnDiskMixin
 from models.exposure import Exposure
@@ -9,6 +11,7 @@ from models.enums_and_bitflags import string_to_bitflag, image_preprocessing_inv
 from pipeline.data_store import DataStore
 from pipeline.top_level import Pipeline
 from util.retrydownload import retry_download
+from util.logger import SCLogger
 
 
 # @pytest.fixture( scope='module' )
@@ -149,8 +152,17 @@ def test_overscan( loaded_singleamp_multifile_exposure ):
     expobj = loaded_singleamp_multifile_exposure
 
     # SE_F and SE_E are the ones that are half-bad
-    chipstodo = [ 'NE_G', 'SE_F', 'SE_E', 'NW_B' ]
-    bands = [ 'i', 'g', 'g', 'z' ]
+    # SE_D and NE_H are the ones that are totally bad, and marked as defective inm ls4cam.py
+    chipstodo = [ 'NE_G', 'NW_B', 'SE_B', 'SE_C', 'SE_D', 'SE_E', 'SE_F' ]
+    bands = [ 'i', 'z', 'g', 'g', 'g', 'g', 'g' ]
+
+    regionmedian = { 'NE_G': 701.5,
+                     'NW_B': 1044.0,
+                     'SE_B': 96.5,
+                     'SE_C': 85.0,
+                     'SE_D': 88.0,
+                     'SE_E': 101.75,
+                     'SE_F': 104.5 }
 
     for chip, band in zip( chipstodo, bands ):
         pip = Pipeline( pipeline={ 'through_step': 'preprocessing' },
@@ -162,8 +174,19 @@ def test_overscan( loaded_singleamp_multifile_exposure ):
         assert im.data.shape == (4096, 2048)
         # Only overscan done
         assert im.preproc_bitflag == string_to_bitflag( 'overscan', image_preprocessing_inverse )
-        import pdb; pdb.set_trace()
-        pass
+
+        SCLogger.info( f"np.median(im.data[1929:1940, 1563:1573])={np.median(im.data[1929:1940, 1563:1573])}" )
+
+        # Some hardcoded regions that I know should be about this.  This is here because
+        #   there is a hack in LS4Cam::overscan_sections that hardcodes which chips are
+        #   read out in which directions.  This is to see that the right amount of
+        #   overscan was subtracted... at least if it was right when I looked at it in ds9
+        #   and pulled out these numbers.
+        assert np.median( im.data[1929:1940, 1563:1573] ) == pytest.approx( regionmedian[chip], abs=0.1 )
+
+
+    import pdb; pdb.set_trace()
+    pass
 
 
 # def test_dualamp_manual_load__exposure( loaded_dualamp_exposure ):

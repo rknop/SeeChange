@@ -22,9 +22,14 @@ from util.fits import read_fits_image
 class LS4Cam(Instrument):
     """Default operation mode for LS4Cam: single amp, sorta.
 
-    It's complicated because of optimizations Kenneth made.
+    It's complicated because of optimizations Kenneth made.  All the
+    headers claim that the left amp is what's being used for readout,
+    but for SE_E, SE_F, SE_C, and SE_D, we're reading out to the right,
+    so that half of the chip's CTE doesn't disaster the other half.
 
-    LS4Cam exposures are assumed to always be raw."""
+    LS4Cam exposures are assumed to always be raw.
+
+    """
 
     # LS4 filenames:
     #
@@ -112,8 +117,7 @@ class LS4Cam(Instrument):
         dx = 0
         dy = 0
         filter_array_index = self.get_section_filter_array_index( section_id )
-        # TODO get defective right
-        defective = False
+        defective = ( section_id in [ 'SE_D', 'NE_H' ] )
         return SensorSection( section_id, self.name, size_x=2048, size_y=4096,
                               offset_x=dx, offset_y=dy, defective=defective,
                               filter_array_index=filter_array_index )
@@ -327,16 +331,17 @@ class LS4Cam(Instrument):
         if header['amp_direction'].strip() != 'left':
             raise RuntimeError( f"{self.__class__.__name} assumes that readout is on the 'left' amp." )
 
+        section_id = header['CCD_LOC'].strip()
+
         # Some people, when confronted with a problem, think "I know,
         #   I'll use regular expressions." Now they have two problems.
         #     --Jamie Zawinski
         extractor = re.compile( r'^\s*\[\s*(?P<x0>\d+)\s*:\s*(?P<x1>\d+)\s*,'
                                 r'\s*(?P<y0>\d+)\s*:\s*(?P<y1>\d+)\s*\]\s*$' )
 
-        # .... OK.  If you ds9 one of the raw images, the stuff towards
-        # the left on the screen is the Right amp, and the stuff towards
-        # the right on the screen is the Left amp.  Oh well.
-        #
+        # Kenneth's Custom Mode : most chips are read out to the left.
+        # SE-C, SE-D, SE-E, and SE-F are read out to the right.
+
         # All the -1's are to go from FITS coords to numpy coords.
         # However, we omit it on the high side, so we get what
         # we'd index numpy with (where the upper index is one past
@@ -347,9 +352,9 @@ class LS4Cam(Instrument):
         biasl_x1 = int(mat.group('x1'))
         # biasl_y0 = int(mat.group('y0')) - 1
         # biasl_y1 = int(mat.group('y1'))
-        # mat = extractor.search( header['BIASSECR'] )
-        # biasr_x0 = int(mat.group('x0')) - 1
-        # biasr_x1 = int(mat.group('x1'))
+        mat = extractor.search( header['BIASSECR'] )
+        biasr_x0 = int(mat.group('x0')) - 1
+        biasr_x1 = int(mat.group('x1'))
         # biasr_y0 = int(mat.group('y0')) - 1
         # biasr_y1 = int(mat.group('y1'))
         mat = extractor.search( header['DATASECL'] )
@@ -374,24 +379,38 @@ class LS4Cam(Instrument):
         # prer_y1 = int(mat.group('y1'))
 
         # OK, these numbers are really confusing.  I think the model is,
-        #   the numbers assume dual-amp readout.  The files we get have
-        #   the L values pasted to the right of the R values, but there
-        #   is no R biassec because there was no R readout.  The prescan
-        #   is on the left side and comes from presec L because that was
-        #   the samp that was actually read out.  The L biassec needs to
-        #   be bumped to the right by the size of the R data because the
-        #   numbers assume that the R data is not there.  I think.
-        #   ZOMG.
-        # (Or maybe the left side really is the left side?)
-        # (Or the dark side?  If only you knew the power....)
-        biassec_x0 = biasl_x0 + ( datar_x1 - datar_x0 )
-        biassec_x1 = biassec_x0 + ( biasl_x1 - biasl_x0 )
-        datasec_x0 = prel_x1
-        datasec_x1 = datasec_x0 + ( datal_x1 - datal_x0 ) + ( datar_x1 - datar_x0 )
+        #   the numbers assume dual-amp readout.  The actual data section
+        #   has the R side on the left and the L side on the right.
+        #
+        # IF the left amp is used for readout, going from low x to high
+        #    x, there is a left block that is PRESECL, then there is the R
+        #    side data, then the L side data, then the BIASSECL.
+        #    Because the numbers assume dual-amp readout, we have to add
+        #    the size of the right side data to the BIASSECL x numbers
+        #    to account for that right data being there.
+        #
+        # IF the right amp is used for readout, going from low x to high
+        #    x, there is a left block that is BIASSECL, then there is R
+        #    side data, then L side data.  In this case, I think we can
+        #    ignore prescan, since it's on the right side, and as such
+        #    we don't need to offset anything.
+
+        if section_id in [ 'SE_C', 'SE_D', 'SE_E', 'SE_F' ]:
+            biassec_x0 = biasr_x0
+            biassec_x1 = biasr_x1
+            datasec_x0 = datar_x0
+            datasec_x1 = datasec_x0 + ( datal_x1 - datal_x0 ) + ( datar_x1 - datar_x0 )
+
+        else:
+            biassec_x0 = biasl_x0 + ( datar_x1 - datar_x0 )
+            biassec_x1 = biassec_x0 + ( biasl_x1 - biasl_x0 )
+            datasec_x0 = prel_x1
+            datasec_x1 = datasec_x0 + ( datal_x1 - datal_x0 ) + ( datar_x1 - datar_x0 )
+
         y0 = datal_y0
         y1 = datal_y1
 
-        return [ { 'secname': "",
+        return [ { 'secname': section_id,
                    'biassec': { 'x0': biassec_x0, 'x1': biassec_x1, 'y0': y0, 'y1': y1 },
                    'datasec': { 'x0': datasec_x0, 'x1': datasec_x1, 'y0': y0, 'y1': y1 } } ]
 
