@@ -1,4 +1,5 @@
 import io
+import shutil
 import hashlib
 import logging
 import pathlib
@@ -84,24 +85,37 @@ def retry_download( url, fpath, md5sum=None, retries=5, sleeptime=5, exists_ok=T
         countdown -= 1
         try:
             starttime = time.perf_counter()
-            response = requests.get( url )
-            response.raise_for_status()
-            midtime = time.perf_counter()
-            if sizelog == 'GiB':
-                size = len(response.content) / 1024 / 1024 / 1024
-            elif sizelog == 'kiB':
-                size = len(response.content) / 1024
-            else:
-                size = len(response.content) / 1024 / 1024
-                sizelog = 'MiB'
-            dt = float( midtime-starttime )
-            logger.debug( f"...downloaded {size:.3f} {sizelog} in {midtime-starttime:.2f} sec "
-                         f"({size/dt:.3f} {sizelog}/sec)" )
-            fpath.parent.mkdir( exist_ok=True, parents=True )
-            with open( fpath, "wb" ) as ofp:
-                ofp.write( response.content )
-            endtime = time.perf_counter()
-            logger.debug( f"...written to disk in {endtime-midtime:.2f} sec" )
+            if ( url[:7] == "http://" ) or ( url[:8] == "https://" ):
+                response = requests.get( url )
+                response.raise_for_status()
+                midtime = time.perf_counter()
+                if sizelog == 'GiB':
+                    size = len(response.content) / 1024 / 1024 / 1024
+                elif sizelog == 'kiB':
+                    size = len(response.content) / 1024
+                else:
+                    size = len(response.content) / 1024 / 1024
+                    sizelog = 'MiB'
+                dt = float( midtime-starttime )
+                logger.debug( f"...downloaded {size:.3f} {sizelog} in {midtime-starttime:.2f} sec "
+                             f"({size/dt:.3f} {sizelog}/sec)" )
+                fpath.parent.mkdir( exist_ok=True, parents=True )
+                with open( fpath, "wb" ) as ofp:
+                    ofp.write( response.content )
+                endtime = time.perf_counter()
+                logger.debug( f"...written to disk in {endtime-midtime:.2f} sec" )
+
+            elif url[:7] == "file://":
+                # Never retry a file copy
+                retries = 1
+                countdown = 0
+                sourcefile = pathlib.Path( url[7:] )
+                if not sourcefile.is_file():
+                    logger.error( f"No such file {sourcefile}" )
+                shutil.copy2( sourcefile, fpath )
+                endtime = time.perf_counter()
+                logger.debug( f"...copied in {endtime-starttime:.2f} sec" )
+
             success = True
             if md5sum is not None:
                 md5 = hashlib.md5()

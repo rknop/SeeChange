@@ -32,6 +32,7 @@ from util.retrydownload import retry_download
 
 @pytest.fixture( scope='module' )
 def loaded_singleamp_multifile_exposure( download_url, cache_dir ):
+    import pdb; pdb.set_trace()
     expobj = None
     try:
         for ctrlr in range(4):

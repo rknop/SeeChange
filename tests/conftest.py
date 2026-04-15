@@ -271,7 +271,11 @@ def pytest_sessionfinish(session, exitstatus):
 
 @pytest.fixture(scope='session')
 def download_url():
-    return 'https://portal.nersc.gov/cfs/m4616/SeeChange_testing_data'
+    test_download_url = os.getenv( "TEST_DOWNLOAD_URL", None )
+    if test_download_url is not None:
+        return os.getenv( "TEST_DOWNLOAD_URL" )
+    else:
+        return 'https://portal.nersc.gov/cfs/m4616/SeeChange_testing_data'
 
 
 # data that is included in the repo and should be available for tests
