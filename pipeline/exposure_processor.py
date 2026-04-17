@@ -25,6 +25,7 @@ from models.exposure import Exposure
 # Gotta import the instruments we might use before instrument fills up
 # its cache of known instrument instances
 import models.decam  # noqa: F401
+import models.ls4cam
 
 from pipeline.data_store import DataStore
 from pipeline.top_level import Pipeline
@@ -34,13 +35,15 @@ from pipeline.configchooser import ConfigChooser
 class ExposureProcessor:
     def __init__( self, instrument, identifier, numprocs, cluster_id,
                   node_id, machine_name=None, onlychips=None,
-                  through_step=None, worker_log_level=logging.WARNING ):
+                  through_step=None, ignore_known_exposures=False,
+                  worker_log_level=logging.WARNING ):
         """A class that processes all images in a single exposure, potentially using multiprocessing.
 
         It's sort of a wrapper around top_level.py::Pipeline, but
         handles downloading exposures, some updates of the
-        knownexposures table, and running lots of processes each
-        of which run a single Pipeline (on one chip).
+        knownexposures table (unless ignore_known_exposures is True),
+        and running lots of processes each of which run a single
+        Pipeline (on one chip).
 
         This is used internally by ExposureLauncher; normally, you would not use it directly.
 
@@ -86,6 +89,7 @@ class ExposureProcessor:
         self.numprocs = numprocs
         self.onlychips = onlychips
         self.through_step = through_step
+        self.ignore_known_exposures = ignore_known_exposures
         self.worker_log_level = worker_log_level
         self.provtag = Config.get().value( 'pipeline.provenance_tag' )
 
@@ -96,39 +100,42 @@ class ExposureProcessor:
 
 
     def finish_work( self ):
-        with PsycopgConnection() as conn:
-            cursor = conn.cursor()
-            cursor.execute( "LOCK TABLE knownexposures" )
-            cursor.execute( "SELECT cluster_id, start_time FROM knownexposures "
-                            "WHERE instrument=%(inst)s AND identifier=%(ident)s",
-                            { 'inst': self.instrument.name, 'ident': self.identifier } )
-            rows = cursor.fetchall()
-            if len(rows) == 0:
-                raise ValueError ( f"Error, unknown known exposure with instrument {self.instrument} "
-                                   f"and identifier {self.identifier}" )
-            if len(rows) > 1:
-                raise RuntimeError ( f"Error, multiple known exposures with instrument {self.instrument} "
-                                     f"and identifier {self.identifier}; this should not happen" )
-            if rows[0][0] != self.cluster_id:
-                raise ValueError( f"Error, known exposure with instrument {self.instrument.name} and identifier "
-                                  f"{self.identifier} is claimed by cluster {rows[0][0]}, not {self.cluster_id}" )
-            if rows[0][1] is None:
-                raise ValueError( f"Error, known exposure with instrument {self.instrument.name} and identifier "
-                                  f"{self.identifier} has a null start time" )
+        if not self.ignore_known_exposures:
+            with PsycopgConnection() as conn:
+                cursor = conn.cursor()
+                cursor.execute( "LOCK TABLE knownexposures" )
+                cursor.execute( "SELECT cluster_id, start_time FROM knownexposures "
+                                "WHERE instrument=%(inst)s AND identifier=%(ident)s",
+                                { 'inst': self.instrument.name, 'ident': self.identifier } )
+                rows = cursor.fetchall()
+                if len(rows) == 0:
+                    raise ValueError ( f"Error, unknown known exposure with instrument {self.instrument} "
+                                       f"and identifier {self.identifier}" )
+                if len(rows) > 1:
+                    raise RuntimeError ( f"Error, multiple known exposures with instrument {self.instrument} "
+                                         f"and identifier {self.identifier}; this should not happen" )
+                if rows[0][0] != self.cluster_id:
+                    raise ValueError( f"Error, known exposure with instrument {self.instrument.name} and identifier "
+                                      f"{self.identifier} is claimed by cluster {rows[0][0]}, not {self.cluster_id}" )
+                if rows[0][1] is None:
+                    raise ValueError( f"Error, known exposure with instrument {self.instrument.name} and identifier "
+                                      f"{self.identifier} has a null start time" )
 
-            cursor.execute( "UPDATE knownexposures SET release_time=%(t)s, _state=%(state)s "
-                            "WHERE instrument=%(inst)s AND identifier=%(ident)s",
-                            { 'inst': self.instrument.name, 'ident': self.identifier,
-                              't': datetime.datetime.now( tz=datetime.UTC ),
-                              'state': KnownExposureStateConverter.to_int('done') } )
-            conn.commit()
+                cursor.execute( "UPDATE knownexposures SET release_time=%(t)s, _state=%(state)s "
+                                "WHERE instrument=%(inst)s AND identifier=%(ident)s",
+                                { 'inst': self.instrument.name, 'ident': self.identifier,
+                                  't': datetime.datetime.now( tz=datetime.UTC ),
+                                  'state': KnownExposureStateConverter.to_int('done') } )
+                conn.commit()
 
 
     def secure_exposure( self, assume_claimed=False, cont=True, delete=False ):
         """Make sure the exposure is downloaded and in the database and archive.
 
         Also updates the knownexposures table to indicate that this
-        exposure is running on this cluster, node, and machine.
+        exposure is running on this cluster, node, and machine (unless
+        the ExposureProcessor was initialized with ignore_kn
+        own_exposures=True).
 
         If it's not yet in the database, use the Instrument subclass to download and load it.
 
@@ -146,13 +153,16 @@ class ExposureProcessor:
              knownexposures state is "claimed", raise an exception
              unless the cluster_id, node_id, and machine_name in the
              knownexposures table all match this object's values.
+             Irrelevant if ExposureProcessor was initialized with
+             ignore_known_exposures=True.
 
           cont : bool, default False
              If this is False, and an exposure already exists in the
              database, raise an exception.  If this is True, then don't
              raise an exception, make sure that the known exposure table
-             has the right exposure id, and proceed, trusting the
-             pipeline to pick up where it left off.
+             has the right exposure id (unless ignore_known_exposures is
+             True), and proceed, trusting the pipeline to pick up where
+             it left off.
 
           delete : bool, default False
              OMG, don't use this.  Unless you're testing and developing,
@@ -160,9 +170,36 @@ class ExposureProcessor:
              exists in the database, *blow it away* (and any derived
              data products) and start it over.  The design of the
              pipeline is such that this isn't supposed to happen, but,
-             well, development has needs.
+             well, development has needs.  delete cannot be True if the
+             ExposureProcessor was initialized with
+             ignore_known_exposures=False.
 
         """
+
+        if self.ignore_known_exposures:
+            if delete:
+                raise ValueError( "Cannot use delete with ignore_known_exposures" )
+
+            with PsycopgConnection() as conn:
+                cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
+                cursor.execute( "SELECT _id FROM exposures WHERE instrument=%(inst)s AND origin_identifier=%(iden)s",
+                                { 'inst': self.instrument.name, 'iden': self.identifier } )
+                exps = cursor.fetchall()
+                if len( exps ) > 1:
+                    raise RuntimeError( f"Database corruption, multiple exposures with instrument "
+                                        f"{self.instrument.name} and identifier {self.identifier}" )
+                if len(exps) == 0:
+                    raise RuntimeError( f"No exposure in the database for instrument {self.instrument.name} "
+                                        f"with identifier {self.identifier}" )
+                exposureid = exps[0]['_id']
+            self.exposure = Exposure.get_by_id( exposureid )
+            if self.exposure is None:
+                raise ValueError( f"Unknown exposure {exposureid}.  This should never happen." )
+            SCLogger.info( f"Found exposure {self.identifier}" )
+
+            return
+
+        # If we get here, then self.ignore_known_exposures is false
 
         SCLogger.info( f"Securing exposure {self.identifier}..." )
         exposureid = None
@@ -327,13 +364,14 @@ class ExposureProcessor:
 
         origconfig = Config._default
         try:
-            with PsycopgConnection() as conn:
-                cursor = conn.cursor()
-                cursor.execute( "UPDATE knownexposures SET start_time=%(t)s "
-                                "WHERE instrument=%(inst)s AND identifier=%(iden)s",
-                                { 'inst': self.instrument.name, 'iden': self.identifier,
-                                  't': datetime.datetime.now( tz=datetime.UTC ) } )
-                conn.commit()
+            if not self.ignore_known_exposures:
+                with PsycopgConnection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute( "UPDATE knownexposures SET start_time=%(t)s "
+                                    "WHERE instrument=%(inst)s AND identifier=%(iden)s",
+                                    { 'inst': self.instrument.name, 'iden': self.identifier,
+                                      't': datetime.datetime.now( tz=datetime.UTC ) } )
+                    conn.commit()
 
             # Update the config if necessary.  This changes the global
             #   config cache, which is scary, because we're changing it
@@ -343,7 +381,7 @@ class ExposureProcessor:
             config_chooser = ConfigChooser()
             config_chooser.run( self.exposure )
 
-            chips = [ c.identifier for c in self.instrument.fetch_sections() if not c.defective ]
+            chips = [ c.identifier for c in self.instrument.fetch_sections().values() if not c.defective ]
             if self.onlychips is not None:
                 chips = [ c for c in chips if c in self.onlychips ]
                 if set(chips) != set(self.onlychips):
@@ -444,11 +482,14 @@ to start it.
     parser.add_argument( 'instrument', help='Name of the instrument of the known exposure' )
     parser.add_argument( 'identifier', help='Identifier of the known exposure' )
     parser.add_argument( '-c', '--cluster-id', default="manual",
-                         help="Cluster ID to mark as claiming the exposure in the knownexposures table" )
+                         help=( "Cluster ID to mark as claiming the exposure in the knownexposures table.  "
+                                "Ignored if ignore-known-exposures is set." ) )
     parser.add_argument( '--node', '--node-id', default="manual",
-                         help="Node ID to mark as claiming the exposure in the knownexposures table" )
+                         help=( "Node ID to mark as claiming the exposure in the knownexposures table.  "
+                                "Ignored if ignore-known-exposures is set." ) )
     parser.add_argument( '-m', '--machine', default="manual",
-                         help="Machine name to mark as claiming the exposure in the knownexposures table" )
+                         help=( "Machine name to mark as claiming the exposure in the knownexposures table.  "
+                                "Ignored if ignore-known-exposures is set." ) )
     parser.add_argument( '-n', '--numprocs', default=None, type=int,
                          help=( "Number of chip processors to run (defaults to number of physical "
                                 "system CPUs minus 1)" ) )
@@ -457,7 +498,8 @@ to start it.
     parser.add_argument( '--cont', '--continue', default=False, action='store_true',
                          help="If exposure already exists, try continuing it." )
     parser.add_argument( '-d', '--delete', default=False, action='store_true',
-                         help="Delete exposure from disk and database before starting if it exists." )
+                         help=( "Delete exposure from disk and database before starting if it exists.  "
+                                "Can't be used with --ignore-known-exposures." ) )
     parser.add_argument( '--really-delete', default=False, action='store_true',
                          help="Must be specified if -d or --delete is specified for it to do its dirty work." )
     parser.add_argument( '-l', '--log-level', default='info',
@@ -467,7 +509,12 @@ to start it.
     parser.add_argument( '--assume-claimed', default=False, action='store_true',
                          help=( "Normally, will object if the exposure is in the claimed or running state, "
                                 "and it is not claimed by the cluster given in --cluster-id. Set "
-                                "this flag to True to ignore claims in the knownexposures table." ) )
+                                "this flag to True to ignore claims in the knownexposures table.  "
+                                "Irrelevant if --ingore-known-exposures is set" ) )
+    parser.add_argument( '--ignore-known-exposures', default=False, action='store_true',
+                         help=( "Normally, reads and writes to the knownexposures table.  Set this to "
+                                "skip that.  You need this if you're running exposures outside of the "
+                                "context of a conductor." ) )
 
     args = parser.parse_args()
 
@@ -486,6 +533,7 @@ to start it.
     processor = ExposureProcessor( args.instrument, args.identifier, numprocs,
                                    args.cluster_id, args.node, machine_name=args.machine,
                                    onlychips=args.chips, through_step=args.through_step,
+                                   ignore_known_exposures=args.ignore_known_exposures,
                                    worker_log_level=loglookup[args.worker_log_level.lower()] )
 
     processor.secure_exposure( assume_claimed=args.assume_claimed, cont=args.cont, delete=reallydelete )

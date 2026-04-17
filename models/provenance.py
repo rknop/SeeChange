@@ -66,7 +66,7 @@ class CodeVersion(Base, UUIDMixin):
     #     (Technically, you're allowed to violate this as long as MAJOR is 0.)
     CODE_VERSION_DICT = {
         # The core processes of the pipeline
-        'acquire_exposure': (0,1,0),
+        'acquire_exposure': (0,2,0),
         'preprocessing': (0,1,1),
         'extraction': (0,2,0),
         'astrocal' : (0,1,0),

@@ -1997,7 +1997,8 @@ class Instrument:
         return provenance
 
 
-    def manually_load_exposure( self, filepath, origin_identifier=None, params=None ):
+    def manually_load_exposure( self, filepath, origin_identifier=None, params=None,
+                                proc_type='raw', method='manual_load', code_version=None ):
         """Load an exposure into the database from a file on disk.
 
         USE THIS WITH CARE.  EXTREME CARE.  Subclasses that implement
@@ -2019,6 +2020,8 @@ class Instrument:
 
           params : ...something
               Instrument dependent.
+
+          proc_type, method, code_version: all passed on to get_exposure_provenance
 
         Returns
         -------
