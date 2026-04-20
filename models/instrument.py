@@ -18,19 +18,8 @@ from models.base import Base, SmartSession, UUIDMixin
 from models.provenance import Provenance
 
 from pipeline.catalog_tools import Bandpass
-from util.util import get_inheritors
 from util.fits import read_fits_image
 from util.logger import SCLogger
-
-
-# dictionary of regex for filenames, pointing at instrument names
-INSTRUMENT_FILENAME_REGEX = None
-
-# dictionary of names of instruments, pointing to the relevant class
-INSTRUMENT_CLASSNAME_TO_CLASS = None
-
-# dictionary of instrument object instances, lazy loaded to be shared between exposures
-INSTRUMENT_INSTANCE_CACHE = None
 
 
 # Orientations for those instruments that have a permanent orientation square to the sky
@@ -44,85 +33,6 @@ class InstrumentOrientation(Enum):
     NrightEdown = 5       # flip-x, then 90° clockwise
     NdownEleft = 6        # flip-x, then 180°
     NleftEup = 7          # flip-x, then 270° clockwise
-
-
-def register_all_instruments():
-    """Go over all subclasses of Instrument and register them in the global dictionaries."""
-    global INSTRUMENT_FILENAME_REGEX, INSTRUMENT_CLASSNAME_TO_CLASS
-
-    if INSTRUMENT_FILENAME_REGEX is None:
-        INSTRUMENT_FILENAME_REGEX = {}
-    if INSTRUMENT_CLASSNAME_TO_CLASS is None:
-        INSTRUMENT_CLASSNAME_TO_CLASS = {}
-
-    inst = get_inheritors(Instrument)
-    for i in inst:
-        INSTRUMENT_CLASSNAME_TO_CLASS[i.__name__] = i
-        if i.get_filename_regex() is not None:
-            for regex in i.get_filename_regex():
-                if not isinstance( regex, re.Pattern ):
-                    raise TypeError( r"Coding error: at least one of the returns of get_instrument_regex() for "
-                                     r"{i.__name__} is not a re.Pattern" )
-                INSTRUMENT_FILENAME_REGEX[regex] = i.__name__
-
-
-def guess_instrument(filename):
-    """Find the name of the instrument from the filename.
-
-    Uses the regex of each instrument (if it exists)
-    to try to match the filename with the expected
-    instrument's file name convention.
-    If multiple instruments match, raises an error.
-
-    If no instruments match, returns None.
-    TODO: add a fallback method that lets each instrument
-      run its own load method and see if it can load the file.
-
-    """
-    if filename is None:
-        raise ValueError("Cannot guess instrument without a filename! ")
-
-    filename = os.path.basename(filename)  # only scan the file name itself!
-
-    if INSTRUMENT_FILENAME_REGEX is None:
-        register_all_instruments()
-
-    instrument_list = []
-    for k, v in INSTRUMENT_FILENAME_REGEX.items():
-        if k.search( filename ):
-            instrument_list.append(v)
-
-    if len(instrument_list) == 0:
-        # TODO: maybe add a fallback of looking into the file header?
-        # raise ValueError(f"Could not guess instrument from filename: {filename}. ")
-        return None  # leave empty is the right thing? should probably go to a fallback method
-    elif len(instrument_list) == 1:
-        return instrument_list[0]
-    else:
-        raise ValueError(f"Found multiple instruments matching filename: {filename}. ")
-
-    # TODO: add fallback method that runs all instruments
-    #  (or only those on the short list) and checks if they can load the file
-
-
-def get_instrument_instance(instrument_name):
-    """Get an instance of the instrument class, given the name of the instrument.
-
-    Will store that instance in the INSTRUMENT_INSTANCE_CACHE dictionary,
-    so the instruments can be re-used for e.g., loading multiple exposures.
-    """
-    if INSTRUMENT_CLASSNAME_TO_CLASS is None:
-        register_all_instruments()
-
-    global INSTRUMENT_INSTANCE_CACHE
-    if INSTRUMENT_INSTANCE_CACHE is None:
-        INSTRUMENT_INSTANCE_CACHE = {}
-
-    if instrument_name not in INSTRUMENT_INSTANCE_CACHE:
-        SCLogger.debug( f"Making instrument cache for {instrument_name}" )
-        INSTRUMENT_INSTANCE_CACHE[instrument_name] = INSTRUMENT_CLASSNAME_TO_CLASS[instrument_name]()
-
-    return INSTRUMENT_INSTANCE_CACHE[instrument_name]
 
 
 class SensorSection(Base, UUIDMixin):
@@ -330,6 +240,114 @@ class Instrument:
     values either in time or in space.
 
     """
+
+    # dictionary of regex for filenames, pointing at instrument names
+    _instrument_filename_regex = {}
+
+    # dictionary of names of instruments, pointing to the relevant class
+    _instrument_classname_to_class = {}
+
+    # dictionary of instrument object instances, lazy loaded to be shared between exposures
+    _instrument_instance_cache = {}
+
+    @classmethod
+    def register_all_instruments( cls ):
+        # Any module that defines classes that derive from Instrument is
+        # supposed to call <class>.regsiter_this_instrument at the
+        # bottom.
+        #
+        # Import all the classes here so that Instrument knows about
+        # them, and so that get_instrument_instance() and
+        # guess_instrument() will work.
+        #
+        # This does mean we have to edit this
+        # class method every time we add a new instrument.
+        #
+        # Doing this in a function rather than at the bottom of the
+        # class to avoid circular imports.  Individual instruments
+        # import Exposure, which imports Instrument....
+
+        import models.ptf     # noqa: F401
+        import models.decam   # noqa: F401
+        import models.ls4cam  # noqa: F401
+
+
+    @classmethod
+    def register_this_instrument( cls ):
+        """Register this instrument in the Instrument class dictionaries.
+
+        Any module that defines a subclass of Instrument needs to call
+        this method on that subclass after the class is defined.
+        Otherwise, Instrument won't know about that instrument and won't
+        be able to find it in get_instrument_instance or
+        guess_instrument.
+
+        """
+
+        if cls.__name__ not in Instrument._instrument_classname_to_class:
+            Instrument._instrument_classname_to_class[cls.__name__] = cls
+            if cls.get_filename_regex() is not None:
+                for regex in cls.get_filename_regex():
+                    if not isinstance( regex, re.Pattern ):
+                        raise TypeError( r"Coding error: at least one of the returns of get_instrument_regex() for "
+                                         r"{cls.__name__} is not a re.Pattern" )
+                    Instrument._instrument_filename_regex[regex] = cls.__name__
+
+
+    @classmethod
+    def get_instrument_instance( cls, instrument_name ):
+        """Get the singleton instrument instance for an instrument."""
+
+        Instrument.register_all_instruments()
+        if instrument_name not in Instrument._instrument_instance_cache:
+            if instrument_name not in Instrument._instrument_classname_to_class:
+                raise ValueError( f"Unknown instrument {instrument_name}" )
+            SCLogger.debug( f"Making instrument cache for {instrument_name}" )
+            Instrument._instrument_instance_cache[ instrument_name ] = (
+                Instrument._instrument_classname_to_class[ instrument_name ]() )
+
+        return Instrument._instrument_instance_cache[ instrument_name ]
+
+
+    @classmethod
+    def guess_instrument( cls, filename ):
+        """Find the name of the instrument from the filename.
+
+        Uses the regex of each instrument (if it exists)
+        to try to match the filename with the expected
+        instrument's file name convention.
+        If multiple instruments match, raises an error.
+
+        If no instruments match, returns None.
+        TODO: add a fallback method that lets each instrument
+          run its own load method and see if it can load the file.
+
+        """
+
+        if filename is None:
+            raise ValueError("Cannot guess instrument without a filename! ")
+
+        filename = os.path.basename(filename)  # only scan the file name itself!
+
+        Instrument.register_all_instruments()
+        instrument_list = []
+        for k, v in cls._instrument_filename_regex.items():
+            if k.search( filename ):
+                instrument_list.append(v)
+
+        if len(instrument_list) == 0:
+            # TODO: maybe add a fallback of looking into the file header?
+            # raise ValueError(f"Could not guess instrument from filename: {filename}. ")
+            return None  # leave empty is the right thing? should probably go to a fallback method
+        elif len(instrument_list) == 1:
+            return instrument_list[0]
+        else:
+            raise ValueError(f"Found multiple instruments matching filename: {filename}. ")
+
+        # TODO: add fallback method that runs all instruments
+        #  (or only those on the short list) and checks if they can load the file
+
+
     def __init__(self, **kwargs):
         """Create a new Instrument.
 
@@ -401,11 +419,8 @@ class Instrument:
             setattr(self, key, value)
 
         # add this instrument to the cache, if there isn't one already
-        global INSTRUMENT_INSTANCE_CACHE
-        if INSTRUMENT_INSTANCE_CACHE is None:
-            INSTRUMENT_INSTANCE_CACHE = {}
-        if self.name not in INSTRUMENT_INSTANCE_CACHE:
-            INSTRUMENT_INSTANCE_CACHE[self.__class__.__name__] = self
+        if self.name not in Instrument._instrument_instance_cache:
+            Instrument._instrument_instance_cache[self.__class__.__name__] = self
 
     def __repr__(self):
         ap = None if self.aperture is None else f'{self.aperture:.1f}m'
@@ -1238,9 +1253,13 @@ class Instrument:
     def get_short_instrument_name(self):
         """Get a short name used for e.g., making filenames.
 
-        The default instrument just spits out the instrument class name.
+        The default spits out the property __name__, or, if that doesn't
+        exist, the class name.
         """
-        return self.__name__
+        if hasattr( self, "__name__" ):
+            return self.__name__
+        else:
+            return self.__class__.__name__
 
     def get_short_filter_name(self, filter):
         """Translate the full filter name into a shorter version,
@@ -2153,7 +2172,6 @@ class Instrument:
                                    f"implemented find_origin_exposures." )
 
 
-
 class DemoInstrument(Instrument):
     fake_image_size_x = 512
     fake_image_size_y = 1024
@@ -2265,6 +2283,10 @@ class DemoInstrument(Instrument):
     def get_short_instrument_name(self):
         """Get a short name used for e.g., making filenames."""
         return 'Demo'
+
+
+# Register the instrument in the Instrument dictionaries
+DemoInstrument.register_this_instrument()
 
 
 class InstrumentOriginExposures:
@@ -2533,6 +2555,7 @@ class InstrumentOriginExposures:
     def __len__( self ):
         """The number of exposures this object encapsulates."""
         raise NotImplementedError( f"Instrument class {self.__class__.__name__} hasn't implemented __len__." )
+
 
 
 if __name__ == "__main__":

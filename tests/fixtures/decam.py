@@ -12,8 +12,8 @@ import numpy as np
 from astropy.io import fits
 
 from models.base import SmartSession
-from models.instrument import Instrument, get_instrument_instance
-from models.decam import DECam  # need this import to make sure DECam is added to the Instrument list
+from models.instrument import Instrument
+from models.decam import DECam
 from models.provenance import Provenance
 from models.exposure import Exposure
 from models.image import Image
@@ -58,7 +58,7 @@ def decam_default_calibrators(cache_dir, data_dir):
                     dirs_exist_ok=True,
                 )
 
-        decam = get_instrument_instance( 'DECam' )
+        decam = Instrument.get_instrument_instance( 'DECam' )
         sections = [ 'S2', 'S3', 'N16' ]
         filters = [ 'r', 'i', 'z', 'g']
         for sec in sections:
@@ -195,8 +195,9 @@ def decam_reduced_origin_exposure_loaded_in_db( decam_reduced_origin_exposure_fi
                               'DATE-OBS', 'TIME-OBS', 'MJD-OBS', 'OBJECT', 'PROGRAM',
                               'OBSERVER', 'PROPID', 'FILTER', 'RA', 'DEC', 'HA', 'ZD', 'AIRMASS',
                               'VSUB', 'GSKYPHOT', 'LSKYPHOT' ) }
-        exphdrinfo = Instrument.extract_header_info( hdr, [ 'mjd', 'exp_time', 'filter',
-                                                            'project', 'target' ] )
+        decam = Instrument.get_instrument_instance( 'DECam' )
+        exphdrinfo = decam.extract_header_info( hdr, [ 'mjd', 'exp_time', 'filter',
+                                                       'project', 'target' ] )
         ra = util.radec.parse_sexigesimal_degrees( hdr['RA'], hours=True )
         dec = util.radec.parse_sexigesimal_degrees( hdr['DEC'] )
 
@@ -277,8 +278,9 @@ def decam_exposure_factory(download_url, data_dir, decam_cache_dir):
 
         with fits.open( filename, memmap=True ) as ifp:
             hdr = ifp[0].header
-        exphdrinfo = Instrument.extract_header_info( hdr, [ 'mjd', 'exp_time', 'filter', 'project', 'target',
-                                                            'ra','dec' ] )
+        decam = Instrument.get_instrument_instance( 'DECam' )
+        exphdrinfo = decam.extract_header_info( hdr, [ 'mjd', 'exp_time', 'filter', 'project', 'target',
+                                                       'ra','dec' ] )
 
         exposure = Exposure( filepath=filename, instrument='DECam', **exphdrinfo )
         exposure.save()  # save to archive and get an MD5 sum

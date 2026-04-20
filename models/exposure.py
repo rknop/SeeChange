@@ -24,7 +24,7 @@ from models.base import (
     SmartSession,
     HasBitFlagBadness,
 )
-from models.instrument import guess_instrument, get_instrument_instance
+from models.instrument import Instrument
 
 from models.enums_and_bitflags import (
     ImageFormatConverter,
@@ -140,7 +140,7 @@ class ExposureImageIterator:
     def __iter__( self, exposure ):
         self.exposure = exposure
 
-        self.instrument = get_instrument_instance( self.exposure.instrument )
+        self.instrument = Instrument.get_instrument_instance( self.exposure.instrument )
         self.section_ids = self.instrument.get_section_ids()
         self.dex = 0
         return self
@@ -419,7 +419,7 @@ class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBad
                 raise ValueError("Exposure.__init__: must give a filepath to initialize an Exposure object. ")
 
         if self.instrument is None:
-            self.instrument = guess_instrument(self.filepath)
+            self.instrument = Instrument.guess_instrument(self.filepath)
 
         # ensure we are working with short filter from here and below
         self.filter = self.instrument_object.get_short_filter_name( self.filter )
@@ -448,7 +448,7 @@ class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBad
 
         Just calls the instrument's get_exposure_provenance() method.
         """
-        return get_instrument_instance( instrument ).get_exposure_provenance()
+        return Instrument.get_instrument_instance( instrument ).get_exposure_provenance()
 
 
     @sa.orm.reconstructor
@@ -537,7 +537,7 @@ class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBad
     def instrument_object(self):
         if self.instrument is not None:
             if self._instrument_object is None or self._instrument_object.name != self.instrument:
-                self._instrument_object = get_instrument_instance(self.instrument)
+                self._instrument_object = Instrument.get_instrument_instance(self.instrument)
 
         return self._instrument_object
 

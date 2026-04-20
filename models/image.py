@@ -37,7 +37,7 @@ from models.base import (
 )
 from models.provenance import Provenance
 from models.exposure import Exposure
-from models.instrument import get_instrument_instance
+from models.instrument import Instrument
 from models.enums_and_bitflags import (
     ImageFormatConverter,
     ImageTypeConverter,
@@ -1149,7 +1149,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
     def instrument_object(self):
         if self.instrument is not None:
             if self._instrument_object is None or self._instrument_object.name != self.instrument:
-                self._instrument_object = get_instrument_instance(self.instrument)
+                self._instrument_object = Instrument.get_instrument_instance(self.instrument)
 
         return self._instrument_object
 
