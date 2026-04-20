@@ -1998,7 +1998,8 @@ class Instrument:
 
 
     def manually_load_exposure( self, filepath, origin_identifier=None, params=None,
-                                proc_type='raw', method='manual_load', code_version=None ):
+                                proc_type='raw', method='manual_load', code_version=None,
+                                exists_ok=False ):
         """Load an exposure into the database from a file on disk.
 
         USE THIS WITH CARE.  EXTREME CARE.  Subclasses that implement
@@ -2022,6 +2023,16 @@ class Instrument:
               Instrument dependent.
 
           proc_type, method, code_version: all passed on to get_exposure_provenance
+
+          exists_ok: bool, default False
+             If True, and an exposure with the same origin_identifier
+             already exists, and the provenance is as expected, assume
+             that what's there is right.  If the exposure in the
+             database has a different provenance from what we would have
+             loaded, raise an exception.  If exists_ok is False
+             (default) and an exposure with the same origin_identifier
+             exists at all, regardless of whether the provenance matches
+             or not, raise an exception.
 
         Returns
         -------

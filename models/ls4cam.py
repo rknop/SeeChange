@@ -2,6 +2,7 @@ import re
 import pathlib
 import subprocess
 
+import psycopg.rows
 import numpy as np
 
 from astropy.coordinates import EarthLocation, SkyCoord, AltAz
@@ -9,7 +10,7 @@ import astropy.time
 import astropy.units as u
 from astropy.io import fits
 
-from models.base import FileOnDiskMixin
+from models.base import FileOnDiskMixin, PsycopgConnection
 from models.instrument import ( Instrument,
                                 InstrumentOrientation,
                                 InstrumentOriginExposures,
@@ -53,7 +54,7 @@ class LS4Cam(Instrument):
     #
     #     Has 33 HDUs if in single-amp mode, so 1 per chip plus dataless HDU 0 (fpack)
 
-    _file_re = re.compile( r'^(?P<filebase>(?P<datetime>\d{14})(?P<sd>[sd])(?P<C>C(?P<ctrlr>\d))?)'
+    _file_re = re.compile( r'^(?P<filebase>(?P<datetime>\d{14})(?P<sd>[sde])(?P<C>C(?P<ctrlr>\d))?)'
                            r'_(?P<num>\d+)(?P<chipthing>_(?P<chip>\d\d))?\.fits(?P<fz>\.fz)?$' )
 
 
@@ -432,7 +433,8 @@ class LS4Cam(Instrument):
 
 
     def _load_exposure_from_file_or_files( self, filepath, origin_identifier=None, params=None,
-                                           proc_type='raw', method='manual_load', code_version=None ):
+                                           proc_type='raw', method='manual_load', code_version=None,
+                                           exists_ok=False ):
         # Have this here to avoid circular imports (instrument.py)
         from models.exposure import Exposure
 
@@ -490,6 +492,26 @@ class LS4Cam(Instrument):
             exposurename = f'{filebase}_{filenum}.fits'
             if origin_identifier is None:
                 origin_identifier = exposurename
+            with PsycopgConnection() as pgcon:
+                cursor = pgcon.cursor( row_factory=psycopg.rows.dict_row )
+                cursor.execute( "SELECT * FROM exposures WHERE origin_identifier=%(id)s", { 'id': origin_identifier } )
+                rows = cursor.fetchall()
+                if len(rows) > 0:
+                    if len(rows) > 1:
+                        raise RuntimeError( "This should never happen" )
+                    if not exists_ok:
+                        raise RuntimeError( f"Exposure with origin_identifier=\"{origin_identifier}\" "
+                                            f"already exists in database." )
+                    row = rows[0]
+                    if row['provenance_id'] != provenance.id:
+                        raise ValueError( f"Exposure with origin_identifier=\"{origin_identifier}\" "
+                                          f"already exists in the database with provenance "
+                                          f"\"{row['provenance_id']}\", but we're trying to load it with "
+                                          f"provennce \"{provenance.id}\"." )
+                    SCLogger.info( f"Exposure with origin identifier=\"{origin_identifier}\" already in the "
+                                   f"database, not doing anything." )
+                    return
+
             exposurepath = pathlib.Path( FileOnDiskMixin.temp_path ) / exposurename
             exposurepathfz = exposurepath.parent / f"{exposurepath.name}.fz"
             try:
@@ -536,7 +558,8 @@ class LS4Cam(Instrument):
                             # WORRY AND THINK : the header doesn't have comments saying the units
                             #   are hours or degrees.  Because in my test image, I got an airmass
                             #   of -3.5 if I interpreted it as degrees, but 1.05 if I interpreted
-                            #   it as hours, I'm guessing it's hours.
+                            #   it as hours, I'm guessing it's hours.  (Also, Kenneth told me
+                            #   it was hours, and he should know.)
                             ra = float( hdr['TELE-RA'] ) * 15.
                             dec = float( hdr['TELE-DEC'] )
                             obs_type = obs_type_map[ hdr['IMAGETYP'] ]
@@ -549,7 +572,12 @@ class LS4Cam(Instrument):
                             hdu0 = fits.PrimaryHDU( header=fits.Header(allhdrinfo) )
                             hdus.append( hdu0 )
 
-                        hdus.append( fits.ImageHDU( data=hdu.data, header=hdu.header ) )
+                        try:
+                            hdus.append( fits.ImageHDU( data=hdu.data, header=hdu.header ) )
+                        except Exception as e:
+                            import pdb; pdb.set_trace()
+                            pass
+
 
                 # Write the exposure to temp and fpack it
                 exphdul = fits.HDUList( hdus )
@@ -579,10 +607,12 @@ class LS4Cam(Instrument):
 
 
     def manually_load_exposure( self, filepath, origin_identifier=None, params=None,
-                                proc_type='raw', method='manual_load', code_version=None ):
+                                proc_type='raw', method='manual_load', code_version=None,
+                                exists_ok=False ):
         return self._load_exposure_from_file_or_files( filepath, origin_identifier=origin_identifier,
                                                        params=params, proc_type=proc_type,
-                                                       method=method, code_version=code_version )
+                                                       method=method, code_version=code_version,
+                                                       exists_ok=exists_ok )
 
 
     def acquire_and_commit_origin_exposure( self, identifier, params ):
