@@ -17,8 +17,8 @@ configchoice:
     extragalactic: seechange_config_test_extragalactic.yaml
 
 path:
-  data_root: '/seechange/tests/temp_data'
-  data_temp: '/seechange/tests/temp_data'
+  data_root: '/seechange/tests/test_filestore'
+  data_temp: '/seechange/tests/test_tempdata'
 
 db:
   host: postgres

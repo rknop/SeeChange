@@ -65,6 +65,33 @@ def loaded_singleamp_multifile_exposure( download_url, cache_dir ):
             assert not fullpath.exists()
 
 
+@pytest.fixture( scope='module' )
+def loaded_singleamp_singlefile_exposure( download_url, cache_dir ):
+    expobj = None
+    try:
+        relpath = pathlib.Path( "LS4/20260409/20260409005320s_00014.fits.fz" )
+        cachepath = pathlib.Path( cache_dir ) / relpath
+        if not cachepath.is_file():
+            cachepath.parent.mkdir( parents=True, exist_ok=True )
+            retry_download( f'{download_url}/{relpath}', cachepath )
+
+        ls4cam = Instrument.get_instrument_instance( 'LS4Cam' )
+        expobj = ls4cam.manually_load_exposure( cachepath )
+
+        # Make sure it didn't levae behind a temp file
+        tmpfile = pathlib.Path( FileOnDiskMixin.temp_path ) / "20260409005320s_00014.fits"
+        assert not tmpfile.exists()
+        tmpfile = tmpfile.parent / f"{tmpfile.name}.fz"
+        assert not tmpfile.exists()
+
+        yield expobj
+
+    finally:
+        if expobj is not None:
+            fullpath = pathlib.Path( expobj.get_fullpath() )
+            expobj.delete_from_disk_and_database()
+            assert not fullpath.exists()
+
 
 def test_section_stuff():
     ls4cam = Instrument.get_instrument_instance( 'LS4Cam' )
@@ -111,7 +138,7 @@ def test_section_stuff():
             assert dex == 3
 
 
-def test_manual_load_exposure( loaded_singleamp_multifile_exposure ):
+def test_manual_load_multifile_exposure( loaded_singleamp_multifile_exposure ):
     expobj = loaded_singleamp_multifile_exposure
 
     assert expobj.origin_identifier == '20260410004924sC3_00025.fits'
@@ -131,6 +158,42 @@ def test_manual_load_exposure( loaded_singleamp_multifile_exposure ):
     assert expobj.mjd == pytest.approx( 61140.034375, abs=1e-5 )
     assert expobj.exp_time == pytest.approx( 60., abs=0.01 )
     assert expobj.airmass == pytest.approx( 1.049, abs=0.001 )
+
+    # Make sure we have all the sections we expect
+    chips = set( f'{quadrant}_{letter}' for quadrant in ['NW', 'NE', 'SW', 'SE'] for letter in 'ABCDEFGH' )
+    for chip in chips:
+        sechdr = expobj.section_headers[chip]
+        assert sechdr['CCD_LOC'] == chip
+
+    # TODO : look at data?
+
+    # Make sure the file is there and it's really in the database
+    assert pathlib.Path( expobj.get_fullpath() ).is_file()
+    dbexp = Exposure.get_by_id( expobj.id )
+    for prop in [ 'id', 'filepath', 'instrument', 'filter', 'type', 'format' ]:
+        assert getattr( expobj, prop ) == getattr( dbexp, prop )
+
+
+def test_manual_load_singlefile_exposure( loaded_singleamp_singlefile_exposure ):
+    expobj = loaded_singleamp_singlefile_exposure
+
+    assert expobj.origin_identifier == '20260409005320s_00014.fits'
+    assert expobj.instrument == 'LS4Cam'
+    assert expobj.instrument_object.__class__.__name__ == 'LS4Cam'
+    assert expobj.telescope == 'ESO 1.0-m Schmidt'
+    assert expobj.project == 'LEG'
+    assert expobj.target == 0  # ...OK. Whatever.
+
+    assert expobj.filter is None
+    assert expobj.filter_array == [ 'i', 'z', 'g', 'i' ]
+    assert expobj.ra == pytest.approx( 160.9515, abs=1e-4 )
+    assert expobj.dec == pytest.approx( -28.07, abs=1e-4 )
+    assert expobj.filepath == 'ls4_20260409_005326_None_4K5UWL.fits.fz'
+    assert expobj.type == 'Sci'
+    assert expobj.format == 'fitsfz'
+    assert expobj.mjd == pytest.approx( 61139.03711, abs=1e-5 )
+    assert expobj.exp_time == pytest.approx( 60., abs=0.01 )
+    assert expobj.airmass == pytest.approx( 1.056, abs=0.001 )
 
     # Make sure we have all the sections we expect
     chips = set( f'{quadrant}_{letter}' for quadrant in ['NW', 'NE', 'SW', 'SE'] for letter in 'ABCDEFGH' )

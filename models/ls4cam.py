@@ -40,7 +40,7 @@ class LS4Cam(Instrument):
     #
     #     First 14 are YYYYMMDDHHMMSS
     #
-    #     s = "sky" (shutter opened) ; could be "d" for dark
+    #     s = "sky" (shutter opened) ; could be "d" for dark, or "e" for evening twilight flat
     #
     #     C? = which controller; ? is 0 through 3
     #
@@ -453,7 +453,6 @@ class LS4Cam(Instrument):
         # Try to identify if it's a whole bunch of files, or if it's a single file.
         # If it's a whole bunch of files, then the convention is to pass any one
         #   of the files, and we have to figure out the rest.
-        # TODO : compare file parsed controller, chip, sd to what's in the header?
         filematch = self._file_re.search( filepath.name )
         filesd = None
         # filectrlr = None
@@ -481,40 +480,79 @@ class LS4Cam(Instrument):
                     raise ValueError( f'Error prasing ls4cam exposure filename "{filepath.name}": '
                                       f'filename has a chip, but doesn\'t have C?.' )
 
-        # ****
-        # One of the example files I had ended in .fits.fz but was impervious to funpack.
-        # Not sure what's wrong.
-        if not manyfiles:
-            raise NotImplementedError( "LS4 packed exposures are broken right now." )
-        # ****
-
         if manyfiles:
             exposurename = f'{filebase}_{filenum}.fits'
             if origin_identifier is None:
                 origin_identifier = exposurename
-            with PsycopgConnection() as pgcon:
-                cursor = pgcon.cursor( row_factory=psycopg.rows.dict_row )
-                cursor.execute( "SELECT * FROM exposures WHERE origin_identifier=%(id)s", { 'id': origin_identifier } )
-                rows = cursor.fetchall()
-                if len(rows) > 0:
-                    if len(rows) > 1:
-                        raise RuntimeError( "This should never happen" )
-                    if not exists_ok:
-                        raise RuntimeError( f"Exposure with origin_identifier=\"{origin_identifier}\" "
-                                            f"already exists in database." )
-                    row = rows[0]
-                    if row['provenance_id'] != provenance.id:
-                        raise ValueError( f"Exposure with origin_identifier=\"{origin_identifier}\" "
-                                          f"already exists in the database with provenance "
-                                          f"\"{row['provenance_id']}\", but we're trying to load it with "
-                                          f"provennce \"{provenance.id}\"." )
-                    SCLogger.info( f"Exposure with origin identifier=\"{origin_identifier}\" already in the "
-                                   f"database, not doing anything." )
-                    return
+        else:
+            exposurename = filepath.name[:-3] if isfz else filepath.name
+            if origin_identifier is None:
+                origin_identifier = exposurename
+        exposurepath = pathlib.Path( FileOnDiskMixin.temp_path ) / exposurename
+        exposurepathfz = exposurepath.parent / f"{exposurepath.name}.fz"
 
-            exposurepath = pathlib.Path( FileOnDiskMixin.temp_path ) / exposurename
-            exposurepathfz = exposurepath.parent / f"{exposurepath.name}.fz"
-            try:
+        with PsycopgConnection() as pgcon:
+            cursor = pgcon.cursor( row_factory=psycopg.rows.dict_row )
+            cursor.execute( "SELECT * FROM exposures WHERE origin_identifier=%(id)s", { 'id': origin_identifier } )
+            rows = cursor.fetchall()
+            if len(rows) > 0:
+                if len(rows) > 1:
+                    raise RuntimeError( "This should never happen" )
+                if not exists_ok:
+                    raise RuntimeError( f"Exposure with origin_identifier=\"{origin_identifier}\" "
+                                        f"already exists in database." )
+                row = rows[0]
+                if row['provenance_id'] != provenance.id:
+                    raise ValueError( f"Exposure with origin_identifier=\"{origin_identifier}\" "
+                                      f"already exists in the database with provenance "
+                                      f"\"{row['provenance_id']}\", but we're trying to load it with "
+                                      f"provenance \"{provenance.id}\"." )
+                SCLogger.info( f"Exposure with origin identifier=\"{origin_identifier}\" already in the "
+                               f"database, not doing anything." )
+                return
+
+        try:
+            hdu0 = None
+            ra = None
+            dec = None
+            obs_type = None
+            hdus = []
+            exphdrinfo = None
+            known_chips = set( self.get_section_ids() )
+            found_chips = set()
+
+            def process_hdu( hdu ):
+                nonlocal hdu0, ra, dec, obs_type, hdus, exphdrinfo
+                hdr = hdu.header
+                if hdr['CCD_LOC'] not in known_chips:
+                    raise ValueError( f"HDU {hdui} of {filepath.name} has CCD_LOC={hdr['CCD_LOC']}, "
+                                      f"which isn't a known chip." )
+                if ( hdr['amp_direction'] == 'both' ) != isdualamp:
+                    raise ValueError( f"Header of {fitsfile.name} has amp_direction={hdr['amp_direction']}, "
+                                      f"which is not what {self.__class__.name} expects." )
+                if hdu0 is None:
+                    # There is code elsewhere that will interpret a string ra as h:m:s
+                    # WORRY AND THINK : the header doesn't have comments saying the units
+                    #   are hours or degrees.  Because in my test image, I got an airmass
+                    #   of -3.5 if I interpreted it as degrees, but 1.05 if I interpreted
+                    #   it as hours, I'm guessing it's hours.  (Also, Kenneth told me
+                    #   it was hours, and he should know.)
+                    ra = float( hdr['TELE-RA'] ) * 15.
+                    dec = float( hdr['TELE-DEC'] )
+                    obs_type = obs_type_map[ hdr['IMAGETYP'] ]
+                    exphdrinfo = self.extract_header_info( hdr, [ 'mjd', 'exp_time', 'project',
+                                                                  'target', 'airmass' ] )
+                    if ( exphdrinfo['exp_time'] == 0 ) and ( obs_type == 'Dark' ):
+                        obs_type = 'Bias'
+                    allhdrinfo = exphdrinfo.copy()
+                    allhdrinfo.update( { 'TELE-RA': ra, 'TELE-DEC': dec, 'IMAGETYP': obs_type } )
+                    hdu0 = fits.PrimaryHDU( header=fits.Header(allhdrinfo) )
+                    hdus.append( hdu0 )
+
+                hdus.append( fits.ImageHDU( data=hdu.data, header=hdu.header ) )
+                found_chips.add( hdr['CCD_LOC'] )
+
+            if manyfiles:
                 # Make sure we can find all the files
                 nsubchip = 16 if isdualamp else 8
                 nneeded = 64 if isdualamp else 32
@@ -535,75 +573,70 @@ class LS4Cam(Instrument):
                     raise RuntimeError( "This should never happen." )
 
                 # Assemble all of these togther into a single exposure
-                hdu0 = None
-                ra = None
-                dec = None
-                obs_type = None
-                hdus = []
-                exphdrinfo = None
                 for fitsfile in files:
                     with fits.open( fitsfile ) as hdul:
                         if ( isfz and ( len(hdul) != 2 ) ) or ( ( not isfz ) and ( len(hdul) != 1 ) ):
                             raise RuntimeError( f"Unexpected number of HDUs in file {fitsfile.name}: "
                                                 f"expected {2 if isfz else 1} but got {len(hdul)}" )
                         hdu = hdul[1] if isfz else hdul[0]
-                        hdr = hdu.header
-                        if ( hdr['amp_direction'] == 'both' ) != isdualamp:
-                            raise ValueError( f"Header of {fitsfile.name} has amp_direction={hdr['amp_direction']}, "
-                                              f"which is not what {self.__class__.name} expects." )
                         # TODO, verify chip and controller vs. filename!!!
+                        process_hdu( hdu )
 
-                        if hdu0 is None:
-                            # There is code elsewhere that will interpret a string ra as h:m:s
-                            # WORRY AND THINK : the header doesn't have comments saying the units
-                            #   are hours or degrees.  Because in my test image, I got an airmass
-                            #   of -3.5 if I interpreted it as degrees, but 1.05 if I interpreted
-                            #   it as hours, I'm guessing it's hours.  (Also, Kenneth told me
-                            #   it was hours, and he should know.)
-                            ra = float( hdr['TELE-RA'] ) * 15.
-                            dec = float( hdr['TELE-DEC'] )
-                            obs_type = obs_type_map[ hdr['IMAGETYP'] ]
-                            exphdrinfo = self.extract_header_info( hdr, [ 'mjd', 'exp_time', 'project',
-                                                                          'target', 'airmass' ] )
-                            if ( exphdrinfo['exp_time'] == 0 ) and ( obs_type == 'Dark' ):
-                                obs_type = 'Bias'
-                            allhdrinfo = exphdrinfo.copy()
-                            allhdrinfo.update( { 'TELE-RA': ra, 'TELE-DEC': dec, 'IMAGETYP': obs_type } )
-                            hdu0 = fits.PrimaryHDU( header=fits.Header(allhdrinfo) )
-                            hdus.append( hdu0 )
+            else:  # not manyfiles
+                # Note : the LS4 .fz files weren't produced with fpack, and
+                #   are (I think) non-standard.  However, even though
+                #   funpack doesn't know what to do with them,
+                #   astropy.io.fits seems to read them just fine.  As such,
+                #   read them, but then rather than just copy them, make new
+                #   versions of them and run fpack on them to make them
+                #   standard.  I THINK all the data raw data is
+                #   integer-encoded, so this should be lossses compression,
+                #   so it's not a problem.
+                with fits.open( filepath ) as hdul:
+                    if len(hdul) != 33:
+                        # In the future, if we get images actually packed with fpack, then we should expect
+                        #   34 HDUs, and the 0th one should be the fpack header, and the 1st one should be
+                        #   what we are calling hdu here.  (This will also effect the for loop below.)
+                        raise ValueError( f"Opened a packed FITS file, saw {len(hdul)} HDUs, expected 33." )
+                    # The actual hdu0 doesn't have anything useful in it, so ignore it, and build our
+                    #   own just like we do with manyfiles.
+                    for hdui, hdu in enumerate(hdul):
+                        if hdui == 0:
+                            # Exposure header, not an image
+                            continue
+                        process_hdu( hdu )
 
-                        try:
-                            hdus.append( fits.ImageHDU( data=hdu.data, header=hdu.header ) )
-                        except Exception as e:
-                            import pdb; pdb.set_trace()
-                            pass
+            if found_chips != known_chips:
+                raise RuntimeError( f"Didn't find all the expected chips in exposure {filepath.name}; "
+                                    f"missing are: {known_chips-found_chips}" )
+            if len(hdus) != 33:
+                raise RuntimeError( "This should never happen." )
 
+            # Write the exposure to temp and fpack it
+            exphdul = fits.HDUList( hdus )
+            exphdul.writeto( exposurepath )
+            exphdul = None
+            del exphdul
+            _result = subprocess.run( [ "fpack", str(exposurepath) ], capture_output=True )
 
-                # Write the exposure to temp and fpack it
-                exphdul = fits.HDUList( hdus )
-                exphdul.writeto( exposurepath )
-                exphdul = None
-                del exphdul
-                _result = subprocess.run( [ "fpack", str(exposurepath) ], capture_output=True )
+            # Load it and save the loaded object to the right place
 
-                # Load it and save the loaded object to the right place
+            expobj = Exposure( current_file=exposurepathfz, invent_filepath=True, type=obs_type,
+                               ra=ra, dec=dec, format='fitsfz', instrument=self.name,
+                               filter=None, filter_array=['i', 'z', 'g', 'i'],
+                               provenance_id=provenance.id, origin_identifier=origin_identifier,
+                               header=hdu0.header, preprocc_bitflag=0, components=None, **exphdrinfo )
+            expobj.save( exposurepathfz )
+            expobj.insert()
 
-                expobj = Exposure( current_file=exposurepathfz, invent_filepath=True, type=obs_type,
-                                   ra=ra, dec=dec, format='fitsfz', instrument=self.name,
-                                   filter=None, filter_array=['i', 'z', 'g', 'i'],
-                                   provenance_id=provenance.id, origin_identifier=origin_identifier,
-                                   header=hdu0.header, preprocc_bitflag=0, components=None, **exphdrinfo )
-                expobj.save( exposurepathfz )
-                expobj.insert()
+            return expobj
 
-                return expobj
-
-            finally:
-                # Clean up the temp files if we made them
-                if exposurepath.exists():
-                    exposurepath.unlink()
-                if exposurepathfz.exists():
-                    exposurepathfz.unlink()
+        finally:
+            # Clean up the temp files if we made them
+            if exposurepath.exists():
+                exposurepath.unlink()
+            if exposurepathfz.exists():
+                exposurepathfz.unlink()
 
 
     def manually_load_exposure( self, filepath, origin_identifier=None, params=None,
