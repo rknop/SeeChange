@@ -14,12 +14,7 @@ from util.config import Config
 from util.util import asUUID
 from util.logger import SCLogger
 from models.base import PsycopgConnection
-# NOTE: for get_instrument_instrance to work, must manually import all
-#  known instrument classes we might want to use here.
-# If models.instrument gets imported somewhere else before this file
-#  is imported, then even this won't work.  There must be a better way....
-import models.decam  # noqa: F401
-from models.instrument import get_instrument_instance
+from models.instrument import Instrument
 
 sys.path.insert( 0, pathlib.Path(__name__).resolve().parent )
 from baseview import BaseView
@@ -113,7 +108,7 @@ class ObjectLtcv( BaseLtcvView ):
         filts = []
         known_instrs = set( r[columns['instrument']] for r in rows )
         for instr in known_instrs:
-            instrobj = get_instrument_instance( instr )
+            instrobj = Instrument.get_instrument_instance( instr )
             curfilts = set( r[columns['filter']] for r in rows if r[columns['instrument']]==instr )
             missing = curfilts - set( instrobj.allowed_filters )
             for m in missing:

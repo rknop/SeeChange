@@ -14,18 +14,8 @@ from util.config import Config
 
 from models.base import PsycopgConnection
 from models.enums_and_bitflags import KnownExposureStateConverter
-from models.instrument import get_instrument_instance
+from models.instrument import Instrument
 from models.exposure import Exposure
-
-# Importing this because otherwise when I try to do something completly
-# unrelated to Object or Measurements, sqlalchemy starts objecting about
-# relationships between those two that aren't defined.
-# import models.object
-
-# Gotta import the instruments we might use before instrument fills up
-# its cache of known instrument instances
-import models.decam  # noqa: F401
-import models.ls4cam
 
 from pipeline.data_store import DataStore
 from pipeline.top_level import Pipeline
@@ -81,7 +71,7 @@ class ExposureProcessor:
           than in the individual processes that run the actual pipeline.
 
         """
-        self.instrument = get_instrument_instance( instrument )
+        self.instrument = Instrument.get_instrument_instance( instrument )
         self.identifier = identifier
         self.cluster_id = cluster_id
         self.node_id = node_id

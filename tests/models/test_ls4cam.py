@@ -3,10 +3,9 @@ import pathlib
 
 import numpy as np
 
-import models.ls4cam  # noqa: F401
 from models.base import FileOnDiskMixin
 from models.exposure import Exposure
-from models.instrument import get_instrument_instance, SensorSection
+from models.instrument import Instrument, SensorSection
 from models.enums_and_bitflags import string_to_bitflag, image_preprocessing_inverse
 from pipeline.data_store import DataStore
 from pipeline.top_level import Pipeline
@@ -24,7 +23,7 @@ from util.logger import SCLogger
 #             cachepath.parent.mkdir( parents=True, exist_ok=True )
 #             retry_download( f'{download_url}/{relpath}', cachepath )
 
-#         ls4cam = get_instrument_instance( 'LS4Cam_dualamp' )
+#         ls4cam = Instrument.get_instrument_instance( 'LS4Cam_dualamp' )
 #         expobj = ls4cam.manually_load_exposure( cachepath )
 #         yield expobj
 
@@ -46,7 +45,7 @@ def loaded_singleamp_multifile_exposure( download_url, cache_dir ):
                     cachepath.parent.mkdir( parents=True, exist_ok=True )
                     retry_download( f'{download_url}/{relpath}', cachepath )
 
-        ls4cam = get_instrument_instance( 'LS4Cam' )
+        ls4cam = Instrument.get_instrument_instance( 'LS4Cam' )
         # ...just use the last cachepath from the for loop, any of them *should* work
         # (...probably we ought to test more than one, huh.)
         expobj = ls4cam.manually_load_exposure( cachepath )
@@ -68,7 +67,7 @@ def loaded_singleamp_multifile_exposure( download_url, cache_dir ):
 
 
 def test_section_stuff():
-    ls4cam = get_instrument_instance( 'LS4Cam' )
+    ls4cam = Instrument.get_instrument_instance( 'LS4Cam' )
 
     expectedsecs = []
     for quadrant in [ 'NE', 'NW', 'SE', 'SW' ]:
@@ -126,7 +125,7 @@ def test_manual_load_exposure( loaded_singleamp_multifile_exposure ):
     assert expobj.filter_array == [ 'i', 'z', 'g', 'i' ]
     assert expobj.ra == pytest.approx( 159.018, abs=1e-4 )
     assert expobj.dec == pytest.approx( -25.8087, abs=1e-4 )
-    assert expobj.filepath == 'ls4_20260410_004930_None_3XSWYA.fits.fz'
+    assert expobj.filepath == 'ls4_20260410_004930_None_4K5UWL.fits.fz'
     assert expobj.type == 'Sci'
     assert expobj.format == 'fitsfz'
     assert expobj.mjd == pytest.approx( 61140.034375, abs=1e-5 )
@@ -185,8 +184,8 @@ def test_overscan( loaded_singleamp_multifile_exposure ):
         assert np.median( im.data[1929:1940, 1563:1573] ) == pytest.approx( regionmedian[chip], abs=0.1 )
 
 
-    import pdb; pdb.set_trace()
-    pass
+    # import pdb; pdb.set_trace()
+    # pass
 
 
 # def test_dualamp_manual_load__exposure( loaded_dualamp_exposure ):
@@ -214,7 +213,7 @@ def test_overscan( loaded_singleamp_multifile_exposure ):
 
 
 # def test_dualamp_load_section_image( loaded_dualamp_exposure ):
-#     ls4cam = get_instrument_instance( 'LS4Cam_dualamp' )
+#     ls4cam = Instrument.get_instrument_instance( 'LS4Cam_dualamp' )
 #     data = ls4cam.load_section_image( loaded_dualamp_exposure.get_fullpath(), 'NW_C' )
 #     assert data.shape == ( 4120, 2100 )
 #     assert np.median( data ) == pytest.approx( 4338.0, abs=0.1 )
@@ -223,7 +222,7 @@ def test_overscan( loaded_singleamp_multifile_exposure ):
 
 
 # def test_dualamp_read_header( loaded_dualamp_exposure ):
-#     ls4cam = get_instrument_instance( 'LS4Cam_dualamp' )
+#     ls4cam = Instrument.get_instrument_instance( 'LS4Cam_dualamp' )
 #     hdr = ls4cam.read_header( loaded_dualamp_exposure.get_fullpath(), 'NW_C' )
 #     import pdb; pdb.set_trace()
 #     pass

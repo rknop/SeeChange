@@ -1,5 +1,6 @@
 import pytest
 import uuid
+import re
 
 import numpy as np
 
@@ -156,15 +157,14 @@ def test_instrument_inheritance_full_example():
 
         @classmethod
         def get_filename_regex(cls):
-            return [ r'^.*/?TestInstrument[^/]*$']
+            return [ re.compile( r'^.*/?TestInstrument[^/]*$' ) ]
 
         @classmethod
         def get_auxiliary_exposure_header_keys(cls):
             return ['shutter_mode']
 
-        @classmethod
-        def _get_header_keyword_translations(cls):
-            translations = Instrument._get_header_keyword_translations()
+        def _get_header_keyword_translations(self):
+            translations = Instrument._get_header_keyword_translations(self)
             translations.update({'shutter_mode': 'SHUTMODE'})
             return translations
 
@@ -173,8 +173,9 @@ def test_instrument_inheritance_full_example():
             # convert exp_time from ms to s:
             return {'exp_time': lambda t: t/1000.0}
 
-    from models.instrument import register_all_instruments
-    register_all_instruments()  # make sure this instrument is registered to global dictionaries
+
+    # Make sure this instrument is registered
+    TestInstrument.register_this_instrument()
 
     # create an instance of the new instrument class
     inst = TestInstrument()

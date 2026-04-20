@@ -20,7 +20,7 @@ from sqlalchemy.exc import IntegrityError
 
 from models.base import SmartSession, FileOnDiskMixin, PsycopgConnection
 from models.provenance import Provenance
-from models.instrument import get_instrument_instance
+from models.instrument import Instrument
 from models.image import Image
 from models.reference import Reference
 from models.enums_and_bitflags import image_preprocessing_inverse, string_to_bitflag, image_badness_inverse
@@ -729,7 +729,7 @@ def test_image_from_reduced_exposure( decam_reduced_origin_exposure_loaded_in_db
     #  header record.  It's hard to work up a care.
     with warnings.catch_warnings():
         warnings.simplefilter( 'ignore', AstropyWarning )
-        decam = get_instrument_instance( 'DECam' )
+        decam = Instrument.get_instrument_instance( 'DECam' )
         exp = decam_reduced_origin_exposure_loaded_in_db
 
         img = Image.from_exposure( exp, section_id='N16' )

@@ -748,3 +748,9 @@ class LS4Cam_dualamp(LS4Cam):
 class LS4CamInstrumentOriginExposures( InstrumentOriginExposures ):
     # DO
     pass
+
+
+# Register the instrument in the Instrument dictionaries
+LS4Cam.register_this_instrument()
+# Dualamp is currently broken
+# LS4Cam_dualamp.register_this_instrument()

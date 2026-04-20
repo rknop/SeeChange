@@ -11,12 +11,6 @@ from pipeline.data_store import DataStore, ProvenanceTree
 from models.base import SmartSession, PsycopgConnection
 from models.provenance import Provenance
 from models.reference import Reference
-
-### HACK ALERT
-### Remove this (maybe?) when Issue #465 is solved
-import models.decam  # noqa: F401
-###
-
 from models.image import Image
 from models.refset import RefSet
 

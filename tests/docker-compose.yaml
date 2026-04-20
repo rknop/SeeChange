@@ -1,6 +1,6 @@
 services:
   make-archive-directories:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/file-archive-server:${IMGTAG:-test20260415}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/file-archive-server:${IMGTAG:-test20260420}
     build:
       context: ../extern/file-archive-server
       args:
@@ -20,7 +20,7 @@ services:
     depends_on:
       make-archive-directories:
         condition: service_completed_successfully
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/file-archive-server:${IMGTAG:-test20260415}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/file-archive-server:${IMGTAG:-test20260420}
     build:
       context: ../extern/file-archive-server
       args:
@@ -48,7 +48,7 @@ services:
     user: ${USERID:-0}:${GROUPID:-0}
 
   postgres:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/postgres:${IMGTAG:-test20260415}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/postgres:${IMGTAG:-test20260420}
     build:
       context: ../docker/postgres
     environment:
@@ -61,7 +61,7 @@ services:
       retries: 5
 
   setuptables:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/seechange:${IMGTAG:-test20260415}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/seechange:${IMGTAG:-test20260420}
     build:
       context: ../
       dockerfile: ./docker/application/Dockerfile
@@ -119,7 +119,7 @@ services:
         condition: service_completed_successfully
       make-archive-directories:
         condition: service_completed_successfully
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/seechange-webap:${IMGTAG:-test20260415}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/seechange-webap:${IMGTAG:-test20260420}
     build:
       context: ../
       dockerfile: ./docker/application/Dockerfile
@@ -142,7 +142,7 @@ services:
     entrypoint: [ "./run_webap.sh", "8081", "1" ]
 
   runtests:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/seechange:${IMGTAG:-test20260415}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/seechange:${IMGTAG:-test20260420}
     build:
       context: ../
       dockerfile: ./docker/application/Dockerfile
@@ -172,7 +172,7 @@ services:
     entrypoint: "pytest -v /seechange/$TEST_SUBFOLDER"
 
   runalltests:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/seechange:${IMGTAG:-test20260415}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/seechange:${IMGTAG:-test20260420}
     build:
       context: ../
       dockerfile: ./docker/application/Dockerfile
@@ -202,7 +202,7 @@ services:
     entrypoint: "pytest -v /seechange/tests"
 
   runruff:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/seechange:${IMGTAG:-test20260415}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/seechange:${IMGTAG:-test20260420}
     build:
       context: ../
       dockerfile: ./docker/application/Dockerfile
@@ -220,7 +220,7 @@ services:
 
 
   shell:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/seechange:${IMGTAG:-test20260415}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/seechange:${IMGTAG:-test20260420}
     build:
       context: ../
       dockerfile: ./docker/application/Dockerfile
@@ -229,8 +229,8 @@ services:
       SEECHANGE_CONFIG: /seechange/tests/seechange_config_test.yaml
       SEECHANGE_TEST_ARCHIVE_DIR: /archive_storage/base
       # ****
-      # TEST_DOWNLOAD_URL: null
-      TEST_DOWNLOAD_URL: file:///rknop_data_dir/m4616_www/SeeChange_testing_data
+      TEST_DOWNLOAD_URL: null
+      # TEST_DOWNLOAD_URL: file:///rknop_data_dir/m4616_www/SeeChange_testing_data
       # ****
     depends_on:
       setuptables:
@@ -259,7 +259,7 @@ services:
 
 
   justshell:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/seechange:${IMGTAG:-test20260415}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/seechange:${IMGTAG:-test20260420}
     build:
       context: ../
       dockerfile: ./docker/application/Dockerfile

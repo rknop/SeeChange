@@ -21,7 +21,7 @@ from models.world_coordinates import WorldCoordinates
 from models.zero_point import ZeroPoint
 from models.reference import Reference
 from models.refset import RefSet
-from models.instrument import get_instrument_instance
+from models.instrument import Instrument
 
 from pipeline.data_store import DataStore
 from pipeline.top_level import Pipeline
@@ -636,7 +636,7 @@ def diagnostic_injections():
 
 @pytest.fixture( scope='session' )
 def sim_lightcurve_image_parameters():
-    instr = get_instrument_instance( 'DemoInstrument' )
+    instr = Instrument.get_instrument_instance( 'DemoInstrument' )
     ra = 123.45678
     dec = -3.14159
     wid = 256
@@ -728,7 +728,7 @@ def sim_lightcurve_persistent_sources():
 @pytest.fixture( scope="session" )
 def sim_lightcurve_wcs_headers( sim_lightcurve_image_parameters ):
     imageinfo, imageargs = sim_lightcurve_image_parameters
-    instr = get_instrument_instance( 'DemoInstrument' )
+    instr = Instrument.get_instrument_instance( 'DemoInstrument' )
     return { 'CTYPE1': 'RA---TAN',
              'CTYPE2': 'DEC--TAN',
              'CRPIX1': imageinfo['size'] / 2. + 0.5,    # 1-offset center of image
@@ -773,7 +773,7 @@ def sim_lightcurve_reference_image_unsaved( sim_lightcurve_image_parameters, sim
     parms['provenance_tag'] = 'sim_lightcurve_reference'
     pip = Pipeline( **parms )
 
-    instr = get_instrument_instance( 'DemoInstrument' )
+    instr = Instrument.get_instrument_instance( 'DemoInstrument' )
     s = Simulator( image_size_x=imageinfo['size'],
                    gain_mean=instr.gain,
                    star_number=60,
@@ -966,7 +966,7 @@ def _do_sim_lightcurve_new_ds_factory( imageinfo, imageargs, refds, sources, wcs
 
 
     def make_new_ds( mjdoff, extranoise=25., extrarandsourcefluxes=[], random_seed=64738 ):
-        instr = get_instrument_instance( 'DemoInstrument' )
+        instr = Instrument.get_instrument_instance( 'DemoInstrument' )
         mjd = imageinfo['refmjd'] + mjdoff
         rng = np.random.default_rng( seed=random_seed )
         data = refds.image.data + instr.gain * rng.normal( 0., extranoise, size=refds.image.data.shape )

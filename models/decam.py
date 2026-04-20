@@ -16,7 +16,7 @@ import sqlalchemy as sa
 from models.base import SmartSession, FileOnDiskMixin
 from models.exposure import Exposure
 from models.knownexposure import KnownExposure
-from models.instrument import Instrument, InstrumentOrientation, SensorSection, get_instrument_instance
+from models.instrument import Instrument, InstrumentOrientation, SensorSection
 from models.image import Image
 from models.datafile import DataFile
 from models.provenance import Provenance
@@ -359,8 +359,8 @@ class DECam(Instrument):
     def _get_header_keyword_translations( self ):
         t = dict(
             ra = [ 'TELRA', 'RA' ],
-            dec = [ 'TELDEC, DEC' ],
-            mjd = [ 'MJD-OBS' ],
+            dec = [ 'TELDEC', 'DEC' ],
+            mjd = [ 'MJD-OBS', 'MJDOBS' ],
             project = [ 'PROPID' ],
             target = [ 'OBJECT' ],
             width = [ 'NAXIS1' ],
@@ -794,8 +794,8 @@ class DECam(Instrument):
                               'DATE-OBS', 'TIME-OBS', 'MJD-OBS', 'OBJECT', 'PROGRAM',
                               'OBSERVER', 'PROPID', 'FILTER', 'RA', 'DEC', 'HA', 'ZD', 'AIRMASS',
                               'VSUB', 'GSKYPHOT', 'LSKYPHOT' ) }
-        exphdrinfo = Instrument.extract_header_info( hdr, [ 'mjd', 'exp_time', 'filter',
-                                                            'project', 'target' ] )
+        decam = Instrument.get_instrument_instance( 'DECam' )
+        exphdrinfo = decam.extract_header_info( hdr, [ 'mjd', 'exp_time', 'filter', 'project', 'target' ] )
         ra = util.radec.parse_sexigesimal_degrees( hdr['RA'], hours=True )
         dec = util.radec.parse_sexigesimal_degrees( hdr['DEC'] )
 
@@ -1167,7 +1167,7 @@ class DECamOriginExposures:
         """
         self.proc_type = proc_type
         self._frame = frame
-        self.decam = get_instrument_instance( 'DECam' )
+        self.decam = Instrument.get_instrument_instance( 'DECam' )
 
     def __len__( self ):
         # The length is the number of values there are in the *first* index
@@ -1395,3 +1395,7 @@ class DECamOriginExposures:
                         dl.unlink( missing_ok=True )
 
         return exposures
+
+
+# Register the instrument in the Instrument dictionaries
+DECam.register_this_instrument()

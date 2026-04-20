@@ -6,6 +6,7 @@ import shutil
 import base64
 import hashlib
 import requests
+import requests_file
 
 import numpy as np
 
@@ -15,7 +16,6 @@ from datetime import datetime
 from astropy.io import fits
 
 from models.base import SmartSession
-from models.ptf import PTF  # noqa: F401  # need this import to make sure PTF is added to the Instrument list
 from models.provenance import Provenance
 from models.exposure import Exposure
 from models.image import Image
@@ -247,7 +247,9 @@ def ptf_datastore(datastore_factory, ptf_exposure, ptf_ref, ptf_cache_dir, ptf_b
 def ptf_urls(download_url):
     # base_url = 'https://portal.nersc.gov/project/m2218/pipeline/test_images/'
     base_url = os.path.join(download_url, 'PTF/10cwm')
-    r = requests.get(base_url)
+    reqsess = requests.Session()
+    reqsess.mount( "file://", requests_file.FileAdapter() )
+    r = reqsess.get(base_url)
     soup = BeautifulSoup(r.text, 'html.parser')
     links = soup.find_all('a')
     filenames = [

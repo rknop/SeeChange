@@ -225,20 +225,6 @@ def parse_bool(text):
         raise ValueError(f'Cannot parse boolean value from "{text}"')
 
 
-# from: https://stackoverflow.com/a/5883218
-def get_inheritors(klass):
-    """Get all classes that inherit from klass. """
-    subclasses = set()
-    work = [klass]
-    while work:
-        parent = work.pop()
-        for child in parent.__subclasses__():
-            if child not in subclasses:
-                subclasses.add(child)
-                work.append(child)
-    return subclasses
-
-
 def as_UUID( val, canbenone=True ):
     """Convert a string or None to a uuid.UUID
 

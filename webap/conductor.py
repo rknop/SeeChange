@@ -15,13 +15,7 @@ from util.util import asUUID
 from models.base import SmartSession, PsycopgConnection
 from models.enums_and_bitflags import KnownExposureStateConverter
 from models.knownexposure import PipelineWorker
-# NOTE: for get_instrument_instrance to work, must manually import all
-#  known instrument classes we might want to use here.
-# If models.instrument gets imported somewhere else before this file
-#  is imported, then even this won't work.  There must be a better way....
-import models.decam  # noqa: F401
-import models.ls4cam  # noqa: F401
-from models.instrument import get_instrument_instance
+from models.instrument import Instrument
 
 sys.path.insert( 0, pathlib.Path(__name__).resolve().parent )
 from baseview import BaseView, BadUpdaterReturnError
@@ -437,7 +431,7 @@ class GetKnownExposures( ConductorBaseView ):
         #   filepath
         for ke in retval['knownexposures']:
             ke['id'] = ke['_id']
-            ke['filter'] = get_instrument_instance( ke['instrument'] ).get_short_filter_name( ke['filter'] )
+            ke['filter'] = Instrument.get_instrument_instance( ke['instrument'] ).get_short_filter_name( ke['filter'] )
             ke['state'] = KnownExposureStateConverter.to_string( ke['_state'] )
             if ke['filepath'] is not None:
                 ke['filepath'] = pathlib.Path( ke['filepath'] ).name

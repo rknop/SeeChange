@@ -169,3 +169,7 @@ class PTF(Instrument):
         if 'GAIN' not in image.header:
             raise RuntimeError( "Failed to find gain in PTF image header" )
         return float( image.header['GAIN'] )
+
+
+# Register the instrument in the Instrument dictionaries
+PTF.register_this_instrument()

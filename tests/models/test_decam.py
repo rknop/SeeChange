@@ -12,11 +12,11 @@ import numpy as np
 from models.base import SmartSession, FileOnDiskMixin
 from models.exposure import Exposure
 from models.knownexposure import KnownExposure
-from models.instrument import get_instrument_instance
+from models.instrument import Instrument
 from models.datafile import DataFile
 from models.calibratorfile import CalibratorFile
 from models.image import Image
-from models.decam import DECam  # noqa: F401
+from models.decam import DECam
 
 from util.logger import SCLogger
 from util.util import env_as_bool
@@ -30,8 +30,8 @@ def test_decam_exposure(decam_exposure):
     assert e.telescope == 'CTIO 4.0-m telescope'
     assert e.mjd == 59512.20054752
     assert e.end_mjd == 59512.20154289037
-    assert e.ra == 7.874595833333333
-    assert e.dec == -43.0096
+    assert e.ra == pytest.approx( 7.8750, abs=1e-4 )
+    assert e.dec == pytest.approx( -43.0091, abs=1e-4 )
     assert e.exp_time == 86.
     assert e.filepath == 'c4d_211025_044847_ori.fits.fz'
     assert e.filter == 'r'
@@ -268,6 +268,9 @@ def test_decam_download_and_commit_reduced_origin_exposure( decam_reduced_origin
         assert len(exps) == 0
 
     finally:
+        # (This doesn't properly clean up if there was asn exception in
+        # download_and_commit_exposures after stuff was already
+        # downloaded...)
         for e in exps_to_del:
             e.delete_from_disk_and_database()
 
@@ -423,7 +426,7 @@ def test_decam_download_and_commit_exposure(
 
 def test_get_default_calibrators( decam_default_calibrators ):
     sections, filters = decam_default_calibrators
-    decam = get_instrument_instance( 'DECam' )
+    decam = Instrument.get_instrument_instance( 'DECam' )
 
     with SmartSession() as session:
         for sec in sections:
@@ -462,7 +465,7 @@ def test_get_default_calibrators( decam_default_calibrators ):
 
 
 def test_linearity( decam_raw_image, decam_default_calibrators ):
-    decam = get_instrument_instance( "DECam" )
+    decam = Instrument.get_instrument_instance( "DECam" )
     im = decam_raw_image
     origdata = im.data
     try:
@@ -501,7 +504,7 @@ def test_linearity( decam_raw_image, decam_default_calibrators ):
 
 
 def test_preprocessing_calibrator_files( decam_default_calibrators ):
-    decam = get_instrument_instance( "DECam" )
+    decam = Instrument.get_instrument_instance( "DECam" )
 
     linfile = None
     for filt in [ 'r', 'z' ]:
@@ -556,7 +559,7 @@ def test_preprocessing_calibrator_files( decam_default_calibrators ):
 
 
 def test_overscan_sections( decam_raw_image, data_dir,  ):
-    decam = get_instrument_instance( "DECam" )
+    decam = Instrument.get_instrument_instance( "DECam" )
 
     ovsecs = decam.overscan_sections( decam_raw_image.header )
     assert ovsecs == [ { 'secname' : 'A',
@@ -570,7 +573,7 @@ def test_overscan_sections( decam_raw_image, data_dir,  ):
 
 
 def test_overscan_and_data_sections( decam_raw_image, data_dir ):
-    decam = get_instrument_instance( "DECam" )
+    decam = Instrument.get_instrument_instance( "DECam" )
 
     ovsecs = decam.overscan_and_data_sections( decam_raw_image.header )
     assert ovsecs == [ { 'secname': 'A',
@@ -586,7 +589,7 @@ def test_overscan_and_data_sections( decam_raw_image, data_dir ):
 
 
 def test_overscan( decam_raw_image, data_dir ):
-    decam = get_instrument_instance( "DECam" )
+    decam = Instrument.get_instrument_instance( "DECam" )
 
     # Make sure it fails if it gets bad arguments
     with pytest.raises( TypeError, match='overscan_and_trim: pass either an Image as one argument' ):
