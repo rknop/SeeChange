@@ -2,7 +2,9 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: archive
+  labels:
+    workload.user.cattle.io/workloadselector: deployment-ls4-production-webap
+  name: webap
   namespace: ls4-production
 spec:
   progressDeadlineSeconds: 600
@@ -10,7 +12,7 @@ spec:
   revisionHistoryLimit: 10
   selector:
     matchLabels:
-      workload.user.cattle.io/workloadselector: deployment-ls4-production-archive
+      workload.user.cattle.io/workloadselector: deployment-ls4-production-webap
   strategy:
     rollingUpdate:
       maxSurge: 1
@@ -20,25 +22,18 @@ spec:
     metadata:
       annotations:
         nersc.gov/collab_uids: "103988"
-        nersc.gov/gid: "103988"
-        nersc.gov/gids: 10389,96414
+        nersc.gov/gid: "63477"
+        nersc.gov/gids: 63477,96414
         nersc.gov/roles: user
         nersc.gov/uid: "95089"
         nersc.gov/username: raknop
       labels:
-        workload.user.cattle.io/workloadselector: deployment-ls4-production-archive
+        workload.user.cattle.io/workloadselector: deployment-ls4-production-webap
     spec:
       containers:
-      - env:
-        - name: CONNECTOR_READ_STORAGE
-          value: /storage_ro
-        - name: CONNECTOR_WRITE_STORAGE
-          value: /storage
-        - name: CONNECTOR_SECRETS
-          value: /secrets
-        image: registry.nersc.gov/m4616/file-archive-server:20260415
-        imagePullPolicy: Always
-        name: archive
+      - image: registry.nersc.gov/m4616/seechange-webap:ls4-production-20260421d
+        imagePullPolicy: IfNotPresent
+        name: seechange-webap
         resources: {}
         securityContext:
           allowPrivilegeEscalation: false
@@ -57,13 +52,11 @@ spec:
         tty: true
         volumeMounts:
         - mountPath: /secrets
-          name: file-archive-secrets
+          name: webap-secrets
         - mountPath: /sessions
-          name: file-archive-sessions
-        - mountPath: /storage_ro
-          name: file-archive-storage-ro
-        - mountPath: /storage
-          name: file-archive-storage
+          name: webap-sessions
+        - mountPath: /archive
+          name: seechange-archive-dir
       dnsConfig: {}
       dnsPolicy: ClusterFirst
       restartPolicy: Always
@@ -74,29 +67,24 @@ spec:
       imagePullSecrets:
         - name: registry-nersc
       volumes:
-      - name: file-archive-secrets
+      - name: webap-secrets
         secret:
           defaultMode: 256
           optional: false
-          secretName: file-archive-secrets
-      - hostPath:
-          # /dvs_ro doesn't work on spin
-          # path: /dvs_ro/cfs/cdirs/m4616/archive-ls4
+          secretName: webap-secrets
+      - name: webap-sessions
+        persistentVolumeClaim:
+          claimName: webap-sessions-pvc
+      - name: seechange-archive-dir
+        hostPath:
+          # path: /global/cfs/cdirs/m4616/archive-production
           path: /global/cfs/cdirs/m4616/archive-ls4
           type: Directory
-        name: file-archive-storage-ro
-      - hostPath:
-          path: /global/cfs/cdirs/m4616/archive-ls4
-          type: Directory
-        name: file-archive-storage
-      - persistentVolumeClaim:
-          claimName: archive-sessions-pvc
-        name: file-archive-sessions
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: archive
+  name: webap
   namespace: ls4-production
 spec:
   clusterIP: None
@@ -108,7 +96,7 @@ spec:
     protocol: TCP
     targetPort: 42
   selector:
-    workload.user.cattle.io/workloadselector: deployment-ls4-production-archive
+    workload.user.cattle.io/workloadselector: deployment-ls4-production-webap
   sessionAffinity: None
   type: ClusterIP
 status:
@@ -117,7 +105,7 @@ status:
 apiVersion: v1
 kind: Service
 metadata:
-  name: archive-ingress
+  name: webap-ingress
   namespace: ls4-production
 spec:
   ports:
@@ -125,7 +113,7 @@ spec:
     protocol: TCP
     targetPort: 8080
   selector:
-    workload.user.cattle.io/workloadselector: deployment-ls4-production-archive
+    workload.user.cattle.io/workloadselector: deployment-ls4-production-webap
   sessionAffinity: None
   type: ClusterIP
 status:
@@ -134,32 +122,30 @@ status:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: archive
+  name: webap
   namespace: ls4-production
-  annotations:
-    nginx.ingress.kubernetes.io/proxy-body-size: 2048m
 spec:
   rules:
-  - host: archive.ls4-production.production.svc.spin.nersc.org
+  - host: webap.ls4-production.production.svc.spin.nersc.org
     http:
       paths:
       - backend:
           service:
-            name: archive-ingress
+            name: webap-ingress
             port:
               number: 8080
         pathType: ImplementationSpecific
-  - host: ls4-archive.lbl.gov
-    http:
-      paths:
-      - backend:
-          service:
-            name: archive-ingress
-            port:
-              number: 8080
-        pathType: ImplementationSpecific
-  tls:
-  - hosts:
-    - ls4-archive.lbl.gov
-    secretName: ls4-archive-cert
+  # - host: ls4-pipeline.lbl.gov
+  #   http:
+  #     paths:
+  #     - backend:
+  #         service:
+  #           name: webap-ingress
+  #           port:
+  #             number: 8080
+  #       pathType: ImplementationSpecific
+  # tls:
+  # - hosts:
+  #   - ls4-pipeline.lbl.gov
+  #   secretName: ls4-production-webap-cert
 ---
