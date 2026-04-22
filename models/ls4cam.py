@@ -11,13 +11,17 @@ import astropy.units as u
 from astropy.io import fits
 
 from models.base import FileOnDiskMixin, PsycopgConnection
+from models.provenance import Provenance
+from models.image import Image
 from models.instrument import ( Instrument,
                                 InstrumentOrientation,
                                 InstrumentOriginExposures,
                                 SensorSection
                                )
 from util.logger import SCLogger
+from util.config import Config
 from util.fits import read_fits_image
+from util.retrydownload import retry_download
 
 
 class LS4Cam(Instrument):
@@ -64,10 +68,10 @@ class LS4Cam(Instrument):
         self.apperture = 1.0
         self.focal_ratio = None   # FIGURE THIS OUT
         self.square_degree_fov = 20
-        self.pixel_scale = 1.0
+        self.pixel_scale = 1.0177
         self.read_time = None # FIGURE THIS OUT
         self.orientation_fixed = True
-        self.orientation = InstrumentOrientation.NupEleft    # VERIFY THIS
+        self.orientation = InstrumentOrientation.NupEright    # VERIFY THIS
         self.read_noise  = 1.0  # FIGURE THIS OUT
         self.dark_current= 0.1  # FIGURE THIS OUT
         self.gain = 4.0         # FIGURE THIS OUT
@@ -79,7 +83,7 @@ class LS4Cam(Instrument):
         Instrument.__init__(self, **kwargs)
 
         # self.preprocessing_steps_available = [ 'overscan', 'bias', 'dark', 'linearity', 'flat' ]
-        self.preprocessing_steps_available = [ 'overscan' ]
+        self.preprocessing_steps_available = [ 'overscan', 'flat' ]
         self.preprocessing_steps_done = []
 
 
@@ -144,6 +148,13 @@ class LS4Cam(Instrument):
                    'SE': 2,
                    'SW': 3 }
         return secdex[ section_id[0:2] ]
+
+    def get_section_filter( self, section_id ):
+        secfilt = { 'NE': 'i',
+                    'NW': 'z',
+                    'SE': 'g',
+                    'SW': 'i' }
+        return secfilt[ section_id[0:2] ]
 
 
     def load_section_image( self, filepath, section_id ):
@@ -223,34 +234,276 @@ class LS4Cam(Instrument):
         return output_values
 
 
-    _chip_offsets = None
+    _chip_offsets = {
+        'NE_A': (-1.2654 ,  0.8498),
+        'NE_B': (-1.8960 ,  0.8549),
+        'NE_C': (-2.5270 ,  0.8632),
+        'NE_D': (-3.1559 ,  0.8743),
+        'NE_E': (-1.2598 ,  2.0508),
+        'NE_F': (-1.8835 ,  2.0558),
+        'NE_G': (-2.5070 ,  2.0636),
+        'NE_H': (-3.1559 ,  2.0636),  # Bad chip, couldn't measure, values from neighbors
+        'NW_A': ( 1.2330 ,  2.0690),
+        'NW_B': ( 0.6103 ,  2.0588),
+        'NW_C': (-0.0128 ,  2.0529),
+        'NW_D': (-0.6367 ,  2.0505),
+        'NW_E': ( 1.2567 ,  0.8688),
+        'NW_F': ( 0.6258 ,  0.8590),
+        'NW_G': (-0.0041 ,  0.8517),
+        'NW_H': (-0.6346 ,  0.8488),
+        'SE_A': (-1.2763 , -1.5541),
+        'SE_B': (-1.9214 , -1.5489),
+        'SE_C': (-2.5664 , -1.5393),  # Bad chip, couldn't measure, values from neighbors
+        'SE_D': (-3.1834 , -1.5393),
+        'SE_E': (-1.2704 , -0.3524),
+        'SE_F': (-1.9085 , -0.3472),
+        'SE_G': (-2.5464 , -0.3387),
+        'SE_H': (-3.1834 , -0.3261),
+        'SW_A': ( 1.2801 , -0.3323),
+        'SW_B': ( 0.6427 , -0.3427),
+        'SW_C': ( 0.0049 , -0.3499),
+        'SW_D': (-0.6325 , -0.3531),
+        'SW_E': ( 1.3038 , -1.5326),
+        'SW_F': ( 0.6595 , -1.5439),
+        'SW_G': ( 0.0145 , -1.5517),
+        'SW_H': (-0.6304 , -1.5546)
+    }
 
     def get_ra_dec_for_section( self, ra, dec, section_id ):
-        if self.__class__._chip_offsets is None:
-            SCLogger.warning( "ra/dec offsets for LS4 cam are currently approximate, need to be measured!" )
-            secgrid = [ [ 'NE_H', 'NE_G', 'NE_F', 'NE_E', 'NW_D', 'NW_C', 'NW_B', 'NW_A' ],
-                        [ 'NE_D', 'NE_C', 'NE_B', 'NE_A', 'NW_H', 'NW_G', 'NW_F', 'NW_E' ],
-                        [ 'SE_H', 'SE_G', 'SE_F', 'SE_E', 'SW_D', 'SW_C', 'SW_B', 'SW_A' ],
-                        [ 'SE_D', 'SE_C', 'SE_B', 'SE_A', 'SW_H', 'SW_G', 'SW_F', 'SW_E' ] ]
-            offsets = {}
-            # Kenneth tells me 13.33 pixels is the size of the chip gap
-            for ix, arr in enumerate( secgrid ):
-                # - because E to the left is + in RA
-                dx = - ( ( ix - 3.5 ) * ( 2048. + 13.33 ) / 3600. )
-                for iy, chip in enumerate( arr ):
-                    # - because in secgrid, I listed chips from top to bottom, not bottom to top
-                    dy = - ( ( iy - 1.5 ) * ( 4096 + 13.33 ) / 3600. )
-                    offsets[chip] = ( dx, dy )
-            self.__class__._chip_offsets = offsets
-
-        ra += self.__class__._chip_offsets[section_id][0] / np.cos( dec * np.pi / 180. )
-        dec += self.__class__._chip_offsets[section_id][1]
+        ra += self._chip_offsets[section_id][0] / np.cos( dec * np.pi / 180. )
+        dec += self._chip_offsets[section_id][1]
 
         return ra, dec
 
 
+    _chip_corners = {
+        'NE_A': {
+            (   0,    0): (-1.5571,  0.2724),
+            (   0, 4095): (-1.5485,  1.4305),
+            (2047,    0): (-0.9797,  0.2696),
+            (2047, 4095): (-0.9771,  1.4278),
+        },
+        'NE_B': {
+            (   0,    0): (-2.1911,  0.2792),
+            (   0, 4095): (-2.1754,  1.4371),
+            (2047,    0): (-1.6137,  0.2729),
+            (2047, 4095): (-1.6043,  1.4311),
+        },
+        'NE_C': {
+            (   0,    0): (-2.8244,  0.2888),
+            (   0, 4095): (-2.8010,  1.4462),
+            (2047,    0): (-2.2463,  0.2785),
+            (2047, 4095): (-2.2308,  1.4365),
+        },
+        'NE_D': {
+            (   0,    0): (-3.4574,  0.3022),
+            (   0, 4095): (-3.4279,  1.4588),
+            (2047,    0): (-2.8801,  0.2889),
+            (2047, 4095): (-2.8584,  1.4462),
+        },
+        'NE_E': {
+            (   0,    0): (-1.5484,  1.4739),
+            (   0, 4095): (-1.5395,  2.6310),
+            (2047,    0): (-0.9772,  1.4712),
+            (2047, 4095): (-0.9749,  2.6288),
+        },
+        'NE_F': {
+            (   0,    0): (-2.1755,  1.4797),
+            (   0, 4095): (-2.1601,  2.6366),
+            (2047,    0): (-1.6044,  1.4733),
+            (2047, 4095): (-1.5969,  2.6315),
+        },
+        'NE_G': {
+            (   0,    0): (-2.8020,  1.4901),
+            (   0, 4095): (-2.7803,  2.6465),
+            (2047,    0): (-2.2313,  1.4806),
+            (2047, 4095): (-2.2157,  2.6377),
+        },
+        # NE_H is a bad chip, couldn't get a measurement off of it,
+        #   so these numbers are from neighoring chips
+        'NE_H': {
+            (   0,    0): (-3.4279,  1.4901),
+            (   0, 4095): (-3.4279,  2.6465),
+            (2047,    0): (-2.8584,  1.4901),
+            (2047, 4096): (-2.8584,  1.4901),
+        },
+        'NW_A': {
+            (   0,    0): ( 0.9589,  1.4859),
+            (   0, 4095): ( 0.9410,  2.6433),
+            (2047,    0): ( 1.5295,  1.4966),
+            (2047, 4095): ( 1.5036,  2.6549),
+        },
+        'NW_B': {
+            (   0,    0): ( 0.3327,  1.4763),
+            (   0, 4095): ( 0.3201,  2.6338),
+            (2047,    0): ( 0.9034,  1.4845),
+            (2047, 4095): ( 0.8845,  2.6408),
+        },
+        'NW_C': {
+            (   0,    0): (-0.2943,  1.4725),
+            (   0, 4095): (-0.2993,  2.6296),
+            (2047,    0): ( 0.2773,  1.4770),
+            (2047, 4095): ( 0.2656,  2.6337),
+        },
+        'NW_D': {
+            (   0,    0): (-0.9211,  1.4715),
+            (   0, 4095): (-0.9197,  2.6288),
+            (2047,    0): (-0.3511,  1.4723),
+            (2047, 4095): (-0.3557,  2.6296),
+        },
+        'NW_E': {
+            (   0,    0): ( 0.9799,  0.2842),
+            (   0, 4095): ( 0.9597,  1.4422),
+            (2047,    0): ( 1.5558,  0.2961),
+            (2047, 4095): ( 1.5307,  1.4529),
+        },
+        'NW_F': {
+            (   0,    0): ( 0.3464,  0.2766),
+            (   0, 4095): ( 0.3332,  1.4346),
+            (2047,    0): ( 0.9224,  0.2843),
+            (2047, 4095): ( 0.9060,  1.4416),
+        },
+        'NW_G': {
+            (   0,    0): (-0.2885,  0.2707),
+            (   0, 4095): (-0.2943,  1.4288),
+            (2047,    0): ( 0.2890,  0.2753),
+            (2047, 4095): ( 0.2769,  1.4332),
+        },
+        'NW_H': {
+            (   0,    0): (-0.9226,  0.2696),
+            (   0, 4095): (-0.9210,  1.4279),
+            (2047,    0): (-0.3451,  0.2705),
+            (2047, 4095): (-0.3499,  1.4286),
+        },
+        'SE_A': {
+            (   0,    0): (-1.5747, -2.1308),
+            (   0, 4095): (-1.5659, -0.9736),
+            (2047,    0): (-0.9835, -2.1335),
+            (2047, 4095): (-0.9815, -0.9763),
+        },
+        'SE_B': {
+            (   0,    0): (-2.2233, -2.1234),
+            (   0, 4095): (-2.2071, -0.9666),
+            (2047,    0): (-1.6323, -2.1304),
+            (2047, 4095): (-1.6229, -0.9729),
+        },
+        'SE_C': {
+            (   0,    0): (-2.8723, -2.1122),
+            (   0, 4095): (-2.8484, -0.9554),
+            (2047,    0): (-2.2816, -2.1229),
+            (2047, 4095): (-2.2641, -0.9661),
+        },
+        # SE_D is a bad chip, couldn't get a measurement off of it,
+        #   so these numbers are from neighoring chips
+        'SE_D': {
+            (   0,    0): (-3.4882, -2.1234),
+            (   0, 4095): (-3.4882, -0.9554),
+            (2047,    0): (-2.9052, -2.1234),
+            (2047, 4095): (-2.9052, -0.9554),
+        },
+        'SE_E': {
+            (   0,    0): (-1.5652, -0.9299),
+            (   0, 4095): (-1.5569,  0.2283),
+            (2047,    0): (-0.9809, -0.9325),
+            (2047, 4095): (-0.9791,  0.2259),
+        },
+        'SE_F': {
+            (   0,    0): (-2.2065, -0.9225),
+            (   0, 4095): (-2.1909,  0.2356),
+            (2047,    0): (-1.6230, -0.9291),
+            (2047, 4095): (-1.6135,  0.2292),
+        },
+        'SE_G': {
+            (   0,    0): (-2.8475, -0.9126),
+            (   0, 4095): (-2.8252,  0.2449),
+            (2047,    0): (-2.2641, -0.9230),
+            (2047, 4095): (-2.2473,  0.2352),
+        },
+        'SE_H': {
+            (   0,    0): (-3.4882, -0.8974),
+            (   0, 4095): (-3.4587,  0.2595),
+            (2047,    0): (-2.9052, -0.9111),
+            (2047, 4095): (-2.8822,  0.2464),
+        },
+        'SW_A': {
+            (   0,    0): ( 0.9997, -0.9164),
+            (   0, 4095): ( 0.9802,  0.2410),
+            (2047,    0): ( 1.5829, -0.9047),
+            (2047, 4095): ( 1.5572,  0.2522),
+        },
+        'SW_B': {
+            (   0,    0): ( 0.3584, -0.9252),
+            (   0, 4095): ( 0.3462,  0.2327),
+            (2047,    0): ( 0.9423, -0.9171),
+            (2047, 4095): ( 0.9234,  0.2404),
+        },
+        'SW_C': {
+            (   0,    0): (-0.2826, -0.9312),
+            (   0, 4095): (-0.2887,  0.2271),
+            (2047,    0): ( 0.3015, -0.9264),
+            (2047, 4095): ( 0.2890,  0.2316),
+        },
+        'SW_D': {
+            (   0,    0): (-0.9241, -0.9319),
+            (   0, 4095): (-0.9220,  0.2266),
+            (2047,    0): (-0.3403, -0.9316),
+            (2047, 4095): (-0.3437,  0.2269),
+        },
+        'SW_E': {
+            (   0,    0): ( 1.0194, -2.1167),
+            (   0, 4095): ( 1.0008, -0.9600),
+            (2047,    0): ( 1.6144, -2.1029),
+            (2047, 4095): ( 1.5830, -0.9491),
+        },
+        'SW_F': {
+            (   0,    0): ( 0.3726, -2.1262),
+            (   0, 4095): ( 0.3604, -0.9691),
+            (2047,    0): ( 0.9635, -2.1175),
+            (2047, 4095): ( 0.9438, -0.9611),
+        },
+        'SW_G': {
+            (   0,    0): (-0.2764, -2.1322),
+            (   0, 4095): (-0.2826, -0.9752),
+            (2047,    0): ( 0.3145, -2.1272),
+            (2047, 4095): ( 0.3017, -0.9702),
+        },
+        'SW_H': {
+            (   0,    0): (-0.9250, -2.1331),
+            (   0, 4095): (-0.9232, -0.9759),
+            (2047,    0): (-0.3339, -2.1324),
+            (2047, 4095): (-0.3389, -0.9752),
+        },
+    }
+
+
     def get_ra_dec_corners_for_section( self, ra, dec, section_id ):
-        raise NotImplementedError( "LS4Cam needs to implement get_ra_dec_corners_for_section" )
+        # Because of the orientation of the image, the min ra is at
+        # pixel 0, max ra is at pixel 2047...  which doesn't sound
+        # surprising, but RA increses to the East, which is to the left
+        # if you're looking at a non-mirrored north-up image of the sky.
+        cors = self._chip_corners[ section_id ]
+        ra_corner = np.array( [ [ cors[(   0, 0)][0], cors[(   0, 4095)][0] ],
+                                [ cors[(2047, 0)][0], cors[(2047, 4095)][0] ] ] )
+        dec_corner = np.array( [ [ cors[(   0, 0)][1], cors[(   0, 4095)][1] ],
+                                 [ cors[(2047, 0)][1], cors[(2047, 4095)][1] ] ] )
+        ra_corner /= np.cos( dec * np.pi / 180. )
+        ra_corner += ra
+        dec_corner += dec
+
+        return {
+            'ra_corner_00': ra_corner[0, 0],
+            'ra_corner_01': ra_corner[0, 1],
+            'ra_corner_10': ra_corner[1, 0],
+            'ra_corner_11': ra_corner[1, 1],
+            'dec_corner_00': dec_corner[0, 0],
+            'dec_corner_01': dec_corner[0, 1],
+            'dec_corner_10': dec_corner[1, 0],
+            'dec_corner_11': dec_corner[1, 1],
+            'minra': ra_corner.min(),
+            'maxra': ra_corner.max(),
+            'mindec': dec_corner.min(),
+            'maxdec': dec_corner.max()
+        }
 
 
     def get_standard_flags_image( self, section_id ):
@@ -321,7 +574,71 @@ class LS4Cam(Instrument):
 
 
     def _get_default_calibrator( self, mjd, section, calibtype='dark', filter=None ):
-        raise NotImplementedError( "Do." )
+        if calibtype != 'flat':
+            raise NotImplementedError( "I only know how to get default calibrator files for flats." )
+
+        if isinstance( section, SensorSection ):
+            section_id = section.id
+        elif isinstance( section, str ):
+            section_id = section
+        else:
+            raise TypeError( f"section must be a SensorSection or a str, not a {type(section)}" )
+        self.check_section_id( section_id )
+
+        from models.calibratorfile import CalibratorFile, CalibratorFileDownloadLock
+
+        cfg = Config.get()
+        cv = Provenance.get_code_version( process='LS4Cam Default Calibrator' )
+        prov = Provenance( process='LS4Cam Default Calibrator', code_version_id=cv.id )
+        prov.insert_if_needed()
+
+        reldatadir = pathlib.Path( 'LS4Cam_default_calibrators' )
+        datadir = pathlib.Path( FileOnDiskMixin.local_path ) / reldatadir
+
+        if calibtype == 'flat':
+            rempath = pathlib.Path( f'{cfg.value("LS4Cam.calibfiles.flatbase")}_{section_id}.fits' )
+        else:
+            return None
+
+        url = f'{cfg.value("LS4Cam.calibfiles.urlbase")}{str(rempath)}'
+        filepath = reldatadir / calibtype / rempath.name
+        fileabspath = datadir / calibtype / rempath.name
+
+        SCLogger.debug( f"ls4cam._get_default_calibrator: getting calibfile lock for {self.name} {section_id} "
+                        f"calibset='externally_supplied' calibtype={calibtype}" )
+        with CalibratorFileDownloadLock.acquire_lock( instrument='LS4Cam',
+                                                      section=section_id,
+                                                      calibset='externally_supplied',
+                                                      calibtype=calibtype,
+                                                      flattype=( 'externally_supplied' if calibtype == 'flat'
+                                                                 else None ) ):
+            retry_download( url, fileabspath )
+
+            if calibtype == 'flat':
+                dbtype = 'ComSkyFlat'
+            mjd = float( cfg.value( 'LS4Cam.calibfiles.mjd' ) )
+            image = Image( format='fits', type=dbtype, provenance_id=prov.id, instrument='LS4Cam',
+                           telescope='ESO 1.0-m Schmidt', filter=self.get_section_filter(section_id),
+                           section_id=section_id, filepath=str(filepath), mjd=mjd, end_mjd=mjd,
+                           info={}, exp_time=0, ra=0., dec=0.,
+                           ra_corner_00=0., ra_corner_01=0.,ra_corner_10=0., ra_corner_11=0.,
+                           dec_corner_00=0., dec_corner_01=0., dec_corner_10=0., dec_corner_11=0.,
+                           minra=0, maxra=0, mindec=0, maxdec=0,
+                           target="", project="" )
+            FileOnDiskMixin.save( image, fileabspath )
+            calfile = CalibratorFile( type=calibtype,
+                                      calibrator_set='externally_supplied',
+                                      flat_type='externally_supplied' if calibtype == 'flat' else None,
+                                      instrument='LS4Cam',
+                                      sensor_section=section_id,
+                                      image_id=image.id )
+            image.insert()
+            calfile.insert()
+
+        SCLogger.debug( f"ls4cam._get_default_calibrator: releasing calibfile lock for {self.name} {section_id} "
+                        f"calibset='externally_supplied' calibtype={calibtype}" )
+
+        return calfile
 
 
     # def preprocessing_calibrator_files( self, calibset, flattype, section, filter, mjd, nofetch=False ):

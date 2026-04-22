@@ -219,7 +219,7 @@ class Preprocessor:
                         image.set_corners_from_header_wcs(setradec=True)
                     except Exception as ex:
                         # No header WCS.  (Probably that's why there's an exception.)
-                        SCLogger.warning( "No header WCS, not setting corners for {image.filepath}" )
+                        SCLogger.warning( f"No header WCS, not setting corners for {image.filepath}" )
                         SCLogger.debug( str(ex) )
                     image.preproc_bitflag |= string_to_bitflag( 'overscan', image_preprocessing_inverse )
 

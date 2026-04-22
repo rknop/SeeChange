@@ -730,7 +730,7 @@ class Instrument:
         Returns
         -------
         offset: tuple of floats
-            The offsets in the x and y direction.
+            The offsets in the x and y direction (in pixels).
         """
         self.check_section_id(section_id)
         # this simple instrument defaults to zero offsets for ALL sections
@@ -763,6 +763,10 @@ class Instrument:
         # this simple instrument has no filter array, so return zero
         idx = 0
         return idx
+
+    def get_section_filter(self, section_id):
+        raise NotImplementedError( f"get_section_filter not implemented for {self.__class__.__name__}" )
+
 
     def load(self, filepath, section_ids=None):
         """Load a part of an exposure file, based on the section identifier.
@@ -998,7 +1002,7 @@ class Instrument:
 
         Returns
         -------
-           dict, 10 keys: (ra|dec)_corner_(0|1)(0|1), (min|max)(ra|dec)
+           dict, 12 keys: (ra|dec)_corner_(0|1)(0|1), (min|max)(ra|dec)
 
         """
         raise NotImplementedError( f"{self.__class__.__name__} needs to implement get_ra_dec_corners_for_section" )

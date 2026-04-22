@@ -964,6 +964,12 @@ def get_archive_object():
         archive_specs = cfg.value('archive', None)
         if archive_specs is not None:
             archive_specs[ 'logger' ] = SCLogger
+            if ( 'token' not in archive_specs ) or  ( archive_specs[ 'token' ] is None ):
+                if ( 'token_file' not in archive_specs ) or ( archive_specs[ 'token_file' ] is None ):
+                    raise RuntimeError( "Archive specs don't include a token or token_file" )
+                with open( archive_specs[ 'token_file' ] ) as ifp:
+                    archive_specs[ 'token' ] = ifp.readline().strip()
+                del archive_specs[ 'token_file' ]
             ARCHIVE = Archive(**archive_specs)
     return ARCHIVE
 

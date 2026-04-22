@@ -157,6 +157,12 @@ storage:
 #     base of the overall archive, and will usually just be a single
 #     word.)
 #
+#   token : string or null
+#     The token necessary to authenticate on the server.
+#
+#   token_file : string
+#     If token is null, read the token from this file
+#
 #   local_read_dir: string or null
 #     The directory to read from if the archive is on the local
 #     filesystem, or null.  Different from local_write_dir in case
@@ -739,12 +745,27 @@ DECam:
   flattype: externally_supplied
   calibfiles:
     mjd: 56876
+    # urlbase must end in /
     urlbase: https://portal.nersc.gov/cfs/m4616/decam_calibration_files/
     linearity: DECamMasterCal_56475/linearity/linearity_table_v0.4.fits
     fringebase: DECamMasterCal_56876/fringecor/DECam_Master_20131115v1
     flatbase: DECam_domeflat/
     illuminationbase: DECamMasterCal_56876/starflat/DECam_Master_20130829v3
     bpmbase: DECamMasterCal_56876/bpm/DECam_Master_20140209v2_cd_
+
+
+# LS4Cam
+
+# This is currently in flux
+
+LS4Cam:
+  calibratorset: externally_supplied
+  flattype: externally_supplied
+  calibfiles:
+    mjd: 61151
+    # urlbase must end in /
+    urlbase: https://portal.nersc.gov/cfs/m4616/LS4Cam_calibration_files/
+    flatbase: 20260421/LS4Cam_flat_20260421
 
 # ======================================================================
 # ======================================================================

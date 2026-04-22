@@ -97,6 +97,7 @@ class CodeVersion(Base, UUIDMixin):
         #   or for specific instruments.,
         'DECam Default Calibrator' : (0,1,0),
         'manual_reference' : (0,1,0),
+        'LS4Cam Default Calibrator': (0, 1, 0),
 
         # The remaining processes are just used in tests (I think)
         'no_process' : (0,1,0),
