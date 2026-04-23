@@ -67,14 +67,15 @@ class LS4Cam(Instrument):
         self.telescope = 'ESO 1.0-m Schmidt'
         self.apperture = 1.0
         self.focal_ratio = None   # FIGURE THIS OUT
-        self.square_degree_fov = 20
+        self.square_degree_fov = 20   # CHECK THIS
+        self.max_rad_degree = 3.5   # CHECK THIS
         self.pixel_scale = 1.0177
         self.read_time = None # FIGURE THIS OUT
         self.orientation_fixed = True
         self.orientation = InstrumentOrientation.NupEright    # VERIFY THIS
         self.read_noise  = 1.0  # FIGURE THIS OUT
         self.dark_current= 0.1  # FIGURE THIS OUT
-        self.gain = 4.0         # FIGURE THIS OUT
+        self.gain = 2.2         # FIGURE THIS OUT.  (2.2 is a non-absurd approximation for most chips.)
         self.saturation_limit = 20000  # FIGURE THIS OUT
         self.non_linearity_limit = 20000   # FIGURE THIS OUT
         self.allowed_filters = [ "0" ]
@@ -779,7 +780,7 @@ class LS4Cam(Instrument):
             manyfiles = False
             isfz = ( ( len(filepath.name) >= 3 ) and ( filepath.name[-3:] == '.fz' ) )
         else:
-            filebase = filematch.group( 'filebase' )
+            # filebase = filematch.group( 'filebase' )
             filedatetime = filematch.group( 'datetime' )
             filesd = filematch.group( 'sd' )
             # filectrlr = filematch.group( 'ctrlr' )
@@ -798,7 +799,7 @@ class LS4Cam(Instrument):
                                       f'filename has a chip, but doesn\'t have C?.' )
 
         if manyfiles:
-            exposurename = f'{filebase}_{filenum}.fits'
+            exposurename = f'{filedatetime}{filesd}_{filenum}.fits'
             if origin_identifier is None:
                 origin_identifier = exposurename
         else:
@@ -826,7 +827,7 @@ class LS4Cam(Instrument):
                                       f"provenance \"{provenance.id}\"." )
                 SCLogger.info( f"Exposure with origin identifier=\"{origin_identifier}\" already in the "
                                f"database, not doing anything." )
-                return
+                return Exposure( **row )
 
         try:
             hdu0 = None

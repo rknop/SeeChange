@@ -2197,6 +2197,7 @@ class DemoInstrument(Instrument):
         self.aperture = 2.0
         self.focal_ratio = 5.0
         self.square_degree_fov = 0.5
+        self.max_rad_degree = 0.4
         self.pixel_scale = 0.41
         self.read_time = 2.0
         self.read_noise = 1.5

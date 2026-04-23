@@ -324,8 +324,15 @@ class Parameters:
             and real_key in self.__typecheck__
             and not isinstance(value, self.__typecheck__[real_key])
         ):
+            strv = None
+            try:
+                # Added this in an attempt to diagnose a very mysterious error.
+                # (The thing should not have been a float!)
+                strv = f"  [Value: {str(value)}]"
+            except Exception:
+                pass
             raise TypeError(
-                f'Parameter "{key}" must be of type {self.__typecheck__[real_key]}, got {type(value)} instead. '
+                f'Parameter "{key}" must be of type {self.__typecheck__[real_key]}, got {type(value)} instead.{strv}'
             )
         super().__setattr__(real_key, value)
 

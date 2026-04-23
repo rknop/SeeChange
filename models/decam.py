@@ -53,6 +53,7 @@ class DECam(Instrument):
         self.aperture = 4.0
         self.focal_ratio = 2.7
         self.square_degree_fov = 3.0
+        self.max_rad_degree = 1.05
         self.pixel_scale = 0.263
         self.read_time = 20.0
         self.orientation_fixed = True

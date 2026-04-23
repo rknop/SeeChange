@@ -41,7 +41,7 @@ import util.config as config
 from util.archive import Archive
 from util.logger import SCLogger
 from util.radec import radec_to_gal_ecl
-from util.util import asUUID, NumpyAndUUIDJsonEncoder
+from util.util import asUUID, NumpyAndUUIDJsonEncoder, listify
 
 # Postgres adapters to allow insertion of some numpy types
 # ...let's see if we can get by without these in psycopg3
@@ -1289,7 +1289,8 @@ class FileOnDiskMixin:
         return [ f'{self.filepath}.{comp}{self._file_suffix(comp)}' for comp in self.components ]
 
 
-    def get_fullpath( self, download=True, as_list=False, nofile=None, always_verify_md5=False ):
+    def get_fullpath( self, download=True, as_list=False, components=None,
+                      nofile=None, always_verify_md5=False ):
         """Get the full path of the file, or list of full paths of files if components is not None.
 
         If the archive is defined, and download=True (default),
@@ -1318,8 +1319,12 @@ class FileOnDiskMixin:
             Must have archive defined. Default is True.
 
         as_list: bool
-            Whether to return a list of filepaths, even if components=None.
+            Whether to return a list of filepaths, even if self.components=None.
             Default is False.
+
+        components: list, str, or None
+            Which components to get.  Must be None if self.components is
+            None None.  If not given, defaults to self.components.
 
         nofile: bool
             Whether to check if the file exists on local disk.
@@ -1336,7 +1341,10 @@ class FileOnDiskMixin:
             Absolute path to the file(s) on local disk.
 
         """
-        if self.components is None:
+
+        components = self.components if components is None else listify( components )
+
+        if components is None:
             if as_list:
                 return [self._get_fullpath_single(download=download, nofile=nofile,
                                                   always_verify_md5=always_verify_md5)]
@@ -1344,10 +1352,16 @@ class FileOnDiskMixin:
                 return self._get_fullpath_single(download=download, nofile=nofile,
                                                  always_verify_md5=always_verify_md5)
         else:
+            if self.components is None:
+                raise ValueError( "Can't give components for an object that doesn't have components." )
+            unknown = set(components) - set(self.components)
+            if unknown:
+                raise ValueError( f"Unknown components: {unknown}" )
+
             return [
                 self._get_fullpath_single(download=download, comp=comp, nofile=nofile,
                                           always_verify_md5=always_verify_md5)
-                for comp in self.components
+                for comp in components
             ]
 
 

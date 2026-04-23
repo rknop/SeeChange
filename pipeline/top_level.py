@@ -87,6 +87,17 @@ class ParsPipeline(Parameters):
             critical=False,
         )
 
+        self.save_after_each_step = self.add_par(
+            'save_after_each_step',
+            False,
+            bool,
+            "Normally, the data products are only saved at the end of the whole pipeline, "
+            "(and, if save_before_subtraction is set, just before subtraction).  Set this "
+            "to save after every step.  This is probably not very I/O efficient, though it "
+            "might be worth thinking about that, as maybe it's not that big a deal.",
+            critical=False
+        )
+
         self.save_at_finish = self.add_par(
             'save_at_finish',
             True,
@@ -578,11 +589,15 @@ class Pipeline:
                         # There are a couple of steps where we might want to save
                         #   before being completely finished
                         if ( not everything_saved ) and ( stepi < len(steps)-1 ):
-                            if self.pars.save_before_subtraction and ( steps[stepi+1] == 'subtraction' ):
+                            if self.pars.save_after_each_step:
+                                self.save_data_products( f'save_after_{step}', ds )
+                                everything_saved = True
+
+                            elif self.pars.save_before_subtraction and ( steps[stepi+1] == 'subtraction' ):
                                 self.save_data_products( 'save_before_subtraction', ds )
                                 everything_saved = True
 
-                            if self.pars.save_before_alerting and ( steps[stepi+1] == 'alerting' ):
+                            elif self.pars.save_before_alerting and ( steps[stepi+1] == 'alerting' ):
                                 self.save_data_products( 'save_before_alerting', ds )
                                 everything_saved = True
 

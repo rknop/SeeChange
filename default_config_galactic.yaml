@@ -30,8 +30,8 @@ fakeinjection:
   mag_rel_limmag: true
   num_fakes: 400
   mag_prob_ratio: 1.
-  random_seed: 0.
+  random_seed: 0
   hostless_frac: 0.
   host_minmag: -3.
   host_maxmag: 1.
-  host_distcale: 0.
+  host_distscale: 0.
