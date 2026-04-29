@@ -74,6 +74,7 @@ RUN apt-get update && \
       lsb-release \
       curl \
       emacs-nox \
+      file \
       fitsverify \
       flex \
       git \
@@ -81,11 +82,13 @@ RUN apt-get update && \
       libbz2-1.0 \
       libcfitsio-bin \
       libfftw3-bin \
+      libgsl28 \
       liblapack3 \
       less \
       locales \
       missfits \
       netcat-openbsd \
+      netpbm \
       postgresql-client \
       procps \
       psfex \
@@ -170,7 +173,9 @@ RUN apt-get update && \
       libcurl4-openssl-dev \
       libfftw3-dev \
       libgsl-dev \
+      libjpeg62-turbo-dev \
       liblapacke-dev \
+      libnetpbm-dev \
       libopenblas-openmp-dev \
       libpq-dev \
       libssl-dev \
@@ -181,6 +186,7 @@ RUN apt-get update && \
       python3-pip \
       python3-venv \
       python3-dev \
+      swig \
     && apt-get -y purge python3-cffi-backend python3-requests python3-dateutil && \
     apt-get -y autoremove && \
     apt-get clean && \
@@ -247,6 +253,20 @@ RUN cd RBbot_inference \
     && pip install . \
     && cd .. \
     && rm -rf RBbot_inference
+
+# astrometry.net
+ARG astrometry_net_ver=0.98
+RUN curl -L https://astrometry.net/downloads/astrometry.net-$astrometry_net_ver.tar.gz -O \
+   && tar xf astrometry.net-$astrometry_net_ver.tar.gz \
+   && cd astrometry.net-$astrometry_net_ver \
+   && source /venv/bin/activate \
+   && make \
+   && make py \
+   && make extra \
+   && mkdir /astrometry.net \
+   && make install INSTALL_DIR=/astrometry.net \
+   && cd .. \
+   && rm -rf astrometry.net-$astrometry_net_ver
 
 
 # ======================================================================
@@ -330,6 +350,7 @@ FROM base AS bindmount_code
 
 COPY --from=build /usr/bin/hotpants /usr/bin/hotpants
 COPY --from=build /venv/ /venv/
+COPY --from=build /astrometry.net/ /astrometry.net/
 ENV PATH=/venv/bin:$PATH
 
 ENV PYTHONPATH="/seechange"
@@ -345,6 +366,7 @@ FROM base AS included_code
 
 COPY --from=build /usr/bin/hotpants /usr/bin/hotpants
 COPY --from=build /venv/ /venv/
+COPY --from=build /astrometry.net/ /astrometry.net/
 ENV PATH=/venv/bin:$PATH
 
 COPY --from=included_code_build /seechange/lib /seechange/lib
@@ -413,6 +435,7 @@ FROM base_selenium AS test_included
 
 COPY --from=build_selenium /usr/bin/hotpants /usr/bin/hotpants
 COPY --from=build_selenium /venv/ /venv/
+COPY --from=build_selenium /astrometry.net/ /astrometry.net/
 ENV PATH=/venv/bin:$PATH
 
 COPY --from=included_code_build /seechange/lib /seechange/lib
@@ -438,6 +461,7 @@ FROM base_selenium AS test_bindmount
 
 COPY --from=build_selenium /usr/bin/hotpants /usr/bin/hotpants
 COPY --from=build_selenium /venv/ /venv/
+COPY --from=build_selenium /astrometry.net/ /astrometry.net/
 ENV PATH=/venv/bin:$PATH
 
 ENV PYTHONPATH="/seechange"
