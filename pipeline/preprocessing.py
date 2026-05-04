@@ -307,7 +307,7 @@ class Preprocessor:
                         del image.header[yeet]
 
             # Build the weight and flags images (if necessary)
-            if image._flags is None or image._weight is None:
+            if image.flags is None or image.weight is None:
                 # Start with the Instrument standard bad pixel mask for this image
                 image._flags = self.instrument.get_standard_flags_image( ds.section_id )
 
