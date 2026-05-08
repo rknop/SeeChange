@@ -348,6 +348,9 @@ class Preprocessor:
                     image._flags[ wsat ] |= string_to_bitflag( "saturated", flag_image_bits_inverse )
                     image._weight[ wsat ] = 0.
 
+                # Make sure image components is set to indicate we have weight and flags
+                image.components = [ 'image', 'weight', 'flags' ]
+
             if image.provenance_id is None:
                 image.provenance_id = prov.id
             else:

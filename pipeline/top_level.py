@@ -106,6 +106,15 @@ class ParsPipeline(Parameters):
             critical=False,
         )
 
+        self.do_not_save = self.add_par(
+            'do_not_save',
+            False,
+            bool,
+            ( 'Set true to disable all saving.  If True, overrides all other save flags, '
+              'effectively setting them all to False.' ),
+            critical=False,
+        )
+
         self.provenance_tag = self.add_par(
             'provenance_tag',
             'current',
@@ -145,7 +154,7 @@ class ParsPipeline(Parameters):
             "If True, generate a report object if the pipeline starts from an Exposure.  "
             "(Reports are linked to exposures, so it's not possible to generate a report "
             "when starting from an image.)  If False, don't generate a report or a report "
-            "provenance.",
+            "provenance.  Ignored if do_not_save is True.",
             critical=False
         )
 
@@ -257,6 +266,18 @@ class Pipeline:
 
         # Other initialization
         self._generate_report = self.pars.generate_report
+        if self.pars.do_not_save:
+            if self._generate_report:
+                SCLogger.warning( "Not generating report because do_not_save is set" )
+                self._generate_report = False
+            save_flags = [ 'save_before_subtraction', 'save_before_alerting',
+                           'save_on_exception', 'save_after_each_step',
+                           'save_at_finish' ]
+            if any( getattr( self.pars, i ) for i in save_flags ):
+                SCLogger.warning( "Turning off all save flags because do_not_save is set" )
+            for i in save_flags:
+                setattr( self.pars, i, False )
+
 
     def override_parameters(self, **kwargs):
         """Override some of the parameters for this object and its sub-objects, using Parameters.override(). """
@@ -475,6 +496,10 @@ class Pipeline:
 
 
     def save_data_products( self, step, ds ):
+        if self.pars.do_not_save:
+            SCLogger.info( f"Not saving at {step} because do_not_save is set" )
+            return
+
         t_start = time.perf_counter()
         try:
             SCLogger.info(f"Saving at step {step} for image id {ds.image.id}")

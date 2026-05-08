@@ -14,6 +14,7 @@ import improc.scamp
 
 from util.exceptions import CatalogNotFoundError, SubprocessFailure, BadMatchException
 from util.logger import SCLogger
+from util.fits import save_fits_image_file
 
 from models.world_coordinates import WorldCoordinates
 from models.base import FileOnDiskMixin
@@ -329,11 +330,6 @@ class AstroCalibrator:
         # 0.8 - 1.2 range we feed to solve-field is probably too generous,
         # but whatevs.
         #
-        # Right now we're letting astrometry.net just be magic and not
-        # giving it a starting ra and dec.  (...I think it ignores the header?)
-        # If we think we have even a vaguely reasonable ra and dec, however,
-        # it would probably be a lot faster to use it.
-        #
         # I *think* a substantial fraction of the time is in I/O.  We might improve
         # things by parallelizing less, though that's hard to figure out without
         # changing the structure of top_level.py
@@ -347,15 +343,29 @@ class AstroCalibrator:
         sources = ds.get_sources( session=session )
         if sources is None:
             raise ValueError( f'Cannot find a source list corresponding to the datastore inputs: {ds.inputs_str}' )
-        imagepath = ds.get_image().get_fullpath( components='image' )[0]
-        solve_field = pathlib.Path( self.pars.astrometry_net_bindir ) / "solve-field"
+        imagepath = pathlib.Path( image.get_fullpath( components='image' )[0] )
+        # It's possible that this image does not exist on disk.  The first time through the
+        #   pipeline, it won't, and the Image object will have been created with nofile=True,
+        #   so the call to get_fullpath() wouldn't have tried to download the image.
+        # If that's the case, then we have to write the data out to a temp file.
+        if not imagepath.exists():
+            imname = imagepath.name
+            if imname[-3:] in ( '.fz', '.gz' ):
+                imname = imname[:-3]
+            imagepath = tmpdir / imname
+            save_fits_image_file( imagepath, image.data, image.header, extname='image', single_file=True )
+            raise RuntimeError( "Rob, you were here." )
+            # ROB :
+            # astrometry.net threw an error that the header had NAXIS=0
+            # Look at the image, look at the header, think about wtf is going on.
+            # import pdb; pdb.set_trace()
 
         try:
-            SCLogger.debug( f"Starting astrometry.net on {pathlib.Path(imagepath).name}" )
+            SCLogger.debug( f"Starting astrometry.net on {imagepath.name}" )
             # If I did this right, it won't write any files anywhere other than into tmpdir.
             # I'm *trying* to only write 'solved' and 'wcs.fits', but it doesn't seem that
             # --axy none stops it from writing hte axy file.  (It's probably useful, anyway....)
-            com = [ solve_field,
+            com = [ str( pathlib.Path( self.pars.astrometry_net_bindir ) / "solve-field" ),
                     '--dir', tmpdir,
                     '-m', tmptmpdir,
                     # '-p',                               # png images; -p disables them
@@ -394,7 +404,7 @@ class AstroCalibrator:
                               '--dec', str( ds.exposure.dec ),
                               '--radius', str( exprad ) ] )
 
-            com.append( imagepath )
+            com.append( str(imagepath) )
 
             t0 = time.perf_counter()
             try:
