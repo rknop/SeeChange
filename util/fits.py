@@ -87,6 +87,11 @@ def save_fits_image_file( filename,
                           just_update_header=False ):
     """Save a single dataset (image data, weight, flags, etc) to a FITS file.
 
+    WARNING : this is not a generic FITS saving utiltiy.  It has stuff
+    built-in that does things to filenames based on assumptions
+    elsewhere in our pipeline.  If all you want to do is write a FITS
+    file, just use astropy.io.fits.writeto.
+
     The header should be the raw header, with some possible adjustments,
     including all the information (not just the minimal subset saved
     into the DB).
@@ -128,10 +133,18 @@ def save_fits_image_file( filename,
         single_file=True.
 
     single_file: bool, default False
-        Whether to save each data array into a separate extension of the
-        same file.  if False (default) will save each data array into a
-        separate file.  If True, will use the extname to name the FITS
-        extension, and save each array into the same file.
+        WARNING -- THE NAME OF THIS OPTION IS POTENTIALLY CONFUSING.
+
+        If False, it means that each data arry goes into a separate
+        file.  If you are calling save_fits_image_file to save a single
+        FITS file with just one HDU and don't want to call again for
+        another HDU on the same file, then, oddly, you want
+        single_file=False.
+
+        If True, it means that multiple data arrays get saved as
+        different HDUs into the same FITS file.  It will use extname to
+        name the FITS extension, and if the file already exists, the HDU
+        built from data and header will be appended to that file.
 
     fpack: bool, default False
         If true, will run fpack on the image after writing it.

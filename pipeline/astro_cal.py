@@ -14,7 +14,6 @@ import improc.scamp
 
 from util.exceptions import CatalogNotFoundError, SubprocessFailure, BadMatchException
 from util.logger import SCLogger
-from util.fits import save_fits_image_file
 
 from models.world_coordinates import WorldCoordinates
 from models.base import FileOnDiskMixin
@@ -353,12 +352,7 @@ class AstroCalibrator:
             if imname[-3:] in ( '.fz', '.gz' ):
                 imname = imname[:-3]
             imagepath = tmpdir / imname
-            save_fits_image_file( imagepath, image.data, image.header, extname='image', single_file=True )
-            raise RuntimeError( "Rob, you were here." )
-            # ROB :
-            # astrometry.net threw an error that the header had NAXIS=0
-            # Look at the image, look at the header, think about wtf is going on.
-            # import pdb; pdb.set_trace()
+            fits.writeto( imagepath, image.data, image.header )
 
         try:
             SCLogger.debug( f"Starting astrometry.net on {imagepath.name}" )
@@ -390,7 +384,7 @@ class AstroCalibrator:
                 imrad = image.instrument_object.pixel_scale * max( image.data.shape ) / 2. * 3600.
                 imrad *= self.pars.astrometry_net_radius
                 SCLogger.debug( f"astrometry.net starting within {imrad:.2f}° of "
-                                f"({image.ra}:.4f, {image.dec:.4f})" )
+                                f"({image.ra:.4f}, {image.dec:.4f})" )
                 com.extend( [ '--ra', str( image.ra ),
                               '--dec', str( image.dec ),
                               '--radius', str( imrad ) ] )
