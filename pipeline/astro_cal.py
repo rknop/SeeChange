@@ -342,17 +342,23 @@ class AstroCalibrator:
         sources = ds.get_sources( session=session )
         if sources is None:
             raise ValueError( f'Cannot find a source list corresponding to the datastore inputs: {ds.inputs_str}' )
-        imagepath = pathlib.Path( image.get_fullpath( components='image' )[0] )
-        # It's possible that this image does not exist on disk.  The first time through the
-        #   pipeline, it won't, and the Image object will have been created with nofile=True,
-        #   so the call to get_fullpath() wouldn't have tried to download the image.
-        # If that's the case, then we have to write the data out to a temp file.
-        if not imagepath.exists():
-            imname = imagepath.name
-            if imname[-3:] in ( '.fz', '.gz' ):
-                imname = imname[:-3]
-            imagepath = tmpdir / imname
-            fits.writeto( imagepath, image.data, image.header )
+        # Building in a possible inefficiency here.  The file may
+        #  already exist on disk, in which case we could just point
+        #  astrometry.net at it.  However, to do that, we have to call
+        #  image.get_fullpath() with components='image', and if the file
+        #  does *not* yet already exist on disk, then, according to our
+        #  (not-well-documented) design, image.components is supposed to
+        #  be None, and get_fullpath() will fail.  ARGH.  We do need the
+        #  ability to figure out what the path of an image is supposed
+        #  to be even if it isn't written yet.  But, right now, that's
+        #  painful, and I don't want to work around it with hacks as
+        #  that will just make the whole thing worse.  So, always write
+        #  a temp file that we're going to pass to astrometry.net, even
+        #  though sometimes that's not necessary.  I should make an
+        #  issue for this, but data is here and I'm trying to do too
+        #  many things too fast.
+        imagepath = tmpdir / 'image.fits'
+        fits.writeto( imagepath, image.data, image.header )
 
         try:
             SCLogger.debug( f"Starting astrometry.net on {imagepath.name}" )
