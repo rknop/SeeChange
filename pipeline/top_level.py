@@ -575,6 +575,7 @@ class Pipeline:
                 # ...counting on python dictionaries being ordered...
                 steps = list( process_objects.keys() )
                 everything_saved = True
+                alldone = False
 
                 # SPECIAL CASE.  If preprocessing is done, then we don't
                 #   need to call the preprocessor.  This will be the
@@ -592,10 +593,20 @@ class Pipeline:
                     if ( ds.image.preproc_bitflag & ppbf ) == ppbf:
                         if 'preprocessing' in stepstodo:
                             stepstodo.remove( 'preprocessing' )
-                        SCLogger.info( 'Image is already preprocessed, not doing preprocessing' )
+                            SCLogger.info( 'Image is already preprocessed, not doing preprocessing' )
 
+                if ( ( 'preprocessing' not in stepstodo ) and
+                     ( ds.image.type in [ 'Bias', 'ComBias', 'Dark', 'ComDark',
+                                          'DomeFlat', 'ComDomeFlat', 'SkyFlat', 'ComSkyFlat',
+                                          'TwiFlat', 'ComTwiFlat', 'Fringe' ] )
+                    ):
+                    SCLogger.info( f'Nothing to do for image of type {ds.image.type}' )
+                    alldone = True
 
                 for stepi, (step, procobj) in enumerate( process_objects.items() ):
+                    if alldone:
+                        break
+
                     if step in stepstodo:
                         SCLogger.info( f'Pipeline starting {step}' )
                         ds = procobj.run( ds )
@@ -604,6 +615,14 @@ class Pipeline:
                         if step == 'preprocessing':
                             SCLogger.info( f"preprocessing complete: image id={ds.image.id}, "
                                            f"filepath={ds.image.filepath}" )
+                            # Some images never go past preprocessing
+                            if ds.image.type in [ 'Bias', 'ComBias', 'Dark', 'ComDark',
+                                                  'DomeFlat', 'ComDomeFlat', 'SkyFlat', 'ComSkyFlat',
+                                                  'TwiFlat', 'ComTwiFlat', 'Fringe' ]:
+                                SCLogger.info( f"Stopping after preprocessing for image of type "
+                                               f"{ds.image.type}" )
+                                alldone = True
+
                         else:
                             SCLogger.info( f"{step} complete for image {ds.image.id}" )
 

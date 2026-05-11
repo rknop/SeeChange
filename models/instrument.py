@@ -407,6 +407,8 @@ class Instrument:
         # and (if it's a step that includes a calibraiton image or datafile)
         # to the CalibratorTypeConverter dict in enums_and_bitflags.
         self.preprocessing_steps_available = ['overscan', 'zero', 'dark', 'linearity', 'flat', 'fringe', 'illumination']
+        # If a type isn't listed, it does all steps.  Otherwise, just the steps listed.
+        self.preprocessing_steps_by_type = {}
         # a list of preprocessing steps that are pre-applied to the exposure data
         self.preprocessing_steps_done = []
         self.preprocessing_step_skip_by_filter = {}  # e.g., {'g': ['fringe', 'illumination']} will skip those for g

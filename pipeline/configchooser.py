@@ -107,6 +107,9 @@ class ConfigChooser:
         """
 
         try:
+            if self.pars.choice_algorithm is None:
+                return
+
             if len( args ) == 1:
                 if isinstance( args[0], Exposure) or isinstance( args[0], Image ):
                     ra = args[0].ra
@@ -120,6 +123,7 @@ class ConfigChooser:
                 raise RuntimeError( "Pass ConfigChooser.run() (ra, dec), Exposure, or Image" )
 
             if self.pars.choice_algorithm == 'star_density':
+                raise RuntimeError( "ConfigChooser is horribly broken" )
                 self.set_config_based_on_star_density( ra, dec )
             else:
                 raise ValueError( f"Unknown ConfigChooser algorithm: {self.pars.choice_algorithm}" )

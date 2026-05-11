@@ -174,7 +174,12 @@ class Preprocessor:
             if image.preproc_bitflag is None:
                 image.preproc_bitflag = 0
 
-            # Figure out what steps are generally needed.
+            # Figure out how many steps we need to keep based on image type
+            import pdb; pdb.set_trace()
+            if image.type in self.instrument.preprocessing_steps_by_type:
+                needed_steps = needed_steps.intersection( self.instrument.preprocessing_steps_by_type[ image.type ] )
+
+            # Figure out if we skip any steps based on filter
             filter_skips = self.instrument.preprocessing_step_skip_by_filter.get(baseobj.filter, [])
             if not isinstance(filter_skips, list):
                 raise ValueError(f'Filter skips parameter for {baseobj.filter} must be a list')

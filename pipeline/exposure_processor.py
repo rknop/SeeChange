@@ -369,6 +369,7 @@ class ExposureProcessor:
             SCLogger.info( "Only running through exposure, not launching any image processes" )
             return
 
+        cfg = Config.get()
         origconfig = Config._default
         try:
             if not ( self.ignore_known_exposures or self.nosave ):
@@ -385,7 +386,7 @@ class ExposureProcessor:
             #   based on the needs of the current exposure.  So, in
             #   the finally block below, we try to restore the original
             #   config.
-            config_chooser = ConfigChooser()
+            config_chooser = ConfigChooser( **( cfg.value('configchoice') ) )
             config_chooser.run( self.exposure )
 
             chips = [ c.identifier for c in self.instrument.fetch_sections().values() if not c.defective ]
