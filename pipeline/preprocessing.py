@@ -175,7 +175,6 @@ class Preprocessor:
                 image.preproc_bitflag = 0
 
             # Figure out how many steps we need to keep based on image type
-            import pdb; pdb.set_trace()
             if image.type in self.instrument.preprocessing_steps_by_type:
                 needed_steps = needed_steps.intersection( self.instrument.preprocessing_steps_by_type[ image.type ] )
 
