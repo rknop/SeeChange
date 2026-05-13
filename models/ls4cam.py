@@ -1,5 +1,7 @@
 import re
+import types
 import pathlib
+import datetime
 import subprocess
 
 import psycopg.rows
@@ -756,6 +758,77 @@ class LS4Cam(Instrument):
         raise NotImplementedError( "Do." )
 
 
+    def _figure_out_exposure_many_files_or_single( self, filepath, origin_identifier=None,
+                                                   ok_no_pattern_match=False ):
+
+        expinfo = types.SimpleNamespace()
+
+        # Try to identify if it's a whole bunch of files, or if it's a single file.
+        # If it's a whole bunch of files, then the convention is to pass any one
+        #   of the files, and we have to figure out the rest.
+        filematch = self._file_re.search( filepath.name )
+        expinfo.filesd = None
+        # filectrlr = None
+        # filechip = None
+        if filematch is None:
+            if ok_no_pattern_match:
+                # If we can't parse the filename, assume it's all chips packed in one file
+                expinfo.manyfiles = False
+                expinfo.isfz = ( ( len(filepath.name) >= 3 ) and ( filepath.name[-3:] == '.fz' ) )
+            else:
+                raise ValueError( f"Can't parse LS4 exposure filename {filepath.name}" )
+        else:
+            expinfo.filebase = filematch.group( 'filebase' )
+            expinfo.filedatetime = filematch.group( 'datetime' )
+            expinfo.filesd = filematch.group( 'sd' )
+            expinfo.filectrlr = filematch.group( 'ctrlr' )
+            expinfo.filenum = filematch.group( 'num' )
+            expinfo.manyfiles = ( filematch.group('C') is not None )
+            expinfo.isfz = ( filematch.group('fz') is not None )
+            if expinfo.manyfiles:
+                if filematch.group('chipthing') is None:
+                    raise ValueError( f'Error prasing ls4cam exposure filename "{filepath.name}": '
+                                      f'filename has a C?, but doesn\'t have a chip.' )
+                # filecontroller = int( filematch.group('ctrlr') )
+                # filechip = int( filematch.group('chip') )
+            else:
+                if filematch.group('chipthing') is not None:
+                    raise ValueError( f'Error prasing ls4cam exposure filename "{filepath.name}": '
+                                      f'filename has a chip, but doesn\'t have C?.' )
+
+        if expinfo.manyfiles:
+            expinfo.exposurename = f'{expinfo.filedatetime}{expinfo.filesd}_{expinfo.filenum}.fits'
+        else:
+            expinfo.exposurename = filepath.name[:-3] if expinfo.isfz else filepath.name
+
+        expinfo.origin_identifier = ( origin_identifier if origin_identifier is not None
+                                      else expinfo.exposurename )
+
+        expinfo.exposurepath = pathlib.Path( FileOnDiskMixin.temp_path ) / expinfo.exposurename
+        expinfo.exposurepathfz = expinfo.exposurepath.parent / f"{expinfo.exposurepath.name}.fz"
+
+        if expinfo.manyfiles:
+            # Make sure we can find all the files
+            expinfo.isdualamp = ( self.name == 'LS4Cam_dualamp' )
+            expinfo.files = []
+            expinfo.missing = []
+            nsubchip = 16 if expinfo.isdualamp else 8
+            for ctrlr in range(0, 4):
+                for subchip in range(0, nsubchip):
+                    fz = ( ".fz" if expinfo.isfz else "" )
+                    p = filepath.parent / ( f'{expinfo.filedatetime}{expinfo.filesd}'
+                                            f'C{ctrlr}_{expinfo.filenum}_{subchip:02d}.fits{fz}' )
+                    if p.is_file():
+                        expinfo.files.append( p )
+                    else:
+                        expinfo.missing.append( p.name )
+        else:
+            with fits.open( filepath ) as hdul:
+                expinfo.nhdus = len( hdul )
+
+        return expinfo
+
+
     def _load_exposure_from_file_or_files( self, filepath, origin_identifier=None, params=None,
                                            proc_type='raw', method='manual_load', code_version=None,
                                            exists_ok=False ):
@@ -772,66 +845,27 @@ class LS4Cam(Instrument):
                          'pmskyflat': 'TwiFlat',
                          'sky': 'Sci' }
 
+        expinfo = self._figure_out_exposure_many_files_or_single( filepath, origin_identifier=origin_identifier )
         provenance = self.get_exposure_provenance( proc_type=proc_type, method=method, code_version=code_version )
-
-        # Try to identify if it's a whole bunch of files, or if it's a single file.
-        # If it's a whole bunch of files, then the convention is to pass any one
-        #   of the files, and we have to figure out the rest.
-        filematch = self._file_re.search( filepath.name )
-        filesd = None
-        # filectrlr = None
-        # filechip = None
-        if filematch is None:
-            # If we can't parse the filename, assume it's all chips packed in one file
-            manyfiles = False
-            isfz = ( ( len(filepath.name) >= 3 ) and ( filepath.name[-3:] == '.fz' ) )
-        else:
-            # filebase = filematch.group( 'filebase' )
-            filedatetime = filematch.group( 'datetime' )
-            filesd = filematch.group( 'sd' )
-            # filectrlr = filematch.group( 'ctrlr' )
-            filenum = filematch.group( 'num' )
-            manyfiles = ( filematch.group('C') is not None )
-            isfz = ( filematch.group('fz') is not None )
-            if manyfiles:
-                if filematch.group('chipthing') is None:
-                    raise ValueError( f'Error prasing ls4cam exposure filename "{filepath.name}": '
-                                      f'filename has a C?, but doesn\'t have a chip.' )
-                # filecontroller = int( filematch.group('ctrlr') )
-                # filechip = int( filematch.group('chip') )
-            else:
-                if filematch.group('chipthing') is not None:
-                    raise ValueError( f'Error prasing ls4cam exposure filename "{filepath.name}": '
-                                      f'filename has a chip, but doesn\'t have C?.' )
-
-        if manyfiles:
-            exposurename = f'{filedatetime}{filesd}_{filenum}.fits'
-            if origin_identifier is None:
-                origin_identifier = exposurename
-        else:
-            exposurename = filepath.name[:-3] if isfz else filepath.name
-            if origin_identifier is None:
-                origin_identifier = exposurename
-        exposurepath = pathlib.Path( FileOnDiskMixin.temp_path ) / exposurename
-        exposurepathfz = exposurepath.parent / f"{exposurepath.name}.fz"
 
         with PsycopgConnection() as pgcon:
             cursor = pgcon.cursor( row_factory=psycopg.rows.dict_row )
-            cursor.execute( "SELECT * FROM exposures WHERE origin_identifier=%(id)s", { 'id': origin_identifier } )
+            cursor.execute( "SELECT * FROM exposures WHERE origin_identifier=%(id)s",
+                            { 'id': expinfo.origin_identifier } )
             rows = cursor.fetchall()
             if len(rows) > 0:
                 if len(rows) > 1:
                     raise RuntimeError( "This should never happen" )
                 if not exists_ok:
-                    raise RuntimeError( f"Exposure with origin_identifier=\"{origin_identifier}\" "
+                    raise RuntimeError( f"Exposure with origin_identifier=\"{expinfo.origin_identifier}\" "
                                         f"already exists in database." )
                 row = rows[0]
                 if row['provenance_id'] != provenance.id:
-                    raise ValueError( f"Exposure with origin_identifier=\"{origin_identifier}\" "
+                    raise ValueError( f"Exposure with origin_identifier=\"{expinfo.origin_identifier}\" "
                                       f"already exists in the database with provenance "
                                       f"\"{row['provenance_id']}\", but we're trying to load it with "
                                       f"provenance \"{provenance.id}\"." )
-                SCLogger.info( f"Exposure with origin identifier=\"{origin_identifier}\" already in the "
+                SCLogger.info( f"Exposure with origin identifier=\"{expinfo.origin_identifier}\" already in the "
                                f"database, not doing anything." )
                 return Exposure( **row )
 
@@ -846,7 +880,7 @@ class LS4Cam(Instrument):
             found_chips = set()
 
             def process_hdu( hdu ):
-                nonlocal hdu0, ra, dec, obs_type, hdus, exphdrinfo
+                nonlocal hdu0, ra, dec, obs_type, hdus, exphdrinfo, isdualamp
                 hdr = hdu.header
                 if hdr['CCD_LOC'] not in known_chips:
                     raise ValueError( f"HDU {hdui} of {filepath.name} has CCD_LOC={hdr['CCD_LOC']}, "
@@ -876,37 +910,29 @@ class LS4Cam(Instrument):
                 hdus.append( fits.ImageHDU( data=hdu.data, header=hdu.header ) )
                 found_chips.add( hdr['CCD_LOC'] )
 
-            if manyfiles:
-                # Make sure we can find all the files
-                nsubchip = 16 if isdualamp else 8
-                nneeded = 64 if isdualamp else 32
-                files = []
-                missing = []
-                for ctrlr in range(0, 4):
-                    for subchip in range(0, nsubchip):
-                        fz = ( ".fz" if isfz else "" )
-                        p = filepath.parent / f'{filedatetime}{filesd}C{ctrlr}_{filenum}_{subchip:02d}.fits{fz}'
-                        if p.is_file():
-                            files.append( p )
-                        else:
-                            missing.append( p.name )
-                if len(missing) > 0:
+            if expinfo.manyfiles:
+                nneeded = ( 64 if expinfo.isdualamp else 32 )
+                if len(expinfo.missing) > 0:
                     raise RuntimeError( f"Tried to the {nneeded} individual files that make up the exposure that "
-                                        f"goes with {filepath.name}, but some files were missing: {missing}" )
-                if len(files) != nneeded:
+                                        f"goes with {filepath.name}, but some files were missing: {expinfo.missing}" )
+                if len(expinfo.files) != nneeded:
                     raise RuntimeError( "This should never happen." )
 
                 # Assemble all of these togther into a single exposure
-                for fitsfile in files:
+                for fitsfile in expinfo.files:
                     with fits.open( fitsfile ) as hdul:
-                        if ( isfz and ( len(hdul) != 2 ) ) or ( ( not isfz ) and ( len(hdul) != 1 ) ):
+                        if ( expinfo.isfz and ( len(hdul) != 2 ) ) or ( ( not expinfo.isfz ) and ( len(hdul) != 1 ) ):
                             raise RuntimeError( f"Unexpected number of HDUs in file {fitsfile.name}: "
-                                                f"expected {2 if isfz else 1} but got {len(hdul)}" )
-                        hdu = hdul[1] if isfz else hdul[0]
+                                                f"expected {2 if expinfo.isfz else 1} but got {len(hdul)}" )
+                        hdu = hdul[1] if expinfo.isfz else hdul[0]
                         # TODO, verify chip and controller vs. filename!!!
                         process_hdu( hdu )
 
-            else:  # not manyfiles
+            else:  # not expinfo.manyfiles
+                if isdualamp:
+                    raise NotImplementedError( "Single file and dual amp not working yet." )
+                if expinfo.nhdus != 33:
+                    raise ValueError( f"Opened a packed FITS file, saw {len(hdul)} HDUs, expected 33." )
                 # Note : the LS4 .fz files weren't produced with fpack, and
                 #   are (I think) non-standard.  However, even though
                 #   funpack doesn't know what to do with them,
@@ -917,13 +943,6 @@ class LS4Cam(Instrument):
                 #   integer-encoded, so this should be lossses compression,
                 #   so it's not a problem.
                 with fits.open( filepath ) as hdul:
-                    if len(hdul) != 33:
-                        # In the future, if we get images actually packed with fpack, then we should expect
-                        #   34 HDUs, and the 0th one should be the fpack header, and the 1st one should be
-                        #   what we are calling hdu here.  (This will also effect the for loop below.)
-                        raise ValueError( f"Opened a packed FITS file, saw {len(hdul)} HDUs, expected 33." )
-                    # The actual hdu0 doesn't have anything useful in it, so ignore it, and build our
-                    #   own just like we do with manyfiles.
                     for hdui, hdu in enumerate(hdul):
                         if hdui == 0:
                             # Exposure header, not an image
@@ -938,29 +957,29 @@ class LS4Cam(Instrument):
 
             # Write the exposure to temp and fpack it
             exphdul = fits.HDUList( hdus )
-            exphdul.writeto( exposurepath )
+            exphdul.writeto( expinfo.exposurepath )
             exphdul = None
             del exphdul
-            _result = subprocess.run( [ "fpack", str(exposurepath) ], capture_output=True )
+            _result = subprocess.run( [ "fpack", str(expinfo.exposurepath) ], capture_output=True )
 
             # Load it and save the loaded object to the right place
 
-            expobj = Exposure( current_file=exposurepathfz, invent_filepath=True, type=obs_type,
+            expobj = Exposure( current_file=expinfo.exposurepathfz, invent_filepath=True, type=obs_type,
                                ra=ra, dec=dec, format='fitsfz', instrument=self.name,
                                filter=None, filter_array=['i', 'z', 'g', 'i'],
-                               provenance_id=provenance.id, origin_identifier=origin_identifier,
+                               provenance_id=provenance.id, origin_identifier=expinfo.origin_identifier,
                                header=hdu0.header, preprocc_bitflag=0, components=None, **exphdrinfo )
-            expobj.save( exposurepathfz )
+            expobj.save( expinfo.exposurepathfz )
             expobj.insert()
 
             return expobj
 
         finally:
             # Clean up the temp files if we made them
-            if exposurepath.exists():
-                exposurepath.unlink()
-            if exposurepathfz.exists():
-                exposurepathfz.unlink()
+            if expinfo.exposurepath.exists():
+                expinfo.exposurepath.unlink()
+            if expinfo.exposurepathfz.exists():
+                expinfo.exposurepathfz.unlink()
 
 
     def manually_load_exposure( self, filepath, origin_identifier=None, params=None,
@@ -972,8 +991,49 @@ class LS4Cam(Instrument):
                                                        exists_ok=exists_ok )
 
 
-    def acquire_and_commit_origin_exposure( self, identifier, params ):
-        raise NotImplementedError( "acquire_and_commit_origin_exposure needs to be implemented for LS4Cam" )
+    def acquire_and_commit_origin_exposure( self, identifier, params, outdir=None ):
+        if ( 'method' in params ) and ( params['method'] == 'localfile' ):
+            # OMG THIS IS A HACK.
+            # Things should be made into parameters!
+
+            if outdir is not None:
+                raise NotImplementedError( "Don't know how to deal with outdir" )
+
+            mat = self._file_re.search( identifier )
+            if mat is None:
+                raise ValueError( f"Failed to parse identifier {identifier}" )
+            filedatetime = mat.group( 'filebase' )
+            filesd = mat.group( 'sd' )
+            filenum = mat.group( 'num' )
+
+            # Have to find the file
+            filedate = datetime.date( int(identifier[0:4]), int(identifier[4:6]), int(identifier[5:8]) )
+            filepath = None
+            for delta in [ 0, -1, 1 ]:
+                if filepath is not None:
+                    break
+                searchdate = filedate + datetime.timedelta( days=delta )
+                direc = ( pathlib.Path( "/m4616/tmp" ) /
+                          f'{searchdate.year:04d}{searchdate.month:02d}{searchdate.day:02d}' )
+                for f in [ direc / f'{filedatetime}{filesd}_{filenum}.fits',
+                           direc / f'{filedatetime}{filesd}_{filenum}.fits.fz',
+                           direc / f'{filedatetime}{filesd}C0_{filenum}_00.fits',
+                           direc / f'{filedatetime}{filesd}C0_{filenum}_00.fits.fz' ]:
+                    if f.is_file():
+                        filepath = f
+                        break
+
+            if filepath is None:
+                raise FileNotFoundError( f"Failed to find file for identifier {identifier}" )
+
+            expobj = self.manually_load_exposure( filepath, exists_ok=True )
+            return expobj.get_fullpath( download=False, as_list=False )
+
+        else:
+            if 'method' not in params:
+                raise ValueError( "No method given to acquire LS4 exposure" )
+            else:
+                raise ValueError( f"Unknown method to acquire LS4 exposure: {params['method']}" )
 
 
     def find_origin_exposures( self,

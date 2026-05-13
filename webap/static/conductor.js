@@ -35,6 +35,8 @@ seechange.Conductor = class
         h3 = rkWebUtil.elemaker( "h3", vbox, { "text": "Pipeline Config  " } );
         rkWebUtil.button( h3, "Refresh", () => { self.show_config_status() } );
         p = rkWebUtil.elemaker( "p", vbox, { "text": "Run through step " } )
+        // NEED TO ADD A CALLBACK TO THIS NEXT ONE
+        // ALSO NEED TO PULL ITS STATE FROM THE SERVER!!!!!!
         this.throughstep_select = rkWebUtil.elemaker( "select", p );
         for ( let step of seechange.Conductor.ALL_STEPS ) {
             rkWebUtil.elemaker( "option", this.throughstep_select,

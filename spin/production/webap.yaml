@@ -135,17 +135,17 @@ spec:
             port:
               number: 8080
         pathType: ImplementationSpecific
-  # - host: ls4-pipeline.lbl.gov
-  #   http:
-  #     paths:
-  #     - backend:
-  #         service:
-  #           name: webap-ingress
-  #           port:
-  #             number: 8080
-  #       pathType: ImplementationSpecific
-  # tls:
-  # - hosts:
-  #   - ls4-pipeline.lbl.gov
-  #   secretName: ls4-production-webap-cert
+  - host: ls4-pipeline.lbl.gov
+    http:
+      paths:
+      - backend:
+          service:
+            name: webap-ingress
+            port:
+              number: 8080
+        pathType: ImplementationSpecific
+  tls:
+  - hosts:
+    - ls4-pipeline.lbl.gov
+    secretName: ls4-production-webap-cert
 ---

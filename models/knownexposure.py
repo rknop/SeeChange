@@ -34,7 +34,8 @@ class KnownExposure(Base, UUIDMixin):
     params = sa.Column( JSONB, nullable=True,
                         doc='Additional instrument-specific parameters needed to pull this exposure' )
 
-    _state = sa.Column( sa.SMALLINT, nullable=False, server_default='0', doc='0=held, 1=ready, 2=running, 3=done' )
+    _state = sa.Column( sa.SMALLINT, nullable=False, server_default='0', doc=( '0=held, 1=ready, 2=running, '
+                                                                               '3=claimed, 4=done' ) )
 
     @hybrid_property
     def state(self):

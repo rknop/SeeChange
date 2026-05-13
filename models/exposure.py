@@ -730,7 +730,7 @@ class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBad
             section_ids = [section_ids]
 
         if not all([isinstance(sec_id, (str, int)) for sec_id in section_ids]):
-            raise ValueError("section_ids must be a list of integers. ")
+            raise ValueError("section_ids must be a list of strings or integers. ")
 
         if self.filepath is not None:
             # Putting this error in to catch if we actually ever actually call this.

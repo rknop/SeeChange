@@ -17,6 +17,7 @@ import shapely
 from astropy.coordinates import SkyCoord
 
 import psycopg
+from psycopg import sql
 # import psycopg.adapt
 
 import sqlalchemy as sa
@@ -1820,8 +1821,21 @@ class UUIDMixin:
 
         Returns None if not found.
         """
-        with SmartSession( session ) as sess:
-            return sess.query( cls ).filter( cls._id==uuid ).first()
+        if isinstance( session, psycopg.Connection ):
+            cursor = session.cursor( row_factory=psycopg.sql.dict_row )
+            q = sql.SQL( "SELECT * FROM {table} WHERE _id=%(id)s" ).format( table=cls.__tablename__ )
+            cursor.execute( q, { 'id': uuid } )
+            rows = cursor.fetchall()
+            if len(rows) == 0:
+                return None
+            elif len(rows) > 1:
+                raise RuntimeError( "This should never happen." )
+            else:
+                return cls( **(rows[0]) )
+
+        else:
+            with SmartSession( session ) as sess:
+                return sess.query( cls ).filter( cls._id==uuid ).first()
 
     @classmethod
     def get_batch_by_ids( cls, uuids, session=None, return_dict=False ):
