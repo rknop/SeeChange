@@ -79,6 +79,13 @@ class KnownExposure(Base, UUIDMixin):
     def type(self):
         return ImageTypeConverter.convert(self._type)
 
+    @type.expression
+    def type(cls):  # noqa: N805
+        return sa.case(ImageTypeConverter.dict, value=cls._type)
+
+    @type.setter
+    def type(self, value):
+        self._type = ImageTypeConverter.convert(value)
 
     # node_id vs. machine name
     # node_id should match what shows up in the pipelineworkers table.  But, it's not actually the node of

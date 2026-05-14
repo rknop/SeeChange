@@ -539,7 +539,8 @@ class LS4Cam(Instrument):
             instrument=['INSTRUME'],
             telescope=['TELESCOP'],
             gain=['GAIN'],
-            airmass=[]
+            airmass=[],
+            sec_id=['CCD_LOC'],
         )
         return t
 
@@ -843,7 +844,12 @@ class LS4Cam(Instrument):
         filepath = pathlib.Path( filepath )
         obs_type_map = { 'dark': 'Dark',
                          'pmskyflat': 'TwiFlat',
-                         'sky': 'Sci' }
+                         'sky': 'Sci',
+                         # ...this next one is a hack, should probably go away.  We ahd some biases
+                         #   that were taken manually at the telescope rather than through the
+                         #   process by which we'll really get images.
+                         'TEST': 'Bias'
+                        }
 
         expinfo = self._figure_out_exposure_many_files_or_single( filepath, origin_identifier=origin_identifier )
         provenance = self.get_exposure_provenance( proc_type=proc_type, method=method, code_version=code_version )
@@ -1002,32 +1008,35 @@ class LS4Cam(Instrument):
             mat = self._file_re.search( identifier )
             if mat is None:
                 raise ValueError( f"Failed to parse identifier {identifier}" )
-            filedatetime = mat.group( 'filebase' )
+            filedatetime = mat.group( 'datetime' )
             filesd = mat.group( 'sd' )
             filenum = mat.group( 'num' )
 
             # Have to find the file
-            filedate = datetime.date( int(identifier[0:4]), int(identifier[4:6]), int(identifier[5:8]) )
+            filedate = datetime.date( int(identifier[0:4]), int(identifier[4:6]), int(identifier[6:8]) )
             filepath = None
             for delta in [ 0, -1, 1 ]:
                 if filepath is not None:
                     break
                 searchdate = filedate + datetime.timedelta( days=delta )
-                direc = ( pathlib.Path( "/m4616/tmp" ) /
-                          f'{searchdate.year:04d}{searchdate.month:02d}{searchdate.day:02d}' )
-                for f in [ direc / f'{filedatetime}{filesd}_{filenum}.fits',
-                           direc / f'{filedatetime}{filesd}_{filenum}.fits.fz',
-                           direc / f'{filedatetime}{filesd}C0_{filenum}_00.fits',
-                           direc / f'{filedatetime}{filesd}C0_{filenum}_00.fits.fz' ]:
-                    if f.is_file():
-                        filepath = f
-                        break
+                masterdirec = pathlib.Path( "/m4616/tmp" )
+                direcs = masterdirec.glob( f'{searchdate.year:04d}{searchdate.month:02d}{searchdate.day:02d}*' )
+                direcs = [ d for d in direcs if d.is_dir() ]
+                direcs.sort()
+                for direc in direcs:
+                    for f in [ direc / f'{filedatetime}{filesd}_{filenum}.fits',
+                               direc / f'{filedatetime}{filesd}_{filenum}.fits.fz',
+                               direc / f'{filedatetime}{filesd}C0_{filenum}_00.fits',
+                               direc / f'{filedatetime}{filesd}C0_{filenum}_00.fits.fz' ]:
+                        if f.is_file():
+                            filepath = f
+                            break
 
             if filepath is None:
                 raise FileNotFoundError( f"Failed to find file for identifier {identifier}" )
 
             expobj = self.manually_load_exposure( filepath, exists_ok=True )
-            return expobj.get_fullpath( download=False, as_list=False )
+            return expobj
 
         else:
             if 'method' not in params:

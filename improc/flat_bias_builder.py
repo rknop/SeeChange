@@ -1,18 +1,255 @@
+import re
 import pathlib
 import argparse
+import datetime
+import pytz
 from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 import psycopg.rows
+from psycopg import sql
 
 from astropy.io import fits
+import astropy.time
 
 from models.base import PsycopgConnection
+from models.provenance import Provenance
 from models.instrument import Instrument
+from models.calibratorfile import CalibratorFile
+from models.enums_and_bitflags import ImageTypeConverter
 from models.exposure import Exposure
 from models.image import Image
+from pipeline.parameters import Parameters
 from util.logger import SCLogger
+from util.config import Config
 import util.util
+
+
+class ParsFlatBuilder(Parameters):
+
+    def __init__( self, **kwargs ):
+        super().__init__()
+
+        self.exposure_mode = self.add_par(
+            'exposure_mode',
+            True,
+            bool,
+            "Work on raw exposures rather than images.",
+            critical=False
+        )
+
+        self.is_flat = self.add_par(
+            'is_flat',
+            False,
+            bool,
+            "True if building a flat, False if building a bias",
+            critical=False
+        )
+
+        self.numproc = self.add_par(
+            'numproc',
+            32,
+            int,
+            ( "When in exposure mode, launch this many worker processes.  Ignored in image mode.  "
+              "Think about memory, that will likely limit you more than CPUs." ),
+            critical=False
+        )
+
+        self.timeout = self.add_par(
+            'timeout',
+            None,
+            ( float, type(None) ),
+            ( "When in exposure mode, the timeout for the parent process to wait for child processes "
+              "to finish.  If None, there is no timeout." ),
+            critical=False
+        )
+
+        self.images = self.add_par(
+            'images',
+            None,
+            ( list, type(None) ),
+            "List of images to combine together.  Can either be full filepaths, or database ids.",
+            critical=False
+        )
+
+        self.image_list_file = self.add_par(
+            'image_list_file',
+            None,
+            ( str, type(None) ),
+            "Text file with paths. or database ids, of images to combine, one per line.",
+            critical=False
+        )
+
+        self.image_list_annotation = self.add_par(
+            'image_list_annotation',
+            None,
+            ( str, type(None) ),
+            ( "Annotation about how you chose the images for the list.  This is here so that if you "
+              "are doing different manual things to make lists of images, they will end up having "
+              "different provenances.  Probably leave this at None if you're using find_images."
+             )
+        )
+
+        self.instrument = self.add_par(
+            'instrument',
+            None,
+            ( str, type(None) ),
+            "write doc",
+        )
+
+        self.find_images = self.add_par(
+            'find_images',
+            False,
+            bool,
+            ( "If True, will search the dastabase for images.  If False, then you must either give "
+              "images or image_list_file" )
+        )
+
+        self.mjd = self.add_par(
+            "mjd",
+            None,
+            float,
+            ( "Search for images around this time.  Suggestion: make this about noon for the observatory. "
+              "for Chile, that's something that ends in ~0.6.  (DST, whatever.)" ),
+            critical=False
+        )
+
+        self.timewindow = self.add_par(
+            'timewindow',
+            1.0,
+            float,
+            "When finding images, will search at mjd0 plus or minues timewindow"
+        )
+
+        self.searchtype = self.add_par(
+            'searchtype',
+            'Bias',
+            str,
+            "When searching for images to combine, search for this type"
+        )
+
+        self.minexptime = self.add_par(
+            'minexptime',
+            0.,
+            ( float, type(None) ),
+            "write doc"
+        )
+
+        self.maxexptime = self.add_par(
+            'maxexptime',
+            0.1,
+            ( float, type(None) ),
+            "write doc"
+        )
+
+        self.dup_reject = self.add_par(
+            '_dup_reject',
+            None,
+            ( float, type(None) ),
+            ( "When building flats, look at the RA and Dec of the image/exposure.  Make sure that there "
+              "isn't more than one that are this close (decimal degrees) along both axes." )
+        )
+
+        self.save_to_db = self.add_par(
+            'save_to_db',
+            False,
+            bool,
+            "Should we save an Image and CalbiratorFile to the database?",
+            critical=False
+        )
+
+        self.savetype = self.add_par(
+            'savetype',
+            'CombBias',
+            str,
+            "When saving an image to the database, this is its type"
+        )
+
+        self.calibrator_set = self.add_par(
+            'calibrator_set',
+            'nightly',
+            str,
+            ( "The calibrator_set for the CalibratorFile created.  One of unknown, externally_supplied, "
+              "general, or nightly" ),
+        )
+
+        self.flat_type = self.add_par(
+            'flat_type',
+            None,
+            ( str, type(None) ),
+            ( "The flat_type for the CalibratorFile created.  One of unknown, externally_supplied, "
+              "sky, twilight, or dome" )
+        )
+
+        self.combine_mode = self.add_par(
+            'combine_mode',
+            "median",
+            str,
+            "Currently must be median"
+        )
+
+        self.normalize_mode = self.add_par(
+            'normalize_mode',
+            None,
+            ( str, type(None) ),
+            "Normalize images before combining.  You want this at None for biases, median for flats"
+        )
+
+        self.bad_threshold = self.add_par(
+            'bad_threshold',
+            5.,
+            ( float, type(None) ),
+            "write doc"
+        )
+
+        self.nmin = self.add_par(
+            'nmin',
+            7,
+            int,
+            "write doc"
+        )
+
+        self.nmax = self.add_par(
+            'nmax',
+            21,
+            int,
+            "write doc"
+        )
+
+        self.save_to_db = self.add_par(
+            'save_to_db',
+            True,
+            bool,
+            "write doc",
+            critical=False
+        )
+
+        self.name_convention = self.add_par(
+            'bias_name_convention',
+            "{inst_name}/biases/{date}/{inst_name}_bias_{date}_{time}_{section_id}_{prov_hash:.6s}",
+            str,
+            "write doc",
+            critical=False
+        )
+
+        self.validity_start_offset = self.add_par(
+            'validity_start_offset',
+            -1.,
+            ( float, type(None) ),
+            ( "The time of the flat or bias is defined as the average of the earliest and latest "
+              "mjd of the images combined together to make the flat or bias.  The CalibratorFile "
+              "will have a validity_start that is this many days relative to that time.  Make this "
+              "None to have no validity_start." ),
+            critical=False
+        )
+
+        self.validity_end_offset = self.add_par(
+            'validity_end_offset',
+            2.0,
+            ( float, type(None) ),
+            "Like validity_start_offset, but for validity_end",
+            critical=False
+        )
 
 
 class FlatBuilder:
@@ -20,9 +257,7 @@ class FlatBuilder:
 
     nmad_k = 1.4826
 
-    def __init__( self, instrument=None, exposure_mode=False, use_masks=False, mask_file=None,
-                  section_keyword=None, numproc=32, timeout=900, combine_mode="median", normalize_mode=None,
-                  bad_threshold=3., nodb=False, i_know_what_im_doing=False ):
+    def __init__( self, nodb=False, section_keyword=None, **kwargs ):
         """Make a FlatBuilder.
 
         The default of numproc=32 is based on the following considerations:
@@ -41,51 +276,125 @@ class FlatBuilder:
         how many different exposures you're combining together.
 
         """
-        self.instrument = instrument
-        self.telescope = None
-        self.exposure_mode = exposure_mode
-        self.use_masks = use_masks
-        self.mask_file = mask_file
-        self.section_keyword = section_keyword
-        self.numproc = numproc
-        self.timeout = None if timeout == 0. else timeout
-        self.numproc = numproc
-        self.combmode = combine_mode
-        self.normmethod = normalize_mode
-        self.bad_threshold = bad_threshold
+
         self.nodb = nodb
-        self.i_know_what_im_doing = i_know_what_im_doing
+        self.section_keyword = None
+
+        cfg = Config.get()
+        cfgdata = cfg.value( 'flat_bias_builder' )
+        del cfgdata['flat']
+        del cfgdata['bias']
+        if self.pars.is_flat:
+            cfgdata.update( cfg.value( 'flat_bias_builder.flat' ) )
+        else:
+            cfgdata.update( cfg.value( 'flat_bias_builder.bias' ) )
+
+        cfgdata.update( kwargs )
+        self.pars = ParsFlatBuilder( **cfgdata )
 
         # Do some basic checks to make sure the stuff we've specified is implemented.
-        if self.normmethod not in [ "median" ]:
-            raise ValueError( f"Unknown normalization method {self.normmethod}" )
-        if self.combmode not in [ "median", "sigmaclipmedian" ]:
-            raise ValueError( f"Unknown combinaton mode {self.combmode}" )
+        if self.pars.normalize_mode not in [ "median", None ]:
+            raise ValueError( f"Unknown normalization method {self.pars.normalize_mode}" )
+        if self.pars.combine_mode not in [ "median" ]: # , "sigmaclipmedian" ]:
+            raise ValueError( f"Unknown combinaton mode {self.pars.combine_mode}" )
 
         if self.nodb:
-            if self.instrument is None:
+            if self.pars.instrument is None:
                 raise ValueError( "Must give an instrument when running with nodb" )
-            if self.exposure_mode and ( self.section_keyword is None ):
+            if self.pars.exposure_mode and ( self.section_keyword is None ):
                 raise ValueError( "Must give a section_keyword when running with nodb and exposure_mode" )
 
         self.results = None
 
 
-    def set_input_files( self, files ):
-        if files is None:
-            raise ValueError( "Gotta give me files" )
-        self.files = util.util.listify( files )
+    def find_input_files( self, sec_id=None, filter=None, i_know_what_im_doing=False ):
+        if self.nodb:
+            raise RuntimeError( "nodb is inconsistent with find" )
+        if self.pars.instrument is None:
+            raise RuntimeError( "find requires an instrument" )
+        self.instrument = Instrument.get_instrument_instance( self.instrument )
+        self.telescope = self.instrument.telescope
+
+        if self.nmin < 5:
+            if i_know_what_im_doing:
+                SCLogger.warning( f"Only {self.nmin} minimum files, but you say what you're doing, so..." )
+            else:
+                raise RuntimeError( f"Really?  You want to build a bias or flat with only {self.nmin} images?" )
+
+        if self.pars.exposure_mode:
+            if sec_id is not None:
+                raise ValueError( "Can't give a find sec_id in exposure mode" )
+            self.section_ids = self.instrument.get_section_ids()
+            table = 'exposures'
+        else:
+            if sec_id is None:
+                raise ValueError( "Must give a find sec_id when not in exposure mode" )
+            self.section_id = sec_id
+            table = 'images'
+
+        with PsycopgConnection() as con:
+            cursor = con.cursor( row_factory=psycopg.rows.dict_row )
+            q = sql.SQL( "SELECT _id FROM {table}\n" ).format( sql.Identifier( table ) )
+            _where = "WHERE"
+            if self.pars.searchtype is not None:
+                imtype = ImageTypeConverter.to_int( self.pars.searchtype )
+                q += sql.SQL( "{where} _type={type}\n".format( where=sql.SQL(_where), type=sql.SQL( imtype ) ) )
+                _where = "  AND"
+            if sec_id is not None:
+                q += sql.SQL( "{where} section_id={secid}\n" ).format( where=sql.SQL(_where), secid=sec_id )
+                _where = "  AND"
+            if filter is not None:
+                q += sql.SQL( "{where} filter={filter}\n" ).format( where=sql.SQL(_where), filter=filter )
+                _where = "  AND"
+            if self.pars.mjd is not None:
+                mjd0 = float( self.pars.mjd - self.pars.timewindow/2. )
+                mjd1 = float( self.pars.mjd + self.pars.timewindow/2. )
+                q += sql.SQL( "{where} mjd>={mjd0} AND mjd<={mjd1}\n" ).format( where=sql.SQL(_where),
+                                                                                mjd0=sql.SQL(mjd0),
+                                                                                mjd1=sql.SQL(mjd1) )
+                _where = "  AND"
+            if self.pars.min_exptime is not None:
+                q += sql.SQL( "{where} exp_time>={exptime}\n" ).format( exptime=float(self.pars.min_exptime) )
+                _where = "  AND"
+            if self.pars.max_exptime is not None:
+                q += sql.SQL( "{where} exp_time<={exptime}\n" ).format( exptime=float(self.pars.max_exptime) )
+                _where = "  AND"
+            if self.pars.nmax is not None:
+                q += sql.SQL( "ORDER BY mjd DESC LIMIT {nmax}\n" ).format( nmax=int(self.pars.nmax) )
+            else:
+                q += sql.SQL( "ORDER BY mjd DESC\n" )
+
+            if _where == "WHERE":
+                raise RuntimeError( "You just said you wanted to combine all images in the database. "
+                                    "Give some selection criteria to make this sane." )
+
+            cursor.execute( q )
+            rows = cursor.fetchall()
+            if len(rows) < self.pars.nmin:
+                raise RuntimeError( f"Only found {len(rows)} {table} that matched, which is < {self.nmin}" )
+            self.files = [ r['_id'] for r in rows ]
+
+        self.results = None
 
 
-        if len(self.files) < 5:
-            if self.i_know_what_im_doing:
+    def set_input_files( self, i_know_what_im_doing=False ):
+        if self.pars.images is None:
+            if self.pars.image_list_file is None:
+                raise ValueError( "Gotta give me files" )
+            with open( self.pars.image_list_file ) as ifp:
+                self.files = [ line.strip() for line in ifp ]
+                spaces = re.compile( r'^\s*$' )
+                self.files = [ f for f in self.files if ( not spaces.search(f) ) and ( f[0] != '#' ) ]
+        else:
+            self.files = util.util.listify( self.pars.images )
+
+        if len(self.files) < self.pars.nmin:
+            if i_know_what_im_doing:
                 SCLogger.warning( f"Only {self.files} input files, but you say you know what you're doing so..." )
             else:
                 raise RuntimeError( f"Really?  You want to build a bias or flat from only {len(self.files)} images?" )
 
         if self.nodb:
-            if self.use_masks and ( self.mask_file is None ):
-                raise ValueError( "With --nodb, if use_masks is True, then mask_file is required." )
             missing = set()
             for f in self.files:
                 if not pathlib.Path(f).is_file():
@@ -93,8 +402,9 @@ class FlatBuilder:
             if len(missing) > 0:
                 raise FileNotFoundError( "Couldn't find some input files: {missing}" )
 
-            if self.instrument is not None:
-                self.instrument = Instrument.get_instrument_instance( self.instrument )
+            self.instrument = None
+            if self.pars.instrument is not None:
+                self.instrument = Instrument.get_instrument_instance( self.pars.instrument )
 
             if self.exposure_mode:
                 self.section_ids = set()
@@ -128,28 +438,32 @@ class FlatBuilder:
                                         f"matches in the database." )
 
                 self.telescope = rows[0]['telescope']
-                self.instrument = rows[0]['instrument'] if self.instrument is None else self.instrument
+                self.instrument = Instrument.get_instrument_instance(
+                    rows[0]['instrument'] if self.pars.instrument is None else self.pars.instrument
+                )
                 found_instruments = set( r['instrument'] for r in rows )
-                if ( len( found_instruments ) > 1 ) or ( self.instrument not in found_instruments ):
-                    raise ValueError( f"Instrument mismatch, they weren't all {self.instrument}: "
+                if ( len( found_instruments ) > 1 ) or ( self.instrument.name not in found_instruments ):
+                    raise ValueError( f"Instrument mismatch, they weren't all {self.instrument.name}: "
                                       f"found {found_instruments}" )
                 self.instrument = Instrument.get_instrument_instance( self.instrument )
 
-                if self.exposure_mode:
-                    self.section_ids = self.instrument.get_secton_ids()
-                if not self.exposure_mode:
+                if self.pars.exposure_mode:
+                    self.section_ids = self.instrument.get_section_ids()
+                if not self.pars.exposure_mode:
                     self.section_id = rows[0]['section_id']
                     found_section_ids = set( r['section_id'] for r in rows )
                     if len( found_section_ids ) > 1:
                         raise ValueError( f"Images didn't all have the same section_id; found: {found_section_ids}" )
 
-                self.files = [ r['id'] for r in rows ]
+                self.files = [ r['_id'] for r in rows ]
 
         self.results = None
 
 
     def read_files( self, section_id=None ):
         massive_stack = None
+        min_mjd = None
+        max_mjd = None
 
         if section_id is not None:
             SCLogger.info( f"Reading {len(self.files)} images for section_id {section_id}" )
@@ -187,6 +501,13 @@ class FlatBuilder:
                         raise RuntimeError( f"First image {self.files[0]} had shape {massive_stack.shape[0:2]}, "
                                             f"but {fname} has shape {data.shape}" )
                     massive_stack[ :, :, i ] = data
+                    mjd = self.instrument.extract_header_info( hdu.header, [ 'mjd' ] )[0]
+                    if min_mjd is None:
+                        min_mjd = mjd
+                        max_mjd = mjd
+                    else:
+                        min_mjd = min( mjd, min_mjd )
+                        max_mjd = max( mjd, max_mjd )
 
         else:
             with PsycopgConnection() as con:
@@ -195,6 +516,7 @@ class FlatBuilder:
                     if self.exposure_mode:
                         expobj = Exposure.get_by_id( objid, session=con )
                         fname = expobj.filepath
+                        mjd = expobj.mjd
                         data = expobj.data[ section_id ]
                         if data is None:
                             raise RuntimeError( f"Failed to find section data {section_id} in exposure {fname}" )
@@ -206,6 +528,7 @@ class FlatBuilder:
                     else:
                         imgobj = Image.get_by_id( objid, session=con )
                         fname = imgobj.filepath
+                        mjd = imgobj.mjd
                         data = imgobj.data
                         del imgobj
 
@@ -216,65 +539,84 @@ class FlatBuilder:
                         raise RuntimeError( f"First image had shape {massive_stack.shape[0:2]}, but "
                                             f"{fname} has shape {data.shape}" )
                     massive_stack[ :, :, i ] = data
-
+                    if min_mjd is None:
+                        min_mjd = mjd
+                        max_mjd = mjd
+                    else:
+                        min_mjd = min( mjd, min_mjd )
+                        max_mjd = max( mjd, max_mjd )
 
         # TODO READ MASKS
 
-        return massive_stack
+        return massive_stack, min_mjd, max_mjd
 
 
     def calculate_flat( self, massive_stack, section_id=None ):
         section_id = '' if section_id is None else f' for {section_id}'
-        if self.normmethod is not None:
+        if self.pars.normalize_mode is not None:
             SCLogger.info( f"Normalizing all images{section_id}..." )
             for i in range(len(self.files)):
                 # TODO USE MASK
-                if self.normmethod == 'median':
+                if self.pars.normalize_mode == 'median':
                     massive_stack[ :, :, i ] /= np.median( massive_stack[ :, :, i ] )
                 else:
-                    raise ValueError( f"Unknown normalization method {self.normmethod}" )
+                    raise ValueError( f"Unknown normalization method {self.pars.normalize_mode}" )
 
         # Combine all the images
         SCLogger.info( f"Building combined image{section_id}..." )
-        if self.combmode == "median":
+        if self.pars.combine_mode == "median":
             # TODO individual masks?  THOUGHT REQUIRED
             self.combined = np.median( massive_stack, axis=2 )
             mad = np.median( np.abs( massive_stack - self.combined[ :, :, np.newaxis ] ), axis=2 )
             self.nmad = ( self.nmad_k * mad ).astype( np.float32, copy=False )
-            # TODO, add to standard mask
-            threshold = self.bad_threshold * self.nmad_k * np.median( self.nmad )
-            self.mask = ( self.nmad > threshold ).astype( np.int16 )
+            if self.pars.bad_threshold is not None:
+                threshold = self.pars.bad_threshold * self.nmad_k * np.median( self.nmad )
+                self.mask = ( self.nmad > threshold ).astype( np.int16 )
+                # TODO, add to standard mask
+            else:
+                self.mask = None
 
         else:
-            raise ValueError( f"Unknown combination mode {self.combmode}" )
+            raise ValueError( f"Unknown combination mode {self.pars.comine_mode}" )
 
         SCLogger.info( f"...done building combined image{section_id}" )
 
 
-    def __call__( self, input_files=None ):
-        if input_files is not None:
-            self.set_input_files()
+    def __call__( self ):
 
-        if self.exposure_mode:
+        if self.pars.exposure_mode:
 
             def do_the_things( self, section_id ):
-                massive_stack = self.read_files( section_id )
+                massive_stack, min_mjd, max_mjd = self.read_files( section_id )
                 self.calculate_flat( massive_stack, section_id )
                 del massive_stack
-                return section_id, self.combined, self.nmad, self.mask
+                return section_id, self.combined, self.nmad, self.mask, min_mjd, max_mjd
 
             self.results = {}
 
-            SCLogger.info( f"Starting work on {len(self.section_ids)} sections in {self.numproc} workers..." )
-            pool = ProcessPoolExecutor( max_workers=self.numproc, max_tasks_per_child=1 )
-            for res in pool.map( lambda x: do_the_things(*x),
-                                 [ [ self, sec ] for sec in self.section_ids ],
-                                 timeout=self.timeout
-                                ):
-                sec_id, comb, nmad, mask = res
-                self.results[sec_id]['comb'] = comb
-                self.results[sec_id]['nmad'] = nmad
-                self.results[sec_id]['mask'] = mask
+            if self.pars.numproc == 1:
+                SCLogger.info( "Doing {len(self.section_ids}) sections serially" )
+                for sec in self.section_ids:
+                    sec_id, comb, nmad, mask, min_mjd, max_mjd = do_the_things( sec )
+                    self.results[sec_id]['comb'] = comb
+                    self.results[sec_id]['nmad'] = nmad
+                    self.results[sec_id]['mask'] = mask
+                    self.results[sec_id]['min_mjd'] = min_mjd
+                    self.results[sec_id]['max_mjd'] = max_mjd
+
+            else:
+                SCLogger.info( f"Starting work on {len(self.section_ids)} sections in {self.pars.numproc} workers..." )
+                pool = ProcessPoolExecutor( max_workers=self.pars.numproc, max_tasks_per_child=1 )
+                for res in pool.map( lambda x: do_the_things(*x),
+                                     [ [ self, sec ] for sec in self.section_ids ],
+                                     timeout=self.pars.timeout
+                                    ):
+                    sec_id, comb, nmad, mask, min_mjd, max_mjd = res
+                    self.results[sec_id]['comb'] = comb
+                    self.results[sec_id]['nmad'] = nmad
+                    self.results[sec_id]['mask'] = mask
+                    self.results[sec_id]['min_mjd'] = min_mjd
+                    self.results[sec_id]['max_mjd'] = max_mjd
 
             SCLogger.info( f"...done work on {len(self.section_ids)} sections." )
 
@@ -282,13 +624,106 @@ class FlatBuilder:
             # Image mode, no need for multiprocessing.  (That is, we could still use it, and it
             #  would be faster, but whatever.)
 
-            massive_stack = self.read_files()
+            massive_stack, min_mjd, max_mjd = self.read_files()
             self.calculate_flat( massive_stack )
             del massive_stack
 
             self.results = { 'comb': self.combined,
                              'nmad': self.nmad,
-                             'mask': self.mask }
+                             'mask': self.mask,
+                             'min_mjd': min_mjd,
+                             'max_mjd': max_mjd }
+
+
+
+    def _make_header( self, results, section_id=None ) :
+        kwdict = self.instrument._get_header_keyword_translations()
+        header = fits.Header()
+        if self.telescope is not None:
+            header[ kwdict['telescope'][0] ] = self.telescope
+        if self.instrument is not None:
+            header[ kwdict['instrument'][0] ] = self.instrument.name
+        if section_id is not None:
+            header[ kwdict['sec_id'][0] ] = section_id
+        header[ kwdict['mjd'][0] ] = results['min_mjd']
+        header['COMMENT'] = "Image combined with SeeChange flat_bias_builder.py"
+        header['COMMENT'] = f"...normalize_mode={self.pars.normalize_mode}"
+        header['COMMENT'] = f"...combine_mode={self.pars.combine_mode}"
+        # TODO MORE
+        header['COMMENT'] = "Files combined:"
+        for f in self.files:
+            header['COMMENT'] = f"  {f}"
+        return header
+
+    # NOTE.  We're saving the nmad as the weight, because, well, it's there.  But,
+    #   this is scary, because nmad is *not* weight.
+    # TODO: refactor Image so that it can have a variable number of
+    def save_to_db( self ):
+        prov = Provenance( process='flat_bias_builder', parameters=self.pars.get_critical_pars() )
+        prov.insert_if_needed()
+
+
+        imkwargs = { 'provenance_id': prov.id,
+                     'exp_time': -999.,
+                     'instrument': self.instrument.name,
+                     'telescope': self.telescope.name,
+                     'project': 'calibratorfile',
+                     'target': 'calibratorfile',
+                     'type': self.pars.savetype
+                  }
+        # ...I'm hoping that a position at the pole isn't going to send q3c into some expensive computation
+        imkwargs['ra'] = 0.
+        imkwargs['dec'] = 90.
+        for mm in [ 'min', 'max' ]:
+            imkwargs[ f'{mm}ra' ] = 0.
+            imkwargs[ f'{mm}dec' ] = 0.
+            for x in [ 0, 1 ]:
+                for y in [ 0, 1 ]:
+                    imkwargs[f'ra_corner_{x}{y}'] = 0.
+                    imkwargs[f'dec_corner_{x}{y}'] = 0.
+
+
+        def _save_and_insert_image( results, sec_id ):
+            nonlocal self, imkwargs
+
+            imkwargs.update( { 'mjd': results['min_mjd'],
+                               'end_mjd': results['max_mjd'],
+                               'section_id': sec_id
+                            } )
+            imgobj = Image( **imkwargs )
+            imgobj.header = self._make_header( sec_id )
+            imgobj.data = results['comb']
+            imgobj.flags = results['mask']
+            imgobj.weight = results['nmad']
+            imgobj.filepath = imgobj.invent_filepath( name_convention=self.pars.name_convention )
+            imgobj.save()
+            imgobj.insert()
+
+            # SCARY AND THOUGHT REQUIRED
+            #   min_mjd and max_mjd should be the same for all sections in an exposure!
+            #   But, there might have been failures.  Hope not.
+            t = pytz.utc.localize( astropy.time.Time( mjd=results['min_mjd'] ).datetime )
+            cf = CalibratorFile( type='flat' if self.pars.is_flat else 'zero',
+                                 calibrator_set=self.pars.calibrator_set,
+                                 flat_type=self.pars.flat_type,
+                                 instrument=self.instrument.name,
+                                 sensor_section=sec_id,
+                                 image_id=imgobj.id,
+                                 datafile_id=None,
+                                 validity_start=( None if self.pars.validity_start_offset is None
+                                                  else t + datetime.timedelta( days=self.pars.validity_start_offset ) ),
+                                 validity_end=( None if self.pars.validity_end_offset is None
+                                                else t + datetime.timedelta( days=self.pars.validity_end_offset ) )
+                                )
+            cf.insert()
+
+
+        if self.pars.exposure_mode:
+            for sec_id in self.section_ids:
+                _save_and_insert_image( self.results[sec_id], sec_id )
+        else:
+            _save_and_insert_image( self.results, self.section_id )
+
 
 
     def write_combination( self, outfile="flat", outmask=None, nmad=None ):
@@ -298,25 +733,13 @@ class FlatBuilder:
         def _write_file( results, section_id=None ):
             nonlocal self, outfile, outmask, nmad
 
-            header = fits.Header()
-            if self.telescope is not None:
-                header['TELESCOP'] = self.telescope
-            if self.instrument is not None:
-                header['INSTRUME'] = self.instrument.name
-            if section_id is not None:
-                header['SEC_ID'] = section_id
-            header['COMMENT'] = "Image combined with SeeChange flat_bias_builder.py"
-            header['COMMENT'] = f"...normmethod={self.normmethod}"
-            header['COMMENT'] = f"...combmode={self.combmode}"
-            # TODO MORE
-            header['COMMENT'] = "Files combined:"
-            for f in self.files:
-                header['COMMENT'] = f"  {f}"
+            header = self._make_header( results, section_id=section_id )
 
-            fname = f'{outfile}{f"_{section_id}" if section_id is not None else ""}.fits'
-            SCLogger.info( f"Writing combined image to to {fname}..." )
-            fits.writeto( fname, results['comb'], header )
-            SCLogger.info( "...written." )
+            if outfile is not None:
+                fname = f'{outfile}{f"_{section_id}" if section_id is not None else ""}.fits'
+                SCLogger.info( f"Writing combined image to to {fname}..." )
+                fits.writeto( fname, results['comb'], header )
+                SCLogger.info( "...written." )
 
             if outmask is not None:
                 fname = f'{outmask}{f"_{section_id}" if section_id is not None else ""}.fits'
@@ -346,11 +769,33 @@ def main():
                                       formatter_class=argparse.ArgumentDefaultsHelpFormatter )
     parser.add_argument( "images", nargs='*', default=[],
                          help="Images/exposures to combine (paths, database filepaths, or database ids)" )
-    parser.add_argument( "-i", "--instrument", default=None,
-                         help="Name of the instrument.  Might not be needed, depending on what you do." )
     parser.add_argument( "-l", "--file-list", default=None,
                          help=( "Text file with list of images or exposures, one per line.  Must not specify any "
                                 "images or exposures on the command line otherwise if you use --file-list" ) )
+    parser.add_argument( "-i", "--instrument", default=None,
+                         help="Name of the instrument.  Might not be needed, depending on what you do." )
+    parser.add_argument( "-f", "--find-images", default=False, action='store_true',
+                         help=( "Instead of specifying files, search the database for images and/or exposures." ) )
+    parser.add_argument( "--find-type", default="Bais",
+                         help=( "Type of image to search for.  Should probably be one of Bias, Dark, Domeflat, "
+                                "TwiFlat, or SkyFlat." ) )
+    parser.add_argument( "--find-filter", default=None, help="Filter to search for" )
+    parser.add_argument( "--find-sec-id", default=None,
+                         help=( "Section ID to search for.  Required if not in exposure mode, forbidden in in "
+                                "exposure mode." ) )
+    parser.add_argument( "--find-mjd0", default=None, type=float,
+                         help=( "The MJD of the center of the window to search.  If None, there is no limit, and "
+                                "you will get the latest images known." ) )
+    parser.add_argument( "--find-mjd-delta", default=0.5, type=float,
+                         help="Search MJD by this much around --find-mjd0" )
+    parser.add_argument( "--find-min", default=7, type=int,
+                         help="Must find at least this many images or the process will fail." )
+    parser.add_argument( "--find-max", default=61, type=int,
+                         help="If there are more than this many images that match, only take the latest ones" )
+    parser.add_argument( "--nodb", default=False, action='store_true',
+                         help=( "By default, input images are all in the database and you must give database ids "
+                                "or database filepaths.  With --nodb, instead just give paths to images." ) )
+
     parser.add_argument( "-e", "--exposure-mode", action='store_true', default=False,
                          help=( "Normally, works on images which have already been overscanned and trimmed "
                                 "(and maybe more).  Use this to work on raw exposures.  Maybe want to "
@@ -366,27 +811,44 @@ def main():
                          help=( "Normally, use the image record in the database to figure out the sensor section. "
                                 "If this is set, instead read it from this keyword of the FITS header.  Required "
                                 "in exposure mode if --nodb is set." ) )
+
     parser.add_argument( "-N", "--numproc", type=int, default=32,
                          help="Number of processes to use in exposure mode.  Ignored if --exposure-mode is not set." )
     parser.add_argument( "-t", "--timeout", type=float, default=900.,
                          help=( "In exposure mode, the timeout to wait for all the processes to finish before "
                                 "throwing a fit.  Make this 0 for no timeout." ) )
+
     parser.add_argument( "-c", "--combine-mode", default="median",
                          help="Mode to combine images.  Currently only median is supported" )
     parser.add_argument( "-1", "--normalize-mode", default=None,
                          help=( "Mode to normalize images before combining.  Do not specify this for a bias, "
                                 "use \"median\" for a flat." ) )
-    parser.add_argument( "-b", "--bad-threshold", default=3.,
+    parser.add_argument( "-b", "--bad-threshold", default=5.,
                          help=( "If specified then on the resultant image, any pixels whose nmad is more than "
                                 "this factor times 1.4826 times the median NMAD will be masked." ) )
-    parser.add_argument( "-o", "--outfile", default="flat",
+
+    parser.add_argument( "--save-to-db", default=False, action='store_true',
+                         help=( "Save the image(s) created to the database as Images and create a CalibratorFile "
+                                "to go with it." ) )
+    parser.add_argument( "--validity-start-offset", default=None, type=float,
+                         help=( "In the CalibreatorFile entry, tag the validity_start of this as the midpoint mjd "
+                                "of the combined images plus this offset.  If this is not given, validity_start "
+                                "will be left unset." ) )
+    parser.add_argument( "--validity-end-offset", default=None, type=float,
+                         help="Just like --validity-start-offset, only for validity_end" )
+    parser.add_argument( "--calibrator-set", default="nightly",
+                         help=( "The calibrator set for the CalibratorFile entry for this image.  One of unknown, "
+                                "externally_supplied, general, or nightly" ) )
+    parser.add_argument( "--flat-type", default=None,
+                         help=( "The flat type for the CalibratorFile entry for this image.  Leave unset if "
+                                "this is bias image.  One of unknown, externall_supplied, sky, twilight, or dome." ) )
+
+    parser.add_argument( "-o", "--outfile", default=None,
                          help=( "Base name of output file.  In image mode, .fits will be appended.  In exposure "
-                                " mode, _<sensor_section_id>.fits will be appended." ) )
+                                " mode, _<sensor_section_id>.fits will be appended.  If --save-to-db is given, "
+                                "these files are written in addition to the files saved to the databse." ) )
     parser.add_argument( "-m", "--outmask", default=None, help="Filename (or base) for mask output" )
     parser.add_argument( "-n", "--nmad", default=None, help="Filename (or base) for nmad output" )
-    parser.add_argument( "--nodb", default=False, action='store_true',
-                         help=( "By default, input images are all in the database and you must give database ids "
-                                "or database filepaths.  With --nodb, instead just give paths to images." ) )
     parser.add_argument( "--i-know-what-im-doing", default=False, action='store_true', help=argparse.SUPPRESS )
 
     args = parser.parse_args()

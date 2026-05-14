@@ -24,12 +24,21 @@ def main():
     provenance = ls4cam.get_exposure_provenance( proc_type='raw', method='manual_load' )
 
     direc = pathlib.Path( args.direc )
+    seen_identifiers = set()
     for fpath in direc.iterdir():
         if fpath.is_file():
             try:
                 expinfo = ls4cam._figure_out_exposure_many_files_or_single( fpath )
             except Exception as ex:
                 SCLogger.warning( f"Something is wrong with file {fpath.name}, skipping it : {ex}" )
+                continue
+
+            if expinfo.origin_identifier in seen_identifiers:
+                # Empirically, sometimes both the .fits.fz, and the
+                # individual image-per-chip files are in the same
+                # directory!  So, a bit of deduplication.
+                SCLogger.info( f"{fpath.name} has origin_idetifier {expinfo.origin_identifier} "
+                               f"which has already been seen." )
                 continue
 
             with PsycopgConnection() as con:
@@ -99,6 +108,7 @@ def main():
 
                 ke.insert( session=con )
 
+            seen_identifiers.add( expinfo.origin_identifier )
             SCLogger.info( f"Added known exposure {expinfo.origin_identifier}" )
 
 
