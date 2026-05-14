@@ -82,8 +82,38 @@ def pytest_sessionstart(session):
     # Will be executed before the first test
     global SKIP_WARNING_TESTS
 
-    if False:  # this is only to make the warnings into errors, so it is easier to track them down...
-        warnings.filterwarnings('error', append=True)  # comment this out in regular usage
+    # make sure to load the test config
+    test_config_file = os.getenv( "SEECHANGE_CONFIG", None )
+    if test_config_file is None:
+        test_config_file = str((pathlib.Path(__file__).parent.parent
+                                / 'tests' / 'seechange_config_test.yaml').resolve())
+    cfg = Config.get(configfile=test_config_file, setdefault=True)
+    FileOnDiskMixin.configure_paths()
+
+    # Make sure that the config is what we expect for tests.  It's possible
+    # somebody put a local_override.yaml or some such file in the SeeChange
+    # directory that changes things from what we're expecting.  We might
+    # also wipe out a production database in that case!  So, yeah, be
+    # careful.
+    assert cfg.value( 'db.host' ) == 'postgres'
+    assert cfg.value( 'db.database' ) == 'seechange'
+    assert cfg.value( 'db.user' ) == 'postgres'
+    assert cfg.value( 'db.password' ) == 'fragile'
+    assert cfg.value( 'db.password_file' ) is None
+    assert cfg.value( 'archive.archive_url' ) == 'http://archive:8080/'
+    assert cfg.value( 'archive.local_read_dir' ) is None
+    assert cfg.value( 'archive.local_write_dir' ) is None
+    assert cfg.value( 'archive.token' ) == 'insecure'
+    assert cfg.value( 'webap.webap_url' ) == 'https://webap:8081/'
+    # ... I think these next three aren't used any more, only webap, so
+    #   we should remove them and remove them from the test config (if I'm right)
+    assert cfg.value( 'conductor.conductor_url' ) == 'https://webap:8081/'
+    assert cfg.value( 'conductor.username' ) == 'admin'
+    assert cfg.value( 'conductor.password' ) == 'admin'
+
+    # this is only to make the warnings into errors, so it is easier to track them down...
+    if False:
+        warnings.filterwarnings('error', append=True)
         SKIP_WARNING_TESTS = True
 
     setup_warning_filters()  # load the list of warnings that are to be ignored (not just in tests)
@@ -92,13 +122,6 @@ def pytest_sessionstart(session):
     # ignore warnings from photometry code that occur for cutouts with mostly zero values
     warnings.filterwarnings('ignore', message=r'.*Background mean=.*, std=.*, normalization skipped!.*')
 
-    # make sure to load the test config
-    test_config_file = os.getenv( "SEECHANGE_CONFIG", None )
-    if test_config_file is None:
-        test_config_file = str((pathlib.Path(__file__).parent.parent
-                                / 'tests' / 'seechange_config_test.yaml').resolve())
-    Config.get(configfile=test_config_file, setdefault=True)
-    FileOnDiskMixin.configure_paths()
     # SCLogger.setLevel( logging.INFO )
 
     # get rid of any catalog excerpts from previous runs:

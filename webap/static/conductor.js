@@ -93,7 +93,7 @@ seechange.Conductor = class
         metatable = rkWebUtil.elemaker( "table", this.search_criteria_div );
         metatr = rkWebUtil.elemaker( "tr", table );
         metatd = rkWebUtil.elemaker( "td", metatr );
-        table = rkWebUtil.elemaker( "table", metattd );
+        table = rkWebUtil.elemaker( "table", metatd );
         tr = rkWebUtil.elemaker( "tr", table );
         td = rkWebUtil.elemaker( "td", tr, { "classes": [ "right" ], "text": "instrument:" } );
         td = rkWebUtil.elemaker( "td", tr );
@@ -138,12 +138,12 @@ seechange.Conductor = class
         td = rkWebUtil.elemaker( "td", tr );
         this.search_type = rkWebUtil.elemaker( "select", td, { "attributes": { "multiple": 1 } } );
         for ( let _type of [ "ALL", "Unknown", "Sci", "Bias", "Dark", "DomeFlat", "SkyFlat", "TwiFlat", "Fringe" ] ) {
-            rkWebUtil.elemaker( "option", this.search-type,
+            rkWebUtil.elemaker( "option", this.search_type,
                                 { "text": _type,
                                   "attributes": { "value": _type,
                                                   "id": "search_type",
                                                   "name": "search_type",
-                                                  "selected": ( step="ALL" ) ? 1 : 0 } }
+                                                  "selected": ( _type=="ALL" ) ? 1 : 0 } }
                               );
         }
 
@@ -413,7 +413,9 @@ seechange.Conductor = class
         let p = rkWebUtil.elemaker( "p", this.knownexpdiv,
                                     { "text": "Loading known exposures...",
                                       "classes": [ "warning", "bold", "italic" ] } );
-        let url = "conductor/getknownexposures";
+        let url = "conductor/getknownexposures/exposure_provtag=";
+        url += encodeURIComponent( this.context.provtag_wid.value );
+
         if ( this.knownexp_mintwid.value.trim().length > 0 ) {
             let minmjd = rkWebUtil.mjdOfDate( rkWebUtil.parseDateAsUTC( this.knownexp_mintwid.value ) );
             url += "/minmjd=" + encodeURIComponent( minmjd.toString() );
@@ -594,7 +596,7 @@ seechange.Conductor = class
             return tr;
         }
 
-        let fields = [ '', 'state', 'instrument', 'identifier', 'mjd', 'target', 'type', 'ra', 'dec', 'gallat',
+        let fields = [ '', 'state', 'instrument', 'identifier', 'mjd', 'type', 'target', 'ra', 'dec', 'gallat',
                        'filter', 'exp_time', 'project', 'cluster_id', 'claim_time', 'release_time',
                        'exposure_id' ];
         let nosortfields = [ '', 'state' ];

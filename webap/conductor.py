@@ -384,39 +384,50 @@ class GetKnownExposures( ConductorBaseView ):
                                               "project": None,
                                               "minexptime": None,
                                               "state": None,
-                                              "maxclaimtime": None
+                                              "maxclaimtime": None,
+                                              "exposure_provtag": None,
                                              } )
         args['minmjd'] = float( args['minmjd'] ) if args['minmjd'] is not None else None
         args['maxmjd'] = float( args['maxmjd'] ) if args['maxmjd'] is not None else None
         with PsycopgConnection() as conn:
             cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
-            q = ( "SELECT ke.*,e.filepath FROM knownexposures ke "
-                  "LEFT JOIN exposures e ON ke.exposure_id=e._id " )
+            q = "SELECT ke.*,e.filepath FROM knownexposures ke\n"
             _and = "WHERE"
             subdict = {}
 
+            if args['exposure_provtag'] is not None:
+                q += ( "LEFT JOIN (\n"
+                       "  SELECT exp.filepath FROM exposures exp\n"
+                       "  INNER JOIN provenance_tags pt ON exp.provenance_id=pt.provenance_id\n"
+                       "         AND pt.tag=%(provtag)s\n"
+                       ") e ON ke.identifier=e.origin_identifier\n"
+                      )
+                subdict['provtag'] = args['exposure_provtag']
+            else:
+                q += ( "LEFT JOIN exposures e ON ke.exposure_id=e._id\n" )
+
             if args['minmjd'] is not None:
-                q += f"{_and} ke.mjd >= %(minmjd)s "
+                q += f"{_and} ke.mjd >= %(minmjd)s\n"
                 subdict['minmjd'] = float( args['minmjd'] )
                 _and = "AND"
             if args['maxmjd'] is not None:
-                q += f"{_and} ke.mjd <= %(maxmjd)s "
+                q += f"{_and} ke.mjd <= %(maxmjd)s\n"
                 subdict['maxmjd'] = float( args['maxmjd'] )
                 _and = "AND"
             if args['instrument'] is not None:
-                q += f"{_and} ke.instrument = %(instr)s "
+                q += f"{_and} ke.instrument = %(instr)s\n"
                 subdict['instr'] = args['instrument']
                 _and = "AND"
             if args['target'] is not None:
-                q += f"{_and} ke.target = %(target)s "
+                q += f"{_and} ke.target = %(target)s\n"
                 subdict['target'] = args['target']
                 _and = "AND"
             if args['project'] is not None:
-                q += f"{_and} ke.project = %(project)s "
+                q += f"{_and} ke.project = %(project)s\n"
                 subdict['project'] = args['project']
                 _and = "AND"
             if args['minexptime'] is not None:
-                q += f"{_and} ke.exp_time >= %(minexp)s "
+                q += f"{_and} ke.exp_time >= %(minexp)s\n"
                 subdict['minexp'] = float( args['minexptime'] )
                 _and = "AND"
             if args['state'] is not None:
@@ -426,17 +437,17 @@ class GetKnownExposures( ConductorBaseView ):
                 claimtime = datetime.datetime.fromisoformat( args['maxclaimtime'] )
                 if claimtime.tzinfo is None:
                     claimtime = pytz.utc.localize( claimtime )
-                q += f"{_and} ke.claim_time <= %(maxclaimtime)s "
+                q += f"{_and} ke.claim_time <= %(maxclaimtime)s\n"
                 subdict['maxclaimtime'] = claimtime
                 _and = "AND"
             if 'types' in args:
                 types = args['types'].split(",")
                 if "all" not in [ t.lower() for t in types ]:
                     types = [ ImageTypeConverter.to_int( t ) for t in types ]
-                    q += f"{_and} ke._type=ANY(%(types)s) "
+                    q += f"{_and} ke._type=ANY(%(types)s)\n"
                     subdict['types'] = types
                     _and = "AND"
-            q += "ORDER BY ke.mjd "
+            q += "ORDER BY ke.mjd\n"
 
             cursor.execute( q, subdict )
             rows = cursor.fetchall()
