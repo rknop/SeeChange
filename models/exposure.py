@@ -188,10 +188,10 @@ class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBad
         doc=(
             "Type of image. One of: Sci, Diff, Bias, Dark, DomeFlat, SkyFlat, TwiFlat, "
             "or any of the above types prepended with 'Com' for combined "
-            "(e.g., a ComSci image is a science image combined from multiple exposures)."
-            "The value is saved as SMALLINT but translated to a string when read. "
+            "(e.g., a ComSci image is a science image combined from multiple exposures). "
+            "The value is saved as SMALLINT; can be read as text with the type property. "
+            "The conversion is found in enums_and_bitflags.py::ImageTypeConverter." )
         )
-    )
 
     @hybrid_property
     def type(self):

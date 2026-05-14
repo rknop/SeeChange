@@ -41,6 +41,9 @@ def main():
                 SCLogger.info( f"Known exposure {expinfo.origin_identifier} is already known." )
                 continue
 
+            filesdmap = { 's': 'Sci', 'd': 'Dark', 'e': 'TwiFlat', 'm': 'TwiFlat' }
+            filetype = filesdmap[ expinfo.filesd ]
+
             if expinfo.manyfiles:
                 nneeded = ( 64 if expinfo.isdualamp else 32 )
                 if len( expinfo.missing ) > 0:
@@ -53,8 +56,9 @@ def main():
                                                                         'project', 'target' ] )
                     hdrinfo['ra'] = float( hdu.header['TELE-RA'] ) * 15.
                     hdrinfo['dec'] = float( hdu.header['TELE-DEC'] )
-
-
+                    # ... what is short enough to be a bias?  I hate to say "=0.0" because floats
+                    if ( filetype == 'Dark' ) and ( hdrinfo['exp_time'] < 0.1 ):
+                        filetype = 'Bias'
             else:
                 with fits.open( fpath ) as hdul:
                     if len(hdul) != 33:
@@ -64,7 +68,8 @@ def main():
                                                                             'project', 'target' ] )
                     hdrinfo['ra'] = float( hdul[1].header['TELE-RA'] ) * 15.
                     hdrinfo['dec'] = float( hdul[1].header['TELE-DEC'] )
-
+                    if ( filetype == 'Dark' ) and ( hdrinfo['exp_time'] < 0.1 ):
+                        filetype = 'Bias'
 
             ke = KnownExposure( instrument='LS4Cam',
                                 identifier=expinfo.origin_identifier,
@@ -75,6 +80,7 @@ def main():
                                 dec=hdrinfo['dec'],
                                 project=hdrinfo['project'],
                                 target=hdrinfo['target'],
+                                type=filetype,
                                 state='ready' if args.no_hold else 'held'
                                )
             ke.calculate_coordinates()

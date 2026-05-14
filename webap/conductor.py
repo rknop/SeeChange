@@ -13,7 +13,7 @@ import flask
 
 from util.util import asUUID
 from models.base import SmartSession, PsycopgConnection
-from models.enums_and_bitflags import KnownExposureStateConverter
+from models.enums_and_bitflags import KnownExposureStateConverter, ImageTypeConverter
 from models.knownexposure import PipelineWorker
 from models.instrument import Instrument
 
@@ -330,6 +330,15 @@ class RequestExposure( ConductorBaseView ):
         args = self.argstr_to_args( argstr )
         if 'cluster_id' not in args.keys():
             return "cluster_id is required for RequestExposure", 500
+        if 'types' in args:
+            types = args['types'].split( "," )
+            if 'all' in [ t.lower() for t in types ]:
+                types = list( ImageTypeConverter.dict.keys() )
+            else:
+                types = [ ImageTypeConverter.to_int( t ) for t in types ]
+        else:
+            types = [ ImageTypeConverter.to_int( 'Unknown' ), ImageTypeConverter.to_int( 'Sci' ) ]
+
         knownexp_id = None
         with PsycopgConnection() as dbcon:
             cursor = dbcon.cursor( row_factory=psycopg.rows.dict_row )
@@ -337,7 +346,9 @@ class RequestExposure( ConductorBaseView ):
             # Select the lowest-mjd exposure in the "ready" state (1)
             cursor.execute( "SELECT _id, cluster_id FROM knownexposures "
                             "WHERE _state=1 "
-                            "ORDER BY mjd LIMIT 1" )
+                            "AND _type=ANY(%(types)s)"
+                            "ORDER BY mjd LIMIT 1",
+                            { 'types': types } )
             rows = cursor.fetchall()
             if len(rows) > 0:
                 knownexp_id = rows[0]['_id']
@@ -418,6 +429,13 @@ class GetKnownExposures( ConductorBaseView ):
                 q += f"{_and} ke.claim_time <= %(maxclaimtime)s "
                 subdict['maxclaimtime'] = claimtime
                 _and = "AND"
+            if 'types' in args:
+                types = args['types'].split(",")
+                if "all" not in [ t.lower() for t in types ]:
+                    types = [ ImageTypeConverter.to_int( t ) for t in types ]
+                    q += f"{_and} ke._type=ANY(%(types)s) "
+                    subdict['types'] = types
+                    _and = "AND"
             q += "ORDER BY ke.mjd "
 
             cursor.execute( q, subdict )
@@ -427,12 +445,13 @@ class GetKnownExposures( ConductorBaseView ):
                    'knownexposures': rows }
         # Add the "id" field that's the same as "_id" for convenience,
         #   make the filter the short name, convert "_state" to a string
-        #   in "state", and strip off all but the filename of the
-        #   filepath
+        #   in "state", "_type" to a string in "type", and strip off all
+        #   but the filename of the filepath
         for ke in retval['knownexposures']:
             ke['id'] = ke['_id']
             ke['filter'] = Instrument.get_instrument_instance( ke['instrument'] ).get_short_filter_name( ke['filter'] )
             ke['state'] = KnownExposureStateConverter.to_string( ke['_state'] )
+            ke['type'] = ImageTypeConverter.to_string( ke['_type'] )
             if ke['filepath'] is not None:
                 ke['filepath'] = pathlib.Path( ke['filepath'] ).name
         # We didn't search by filter because we want to make sure we're letting the user

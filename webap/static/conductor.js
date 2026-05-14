@@ -90,7 +90,10 @@ seechange.Conductor = class
                                                                } } );
         this.search_criteria_div = rkWebUtil.elemaker( "div", p,
                                                        { "classes": [ "midborder", "dispnone" ] } );
-        table = rkWebUtil.elemaker( "table", this.search_criteria_div );
+        metatable = rkWebUtil.elemaker( "table", this.search_criteria_div );
+        metatr = rkWebUtil.elemaker( "tr", table );
+        metatd = rkWebUtil.elemaker( "td", metatr );
+        table = rkWebUtil.elemaker( "table", metattd );
         tr = rkWebUtil.elemaker( "tr", table );
         td = rkWebUtil.elemaker( "td", tr, { "classes": [ "right" ], "text": "instrument:" } );
         td = rkWebUtil.elemaker( "td", tr );
@@ -128,6 +131,21 @@ seechange.Conductor = class
         this.max_claim_time.addEventListener( "blur",
                                               (e) => { rkWebUtil.validateWidgetDateUTC( self.max_claim_time ) } );
 
+        metatd = rkWebUtil.elemaker( "td", metatr );
+        table = rkWebUtil.elemaker( "table", metatd );
+        tr = rkWebUtil.elemaker( "tr", table );
+        td = rkWebUtil.elemaker( "td", tr, { "classes": [ "right" ], "text": "types:" } );
+        td = rkWebUtil.elemaker( "td", tr );
+        this.search_type = rkWebUtil.elemaker( "select", td, { "attributes": { "multiple": 1 } } );
+        for ( let _type of [ "ALL", "Unknown", "Sci", "Bias", "Dark", "DomeFlat", "SkyFlat", "TwiFlat", "Fringe" ] ) {
+            rkWebUtil.elemaker( "option", this.search-type,
+                                { "text": _type,
+                                  "attributes": { "value": _type,
+                                                  "id": "search_type",
+                                                  "name": "search_type",
+                                                  "selected": ( step="ALL" ) ? 1 : 0 } }
+                              );
+        }
 
         this.knownexp_notification_div = rkWebUtil.elemaker( "div", this.contentdiv );
         this.knownexpdiv = rkWebUtil.elemaker( "div", this.contentdiv );
@@ -429,6 +447,21 @@ seechange.Conductor = class
         if ( searchstate.length > 0 ) {
             url += "/state=" + encodeURIComponent( searchstate.join(",") );
         }
+        let types = [];
+        let alltypes = false;
+        for ( let sel of this.search_type.selectedOptions ) {
+            if ( sel.value == 'ALL' ) {
+                alltypes = true;
+                break;
+            }
+            types.push( sel.value );
+        }
+        if ( alltypes ) {
+            url += "/types=ALL";
+        }
+        else if ( types.length > 0 ) {
+            url += "/types=" + encodeURIComponent( types.join(",") );
+        }
         this.connector.sendHttpRequest( url, {}, (data) => { self.show_known_exposures(data); } );
     }
 
@@ -526,6 +559,7 @@ seechange.Conductor = class
             td = rkWebUtil.elemaker( "td", tr, { "text": ke.instrument } );
             td = rkWebUtil.elemaker( "td", tr, { "text": ke.identifier } );
             td = rkWebUtil.elemaker( "td", tr, { "text": parseFloat( ke.mjd ).toFixed( 5 ) } );
+            td = rkWebUtil.elemaker( "td", tr, { "text": ke.type } );
             td = rkWebUtil.elemaker( "td", tr, { "text": ke.target } );
             td = rkWebUtil.elemaker( "td", tr, { "text": parseFloat( ke.ra ).toFixed( 5 ) } );
             td = rkWebUtil.elemaker( "td", tr, { "text": parseFloat( ke.dec ).toFixed( 5 ) } );
@@ -560,13 +594,14 @@ seechange.Conductor = class
             return tr;
         }
 
-        let fields = [ '', 'state', 'instrument', 'identifier', 'mjd', 'target', 'ra', 'dec', 'gallat',
+        let fields = [ '', 'state', 'instrument', 'identifier', 'mjd', 'target', 'type', 'ra', 'dec', 'gallat',
                        'filter', 'exp_time', 'project', 'cluster_id', 'claim_time', 'release_time',
                        'exposure_id' ];
         let nosortfields = [ '', 'state' ];
         let fieldmap = { 'instrument': 'instrument',
                          'identifier': 'identifier',
                          'mjd': 'mjd',
+                         'type': 'type',
                          'target': 'target',
                          'ra': 'ra',
                          'dec': 'dec',

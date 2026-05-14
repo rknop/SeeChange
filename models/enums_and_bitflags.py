@@ -169,6 +169,7 @@ class SourceListFormatConverter( EnumConverter ):
 
 class ImageTypeConverter( EnumConverter ):
     _dict = {
+        0: 'Unknown',
         1: 'Sci',
         2: 'ComSci',
         3: 'Diff',

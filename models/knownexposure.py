@@ -6,7 +6,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as sqlUUID
 
 from models.base import Base, UUIDMixin
-from models.enums_and_bitflags import KnownExposureStateConverter
+from models.enums_and_bitflags import KnownExposureStateConverter, ImageTypeConverter
 from util.radec import radec_to_gal_ecl
 
 
@@ -63,6 +63,22 @@ class KnownExposure(Base, UUIDMixin):
 
     project = sa.Column( sa.Text, nullable=True, doc="Name of the project (or proposal ID)" )
     target = sa.Column( sa.Text, nullable=True, doc="Target of the exposure" )
+
+    _type = sa.Column( sa.SMALLINT,
+                       nullable=False,
+                       server_default=sa.sql.elements.TextClause( str(ImageTypeConverter.convert('Unknown')) ),
+                       index=True,
+                       doc=( "Type of image. One of: Sci, Diff, Bias, Dark, DomeFlat, SkyFlat, TwiFlat, "
+                             "or any of the above types prepended with 'Com' for combined "
+                             "(e.g., a ComSci image is a science image combined from multiple exposures). "
+                             "The value is saved as SMALLINT; can be read as text with the type property. "
+                             "The conversion is found in enums_and_bitflags.py::ImageTypeConverter." )
+                      )
+
+    @hybrid_property
+    def type(self):
+        return ImageTypeConverter.convert(self._type)
+
 
     # node_id vs. machine name
     # node_id should match what shows up in the pipelineworkers table.  But, it's not actually the node of

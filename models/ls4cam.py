@@ -60,7 +60,7 @@ class LS4Cam(Instrument):
     #
     #     Has 33 HDUs if in single-amp mode, so 1 per chip plus dataless HDU 0 (fpack)
 
-    _file_re = re.compile( r'^(?P<filebase>(?P<datetime>\d{14})(?P<sd>[sde])(?P<C>C(?P<ctrlr>\d))?)'
+    _file_re = re.compile( r'^(?P<filebase>(?P<datetime>\d{14})(?P<sd>[sdem])(?P<C>C(?P<ctrlr>\d))?)'
                            r'_(?P<num>\d+)(?P<chipthing>_(?P<chip>\d\d))?\.fits(?P<fz>\.fz)?$' )
 
 

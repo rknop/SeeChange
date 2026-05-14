@@ -285,6 +285,42 @@ catalog_gaiadr3:
 #
 
 # ======================================================================
+# Bias and Flat Builder
+#
+# timewindow: try to get exposures that are all within this window (days)
+# mjdmiddle: a number between -0.5 and 0.5, center time window on this MJD
+#            relative to an integer MJD.  For Chile, the time zone is
+#            UTC-4 in winter and UTC-3 in summer, so Noon is about
+#            15:00 or 16:00.  MJD .0 is midnight, so we want to be
+#            dividing at about 15.5/24 = 0.6
+# gobackdays: When searching for flats or biases, will start with the current
+#             time rounded to the close mjdmiddle, and will go back in
+#             steps of timewindow until the next step would be more than
+#             this many days before the current window.
+# calibratoreset: one of the values from CalibratorSetConverter in enums_and_bitflags.py
+# validity_start_offset: Days relative to the mjdmiddle of the found time
+#                        window, or null for no validity start limit
+# validity_end_offset: Like start, only end
+# search_known_exposures: if True, will look for exposures in the
+#                         knownexposures table.  exposure_mode must
+#                         be True in this case.  If False, will
+#                         search in either the exposures table (if
+#                         exposure_mode is True) or the imges table
+#                         (if exposure_mode is False)
+
+flat_bias_builder:
+  timewindow: 1.0
+  mjdmiddle: 0.6
+  calibrator_set: nightly
+  validity_start_offset: -1.0
+  validity_end_offset: 2.0
+  bias_min: 7
+  flat_min: 11
+  search_known_exposures: true
+  exposure_mode: true
+
+
+# ======================================================================
 # Overall pipeline
 #
 # For additional documentation on the parameters, see the Parameters
