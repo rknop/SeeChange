@@ -21,7 +21,7 @@ seechange.Conductor = class
     {
         let self = this;
 
-        let p, h3, span, hbox, vbox, subhbox, table, tr, td;
+        let p, h3, span, hbox, vbox, subhbox, table, tr, td, metatable, metatr, metatd;
 
         rkWebUtil.wipeDiv( this.div );
         this.frontpagediv = rkWebUtil.elemaker( "div", this.div );
