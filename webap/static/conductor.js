@@ -90,8 +90,11 @@ seechange.Conductor = class
                                                                } } );
         this.search_criteria_div = rkWebUtil.elemaker( "div", p,
                                                        { "classes": [ "midborder", "dispnone" ] } );
+        // TODO : don't use metatable.  Use two divs next to each other.  Then find a way to make
+        //   the right div (and its list box) expand vertically to fill the space available.
+        //   (i.e. resurrect my rusty CSS).
         metatable = rkWebUtil.elemaker( "table", this.search_criteria_div );
-        metatr = rkWebUtil.elemaker( "tr", table );
+        metatr = rkWebUtil.elemaker( "tr", metatable );
         metatd = rkWebUtil.elemaker( "td", metatr );
         table = rkWebUtil.elemaker( "table", metatd );
         tr = rkWebUtil.elemaker( "tr", table );

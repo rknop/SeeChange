@@ -8,6 +8,7 @@ import traceback
 
 import psycopg
 import psycopg.types.json
+from psycopg import sql
 
 import flask
 
@@ -339,16 +340,31 @@ class RequestExposure( ConductorBaseView ):
         else:
             types = [ ImageTypeConverter.to_int( 'Unknown' ), ImageTypeConverter.to_int( 'Sci' ) ]
 
+        # ****
+        flask.current_app.logger.debug( f"RequestExposure got argstr={argstr}\n...parsed to {args}\n" )
+        # ****
+
         knownexp_id = None
         with PsycopgConnection() as dbcon:
             cursor = dbcon.cursor( row_factory=psycopg.rows.dict_row )
             cursor.execute( "LOCK TABLE knownexposures" )
+
             # Select the lowest-mjd exposure in the "ready" state (1)
-            cursor.execute( "SELECT _id, cluster_id FROM knownexposures "
-                            "WHERE _state=1 "
-                            "AND _type=ANY(%(types)s)"
-                            "ORDER BY mjd LIMIT 1",
-                            { 'types': types } )
+            q = sql.SQL( "SELECT _id, cluster_id FROM knownexposures\n"
+                         "WHERE _state=1\n"
+                         "  AND _type=ANY(%(types)s)\n" )
+            subdict = { 'types': types }
+
+            if 'instrument' in args:
+                q += sql.SQL( "  AND instrument=%(instr)s\n" )
+                subdict['instr'] = args['instrument']
+
+            # ****
+            flask.current_app.logger.debug( f"Sending query:\n{q}\n...args {subdict}" )
+            # ****
+
+            q += sql.SQL( "ORDER BY mjd" )
+            cursor.execute( q, subdict )
             rows = cursor.fetchall()
             if len(rows) > 0:
                 knownexp_id = rows[0]['_id']
@@ -389,15 +405,16 @@ class GetKnownExposures( ConductorBaseView ):
                                              } )
         args['minmjd'] = float( args['minmjd'] ) if args['minmjd'] is not None else None
         args['maxmjd'] = float( args['maxmjd'] ) if args['maxmjd'] is not None else None
+
         with PsycopgConnection() as conn:
             cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
-            q = "SELECT ke.*,e.filepath FROM knownexposures ke\n"
+            q = "SELECT ke.*,e.filepath,e._id AS matched_exposure_id FROM knownexposures ke\n"
             _and = "WHERE"
             subdict = {}
 
             if args['exposure_provtag'] is not None:
                 q += ( "LEFT JOIN (\n"
-                       "  SELECT exp.filepath FROM exposures exp\n"
+                       "  SELECT exp._id, exp.filepath, exp.origin_identifier FROM exposures exp\n"
                        "  INNER JOIN provenance_tags pt ON exp.provenance_id=pt.provenance_id\n"
                        "         AND pt.tag=%(provtag)s\n"
                        ") e ON ke.identifier=e.origin_identifier\n"
@@ -431,8 +448,9 @@ class GetKnownExposures( ConductorBaseView ):
                 subdict['minexp'] = float( args['minexptime'] )
                 _and = "AND"
             if args['state'] is not None:
-                q += f"{_and} ke._state=ANY(%(state)s)"
+                q += f"{_and} ke._state=ANY(%(state)s)\n"
                 subdict['state'] = [ KnownExposureStateConverter.to_int( s ) for s in args['state'].split(",") ]
+                _and = "AND"
             if args['maxclaimtime'] is not None:
                 claimtime = datetime.datetime.fromisoformat( args['maxclaimtime'] )
                 if claimtime.tzinfo is None:
@@ -449,6 +467,7 @@ class GetKnownExposures( ConductorBaseView ):
                     _and = "AND"
             q += "ORDER BY ke.mjd\n"
 
+            flask.current_app.logger.debug( f"Sending query:\n{q}\nsubdict: {subdict}" )
             cursor.execute( q, subdict )
             rows = cursor.fetchall()
 
@@ -457,9 +476,13 @@ class GetKnownExposures( ConductorBaseView ):
         # Add the "id" field that's the same as "_id" for convenience,
         #   make the filter the short name, convert "_state" to a string
         #   in "state", "_type" to a string in "type", and strip off all
-        #   but the filename of the filepath
+        #   but the filename of the filepath.  Also, replace
+        #   exposure_id with matched_exposure_id.
         for ke in retval['knownexposures']:
             ke['id'] = ke['_id']
+            ke['knownexposure_table_exposure_id'] = ke['exposure_id']
+            ke['exposure_id'] = ke['matched_exposure_id']
+            del ke['matched_exposure_id']
             ke['filter'] = Instrument.get_instrument_instance( ke['instrument'] ).get_short_filter_name( ke['filter'] )
             ke['state'] = KnownExposureStateConverter.to_string( ke['_state'] )
             ke['type'] = ImageTypeConverter.to_string( ke['_type'] )
@@ -469,6 +492,7 @@ class GetKnownExposures( ConductorBaseView ):
         #   specify short filter names.  Filter by filter now.
         if args['filter'] is not None:
             retval['knownexposures'] = [ ke for ke in retval['knownexposures'] if ke['filter'] == args['filter'] ]
+
         return retval
 
 

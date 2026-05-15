@@ -25,6 +25,7 @@ import flask_session
 
 from util.config import Config
 from util.util import asUUID
+from models.enums_and_bitflags import ImageTypeConverter
 from models.base import PsycopgConnection
 from models.deepscore import DeepScoreSet
 from models.fakeset import FakeSet, FakeAnalysis
@@ -214,7 +215,7 @@ class Exposures( BaseView ):
             subdict = {}
             if data['provenancetag'] is None:
                 q = ( 'SELECT e._id, e.filepath, e.mjd, e.airmass, e.target, e.project, '
-                      '       e._filter, e.filter_array, e.exp_time, '
+                      '       e._type, e._filter, e.filter_array, e.exp_time, '
                       '       i._id AS imgid, i.fwhm_estimate as fwhm_estimate, '
                       '       i.lim_mag_estimate as lim_mag_estimate, '
                       '       s._id AS subid, sl._id AS slid, ssl.num_sources, '
@@ -234,7 +235,7 @@ class Exposures( BaseView ):
                       'GROUP BY e._id, i._id, s._id, ssl._id '
                      )
             else:
-                q = ( 'SELECT e._id, e.filepath, e.mjd, e.airmass, e.target, e._filter, e.project, '
+                q = ( 'SELECT e._id, e.filepath, e.mjd, e.airmass, e.target, e._type, e._filter, e.project, '
                       '       e.filter_array, e.exp_time, '
                       '       i._id AS imgid, i.fwhm_estimate as fwhm_estimate, '
                       '       i.lim_mag_estimate as lim_mag_estimate, '
@@ -311,14 +312,14 @@ class Exposures( BaseView ):
             # These numbers will be wrong (double-counts) if not filtering on a provenance tag, or if the
             #   provenance tag includes multiple provenances for a given step!
             q = ( 'SELECT t._id, t.filepath, t.mjd, t.airmass, t.target, t.project, '
-                  '  t._filter, t.filter_array, t.exp_time, '
+                  '  t._type, t._filter, t.filter_array, t.exp_time, '
                   '  AVG(t.fwhm_estimate) AS seeingavg, AVG(t.lim_mag_estimate) AS limmagavg, '
                   '  COUNT(t.subid) AS num_subs, SUM(t.num_sources) AS num_sources, '
                   '  SUM(t.num_measurements) AS num_measurements '
                   'INTO TEMP TABLE temp_imgs_2 '
                   'FROM temp_imgs t '
                   'GROUP BY t._id, t.filepath, t.mjd, t.airmass, t.target, t.project, '
-                  '         t._filter, t.filter_array, t.exp_time'
+                  '         t._type, t._filter, t.filter_array, t.exp_time'
                  )
 
             cursor.execute( q )
@@ -331,7 +332,7 @@ class Exposures( BaseView ):
             #   tables are big.  Think about that.
             subdict = {}
             q = ( 'SELECT t._id, t.filepath, t.mjd, t.airmass, t.target, t.project, '
-                  '  t._filter, t.filter_array, t.exp_time, '
+                  '  t._type, t._filter, t.filter_array, t.exp_time, '
                   '  t.seeingavg, t.limmagavg, t.num_subs, t.num_sources, t.num_measurements, '
                   '  SUM( CASE WHEN r.success THEN 1 ELSE 0 END ) as n_successim, '
                   '  SUM( CASE WHEN r.error_message IS NOT NULL THEN 1 ELSE 0 END ) AS n_errors '
@@ -344,8 +345,9 @@ class Exposures( BaseView ):
             q += ') r ON r.exposure_id=t._id '
             # I wonder if making a primary key on the temp table would be more efficient than
             #    all these columns in GROUP BY?  Investigate this.
-            q += ( 'GROUP BY t._id, t.filepath, t.mjd, t.airmass, t.target, t.project, t._filter, t.filter_array, '
-                   '  t.exp_time, t.seeingavg, t.limmagavg, t.num_subs, t.num_sources, t.num_measurements '
+            q += ( 'GROUP BY t._id, t.filepath, t.mjd, t.airmass, t.target, t.project, t._type, '
+                   '  t._filter, t.filter_array, t.exp_time, t.seeingavg, t.limmagavg, t.num_subs, '
+                   '  t.num_sources, t.num_measurements '
                    'ORDER BY t.mjd, t._filter, t.filter_array ')
 
             cursor.execute( q, subdict  )
@@ -357,6 +359,7 @@ class Exposures( BaseView ):
             airmass = []
             target = []
             project = []
+            imgtype = []
             filtername = []
             exp_time = []
             seeingavg = []
@@ -381,6 +384,7 @@ class Exposures( BaseView ):
                 project.append( row[columns['project']] )
                 app.logger.debug( f"filter={row[columns['_filter']]} type {row[columns['_filter']]}; "
                                   f"filter_array={row[columns['filter_array']]} type {row[columns['filter_array']]}" )
+                imgtype.append( ImageTypeConverter.to_string( row[columns['_type']] ) )
                 filtername.append( row[columns['_filter']] )
                 exp_time.append( row[columns['exp_time']] )
                 seeingavg.append( row[columns['seeingavg']] )
@@ -403,6 +407,7 @@ class Exposures( BaseView ):
                          'airmass': airmass,
                          'project': project,
                          'target': target,
+                         'imgtype': imgtype,
                          'filter': filtername,
                          'exp_time': exp_time,
                          'seeingavg': seeingavg,
