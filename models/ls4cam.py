@@ -574,8 +574,98 @@ class LS4Cam(Instrument):
         return band
 
 
+    # ------------------------------------------------------------------
+    # Gaia DR3 -> instrument magnitude
+    # ------------------------------------------------------------------
+    # All three (g, i, z) coefficients have been refit against
+    # LS DR10 PSF stars using the multi-color (Gaia BP-RP + DR10 g-r,
+    # r-i, i-z) total-degree-3 polynomial, marginalized to a 1-D
+    # Gaia-only production polynomial.  See hacks/refit_ls4_color_terms.py
+    # --multi-color and the per-filter provenance comments in the
+    # transformations dict below.
+    LS4_GAIA_TRNS_PLACEHOLDER = False
+
     def gaia_dr3_to_instrument_mag( self, filter, catdata ):
-        raise NotImplementedError( "Need to implement gaia_dr3_to_instrument_mag for LS4Cam" )
+        """Transform Gaia DR3 magnitudes to instrument magnitudes.
+
+        The array trns allows a conversion from Gaia MAG_G to the
+        magnitude through the desired filter using:
+
+          MAG_filter = Gaia_MAG_G - sum( trns[i] * ( Gaia_MAG_BP - Gaia_MAG_RP ) ** i )
+
+        (with i running from 0 to len(trns)-1).
+
+        Parameters
+        ----------
+        filter: str
+            The (short) filter name of the magnitudes we want.  LS4
+            supports only g, i, z; passing 'r' (or anything else) raises.
+        catdata: dict or pandas.DataFrame or numpy.recarray or astropy.Table
+            A data structure that holds the relevant data, indexable on
+            MAG_G, MAGERR_G, MAG_BP, MAGERR_BP, MAG_RP, MAGERR_RP.
+            MAGERR_BP and MAGERR_RP must be astropy Quantity arrays
+            (i.e. carry units) so that the chain-rule expression below
+            (which calls ``.value`` on the combined color error) works.
+            The catalog excerpt produced by
+            ``pipeline.catalog_tools.fetch_gaia_dr3_excerpt`` already
+            satisfies this.
+
+        Returns
+        -------
+        trans_mag: float or numpy array
+            The catalog magnitude(s) transformed to instrument magnitude(s).
+        trans_magerr: float or numpy array
+            The catalog magnitude error(s) transformed to instrument
+            magnitude error(s).
+        """
+        if not isinstance( filter, str ):
+            raise ValueError( f"The filter must be a string. Got {type(filter)}. " )
+        if len( filter ) > 1:
+            filter_short = self.get_short_filter_name( filter )
+        else:
+            filter_short = filter
+
+        # All coefficients refit via hacks/refit_ls4_color_terms.py
+        # --multi-color, using a multi-color (Gaia BP-RP + DR10 g-r, r-i, i-z)
+        # total-degree-3 polynomial, marginalized to a 1-D production
+        # polynomial in (BP-RP) via the calibration field's
+        # E[DR10_color | BP-RP] relations.  Calibration sample restricted
+        # to clusters with at least one photometric image
+        # (--photometric-zp-window 0.10).
+        #
+        # g: 0.86M PSF stars from the SE_C calibration field.
+        #    Catalog-fit RMS = 0.011 mag, collapse RMS = 0.0023 mag.
+        # i: mean of two independent fits on NE_F (1.17M stars,
+        #    catalog-fit RMS 0.013 mag) and SW_G (0.85M stars,
+        #    catalog-fit RMS 0.014 mag).  The two per-chip polynomials
+        #    agreed within 2-7 mmag across BP-RP = 0.5..2.0, justifying
+        #    a single per-filter (rather than per-chip) coefficient set.
+        # z: 1.11M PSF stars from the NW_C calibration field.
+        #    Catalog-fit RMS = 0.013 mag, collapse RMS = 0.0063 mag.
+        transformations = {
+            'g': np.array( [ +0.363464, -0.862719, -0.020064, +0.007459 ] ),
+            'i': np.array( [ -0.589334, +1.201847, -0.352709, +0.045252 ] ),
+            'z': np.array( [ -0.662140, +1.290285, -0.264194, +0.034393 ] ),
+        }
+        if filter_short not in transformations:
+            raise ValueError( f"Unknown short LS4 filter name {filter}" )
+
+        # instrumental mag is sum(trns[i] * (GaiaBP - GaiaRP) ** i)
+        trns = transformations[ filter_short ]
+        fitorder = len(trns) - 1
+
+        colors = catdata['MAG_BP'] - catdata['MAG_RP']
+        colorerrs = np.sqrt(catdata['MAGERR_BP'] ** 2 + catdata['MAGERR_RP'] ** 2)
+        colton = colors[:, np.newaxis] ** np.arange(0, fitorder + 1, 1)
+        coltonminus1 = np.zeros(colton.shape)
+        coltonminus1[:, 1:] = colors[:, np.newaxis] ** np.arange(0, fitorder, 1)
+        coltonerr = np.zeros(colton.shape)
+        coltonerr[:, 1:] = np.arange(1, fitorder + 1, 1) * coltonminus1[:, 1:] * colorerrs.value[:, np.newaxis]
+
+        trans_mag = catdata['MAG_G'] - (trns[np.newaxis, :] * colton).sum(axis=1)
+        trans_magerr = np.sqrt(catdata['MAGERR_G'] ** 2 + (trns[np.newaxis, :] * coltonerr).sum(axis=1) ** 2)
+
+        return trans_mag, trans_magerr
 
 
     # def get_filter_bandpasses( self ):
