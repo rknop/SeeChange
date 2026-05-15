@@ -1177,6 +1177,7 @@ class Instrument:
             telescope=['TELESCOP', 'TELESCOPE'],
             gain=['GAIN'],
             airmass=['AIRMASS'],
+            sec_id=['SEC_ID'],
         )
         return t
         # TODO: add more!
@@ -1636,13 +1637,22 @@ class Instrument:
                 if ( calibtype in [ 'flat', 'fringe', 'illumination' ] ) and ( filter is not None ):
                     calibquery = ( calibquery.join( Image, CalibratorFile.image_id==Image._id )
                                    .filter( Image.filter == filter ) )
+                calibquery = calibquery.order_by( CalibratorFile.validity_start.desc() )
 
                 if calibquery.count() > 1:
                     SCLogger.warning( f"Found {calibquery.count()} valid {calibtype}s for "
-                                      f"{self.name} {section}, randomly using one." )
+                                      f"{self.name} {section}, picking the latest one, or, failing "
+                                      f"that, picking a 'random' one." )
                 if calibquery.count() > 0:
                     SCLogger.debug( f"Got an existing valid {calibtype} for {self.name} {section}" )
-                    calib = calibquery.first()
+                    calibs = calibquery.all()
+                    calib = None
+                    for checkcalib in calibs:
+                        if checkcalib.validity_start is not None:
+                            calib = checkcalib
+                            break
+                    if calib is None:
+                        calib = calibs[0]
 
             if ( calib is None ) and ( calibset == 'externally_supplied' ) and ( not nofetch ):
                 # This is the real reason we got the calibfile downloadlock, but of course

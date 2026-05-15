@@ -1182,7 +1182,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
     def __str__(self):
         return self.__repr__()
 
-    def invent_filepath(self):
+    def invent_filepath(self, name_convention=None ):
         """Create a relative file path for the object.
 
         Create a file path relative to data root for the object based on its
@@ -1242,7 +1242,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
 
         cfg = config.Config.get()
         default_convention = "{inst_name}_{date}_{time}_{section_id}_{filter}_{im_type}_{prov_hash:.6s}"
-        name_convention = cfg.value('storage.images.name_convention', default=None)
+        if name_convention is None:
+            name_convention = cfg.value('storage.images.name_convention', default=None)
         if name_convention is None:
             name_convention = default_convention
 

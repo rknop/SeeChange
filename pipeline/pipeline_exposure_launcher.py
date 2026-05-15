@@ -3,6 +3,7 @@ import time
 import psutil
 import logging
 import argparse
+import urllib
 import signal
 
 from util.conductor_connector import ConductorConnector
@@ -23,7 +24,8 @@ class ExposureLauncher:
     """
 
     def __init__( self, cluster_id, node_id, numprocs=None, verify=True, onlychips=None,
-                  through_step=None, max_run_time=None, worker_log_level=logging.WARNING ):
+                  through_step=None, max_run_time=None, types=None, instrument=None,
+                  just_download=False, worker_log_level=logging.WARNING ):
         """Make an ExposureLauncher.
 
         Parameters
@@ -73,6 +75,20 @@ class ExposureLauncher:
           to see that it hasn't been running this long, and if it has,
           it will exit.
 
+        types : list of str or None
+          If not None, will ask the conductor just for images of these
+          types.  See enums_and_bitflags.py::ImageTypeConverter for
+          possibilities.
+
+        instrument : str or None
+          If not None, will ask the conductor just for images from this
+          instrument.  (If you have a conductor running handling multiple
+          different instruments, I am surprised.)
+
+        just_download : bool, default False
+          If True, download exposures and load them into the database, but don't
+          actually run the pipeline.
+
         worker_log_level : log level, default logging.WARNING
           The log level for the worker processes.  Here so that you can
           have a different log level for the overall control process
@@ -88,6 +104,9 @@ class ExposureLauncher:
         self.onlychips = onlychips
         self.through_step = through_step
         self.max_run_time = max_run_time
+        self.types = types
+        self.instrument = instrument
+        self.just_download = just_download
         self.worker_log_level = worker_log_level
         self.verify = verify
         self.conductor = ConductorConnector( verify=verify )
@@ -148,7 +167,14 @@ class ExposureLauncher:
                     continue
 
                 self.send_heartbeat()
-                data = self.conductor.send( f'conductor/requestexposure/cluster_id={self.cluster_id}' )
+                url = f'conductor/requestexposure/cluster_id={urllib.parse.quote(self.cluster_id, safe="")}'
+                if self.types is not None:
+                    url += "/types="
+                    url += urllib.parse.quote( ",".join(self.types), safe="" )
+                if self.instrument is not None:
+                    url += "/instrument="
+                    url += urllib.parse.quote( self.instrument, safe="" )
+                data = self.conductor.send( url )
 
                 if data['status'] == 'not available':
                     SCLogger.info( f'No exposures available, sleeping {self.sleeptime} s' )
@@ -211,9 +237,12 @@ class ExposureLauncher:
                                                         through_step=through_step,
                                                         worker_log_level=self.worker_log_level )
                 exposure_processor.secure_exposure()
-                SCLogger.info( 'Exposure secured.  Launching process to handle all chips.' )
-                exposure_processor()
-                SCLogger.info( f"Done processing exposure {exposure_processor.exposure.origin_identifier}" )
+                if self.just_download:
+                    SCLogger.info( 'Exposure secured.  just_download is set, so doing nothing else.' )
+                else:
+                    SCLogger.info( 'Exposure secured.  Launching process to handle all chips.' )
+                    exposure_processor()
+                    SCLogger.info( f"Done processing exposure {exposure_processor.exposure.origin_identifier}" )
 
                 n_processed += 1
                 if ( max_n_exposures is not None ) and ( n_processed >= max_n_exposures ):
@@ -296,6 +325,14 @@ environment variable anyway.)
                                 "exposure, preprocessing, extraction, astrocal, photocal, "
                                 "subtraction, detection, cutting, measuring, scoring.  Will run "
                                 "through the earlier of this step or the through step given by the conductor." ) )
+    parser.add_argument( "--types", default=None, nargs='+',
+                         help="Just get exposures of these types.  Allowed vaues include Sci, Bias, Dark, TwiFlat." )
+    parser.add_argument( "-i", "--instrument", default=None, help="Just get exposures for this instrument." )
+    parser.add_argument( "--just-download", default=False, action='store_true',
+                         help=( "Just download exposures and load them into the database, don't run the pipeline. "
+                                "Many other options (including -t, --chips, -w, --numprocs) are irrelevant if "
+                                "this is set." ) )
+
     args = parser.parse_args()
 
     loglookup = { 'error': logging.ERROR,
@@ -311,7 +348,8 @@ environment variable anyway.)
 
     elaunch = ExposureLauncher( args.cluster_id, args.node_id, numprocs=args.numprocs, onlychips=args.chips,
                                 verify=not args.noverify, through_step=args.through_step,
-                                max_run_time=args.max_run_time, worker_log_level=worker_log_level )
+                                max_run_time=args.max_run_time, worker_log_level=worker_log_level,
+                                types=args.types, instrument=args.instrument, just_download=args.just_download )
     elaunch.register_worker()
 
     def goodbye( signum, frame ):

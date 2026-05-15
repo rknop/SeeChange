@@ -367,6 +367,7 @@ class ExposureProcessor:
 
         if self.through_step == 'exposure':
             SCLogger.info( "Only running through exposure, not launching any image processes" )
+            self.finish_work()
             return
 
         cfg = Config.get()
@@ -502,6 +503,9 @@ to start it.
                          help=( "Number of chip processors to run (defaults to number of physical "
                                 "system CPUs minus 1)" ) )
     parser.add_argument( '-t', '--through-step', default=None, help="Process through this step" )
+    parser.add_argument( '--just-download', default=False, action='store_true',
+                         help=( "Just secure the exposure and load it into the database, don't process it. "
+                                "Many other options, e.g. --through-step, are ignored if this is set." ) )
     parser.add_argument( '--chips', default=None, nargs='+', help="Only do these sensor sections (defaults to all)" )
     parser.add_argument( '--cont', '--continue', default=False, action='store_true',
                          help="If exposure already exists, try continuing it." )
@@ -547,7 +551,8 @@ to start it.
                                    worker_log_level=loglookup[args.worker_log_level.lower()] )
 
     processor.secure_exposure( assume_claimed=args.assume_claimed, cont=args.cont, delete=reallydelete )
-    processor()
+    if not args.just_download:
+        processor()
 
     SCLogger.info( "All done" )
 
