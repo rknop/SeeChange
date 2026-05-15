@@ -1822,8 +1822,8 @@ class UUIDMixin:
         Returns None if not found.
         """
         if isinstance( session, psycopg.Connection ):
-            cursor = session.cursor( row_factory=psycopg.sql.dict_row )
-            q = sql.SQL( "SELECT * FROM {table} WHERE _id=%(id)s" ).format( table=cls.__tablename__ )
+            cursor = session.cursor( row_factory=psycopg.rows.dict_row )
+            q = sql.SQL( "SELECT * FROM {table} WHERE _id=%(id)s" ).format( table=sql.Identifier(cls.__tablename__) )
             cursor.execute( q, { 'id': uuid } )
             rows = cursor.fetchall()
             if len(rows) == 0:

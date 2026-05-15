@@ -86,13 +86,13 @@ class LS4Cam(Instrument):
         Instrument.__init__(self, **kwargs)
 
         # self.preprocessing_steps_available = [ 'overscan', 'bias', 'dark', 'linearity', 'flat' ]
-        self.preprocessing_steps_available = [ 'overscan', 'flat' ]
+        self.preprocessing_steps_available = [ 'overscan', 'zero', 'flat' ]
         self.preprocessing_steps_by_type = { 'Bias': set( [ 'overscan' ] ),
-                                             'Dark': set( [ 'overscan' ] ),
-                                             'DomeFlat': set( [ 'overscan' ] ),
-                                             'SkyFlat': set( [ 'overscan' ] ),
-                                             'TwiFlat': set( [ 'overscan' ] ),
-                                             'Fringe': set( [ 'overscan' ] ) }
+                                             'Dark': set( [ 'overscan', 'zero' ] ),
+                                             'DomeFlat': set( [ 'overscan', 'zero' ] ),
+                                             'SkyFlat': set( [ 'overscan', 'zero' ] ),
+                                             'TwiFlat': set( [ 'overscan', 'zero' ] ),
+                                             'Fringe': set( [ 'overscan', 'zero' ] ) }
         self.preprocessing_steps_done = []
 
 
