@@ -1965,7 +1965,7 @@ class Instrument:
                     poly = np.polynomial.chebyshev.Chebyshev.fit( xvals, ovscn_meds, order )
                     resid = ovscn_meds - poly(xvals)
                     sig = resid.std()
-                    keeps = ( np.fabs(resid) < sigcut * sig )
+                    keeps = np.where( np.fabs(resid) < sigcut * sig )[0]
                     if len(keeps) == len(xvals):
                         done = True
                     else:

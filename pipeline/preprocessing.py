@@ -31,6 +31,23 @@ class ParsPreprocessor(Parameters):
                       "in already-preprocessed images.",
                       critical=True )
 
+        self.add_par( 'overscan_method',
+                      'median',
+                      str,
+                      ( "Method used for overscan.  Can median or polymedrej (see "
+                        "instrument.py::Instrument.overscan_and_trim); possible that other instruments may "
+                        "support other methods." ),
+                      critical=True
+                     )
+
+        self.add_par( 'overscan_kwargs',
+                      {},
+                      dict,
+                      ( "Additional keywords passed to Instrument.overscan_and_trim.  Meanings depend on "
+                        "overscan_method" ),
+                      critical=True
+                     )
+
         self.add_par( 'calibset', 'externally_supplied', str,
                       "The calibrator set to use.  Choose one of the CalibratorSetConverter enum. ",
                       critical=True )
@@ -217,7 +234,8 @@ class Preprocessor:
                 # Overscan is always first (as it reshapes the image)
                 if 'overscan' in needed_steps:
                     SCLogger.debug('preprocessing: overscan and trim')
-                    image.data = self.instrument.overscan_and_trim( image )
+                    image.data = self.instrument.overscan_and_trim( image, method=self.pars.overscan_method,
+                                                                    **self.pars.overscan_kwargs )
                     # Update the header ra/dec calculations now that we know the real width/height
                     try:
                         image.set_corners_from_header_wcs(setradec=True)
