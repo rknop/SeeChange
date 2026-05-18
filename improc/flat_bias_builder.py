@@ -132,6 +132,24 @@ class ParsFlatBuilder(Parameters):
               "images or image_list_file" )
         )
 
+        self.provenance_id = self.add_par(
+            'find_provenance_id',
+            None,
+            ( str, type(None) ),
+            ( "If find_images is true, find images with this provenance id.  If find_images is true, must "
+              "specify exactly one of this or find_provenance_tag" )
+        )
+        self.add_alias( 'prov_id', 'find_provenance_id' )
+
+        self.find_provenance_tag = self.add_par(
+            'find_provenance_tag',
+            None,
+            ( str, type(None) ),
+            ( "If find_images is true, find iamges with this provenance tag.  If find_images is true, must "
+              "specify exactly one of this or find_provenance_id" )
+        )
+        self.add_alias( 'prov_tag', 'find_provenance_tag' )
+
         self.mjd = self.add_par(
             "mjd",
             None,
@@ -315,13 +333,19 @@ class FlatBuilder:
         cfgdata = cfg.value( 'flat_bias_builder' )
         del cfgdata['flat']
         del cfgdata['bias']
-        if ( 'is_flat' in cfgdata ) and cfgdata['is_flat']:
+        if 'is_flat' in kwargs:
+            is_flat = kwargs['is_flat']
+        elif 'is_flat' in cfgdata:
+            is_flat = cfgdata['is_flat']
+        else:
+            is_flat = False
+        if is_flat:
             cfgdata.update( cfg.value( 'flat_bias_builder.flat' ) )
         else:
             cfgdata.update( cfg.value( 'flat_bias_builder.bias' ) )
 
-        cfgdata.update( kwargs )
         self.pars = ParsFlatBuilder( **cfgdata )
+        self.pars.override( kwargs )
 
         # Do some basic checks to make sure the stuff we've specified is implemented.
         if self.pars.normalize_mode not in [ "median", None ]:
@@ -359,47 +383,61 @@ class FlatBuilder:
             table = 'exposures'
         else:
             if self.pars.section_id is None:
-                raise ValueError( "Must give a find sec_id when not in exposure mode" )
+                raise ValueError( "Must give a section_id when not in exposure mode" )
             self.section_id = self.pars.section_id
             table = 'images'
 
         with PsycopgConnection() as con:
             cursor = con.cursor( row_factory=psycopg.rows.dict_row )
-            q = sql.SQL( "SELECT _id, filepath, ra, dec FROM {table}\n" ).format( table=sql.Identifier( table ) )
+            q = ( sql.SQL( "SELECT m._id, m.filepath, m.ra, m.dec FROM {table} m\n" )
+                  .format( table=sql.Identifier( table ) ) )
+            if self.pars.find_provenance_id is not None:
+                if self.pars.find_provenance_tag is not None:
+                    raise ValueError( "Only specify one of find_provenance_id or find_provenance_tag" )
+                q += sql.SQL( "WHERE provenance_id={provid}\n" ).format( provid=self.pars.find_provenance_id )
+            else:
+                if self.pars.find_provenance_tag is None:
+                    raise ValueError( "Must specify exactly one of find_provenance_id or find_provenance_tag" )
+                q += ( sql.SQL( "INNER JOIN provenance_tags t ON m.provenance_id=t.provenance_id\n"
+                                "                            AND t.tag={tag}\n" )
+                       .format( tag=self.pars.find_provenance_tag ) )
             _where = "WHERE"
             if self.pars.searchtype is not None:
                 imtype = ImageTypeConverter.to_int( self.pars.searchtype )
-                q += sql.SQL( "{where} _type={type}\n" ).format( where=sql.SQL(_where), type=imtype )
+                q += sql.SQL( "{where} m._type={type}\n" ).format( where=sql.SQL(_where), type=imtype )
                 _where = "  AND"
             if self.pars.section_id is not None:
-                q += sql.SQL( "{where} section_id={secid}\n" ).format( where=sql.SQL(_where),
-                                                                       secid=self.pars.section_id )
+                q += sql.SQL( "{where} m.section_id={secid}\n" ).format( where=sql.SQL(_where),
+                                                                         secid=self.pars.section_id )
                 _where = "  AND"
             if self.pars.filter is not None:
-                q += sql.SQL( "{where} filter={filter}\n" ).format( where=sql.SQL(_where), filter=self.pars.filter )
+                q += sql.SQL( "{where} m.filter={filter}\n" ).format( where=sql.SQL(_where),
+                                                                      filter=self.pars.filter )
                 _where = "  AND"
             if self.pars.mjd is not None:
                 mjd0 = float( self.pars.mjd - self.pars.timewindow/2. )
                 mjd1 = float( self.pars.mjd + self.pars.timewindow/2. )
-                q += sql.SQL( "{where} mjd>={mjd0} AND mjd<={mjd1}\n" ).format( where=sql.SQL(_where),
-                                                                                mjd0=mjd0, mjd1=mjd1 )
+                q += sql.SQL( "{where} m.mjd>={mjd0} AND m.mjd<={mjd1}\n" ).format( where=sql.SQL(_where),
+                                                                                    mjd0=mjd0, mjd1=mjd1 )
                 _where = "  AND"
             if self.pars.minexptime is not None:
-                q += sql.SQL( "{where} exp_time>={exptime}\n" ).format( where=sql.SQL(_where),
-                                                                        exptime=float(self.pars.minexptime) )
+                q += sql.SQL( "{where} m.exp_time>={exptime}\n" ).format( where=sql.SQL(_where),
+                                                                          exptime=float(self.pars.minexptime) )
                 _where = "  AND"
             if self.pars.maxexptime is not None:
-                q += sql.SQL( "{where} exp_time<={exptime}\n" ).format( where=sql.SQL(_where),
-                                                                        exptime=float(self.pars.maxexptime) )
+                q += sql.SQL( "{where} m.exp_time<={exptime}\n" ).format( where=sql.SQL(_where),
+                                                                          exptime=float(self.pars.maxexptime) )
                 _where = "  AND"
-            if ( self.pars.nmax is not None ) and ( not self.pars.dup_reject ):
-                q += sql.SQL( "ORDER BY mjd DESC LIMIT {nmax}\n" ).format( nmax=int(self.pars.nmax) )
-            else:
-                q += sql.SQL( "ORDER BY mjd DESC\n" )
 
             if _where == "WHERE":
-                raise RuntimeError( "You just said you wanted to combine all images in the database. "
-                                    "Give some selection criteria to make this sane." )
+                raise RuntimeError( "You probably wanted to specify more search criteria." )
+
+            if ( self.pars.nmax is not None ) and ( not self.pars.dup_reject ):
+                q += sql.SQL( "ORDER BY m.mjd DESC LIMIT {nmax}\n" ).format( nmax=int(self.pars.nmax) )
+            else:
+                q += sql.SQL( "ORDER BY m.mjd DESC\n" )
+
+            SCLogger.debug( f"Searching for input files with:\n{q.as_string()}" )
 
             cursor.execute( q )
             rows = cursor.fetchall()
@@ -412,7 +450,7 @@ class FlatBuilder:
                 # There is probably a cleverer way to do this with numpy
                 for row in oldrows:
                     if any( ( np.fabs(row['ra'] - r['ra']) * np.cos(row['dec']*np.pi/180.) < self.pars.dup_reject )
-                            or ( np.fabs(row['dec'] - r['dec']) < self.pars.dup_reject )
+                            and ( np.fabs(row['dec'] - r['dec']) < self.pars.dup_reject )
                             for r in rows
                            ):
                         continue
@@ -420,8 +458,10 @@ class FlatBuilder:
                 if len(rows) < self.pars.min:
                     raise RuntimeError( f"Found {len(oldrows)} {table}, but after duplicate rejection, "
                                         f"only {len(rows)} were left, which is < {self.pars.nmin}" )
-                if ( self.pars.max is not None ) and ( len(rows) > self.pars.max ):
-                    rows = rows[:self.pars.max]
+                SCLogger.info( f"Found {len(oldrows)} exposure, {len(rows)} left after ra/dec duplicate rejection." )
+                if ( self.pars.nmax is not None ) and ( len(rows) > self.pars.nmax ):
+                    SCLogger.info( f"Reducing to {self.pars.nmax} images as specified" )
+                    rows = rows[:self.pars.nmax]
 
             self.files = [ r['_id'] for r in rows ]
 
@@ -812,7 +852,6 @@ class FlatBuilder:
 
 
     def __call__( self, i_know_what_im_doing=False ):
-
         if self.pars.find_images:
             self.find_input_files( i_know_what_im_doing=i_know_what_im_doing )
         else:
@@ -938,14 +977,15 @@ def main():
 
     parser.add_argument( "-f", "--find-images", default=argparse.SUPPRESS, action='store_true',
                          help=( "Instead of specifying files, search the database for images and/or exposures." ) )
-    parser.add_argument( "--find-section-id", default=argparse.SUPPRESS,
+    parser.add_argument( "--prov-id", default=None, help="Find images/exposures with this provenance id" )
+    parser.add_argument( "--prov-tag", default=None, help="Find images/exposures with this provenance tag" )
+    parser.add_argument( "--section-id", default=argparse.SUPPRESS,
                          help=( "When finding images, find images of this secton id.  Do not use when in "
                                 "exposure mode, but required when not in exposure mode." ) )
-    parser.add_argument( "--find-filter", default=argparse.SUPPRESS,
+    parser.add_argument( "--searchtype", default=argparse.SUPPRESS,
+                         help="Search for images of this type (usu. one of Bias, TwiFlat, DomeFlat, SkyFlat)" )
+    parser.add_argument( "--filter", default=argparse.SUPPRESS,
                          help=( "When finding images/exposures, find ones with this filter.  None=any filter." ) )
-    parser.add_argument( "--find-type", default=argparse.SUPPRESS,
-                         help=( "Type of image to search for.  Should probably be one of Bias, Dark, Domeflat, "
-                                "TwiFlat, or SkyFlat." ) )
     parser.add_argument( "--find-sec-id", default=argparse.SUPPRESS,
                          help=( "Section ID to search for.  Required if not in exposure mode, forbidden in in "
                                 "exposure mode." ) )
@@ -954,8 +994,6 @@ def main():
                                 "you will get the latest images known." ) )
     parser.add_argument( "--timewindow", default=argparse.SUPPRESS, type=float,
                          help="Search MJD by this much around MJD (± timewindow/2)" )
-    parser.add_argument( "--searchtype", default=argparse.SUPPRESS,
-                         help="Search for images of this type (usu. one of Bias, TwiFlat, DomeFlat, SkyFlat)" )
     parser.add_argument( "--minexptime", default=argparse.SUPPRESS,
                          help="Only find images with at least this exposure time" )
     parser.add_argument( "--maxexptime", default=argparse.SUPPRESS,
@@ -1043,8 +1081,7 @@ def main():
     args = parser.parse_args()
     kwargs = vars( args ).copy()
 
-    mainargs = { 'outfile': None, 'outmask': None, 'nmad': None, 'i_know_what_im_doing': False,
-                 'find_section_id': None, 'find_filter': None, 'section_id': None, 'verbose': False }
+    mainargs = { 'outfile': None, 'outmask': None, 'nmad': None, 'i_know_what_im_doing': False, 'verbose': False }
     for kw in mainargs.keys():
         if kw in kwargs:
             mainargs[kw] = kwargs[kw]

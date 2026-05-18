@@ -312,6 +312,8 @@ environment variable anyway.)
                                 "(e.g. one launched on a slurm queue), make sure this is less than the runtime "
                                 "of the job by an amount conservatively equal to what you'd need to process a "
                                 "single exposure." ) )
+    parser.add_argument( "--nexp", default=None, type=int,
+                         help="Stop after running this many images." )
     parser.add_argument( "--noverify", default=False, action='store_true',
                          help="Don't verify the conductor's SSL certificate" )
     parser.add_argument( "-l", "--log-level", default="info",
@@ -360,7 +362,7 @@ environment variable anyway.)
     signal.signal( signal.SIGTERM, goodbye )
 
     try:
-        elaunch()
+        elaunch( max_n_exposures=args.nexp )
     finally:
         elaunch.unregister_worker()
 

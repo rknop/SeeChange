@@ -6,6 +6,7 @@ import pytz
 from enum import Enum
 
 import numpy as np
+import numpy.polynomial.chebyshev
 
 import sqlalchemy as sa
 
@@ -1637,7 +1638,11 @@ class Instrument:
                 if ( calibtype in [ 'flat', 'fringe', 'illumination' ] ) and ( filter is not None ):
                     calibquery = ( calibquery.join( Image, CalibratorFile.image_id==Image._id )
                                    .filter( Image.filter == filter ) )
-                calibquery = calibquery.order_by( CalibratorFile.validity_start.desc() )
+                # Select thing with most recent validity start; if there are more than one with the same
+                #   validity_start, choose the one made most recently.
+                # (I really hope that SQLAlchemy will make this order by validity_start desc, created_at desc)
+                calibquery = calibquery.order_by( CalibratorFile.validity_start.desc(),
+                                                  CalibratorFile.created_at.desc() )
 
                 if calibquery.count() > 1:
                     SCLogger.warning( f"Found {calibquery.count()} valid {calibtype}s for "
@@ -1844,11 +1849,11 @@ class Instrument:
         return []
 
 
-    def overscan_and_trim( self, *args ):
+    def overscan_and_trim( self, *args, method='median', **kwargs ):
         """Overscan and trim image.
 
-        Parameters
-        ----------
+        Positional Parameters
+        ---------------------
         Can pass either one or two positional parameters
 
         If one: image
@@ -1863,6 +1868,21 @@ class Instrument:
           Image header.  Need the full header, i.e. Image.header not Image.info.
         data: numpy array
           Image data.  Must not be trimmed, i.e. must include the overscan section
+
+        Keyword Parameters
+        ------------------
+          method : str, default 'median'
+             If 'median', then the overscan for an image's row/column is
+             the median of the overscan region for that row/column.
+
+             If 'polymedrej', then the overscan will first calculate the
+             median of all the rows/cols, then fit a kwargs['order']
+             (default: 3) Chebychev polynomial along the cols/rows of
+             those resultant medians, will reject points that are more
+             than kwargs['sigcut'] (default 3) σ away from the fit, and
+             will iterate the fit until there are no more rejections.
+             The overscan value for an image's row/col is then
+             interpolated from that polynomial.
 
         Hopefully most instruments won't have to override this (only
         overscan_sections), but this routine does assume that the data
@@ -1913,18 +1933,12 @@ class Instrument:
             ysize = max( sec['destsec']['y1'], ysize )
             xsize = max( sec['destsec']['x1'], xsize )
 
-        # Figure out bias values by taking the median of the appropriate overscan sections
         for sec in sections:
             # Have to figure out whether the overscan strip is offset in x or offset in y
-            if sec['biassec']['y1'] - sec['biassec']['y0'] == sec['datasec']['y1'] - sec['datasec']['y0']:
-                sec['bias'] = np.median( data[ sec['biassec']['y0']:sec['biassec']['y1'] ,
-                                               sec['biassec']['x0']:sec['biassec']['x1'] ],
-                                         axis=1 )[ :, np.newaxis ]
-            elif sec['biassec']['x1'] - sec['biassec']['x0'] == sec['datasec']['x1'] - sec['datasec']['x0']:
-                sec['bias'] = np.median( data[ sec['biassec']['y0']:sec['biassec']['y1'] ,
-                                               sec['biassec']['x0']:sec['biassec']['x1'] ],
-                                         axis=0 )[ np.newaxis, : ]
-            else:
+            isrow = ( sec['biassec']['y1'] - sec['biassec']['y0'] == sec['datasec']['y1'] - sec['datasec']['y0'] )
+            iscol = ( sec['biassec']['x1'] - sec['biassec']['x0'] == sec['datasec']['x1'] - sec['datasec']['x0'] )
+            axis = 1 if isrow else 0 if iscol else None
+            if axis is None:
                 err = ( f"Bias/Data section size mismatch: biassec=["
                         f"{sec['biassec']['x0']}:{sec['biassec']['x1']},"
                         f"{sec['biassec']['y0']}:{sec['biassec']['y1']}], datasec=["
@@ -1932,6 +1946,43 @@ class Instrument:
                         f"{sec['datasec']['y0']}:{sec['datasec']['y1']}]" )
                 SCLogger.error( err )
                 raise ValueError( err )
+
+            ovscn_meds = np.median( data[ sec['biassec']['y0']:sec['biassec']['y1'] ,
+                                          sec['biassec']['x0']:sec['biassec']['x1'] ],
+                                    axis=axis )
+
+            if method == 'median':
+                # Figure out bias values by taking the median of the appropriate overscan sections
+                pass
+
+            elif method == 'polymedrej':
+                order = kwargs['order'] if 'order' in kwargs else 3
+                sigcut = kwargs['sigcut'] if 'sigcut' in kwargs else 3.
+                allxvals = numpy.arange( 0, ovscn_meds.shape[0], dtype=ovscn_meds.dtype )
+                xvals = allxvals.copy()
+                done = False
+                while not done:
+                    poly = np.polynomial.chebyshev.Chebyshev.fit( xvals, ovscn_meds, order )
+                    resid = ovscn_meds - poly(xvals)
+                    sig = resid.std()
+                    keeps = ( np.fabs(resid) < sigcut * sig )
+                    if len(keeps) == len(xvals):
+                        done = True
+                    else:
+                        xvals = xvals[keeps]
+                        ovscn_meds = ovscn_meds[keeps]
+                ovscn_meds = poly( allxvals )
+
+            else:
+                raise ValueError( f"Unknown overscan method {method}" )
+
+            # By now, the right overscan values as a function of col/row are in ovscn_meds
+            if isrow:
+                sec['bias'] = ovscn_meds[:, np.newaxis]
+            elif iscol:
+                sec['bias'] = ovscn_meds[np.newaxis, :]
+            else:
+                raise RuntimeError( "This should never happen." )
 
         # Actually subtract overscan and trim
         trimmedimage = np.zeros( [ ysize, xsize ], dtype=data.dtype )
