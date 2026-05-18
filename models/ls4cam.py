@@ -516,8 +516,17 @@ class LS4Cam(Instrument):
 
 
     def get_standard_flags_image( self, section_id ):
-        SCLogger.warning( "get_standard_flags_image not yet implemetented for LS4cam, returning all zeros!" )
-        return super().get_standard_flags_image( section_id )
+        rempath = pathlib.Path( f'masks/20260518/FP_mask_{section_id}.fits.fz' )
+        localpath = ( pathlib.path( FileOnDiskMixin.local_path ) / f'masks/20260518/FP_mask_{section_id}.fits.fz' )
+        if not localpath.is_file():
+            cfg = Config.get()
+            url = f'{cfg.value("LS4Cam.urlbase")}{rempath}'
+            retry_download( url, localpath )
+
+        with fits.open( localpath ) as hdu:
+            bpm = hdu[1].data
+
+        return bpm
 
 
     def get_gain_at_pixel( self, image, x, y, section_id=None ):

@@ -16,7 +16,7 @@ import astropy.units as u
 from astropy.coordinates import SkyCoord, Distance
 
 from models.base import Base, SmartSession, UUIDMixin
-from models.provenance import Provenance
+from models.provenance import Provenance, ProvenanceTag
 
 from pipeline.catalog_tools import Bandpass
 from util.fits import read_fits_image
@@ -1544,7 +1544,7 @@ class Instrument:
 
         return None
 
-    def preprocessing_calibrator_files( self, calibset, flattype, section, filter, mjd, nofetch=False ):
+    def preprocessing_calibrator_files( self, calibset, flattype, section, filter, mjd, provtag=None, nofetch=False ):
         """Get a dictionary of calibrator images/datafiles for a given mjd and sensor section.
 
         Don't call this when you're holding open a database session, as
@@ -1578,6 +1578,8 @@ class Instrument:
           be the short filter name, not the long filter name.
         mjd: float
           The mjd where the calibrator params are valid
+        provtag: str or None
+          If given, the provenance tag of the image or data file to get
         nofetch: bool
           If True, will only search the database for an
           externally_supplied calibrator.  If False (default), will call
@@ -1623,7 +1625,13 @@ class Instrument:
 
             calib = None
             with SmartSession() as dbsess:
-                calibquery = ( dbsess.query( CalibratorFile )
+                calibquery = dbsess.query( CalibratorFile )
+                if provtag is not None:
+                    calibquery = ( calibquery.join( ProvenanceTag,
+                                                    CalibratorFile.provenance_id == ProvenanceTag.provenance_id )
+                                   .filter( ProvenanceTag.tag == provtag )
+                                  )
+                calibquery = ( calibquery
                                .filter( CalibratorFile.calibrator_set == calibset )
                                .filter( CalibratorFile.instrument == self.name )
                                .filter( CalibratorFile.type == calibtype )

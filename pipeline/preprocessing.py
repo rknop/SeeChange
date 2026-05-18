@@ -48,6 +48,27 @@ class ParsPreprocessor(Parameters):
                       critical=True
                      )
 
+        self.add_par( 'use_base_mask',
+                      True,
+                      bool,
+                      "Use the instrument's base mask when building the image mask.",
+                      critical=True
+                     )
+
+        self.add_par( 'use_zero_mask',
+                      True,
+                      bool,
+                      "If the bias subtraction step is applied, add masked pixels in the bias image to image mask",
+                      critical=True
+                     )
+
+        self.add_par( 'use_flat_mask',
+                      True,
+                      bool,
+                      "If flatfielding is performed, add masked pixels in the flat image to image mask",
+                      critical=True
+                     )
+
         self.add_par( 'calibset', 'externally_supplied', str,
                       "The calibrator set to use.  Choose one of the CalibratorSetConverter enum. ",
                       critical=True )
@@ -168,7 +189,7 @@ class Preprocessor:
                                                                                self.pars.flattype,
                                                                                ds.section_id,
                                                                                baseobj.filter,
-                                                                              baseobj.mjd )
+                                                                               baseobj.mjd )
                 SCLogger.debug("preprocessing: got calibrator files")
             else:
                 preprocparam = {}
@@ -202,8 +223,8 @@ class Preprocessor:
             filter_skips = set(filter_skips)
             needed_steps -= filter_skips
 
-            # in case we skip all preprocessing steps
             if image._data is None:
+                # in case we skip all preprocessing steps
                 image.data = image.raw_data
                 # Make sure the Exposure won't cache data we aren't using any more.
                 if image_was_from_exposure:
@@ -218,6 +239,7 @@ class Preprocessor:
             #   the things that were skipped for this filter (i.e., the
             #   instrument's preprocessing_step_skip_by_filter).
             already_done = set( image.preprocessing_done.split(', ') if image.preprocessing_done else [] )
+            made_flags = False
 
             # If self.pars.preprocessing is anything other than
             #   'internal', there should be nothing left to do except
@@ -236,6 +258,8 @@ class Preprocessor:
                     SCLogger.debug('preprocessing: overscan and trim')
                     image.data = self.instrument.overscan_and_trim( image, method=self.pars.overscan_method,
                                                                     **self.pars.overscan_kwargs )
+                    image.flags = np.zeros( image.data.shape, dtype=np.int16 )
+                    made_flags = True
                     # Update the header ra/dec calculations now that we know the real width/height
                     try:
                         image.set_corners_from_header_wcs(setradec=True)
@@ -298,10 +322,14 @@ class Preprocessor:
                     if step in [ 'zero', 'dark' ]:
                         # Subtract zeros and darks
                         image.data -= calibfile.data
+                        if ( step == 'zero' ) and ( self.pars.use_zero_mask ) and ( calibfile.flags is not None ):
+                            image.flags = np.bitwise_or( image.flags, calibfile.flags )
 
                     elif step in [ 'flat', 'illumination' ]:
                         # Divide flats and illuminations
                         image.data /= calibfile.data
+                        if self.pars.use_flat_mask and ( calibfile.flags is not None ):
+                            image.flags = np.bitwise_or( image.flags, calibfile.flags )
 
                     elif step == 'fringe':
                         # TODO FRINGE CORRECTION
@@ -328,8 +356,14 @@ class Preprocessor:
                     if yeet in image.header:
                         del image.header[yeet]
 
-            # Build the weight and flags images (if necessary)
-            if image.flags is None or image.weight is None:
+
+            # Add the instrument base flags to the flags if we just created the flags here
+            if made_flags and self.pars.use_base_mask:
+                basemask = self.instrument.get_standard_flags_image( ds.section_id )
+                image.flags = np.bitwise_or( image.flags, basemask.flags )
+
+            # Build the weight images (if necessary)
+            if image.weight is None:
                 # Start with the Instrument standard bad pixel mask for this image
                 image._flags = self.instrument.get_standard_flags_image( ds.section_id )
 

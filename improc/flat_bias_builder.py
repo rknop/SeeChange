@@ -570,6 +570,8 @@ class FlatBuilder:
         # Whatever.  Memory is cheap now, yes?
 
         if self.nodb:
+            # At the very least, need to generate an all-True mask
+            raise RuntimeError( "nodb is broken at the moment" )
             for i, fname in enumerate( self.files ):
                 with fits.open( fname ) as hdul:
                     if self.pars.exposure_mode:
@@ -590,12 +592,13 @@ class FlatBuilder:
                         data = hdu.data
 
                     if massive_stack is None:
-                        massive_stack = np.empty( ( data.shape[0], data.shape[1], len(self.files) ),
+                        # Make the file index the first one, so that the images stay contiguous in memory
+                        massive_stack = np.empty( ( len(self.files), data.shape[0], data.shape[1] ),
                                                        dtype=np.float64 )
-                    if data.shape != massive_stack.shape[0:2]:
-                        raise RuntimeError( f"First image {self.files[0]} had shape {massive_stack.shape[0:2]}, "
+                    if data.shape != massive_stack.shape[1:3]:
+                        raise RuntimeError( f"First image {self.files[0]} had shape {massive_stack.shape[1:3]}, "
                                             f"but {fname} has shape {data.shape}" )
-                    massive_stack[ :, :, i ] = data
+                    massive_stack[ i, :, : ] = data
                     mjd = self.instrument.extract_header_info( hdu.header, [ 'mjd' ] )[0]
                     if min_mjd is None:
                         min_mjd = mjd
@@ -603,6 +606,8 @@ class FlatBuilder:
                     else:
                         min_mjd = min( mjd, min_mjd )
                         max_mjd = max( mjd, max_mjd )
+
+            # TODO : flags/mask images when not in db mode?
 
         else:
             with PsycopgConnection() as con:
@@ -620,28 +625,31 @@ class FlatBuilder:
                             raise RuntimeError( f"Failed to find section header {section_id} in exposure {fname}" )
                         del expobj
                         data = self.instrument.overscan_and_trim( header, data )
+                        flags = np.zeros( data.shape, dtype=np.int16 )
                     else:
                         imgobj = Image.get_by_id( objid, session=con )
                         fname = imgobj.filepath
                         mjd = imgobj.mjd
                         data = imgobj.data
+                        flags = imgobj.flags
                         del imgobj
 
                     if massive_stack is None:
-                        massive_stack = np.empty( ( data.shape[0], data.shape[1], len(self.files) ),
-                                                       dtype=np.float64 )
-                    if data.shape != massive_stack.shape[0:2]:
-                        raise RuntimeError( f"First image had shape {massive_stack.shape[0:2]}, but "
+                        massive_stack = np.ma.array( np.empty( ( len(self.files), data.shape[0], data.shape[1] ),
+                                                               dtype=np.float64 ),
+                                                     mask=np.full( ( len(self.files), data.shape[0], data.shape[1] ),
+                                                                   False ) )
+                    if data.shape != massive_stack.shape[1:3]:
+                        raise RuntimeError( f"First image had shape {massive_stack.shape[1:3]}, but "
                                             f"{fname} has shape {data.shape}" )
-                    massive_stack[ :, :, i ] = data
+                    massive_stack[ i ] = data
+                    massive_stack.mask[ i ] = ( flags != 0 )
                     if min_mjd is None:
                         min_mjd = mjd
                         max_mjd = mjd
                     else:
                         min_mjd = min( mjd, min_mjd )
                         max_mjd = max( mjd, max_mjd )
-
-        # TODO READ MASKS
 
         return massive_stack, min_mjd, max_mjd
 
@@ -651,25 +659,20 @@ class FlatBuilder:
         if self.pars.normalize_mode is not None:
             SCLogger.info( f"Normalizing all images{section_id}..." )
             for i in range(len(self.files)):
-                # TODO USE MASK
                 if self.pars.normalize_mode == 'median':
-                    massive_stack[ :, :, i ] /= np.median( massive_stack[ :, :, i ] )
+                    massive_stack[ i, :, : ] /= np.ma.median( massive_stack[ i, :, : ] )
                 else:
                     raise ValueError( f"Unknown normalization method {self.pars.normalize_mode}" )
 
         # Combine all the images
         SCLogger.info( f"Building combined image{section_id}..." )
         if self.pars.combine_mode == "median":
-            # TODO individual masks?  THOUGHT REQUIRED
-            self.combined = np.median( massive_stack, axis=2 )
-            mad = np.median( np.abs( massive_stack - self.combined[ :, :, np.newaxis ] ), axis=2 )
+            self.combined = np.ma.median( massive_stack, axis=0 )
+            mad = np.ma.median( np.abs( massive_stack - self.combined[ np.newaxis, :, : ] ), axis=0 )
             self.nmad = ( self.nmad_k * mad ).astype( np.float32, copy=False )
             if self.pars.bad_threshold is not None:
                 threshold = self.pars.bad_threshold * self.nmad_k * np.median( self.nmad )
-                self.mask = ( self.nmad > threshold ).astype( np.int16 )
-                # TODO, add to standard mask
-            else:
-                self.mask = None
+                self.combined.mask = np.logical_or( self.combined.mask, self.nmad > threshold )
 
         else:
             raise ValueError( f"Unknown combination mode {self.pars.comine_mode}" )
@@ -711,8 +714,8 @@ class FlatBuilder:
                             } )
             imgobj = Image( **imkwargs )
             imgobj.header = self._make_header( results, results['section_id'] )
-            imgobj.data = results['comb']
-            imgobj.flags = results['mask']
+            imgobj.data = results['comb'].data
+            imgobj.flags = results['comb'].mask.astype( np.int16 )
             imgobj.weight = results['nmad']
             imgobj.filepath = imgobj.invent_filepath( name_convention=self.pars.name_convention )
             imgobj.save()
@@ -814,13 +817,14 @@ class FlatBuilder:
             if outfile is not None:
                 fname = f'{outfile}{f"_{section_id}" if section_id is not None else ""}.fits.fz'
                 SCLogger.info( f"Writing combined image to to {fname}..." )
-                util.fits.write_compressed_fits_fz( fname, results['comb'], header, overwrite=True )
+                util.fits.write_compressed_fits_fz( fname, results['comb'].data, header, overwrite=True )
                 SCLogger.info( "...written." )
 
             if outmask is not None:
                 fname = f'{outmask}{f"_{section_id}" if section_id is not None else ""}.fits.fz'
                 SCLogger.info( f"Writing mask to {fname}..." )
-                util.fits.write_compressed_fits_fz( fname, results['mask'], header, overwrite=True )
+                util.fits.write_compressed_fits_fz( fname, results['comb'].mask.astype(np.int16),
+                                                    header, overwrite=True )
                 SCLogger.info( "...written." )
 
             if nmad is not None:
@@ -845,7 +849,7 @@ class FlatBuilder:
             massive_stack, min_mjd, max_mjd = self.read_files( section_id )
             self.calculate_flat( massive_stack, section_id )
             del massive_stack
-            return section_id, self.combined, self.nmad, self.mask, min_mjd, max_mjd
+            return section_id, self.combined, self.nmad, min_mjd, max_mjd
         except Exception:
             SCLogger.exception( f"Exception in process running chip {section_id}" )
             raise
@@ -873,7 +877,6 @@ class FlatBuilder:
                             'section_id': sec,
                             'comb': self.combined,
                             'nmad': self.nmad,
-                            'mask': self.mask,
                             'min_mjd': min_mjd,
                             'max_mjd': max_mjd
                         }
@@ -892,14 +895,13 @@ class FlatBuilder:
                 for sec, res in zip( self.section_ids,
                                      pool.map( doer, self.section_ids, timeout=self.pars.timeout ) ):
                     try:
-                        sec_id, comb, nmad, mask, min_mjd, max_mjd = res
+                        sec_id, comb, nmad, min_mjd, max_mjd = res
                         if sec_id != sec:
                             raise RuntimeError( "This should never happen." )
                         collected_results[sec_id] = {
                             'section_id': sec,
                             'comb': comb,
                             'nmad': nmad,
-                            'mask': mask,
                             'min_mjd': min_mjd,
                             'max_mjd': max_mjd
                         }
@@ -940,7 +942,6 @@ class FlatBuilder:
             self.results = { 'section_id': self.section_id,
                              'comb': self.combined,
                              'nmad': self.nmad,
-                             'mask': self.mask,
                              'min_mjd': min_mjd,
                              'max_mjd': max_mjd }
 

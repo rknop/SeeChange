@@ -734,6 +734,38 @@ class SeeChangeBase:
         raise NotImplementedError( f'get_downstreams not implemented for {self.__class__.__name__}' )
 
 
+    def delete_everything_in_provtag( self, tag, models=[], remove_folders=True,
+                                      remove_downstreams=True, archive=True ):
+        raise NotImplementedError( "In progress" )
+        with PsycopgConnection() as dbcon:
+            cursor = dbcon.cursor( row_factory=psycopg.rows.dict_row )
+            cursor.execute( "SELECT provenance_id FROM provenance_tags WHERE tag=%(tag)s", { 'tag': tag } )
+            rows = cursor.fetchall()
+            chopping_block = [ r['provenance_id'] for r in rows ]
+            cursor.execute( "SELECT provenance_id, tag FROM provenance_tags WHERE tag!=%(tag)s AND "
+                            "provenance_id=ANY(%(ids))", { 'tag': tag, 'ids': chopping_block } )
+            rows = cursor.fetchall()
+            chopping_block = set( chopping_block )
+            for row in rows:
+                SCLogger.warning( f"Not deleting things from provenance {row['provenance_id']} because "
+                                  f"it also exists in tag {row['tag']}" )
+                chopping_block.remove( row['provenance_id'] )
+
+        with SmartSession() as session:
+            for model in models:
+                objs = session.query( model ).filter( model.provenance_id.in_( chopping_block ) ).all()
+                SCLogger.warning( f"Deleteing {len(objs)} rows from {model.__tablename__}, plus associated "
+                                  f"data, plus (probably) all downstreams." )
+                for i, obj in enumerate(objs):
+                    if i % 100 == 0:
+                        SCLogger.debug( f"...deleted {i} of {len(objs)}..." )
+                    obj.delete_from_disk_and_database( remove_folders=remove_folders,
+                                                       remove_downstreams=remove_downstreams,
+                                                       archive=archive )
+                SCLogger.debug( f"...done deleting {len(objs)} rows from {model.__tablename__}." )
+
+
+
     def delete_from_disk_and_database( self, remove_folders=True, remove_downstreams=True, archive=True ):
         """Delete any data from disk, archive and the database.
 
