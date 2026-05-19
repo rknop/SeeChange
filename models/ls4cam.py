@@ -1,6 +1,7 @@
 import re
 import types
 import pathlib
+import hashlib
 import datetime
 import subprocess
 
@@ -517,11 +518,32 @@ class LS4Cam(Instrument):
 
     def get_standard_flags_image( self, section_id ):
         rempath = pathlib.Path( f'masks/20260518/FP_mask_{section_id}.fits.fz' )
-        localpath = ( pathlib.path( FileOnDiskMixin.local_path ) / f'masks/20260518/FP_mask_{section_id}.fits.fz' )
+        localpath = ( pathlib.Path( FileOnDiskMixin.local_path ) / f'masks/20260518/FP_mask_{section_id}.fits.fz' )
         if not localpath.is_file():
             cfg = Config.get()
-            url = f'{cfg.value("LS4Cam.urlbase")}{rempath}'
-            retry_download( url, localpath )
+            url = f'{cfg.value("LS4Cam.calibfiles.urlbase")}{str(rempath)}'
+            md5path = localpath.parent / f'{localpath.name}.md5sum'
+            retry_download( f'{url}.md5sum', md5path )
+            with open( md5path ) as ifp:
+                line = ifp.readline()
+                md5sum = line.split()[0]
+            retries = 5
+            success = False
+            while ( not success ) and ( retries >= 0 ):
+                # retries within retries....
+                # (retry_download will raise an exception if it runs out of retries, so the way
+                # this loop is written, it multiply the retry_download timeout by 5.)
+                retry_download( url, localpath )
+                filemd5 = hashlib.md5()
+                with open( localpath, 'rb' ) as ifp:
+                    filemd5.update( ifp.read() )
+                if filemd5.hexdigest() != md5sum:
+                    retries -= 1
+                    SCLogger.warning( f"md5sum of {localpath.name} not right, going to retry {retries} more times." )
+                else:
+                    success = True
+            if not success:
+                raise RuntimeError( f"Failed to download standard flags image {localpath.name}, md5sum did not match" )
 
         with fits.open( localpath ) as hdu:
             bpm = hdu[1].data

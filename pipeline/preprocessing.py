@@ -360,7 +360,7 @@ class Preprocessor:
             # Add the instrument base flags to the flags if we just created the flags here
             if made_flags and self.pars.use_base_mask:
                 basemask = self.instrument.get_standard_flags_image( ds.section_id )
-                image.flags = np.bitwise_or( image.flags, basemask.flags )
+                image.flags = np.bitwise_or( image.flags, basemask )
 
             # Build the weight images (if necessary)
             if image.weight is None:
