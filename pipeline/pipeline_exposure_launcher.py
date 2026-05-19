@@ -24,7 +24,7 @@ class ExposureLauncher:
     """
 
     def __init__( self, cluster_id, node_id, numprocs=None, verify=True, onlychips=None,
-                  through_step=None, max_run_time=None, types=None, instrument=None,
+                  through_step=None, max_run_time=None, max_idle_time=None, types=None, instrument=None,
                   just_download=False, worker_log_level=logging.WARNING ):
         """Make an ExposureLauncher.
 
@@ -75,6 +75,13 @@ class ExposureLauncher:
           to see that it hasn't been running this long, and if it has,
           it will exit.
 
+        max_idle_time : float, default None
+          By default, if the conductor has nothing to do, the
+          pipeline_exposure_launcher will sleep for 2 minutes and ask
+          the conductor again.  If max_idle_time is not None, exit after
+          that many seconds have elapsed not getting something to do from
+          the conductor.
+
         types : list of str or None
           If not None, will ask the conductor just for images of these
           types.  See enums_and_bitflags.py::ImageTypeConverter for
@@ -104,6 +111,7 @@ class ExposureLauncher:
         self.onlychips = onlychips
         self.through_step = through_step
         self.max_run_time = max_run_time
+        self.max_idle_time = max_idle_time
         self.types = types
         self.instrument = instrument
         self.just_download = just_download
@@ -156,13 +164,19 @@ class ExposureLauncher:
         """
 
         start_time = time.perf_counter()
+        last_idle_time = time.perf_counter()
         done = False
         n_processed = 0
         while not done:
             try:
                 run_time = time.perf_counter() - start_time
+                idle_time = time.perf_counter() - last_idle_time
                 if ( self.max_run_time is not None ) and ( run_time > self.max_run_time ):
                     SCLogger.info( f"ExposureLauncher has been running for {run_time:.0f} seconds, returning." )
+                    done = True
+                    continue
+                if ( self.max_idle_time is not None ) and ( idle_time > self.max_idle_time ):
+                    SCLogger.info( f"ExposureLauncher has been idle for {idle_time:.0f} seconds, returning." )
                     done = True
                     continue
 
@@ -249,6 +263,9 @@ class ExposureLauncher:
                     SCLogger.info( f"Hit max {n_processed} exposures, returning." )
                     done = True
 
+                # Reset idle timer
+                last_idle_time = time.perf_counter()
+
             except Exception:
                 if die_on_exception:
                     raise
@@ -308,10 +325,13 @@ environment variable anyway.)
     parser.add_argument( "--numprocs", default=None, type=int,
                          help="Number of worker processes to run at once.  (Default: # of CPUS - 1.)" )
     parser.add_argument( "-m", "--max-run-time", default=None, type=float,
-                         help=( "Maximum time to run before exiting.  If this is on a job that will get cancelled "
-                                "(e.g. one launched on a slurm queue), make sure this is less than the runtime "
-                                "of the job by an amount conservatively equal to what you'd need to process a "
-                                "single exposure." ) )
+                         help=( "Maximum time (seconds) to run before exiting.  If this is on a job that will "
+                                "get cancelled (e.g. one launched on a slurm queue), make sure this is less than "
+                                "the runtime of the job by an amount conservatively equal to what you'd need to "
+                                "process a single exposure." ) )
+    parser.add_argument( "--max-idle-time", default=None, type=float,
+                         help=( "Maximum time (seconds) to get no exposures from the conductor before existing.  "
+                                "None = keep going forever modulo max-run-time and nexp" ) )
     parser.add_argument( "--nexp", default=None, type=int,
                          help="Stop after running this many images." )
     parser.add_argument( "--noverify", default=False, action='store_true',
@@ -350,8 +370,9 @@ environment variable anyway.)
 
     elaunch = ExposureLauncher( args.cluster_id, args.node_id, numprocs=args.numprocs, onlychips=args.chips,
                                 verify=not args.noverify, through_step=args.through_step,
-                                max_run_time=args.max_run_time, worker_log_level=worker_log_level,
-                                types=args.types, instrument=args.instrument, just_download=args.just_download )
+                                max_run_time=args.max_run_time, max_idle_time=args.max_idle_time,
+                                worker_log_level=worker_log_level, types=args.types, instrument=args.instrument,
+                                just_download=args.just_download )
     elaunch.register_worker()
 
     def goodbye( signum, frame ):

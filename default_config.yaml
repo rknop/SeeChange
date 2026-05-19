@@ -396,7 +396,7 @@ preprocessing:
   calibset: externally_supplied
   overscan_method: median
   overscan_kwargs: {}
-  flatttype: externally_supplied
+  flattype: externally_supplied
   use_base_mask: true
   use_zero_mask: true
   use_flat_mask: true
