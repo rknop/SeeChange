@@ -322,7 +322,7 @@ flat_bias_builder:
   save_to_db: True
   no_save_on_exception: True
   calibrator_set: nightly
-  name_convention: "{inst_name}/biases/{date}/{inst_name}_bias_{date}_{time}_{section_id}_{prov_hash:.6s}"
+  name_convention: "{inst_name}/biases/{date}/{inst_name}_{im_type}_{date}_{time}_{section_id}_{prov_hash:.6s}"
   validity_start_offset: 1.0
   validity_end_offset: 2.0
   bias: { }
@@ -339,7 +339,7 @@ flat_bias_builder:
     bad_threshold: 5.0
     nmin: 21
     nmax: 61
-    name_convention: "{inst_name}/flats/{date}/{inst_name}_twiflat_{date}_{time}_{section_id}_{prov_hash:.6s}"
+    name_convention: "{inst_name}/flats/{date}/{inst_name}_{im_type}_{date}_{time}_{section_id}_{prov_hash:.6s}"
 #   flat:
 #     exposure_mode: False
 #     searchtype: Sci
@@ -396,7 +396,10 @@ preprocessing:
   calibset: externally_supplied
   overscan_method: median
   overscan_kwargs: {}
+  zero_provtag: null
   flattype: externally_supplied
+  flat_provtag: null
+  fringe_provtag: null
   use_base_mask: true
   use_zero_mask: true
   use_flat_mask: true
