@@ -8,6 +8,8 @@ import pathlib
 import json
 import datetime
 import uuid
+import socket
+import threading
 from uuid import UUID
 from contextlib import contextmanager
 
@@ -989,6 +991,103 @@ Base = declarative_base(cls=SeeChangeBase)
 ARCHIVE = None
 
 
+class ArchiveLock( Base ):
+    __tablename__ = 'archive_locks'
+
+    serverpath = sa.Column(
+        sa.Text,
+        nullable=False,
+        index=True,
+        unique=True,
+        doc="Path on the archive server that we want to lock"
+    )
+
+    hostname = sa.Column(
+        sa.Text,
+        nullable=True,
+        server_default=None,
+        doc="hostname that holds the lock"
+    )
+
+    pid = sa.Column(
+        sa.Integer,
+        nullable=True,
+        server_default=None,
+        doc="PID of the process that holds the lock"
+    )
+
+    identifier = sa.Column(
+        sa.Text
+        nullable=True,
+        server_default=None,
+        doc=( "Some sort of identifier of the thread that holds the lock so it can be sure not to delete "
+              "locks owned by other threads." )
+    )
+
+
+    def __init__( self, *args, **kargs ):
+        super().__init__( *args, **kwargs )
+
+
+    @staticmethod
+    def lockfunc( serverpath, unlock=False, sleep_min=0.5, sleep_init=2, sleep_max=16, sleep_fac=2, sleep_fuzz=0.1 ):
+        if unlock:
+            with PsycopgConnection() as con:
+                cursor = con.cursor()
+                cursor.execute( "DELETE FROM archive_locks "
+                                "WHERE serverpath=%(path)s "
+                                "  AND host=%(host)s "
+                                "  AND pid=%(pid)s",
+                                "  AND identifier=%(id)s"
+                                { 'path': serverpath,
+                                  'host': socket.gethostname(),
+                                  'pid': os.getpid(),
+                                  'id': str(threading.get_ident()) }
+                               )
+                con.commit()
+                return
+        
+        rng = np.random.default_generator()
+        sleept = sleep_init
+        t0 = time.perf_counter()
+        ok = False
+        while not ok:
+            with PsycopgConnection() as con:
+                try:
+                    cursor = con.cursor()
+                    cursor.execute( "LOCK TABLE archive_locks" )
+                    cursor.execute( "SELECT serverpath, hostname, pid, identifier, created_at "
+                                    "FROM archive_locks "
+                                    "WHERE serverpath=%(path)s",
+                                    { 'path': serverpath } )
+                    rows = cursor.fetchall()
+                    if len(rows) == 0:
+                        cursor.execute( "INSERT INTO archive_locks(serverpath, hostname, pid, identifier) "
+                                        "VALUES (%(path)s, %(host)s, %(pid)s, %(id)s)",
+                                        { 'path': serverpath,
+                                          'host': socket.gethostname(),
+                                          'pid': os.getpid(),
+                                          'id': str(threading.get_ident()) }
+                                       )
+                        con.commit()
+                        ok = True
+                finally:
+                    con.rollback()
+                        
+            if not ok:
+                nextsleept = sleept * sleep_fac
+                if nextsleept > sleep_max:
+                    raise RuntimeError( f"Failed to get archive lock on {serverpath} after "
+                                        f"{time.perf_counter()-t0:.1f}s" )
+                actualsleept = max( sleep_min, sleept + rng.normal( scale=sleep_fuzz * sleept ) )
+                SCLogger.info( "Archive lock exists on {serverpath}; sleeping {actualsleept:.1f}s and trying again." )
+                SCLogger.debug( f"Lock held by {rows[0][1]} PID {rows[0][2]} thread {rows[0][3]} at {rows[0][4]}" )
+                if len(rows) > 1:
+                    SCLogger.error( f"{len(rows)} locks held on {serverpath}; that's not supposed to happen!" )
+                time.sleep( actualsleept )
+                sleept = nextsleept
+        
+        
 def get_archive_object():
     """Return a global archive object. If it doesn't exist, create it based on the current config. """
     global ARCHIVE
@@ -997,6 +1096,7 @@ def get_archive_object():
         archive_specs = cfg.value('archive', None)
         if archive_specs is not None:
             archive_specs[ 'logger' ] = SCLogger
+            archive_specs[ 'lockfunc' ] = ArchiveLock.lockfunc
             if ( 'token' not in archive_specs ) or  ( archive_specs[ 'token' ] is None ):
                 if ( 'token_file' not in archive_specs ) or ( archive_specs[ 'token_file' ] is None ):
                     raise RuntimeError( "Archive specs don't include a token or token_file" )
