@@ -4,7 +4,6 @@ import logging
 
 import psycopg
 
-from util.config import Config
 from models.base import PsycopgConnection
 from models.enums_and_bitflags import KnownExposureStateConverter
 from models.exposure import Exposure
@@ -20,15 +19,8 @@ def test_exposure_processor( decam_default_calibrators,
 
     exposureid = None
     zpid = None
-    origcfgobj = Config._configs[ Config._default ]
 
     try:
-        cfg = Config.get( static=False )
-        # NEVER DO THIS ; search for NEVER DO THIS in tests/models/test_base.py
-        Config._configs[ Config._default ] = cfg
-        # Make a new provenance tag that the exposure processor will save under
-        cfg.set_value( 'pipeline.provenance_tag', 'test_exposure_processor' )
-
         # Make sure that the exposure is currently held
         with PsycopgConnection() as conn:
             cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
@@ -46,7 +38,8 @@ def test_exposure_processor( decam_default_calibrators,
 
         # Set up an exposure processor that will run through photocal
         processor = ExposureProcessor( 'DECam', decam_exposure_name, 1, 'test', 'test', machine_name='test',
-                                       onlychips=['S2'], through_step='photocal', worker_log_level=logging.DEBUG )
+                                       onlychips=['S2'], through_step='photocal', provtag='test_exposure_processor',
+                                       worker_log_level=logging.DEBUG )
 
         # Make sure it yells at us if we don't assume_claimed and the exposure is claimed by somebody else
         with PsycopgConnection() as conn:
@@ -148,9 +141,12 @@ def test_exposure_processor( decam_default_calibrators,
             rows = cursor.fetchall()
             assert len(rows) == 0
 
+            # TODO : check that the right provenance tags got created
+
         # Make a new processor that will pick up where this one left off
         processor = ExposureProcessor( 'DECam', decam_exposure_name, 1, 'test', 'test', machine_name='test',
-                                       onlychips=['S2'], worker_log_level=logging.DEBUG )
+                                       onlychips=['S2'], provtag='test_exposure_processor',
+                                       worker_log_level=logging.DEBUG )
         with pytest.raises( ValueError, match="There's already an exposure associated.*but cont is False" ):
             processor.secure_exposure( cont=False )
 
@@ -246,9 +242,6 @@ def test_exposure_processor( decam_default_calibrators,
         # NOTE -- we haven't tested "delete"
 
     finally:
-        # Clean up after the thing we were not supposed to do
-        Config._configs[ Config._default ] = origcfgobj
-
         with PsycopgConnection() as con:
             cursor = con.cursor()
 

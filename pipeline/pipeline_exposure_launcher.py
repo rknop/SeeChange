@@ -97,7 +97,7 @@ class ExposureLauncher:
           provenance_tag parameter.  Otherwise, pass this value.  (The
           default is not None because None is something you might use to
           override what's in the config.)
-        
+
         just_download : bool, default False
           If True, download exposures and load them into the database, but don't
           actually run the pipeline.
@@ -395,7 +395,7 @@ environment variable anyway.)
                "just_download": args.just_download }
     if 'provtag' in vars( args ):
         kwargs['provtag'] = None if args.provtag == "None" else args.provtag
-    
+
     elaunch = ExposureLauncher( *args, **kwargs )
     elaunch.register_worker()
 

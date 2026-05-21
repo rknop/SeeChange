@@ -86,46 +86,9 @@ def test_solve_wcs_scamp( ztf_gaia_dr3_excerpt, ztf_datastore_uncommitted, astro
         assert scold.dec.value == pytest.approx( scnew.dec.value, abs=1./3600. )
 
 
-def test_run_scamp( decam_datastore_through_extraction, astrometor ):
-    ds = decam_datastore_through_extraction
 
-    # Get the md5sum and WCS from the image before we do things to it
-    with open(ds.path_to_original_image, "rb") as ifp:
-        md5 = hashlib.md5()
-        md5.update(ifp.read())
-        origmd5 = uuid.UUID(md5.hexdigest())
-
-    xvals = [0, 0, 2047, 2047]
-    yvals = [0, 4095, 0, 4095]
-    with fits.open(ds.path_to_original_image) as hdu:
-        origwcs = WCS(hdu[ds.section_id].header)
-
-    astrometor.pars.cross_match_catalog = 'gaia_dr3'
-    astrometor.pars.solution_method = 'scamp'
-    astrometor.pars.max_catalog_mag = [20.]
-    astrometor.pars.mag_range_catalog = 4.
-    astrometor.pars.min_catalog_stars = 50
-    astrometor.pars.max_resid = 0.15
-    astrometor.pars.crossid_radii = [2.0]
-    astrometor.pars.min_frac_matched = 0.1
-    astrometor.pars.min_matched_stars = 10
-
-    # The datastore should object when it tries to get the provenance for astrometor
-    # params that don't match what we started with
-    with pytest.raises( ValueError, match=( "Passed pars_dict does not match parameters for "
-                                            "internal provenance of astrocal" ) ):
-        ds = astrometor.run(ds)
-
-    # Update the datastore's prov_tree so that it has the provenance we
-    #   want for astrometor.  Unset the datastore's provtag because
-    #   we're kind of cheating here.  (If you're going to edit
-    #   the provenance tree like this, you shouldn't have set
-    #   a provenance tag in the first place, but the fixture did.)
-    ds._provtag = None
-    ds.edit_prov_tree( 'astrocal', process='astrocal', params_dict=astrometor.pars.get_critical_pars() )
-
-    # And now run
-    ds = astrometor.run(ds)
+def verify_astrocal( astrometor, origwcs, ds, origmd5 ):
+    # Has the side effect of running ds.save_and_commit()
 
     assert astrometor.has_recalculated
 
@@ -133,6 +96,8 @@ def test_run_scamp( decam_datastore_through_extraction, astrometor ):
     # (since we know the one that came in the decam exposure is approximate)
     # BUT, make sure that it's within 40", because the original one, while
     # not great, is *something*
+    xvals = [0, 0, 2047, 2047]
+    yvals = [0, 4095, 0, 4095]
     origscs = origwcs.pixel_to_world( xvals, yvals )
     newscs = ds.wcs.wcs.pixel_to_world( xvals, yvals )
     for origsc, newsc in zip( origscs, newscs ):
@@ -198,7 +163,82 @@ def test_run_scamp( decam_datastore_through_extraction, astrometor ):
         assert uuid.UUID( info['md5sum'] ) == foundim.md5sum_components[0]
 
 
+
+
+def test_run_scamp( decam_datastore_through_extraction, astrometor ):
+    ds = decam_datastore_through_extraction
+
+    # Get the md5sum and WCS from the image before we do things to it
+    with open(ds.path_to_original_image, "rb") as ifp:
+        md5 = hashlib.md5()
+        md5.update(ifp.read())
+        origmd5 = uuid.UUID(md5.hexdigest())
+    with fits.open(ds.path_to_original_image) as hdu:
+        origwcs = WCS(hdu[ds.section_id].header)
+
+    astrometor.pars.cross_match_catalog = 'gaia_dr3'
+    astrometor.pars.solution_method = 'scamp'
+    astrometor.pars.max_catalog_mag = [20.]
+    astrometor.pars.mag_range_catalog = 4.
+    astrometor.pars.min_catalog_stars = 50
+    astrometor.pars.max_resid = 0.15
+    astrometor.pars.crossid_radii = [2.0]
+    astrometor.pars.min_frac_matched = 0.1
+    astrometor.pars.min_matched_stars = 10
+
+    # The datastore should object when it tries to get the provenance for astrometor
+    # params that don't match what we started with
+    with pytest.raises( ValueError, match=( "Passed pars_dict does not match parameters for "
+                                            "internal provenance of astrocal" ) ):
+        ds = astrometor.run(ds)
+
+    # Update the datastore's prov_tree so that it has the provenance we
+    #   want for astrometor.  Unset the datastore's provtag because
+    #   we're kind of cheating here.  (If you're going to edit
+    #   the provenance tree like this, you shouldn't have set
+    #   a provenance tag in the first place, but the fixture did.)
+    ds._provtag = None
+    ds.edit_prov_tree( 'astrocal', process='astrocal', params_dict=astrometor.pars.get_critical_pars() )
+
+    # And now run
+    ds = astrometor.run(ds)
+
+    verify_astrocal( astrometor, origwcs, ds, origmd5 )
+
+
 # TODO : test that it fails when it's supposed to
+
+
+def test_run_astrometry_net( decam_datastore_through_extraction, astrometor ):
+    ds = decam_datastore_through_extraction
+
+    # Get the md5sum and WCS from the image before we do things to it
+    with open(ds.path_to_original_image, "rb") as ifp:
+        md5 = hashlib.md5()
+        md5.update(ifp.read())
+        origmd5 = uuid.UUID(md5.hexdigest())
+    with fits.open(ds.path_to_original_image) as hdu:
+        origwcs = WCS(hdu[ds.section_id].header)
+
+    astrometor.pars.solution_method = 'astrometry.net'
+    astrometor.pars.cross_match_catalog = 'astrometry.net'
+    astrometor.pars.astrometry_net_exposure_radec = False
+    astrometor.pars.astrometry_net_image_radec = True
+    astrometor.pars.astrometry_net_radius = 1.2
+
+    # Update the datastore's prov_tree so that it has the provenance we
+    #   want for astrometor.  Unset the datastore's provtag because
+    #   we're kind of cheating here.  (If you're going to edit
+    #   the provenance tree like this, you shouldn't have set
+    #   a provenance tag in the first place, but the fixture did.)
+    ds._provtag = None
+    ds.edit_prov_tree( 'astrocal', process='astrocal', params_dict=astrometor.pars.get_critical_pars() )
+
+    ds = astrometor.run( ds )
+
+    verify_astrocal( astrometor, origwcs, ds, origmd5 )
+
+    # TODO : test using astrometry_net_exposure_radec
 
 
 def test_warnings_and_exceptions(decam_datastore, astrometor):

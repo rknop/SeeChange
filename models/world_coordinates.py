@@ -131,7 +131,7 @@ class WorldCoordinates(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         txtpath = pathlib.Path( self.local_path ) / self.filepath
 
         # ----- Get the header string to save and save ----- #
-        header_txt = self.wcs.to_header().tostring(padding=False, sep='\\n' )
+        header_txt = self.wcs.to_header( relax=True ).tostring(padding=False, sep='\\n' )
 
         if txtpath.exists():
             if not kwargs.get('overwrite', True):

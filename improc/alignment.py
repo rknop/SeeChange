@@ -427,7 +427,7 @@ class ImageAligner:
                                                           target_sources )
 
             # Write out the .head file that swarp will use to figure out what to do
-            hdr = swarp_fodder_wcs.to_header()
+            hdr = swarp_fodder_wcs.to_header( relax=True )
             hdr['NAXIS'] = 2
             hdr['NAXIS1'] = target_image.data.shape[1]
             hdr['NAXIS2'] = target_image.data.shape[0]
@@ -461,7 +461,7 @@ class ImageAligner:
 
             hdr = source_image.header.copy()
             improc.tools.strip_wcs_keywords(hdr)
-            hdr.update(source_wcs.wcs.to_header())
+            hdr.update(source_wcs.wcs.to_header( relax=True ))
             data = source_bg.subtract_me( source_image.data )
 
             save_fits_image_file(tmpim, data, hdr, extname=None, single_file=False)

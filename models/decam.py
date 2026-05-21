@@ -629,7 +629,7 @@ class DECam(Instrument):
                 # Gotta check to see if the file was there because another process pulled
                 #   it down while we were waiting for the lock.
                 with SmartSession() as session:
-                    image = session.query( Image ).filter( Image.filepath==str(filepath) )
+                    image = session.query( Image ).filter( Image.filepath==str(filepath) ).first()
                     if image is not None:
                         calfile = ( session.query( CalibratorFile )
                                     .filter( CalibratorFile.type==calibtype )
@@ -637,7 +637,7 @@ class DECam(Instrument):
                                     .filter( CalibratorFile.flat_type==('externally_supplied'
                                                                         if calibtype=='flat' else None) )
                                     .filter( CalibratorFile.instrument=='DECam' )
-                                    .filter( CalibratorFile.sensor_secton==section )
+                                    .filter( CalibratorFile.sensor_section==section )
                                     .filter( CalibratorFile.image_id==image.id ) )
                         if calfile is None:
                             raise RuntimeError( f"Image {filepath} exists, but the corresponding CalibratorFile "

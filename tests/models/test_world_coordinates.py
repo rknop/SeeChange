@@ -23,7 +23,7 @@ def test_world_coordinates( ztf_datastore_uncommitted, provenance_base, provenan
 
     wcobj = WorldCoordinates()
     wcobj.wcs = origwcs
-    header_excerpt = wcobj.wcs.to_header().tostring( sep='\n', padding=False)
+    header_excerpt = wcobj.wcs.to_header( relax=True ).tostring( sep='\n', padding=False)
     md5 = hashlib.md5( header_excerpt.encode('ascii') )
     assert md5.hexdigest() == 'a13d6bdd520c5a0314dc751025a62619'
 
@@ -117,7 +117,7 @@ def test_save_and_load_wcs(ztf_datastore_uncommitted, provenance_base, provenanc
         wcobj2 = WorldCoordinates()
         wcobj2.load( txtpath=txtpath )
 
-        assert wcobj2.wcs.to_header() == wcobj.wcs.to_header()
+        assert wcobj2.wcs.to_header( relax=True ) == wcobj.wcs.to_header( relax=True )
 
     finally:
         if "wcobj" in locals():

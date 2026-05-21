@@ -563,7 +563,7 @@ class Coadder:
             # Write out an output header file using the correct target wcs
             hdr = targds.image.header.copy()
             improc.tools.strip_wcs_keywords( hdr )
-            hdr.update( targds.wcs.wcs.to_header() )
+            hdr.update( targds.wcs.wcs.to_header( relax=True ) )
             hdr.tofile( tmpdir / 'coadd.head' )
 
             # Write out a bunch of temporary images that are the source images with an
@@ -581,7 +581,7 @@ class Coadder:
                 # Need to write out a temporary image whose header has this new wcs
                 hdr = ds.image.header.copy()
                 improc.tools.strip_wcs_keywords( hdr )
-                hdr.update( dswcs.to_header() )
+                hdr.update( dswcs.to_header( relax=True ) )
 
                 # Background subtract
                 data = ds.bg.subtract_me( ds.image.data )

@@ -377,7 +377,7 @@ def decam_datastore(
         decam_exposure,
         'S2',
         cache_dir=decam_cache_dir,
-        cache_base_name='007/c4d_20211025_044847_S2_r_Sci_TQOBFR',
+        cache_base_name='007/c4d_20211025_044847_S2_r_Sci_GQWGN2',
         overrides={ 'subtraction': { 'refset': 'test_refset_decam' } },
         save_original_image=True,
         provtag='decam_datastore'
@@ -434,7 +434,7 @@ def decam_partial_datastore_factory( datastore_factory, decam_cache_dir,
         mat = re.search( r'^c4d_(?P<yymmdd>\d{6})_(?P<hhmmss>\d{6})_ori\.fits\.fz$', str(exposure.filepath) )
         if mat is None:
             raise ValueError( f"Failed to match {exposure.filepath}" )
-        cache_base_name = f'007/c4d_20{mat.group("yymmdd")}_{mat.group("hhmmss")}_S2_r_Sci_TQOBFR'
+        cache_base_name = f'007/c4d_20{mat.group("yymmdd")}_{mat.group("hhmmss")}_S2_r_Sci_GQWGN2'
 
         ds = datastore_factory(
             exposure,

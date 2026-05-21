@@ -80,7 +80,7 @@ class ExposureProcessor:
           provenance_tag parameter.  Otherwise, pass this value.  (The
           default is not None because None is something you might use to
           override what's in the config.)
-        
+
         worker_log_level : log level, default logging.WARNING
           The log level for the worker processes.  Here so that you can
           have a different log level for the overall control process
@@ -565,7 +565,7 @@ to start it.
                'worker_log_level': args.worker_log_level }
     if 'provtag' in vars( args ):
         kwargs['provtag'] = None if args.provtag == "None" else args.provtag
-    
+
     processor = ExposureProcessor( *args, **kwargs )
     processor.secure_exposure( assume_claimed=args.assume_claimed, cont=args.cont, delete=reallydelete )
     if not args.just_download:

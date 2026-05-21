@@ -143,6 +143,15 @@ class ParsAstroCalibrator(Parameters):
             critical=False
         )
 
+        self.astrometry_net_indexdir = self.add_par(
+            'astrometry_net_indexdir',
+            None,
+            ( str, type(None) ),
+            ( 'Directory where astrometry.net should find index files.  If not given, use the '
+              'astrometry.net default (which, I think, is ../data relative to astrometry_net_bindir' ),
+            critical=False
+        )
+
         # TODO : these could also be used in the scamp method!
         self.astrometry_net_exposure_radec = self.add_par(
             'astrometry_net_exposure_radec',
@@ -248,7 +257,7 @@ class AstroCalibrator:
 
         # Update image.header with the new wcs.  Process this
         # through astropy.wcs.WCS to make sure everything is copacetic.
-        image.header.extend( wcs.to_header(), update=True )
+        image.header.extend( wcs.to_header( relax=True ), update=True )
 
         return wcs
 
@@ -352,20 +361,25 @@ class AstroCalibrator:
                         'YIMAGE': sources.y + 1.,
                         'FLUX': sources.psffluxadu()[0] } )
         inputpath = tmpdir / 'input_xyls.fits'
-        fits.writeto( inputpath, xyls )
-        
+        xyls.write( inputpath, format='fits' )
+
         try:
-            SCLogger.debug( f"Starting astrometry.net on {imagepath.name}" )
+            SCLogger.debug( f"Starting astrometry.net on {ds.image.filepath}" )
             # If I did this right, it won't write any files anywhere other than into tmpdir.
             # I'm *trying* to only write 'solved' and 'wcs.fits', but it doesn't seem that
             # --axy none stops it from writing hte axy file.  (It's probably useful, anyway....)
             com = [ str( pathlib.Path( self.pars.astrometry_net_bindir ) / "solve-field" ),
                     '--dir', tmpdir,
                     '-m', tmptmpdir,
-                    # '-p',                               # png images; -p disables them
+                    '--x-column', 'XIMAGE',
+                    '--y-column', 'YIMAGE',
+                    '--sort-column', 'FLUX',
+                    '--width', str( image.data.shape[1] ),
+                    '--height', str( image.data.shape[0] ),
+                    '-p',                               # png images; -p disables them
                     '-S', tmpdir / 'solved',
                     '-W', tmpdir / 'wcs.fits',
-                    '--axy', tmpdir / 'axyls.fits',     # sources extracted
+                    # '--axy', tmpdir / 'axyls.fits',     # sources extracted
                     '-U', tmpdir / 'index_xyls.fits',   # x/y of sources from index
                     '-R', tmpdir / 'rdls.fits',         # RA/Dec of sources from index
                     '-B', tmpdir / 'corr.fits',         # stars that match between catalog and image
@@ -375,13 +389,19 @@ class AstroCalibrator:
                     '-L', str( 0.8 * image.instrument_object.pixel_scale ),
                     '-H', str( 1.2 * image.instrument_object.pixel_scale ),
                     '-u', 'arcsecperpix',
+                    '-t', '3',
+                    # '-v', '-v', '-v', '-v',             # verbose for debugging
                    ]
+
+            if self.pars.astrometry_net_indexdir is not None:
+                com.extend( [ '--index-dir', self.pars.astrometry_net_indexdir ] )
 
             if self.pars.astrometry_net_image_radec:
                 # hmm... this will trigger a read of the data, if it hasn't been read already.
                 # Should we just not worry about it, since often it will have been read earlier
                 # in the pipeline?  Or should we be keeping image width and height in the database?
-                imrad = image.instrument_object.pixel_scale * max( image.data.shape ) / 2. * 3600.
+                imrad = ( image.instrument_object.pixel_scale / 3600. *
+                          np.sqrt( image.data.shape[0]**2 + image.data.shape[1]**2 ) / 2. )
                 imrad *= self.pars.astrometry_net_radius
                 SCLogger.debug( f"astrometry.net starting within {imrad:.2f}° of "
                                 f"({image.ra:.4f}, {image.dec:.4f})" )
@@ -402,6 +422,7 @@ class AstroCalibrator:
 
             t0 = time.perf_counter()
             try:
+                SCLogger.debug( f"Sending to subprocess.run: {com}" )
                 res = subprocess.run( com, capture_output=True, timeout=self.pars.subproc_timeout )
             except Exception:
                 strstr = io.StringIO()
@@ -418,12 +439,13 @@ class AstroCalibrator:
                 raise SubprocessFailure( res, premessage="astrometry.net/solve-field worked but solved file missing" )
 
             # Read the diagnostic files, do some match checks
-            axyls = Table.read( tmpdir / 'axyls.fits' )
+            # axyls = Table.read( tmpdir / 'axyls.fits' )
             index_xyls = Table.read( tmpdir / 'index_xyls.fits' )
             corr = Table.read( tmpdir / 'corr.fits' )
 
             ncat = len(index_xyls)
-            nsrc = len(axyls)
+            # nsrc = len(axyls)
+            nsrc = len(xyls)
             nmatch = len(corr)
 
             if ( self.pars.min_matched_stars > 0 ) and ( nmatch < self.pars.min_matched_stars ):
@@ -448,7 +470,7 @@ class AstroCalibrator:
 
             # Update the image header... I'm not fully sure if that actually goes anywhere or not,
             #  but scamp does it, so I'm cargo-culting my earlier self.
-            image.header.extend( astropy_wcs.to_header(), update=True )
+            image.header.extend( astropy_wcs.to_header( relax=True ), update=True )
 
             ds.wcs = WorldCoordinates( sources_id=sources.id, provenance_id=prov.id )
             ds.wcs.wcs = astropy_wcs

@@ -1667,19 +1667,19 @@ class Instrument:
                 cursor.execute( q )
                 rows = cursor.fetchall()
 
+            matchedrow = None
             if len(rows) > 1:
                 SCLogger.warning( f"Found {len(rows)} valid {calibtype}s for "
                                   f"{self.name} {section}, picking the latest one, or, failing "
                                   f"that, picking a 'random' one." )
             if len(rows) > 0:
                 SCLogger.debug( f"Got an existing valid {calibtype} for {self.name} {section}" )
-                matchedrow = None
                 for row in rows:
                     if row['validity_start'] is not None:
                         matchedrow = row
                         break
                 if matchedrow is None:
-                    matchedrow = row[0]
+                    matchedrow = rows[0]
 
             if ( ( matchedrow is None ) and
                  ( CalibratorSetConverter.to_string( calibset ) == 'externally_supplied' ) and
@@ -1687,7 +1687,7 @@ class Instrument:
                 ):
                 calib = self._get_default_calibrator( mjd, section, calibtype=calibtype, filter=filter )
                 SCLogger.debug( f"Got default calibrator {calib} for {calibtype} {section}" )
-                matchedrow = calib.to_dict()
+                matchedrow = calib.to_dict() if calib is not None else None
 
             if matchedrow is None:
                 params[ f'{calibtype}_isimage' ] = False

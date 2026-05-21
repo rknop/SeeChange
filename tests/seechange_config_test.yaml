@@ -49,6 +49,9 @@ pipeline:
   inject_fakes: false
   # inject_fakes: true
 
+astrocal:
+  astrometry_net_indexdir: /seechange/tests/astrometry_net_data
+  
 # Need the sep box and filt size for historical reasons
 #  (These used to be the defaults, so some test results
 #   depend on them.)
