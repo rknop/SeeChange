@@ -10,14 +10,14 @@ from models.base import FourCorners
 from models.image import Image
 
 
-def test_download_gaia_dr3(data_dir):
+def test_download_gaia_dr3(temp_dir, data_dir):
     firstfilepath = None
     secondfilepath = None
     try:
         catexp, firstfilepath, dbfile = download_gaia_dr3( 150.9427, 151.2425, 1.75582, 1.90649,
                                                                      padding=0.1, minmag=18., maxmag=22. )
-        assert firstfilepath == os.path.join(data_dir, 'gaia_dr3_excerpt/94/Gaia_DR3_151.0926_1.8312_18.0_22.0.fits')
-        assert dbfile == firstfilepath
+        assert firstfilepath == os.path.join(temp_dir, 'gaia_dr3_excerpt/94/Gaia_DR3_151.0926_1.8312_18.0_22.0.fits')
+        assert dbfile == os.path.join(data_dir, 'gaia_dr3_excerpt/94/Gaia_DR3_151.0926_1.8312_18.0_22.0.fits')
         assert catexp.num_items == 178
         assert catexp.format == 'fitsldac'
         assert catexp.origin == 'gaia_dr3'
@@ -26,8 +26,8 @@ def test_download_gaia_dr3(data_dir):
         assert ( catexp.dec_corner_11 - catexp.dec_corner_00 ) == pytest.approx( 1.2 * (1.90649-1.75582), abs=1e-4 )
         catexp, secondfilepath, dbfile = download_gaia_dr3( 150.9427, 151.2425, 1.75582, 1.90649,
                                                                       padding=0.1, minmag=17., maxmag=19. )
-        assert secondfilepath == os.path.join(data_dir, 'gaia_dr3_excerpt/94/Gaia_DR3_151.0926_1.8312_17.0_19.0.fits')
-        assert dbfile == secondfilepath
+        assert secondfilepath == os.path.join(temp_dir, 'gaia_dr3_excerpt/94/Gaia_DR3_151.0926_1.8312_17.0_19.0.fits')
+        assert dbfile == os.path.join(data_dir, 'gaia_dr3_excerpt/94/Gaia_DR3_151.0926_1.8312_17.0_19.0.fits')
         assert catexp.num_items == 59
         assert catexp.minmag == 17.
         assert catexp.maxmag == 19.

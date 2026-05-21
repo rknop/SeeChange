@@ -95,6 +95,8 @@ def pytest_sessionstart(session):
     # directory that changes things from what we're expecting.  We might
     # also wipe out a production database in that case!  So, yeah, be
     # careful.
+    assert cfg.value( 'path.data_root' ) == '/seechange/tests/test_filestore'
+    assert cfg.value( 'path.data_temp' ) == '/seechange/tests/test_tempdata'
     assert cfg.value( 'db.host' ) == 'postgres'
     assert cfg.value( 'db.database' ) == 'seechange'
     assert cfg.value( 'db.user' ) == 'postgres'
@@ -316,7 +318,7 @@ def cache_dir():
 
 
 # this will be configured to FileOnDiskMixin.local_path, and used as temporary data location
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="session", autouse=True)
 def data_dir():
     temp_data_folder = FileOnDiskMixin.local_path
     tdf = pathlib.Path( temp_data_folder )
@@ -334,6 +336,21 @@ def data_dir():
     # make sure the test config is pointing the data_dir
     # to a different location than the rest of the data
     # shutil.rmtree(temp_data_folder)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def temp_dir():
+    temp_path = pathlib.Path( FileOnDiskMixin.temp_path )
+    temp_path.mkdir( exist_ok=True, parents=True )
+    with open( temp_path / 'placeholder', 'w' ):
+        # Create an empty folder so the directory doesn't get deleted on "remove_data_from_disk"
+        pass
+
+    yield FileOnDiskMixin.temp_path
+
+    ( temp_path / 'placeholder' ).unlink( missing_ok=True )
+    # Remove the whole temp path.
+    shutil.rmtree( temp_path )
 
 
 @pytest.fixture(scope="session")

@@ -11,7 +11,7 @@ from models.enums_and_bitflags import (
 
 def test_enums_zero_values():
     assert 0 not in FormatConverter.dict
-    assert 0 not in ImageTypeConverter.dict
+    assert ImageTypeConverter.dict[0] == 'Unknown'
 
 
 def test_converter_dict():
@@ -20,6 +20,7 @@ def test_converter_dict():
     #  is working for all of them.
 
     assert ImageTypeConverter.dict == {
+        0: 'Unknown',
         1: 'Sci',
         2: 'ComSci',
         3: 'Diff',

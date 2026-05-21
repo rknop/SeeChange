@@ -832,6 +832,15 @@ class ObjectCatalogMatch:
                 if found_existing and not verify_existing:
                     return matches
 
+                # Rollback the database so there won't be an idle in
+                #   transaction connection sitting around.  This is
+                #   necessary because in a bit we might be about to lock
+                #   the table we just read, and if one process has an
+                #   idle in transaction sitting around that read that
+                #   table, it'll stop the other process from locking the
+                #   table.
+                dbcon.rollback()
+
                 # For one reason or another, we have to find new matches
                 cursor.execute( "SELECT ra,dec FROM objects WHERE _id=%(id)s", { 'id': objid } )
                 row = cursor.fetchone()

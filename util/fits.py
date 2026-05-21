@@ -268,7 +268,7 @@ def save_fits_image_file( filename,
                  else filename )
 
     # Figure out output filename
-    filename = filebase if extname is None else filebase + '.' + extname
+    filename = filebase if ( single_file or (extname is None) )else filebase + '.' + extname
     filename += '.fits'
     finalfilename = filename + '.fz' if fpack else filename
     finalfilepath = direc / finalfilename

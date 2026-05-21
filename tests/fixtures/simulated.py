@@ -213,7 +213,7 @@ def generate_image_fixture(commit=True, filter=None, seed=None ):
 
         yield im
 
-        # Clean up the exposure that got created; this will recusrively delete im as well
+        # Clean up the exposure that got created; this will recursively delete im as well
         if exp is not None:
             exp.delete_from_disk_and_database()
 
