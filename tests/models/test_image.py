@@ -427,18 +427,7 @@ def test_image_save_fpack():
             im.data[ y-wid:y+wid+1, x-wid:x+wid+1 ] += star
             im.weight[ y-wid:y+wid+1, x-wid:x+wid+1 ] = 1. / ( ( 1. / im.weight[ y-wid:y+wid+1, x-wid:x+wid+1 ] ) +
                                                                ( np.maximum( star, 0. ) / gain ) )
-        # We're not actually using the flags image as a flags image, so
-        #   instead fill it with values that will really test the
-        #   lossless compression.  (The image class is supposed to save
-        #   the flags image losslessly, since usually it's a 16-bit
-        #   integer and will compress very well with lossless
-        #   gzip... and we don't want mask values slightly deviating
-        #   from their true values, since they're treated as bitmasks!)
-        #   (However, I suspect with 16-bit integers even if we told it
-        #   to do lossy compression, it would end up saving with full
-        #   fidelity.  Here, we're trying to test that the explicit
-        #   "save losslessly" functionality is working.)
-        im.flags = rng.uniform( 0, 1e5, size=im.data.shape ).astype( '>f4' )
+        im.flags = rng.integers( 0, 32768, size=im.data.shape, dtype=np.int16 )
 
         # Make a header
         tsthdrvals = { 'TEST1': 4, 'TEST2': 8, 'TEST3': 15, 'TEST4': 16, 'TEST5': 23, 'TEST6': 42 }
@@ -1081,7 +1070,7 @@ def test_image_multifile(sim_image_uncommitted, provenance_base):
         cfg.set_value('storage.images.single_file', True)
         im.save( no_archive=True )
 
-        assert re.match(r'\d{3}/Demo_\d{8}_\d{6}_\d+_.+_.{6}\.fits', im.filepath)
+        assert re.match(r'\d{3}/Demo_\d{8}_\d{6}_\d+_[^\.]+_[A-Z0-9]{6}\.fits', im.filepath)
 
         files = im.get_fullpath(as_list=True)
         assert len(files) == 1

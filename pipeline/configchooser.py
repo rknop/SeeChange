@@ -86,6 +86,8 @@ class ConfigChooser:
 
     def __init__( self, **kwargs ):
         self.pars = ParsConfigChooser( **kwargs )
+        if self.pars.choice_algorithm is not None:
+            raise RuntimeError( "ConfigChooser is currently broken." )
 
 
     def run( self, *args ):

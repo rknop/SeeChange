@@ -116,6 +116,10 @@ def test_exposure_launcher_conductor_through_step( conductor_connector,
     """Make sure ExposureLauncher stops where the conductor tells it to."""
     decam_exposure_name = 'c4d_230702_080904_ori.fits.fz'
 
+    origconductorstatus  = conductor_connector.send( 'conductor/status' )
+    del origconductorstatus['status']
+    del origconductorstatus['lastupdate']
+    del origconductorstatus['configchangetime']
     try:
         unhold_decam_exposure( conductor_connector, decam_exposure_name )
 
@@ -162,8 +166,8 @@ def test_exposure_launcher_conductor_through_step( conductor_connector,
                 session.delete( pw )
             session.commit()
 
-        # Reset the conductor through step to 'scoring' (the default)
-        conductor_connector.send( "/conductor/updateparameters/throughstep=scoring" )
+        # Reset the conductor through step to how it was when we got here
+        conductor_connector.send( "/conductor/updateparameters", origconductorstatus )
 
 
 # See comment on test_exposure_launcher re: user and admin_user fixtures
@@ -174,6 +178,10 @@ def test_exposure_launcher_through_step( conductor_connector,
     """Make sure that if ExposureLauncher is told to stop at a step *earlier* than conductor, it stops there."""
     decam_exposure_name = 'c4d_230702_080904_ori.fits.fz'
 
+    origconductorstatus  = conductor_connector.send( 'conductor/status' )
+    del origconductorstatus['status']
+    del origconductorstatus['lastupdate']
+    del origconductorstatus['configchangetime']
     try:
         unhold_decam_exposure( conductor_connector, decam_exposure_name )
 
@@ -202,8 +210,8 @@ def test_exposure_launcher_through_step( conductor_connector,
                 session.delete( pw )
             session.commit()
 
-        # Reset the conductor through step to 'scoring' (the default)
-        conductor_connector.send( "/conductor/updateparameters/throughstep=scoring" )
+        # Reset the conductor through step to how it was when we got here
+        conductor_connector.send( "/conductor/updateparameters", origconductorstatus )
 
 
 # NOTE -- in the past, this next test was killed on github actions;

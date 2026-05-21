@@ -141,7 +141,7 @@ def test_section_stuff():
 def test_manual_load_multifile_exposure( loaded_singleamp_multifile_exposure ):
     expobj = loaded_singleamp_multifile_exposure
 
-    assert expobj.origin_identifier == '20260410004924sC3_00025.fits'
+    assert expobj.origin_identifier == '20260410004924s_00025.fits'
     assert expobj.instrument == 'LS4Cam'
     assert expobj.instrument_object.__class__.__name__ == 'LS4Cam'
     assert expobj.telescope == 'ESO 1.0-m Schmidt'
