@@ -25,7 +25,7 @@ class ExposureLauncher:
 
     def __init__( self, cluster_id, node_id, numprocs=None, verify=True, onlychips=None,
                   through_step=None, max_run_time=None, max_idle_time=None, types=None, instrument=None,
-                  just_download=False, worker_log_level=logging.WARNING ):
+                  provtag=False, just_download=False, worker_log_level=logging.WARNING ):
         """Make an ExposureLauncher.
 
         Parameters
@@ -92,6 +92,12 @@ class ExposureLauncher:
           instrument.  (If you have a conductor running handling multiple
           different instruments, I am surprised.)
 
+        provtag : str or None or False
+          If False, use the config's value for the Pipeline
+          provenance_tag parameter.  Otherwise, pass this value.  (The
+          default is not None because None is something you might use to
+          override what's in the config.)
+        
         just_download : bool, default False
           If True, download exposures and load them into the database, but don't
           actually run the pipeline.
@@ -114,6 +120,7 @@ class ExposureLauncher:
         self.max_idle_time = max_idle_time
         self.types = types
         self.instrument = instrument
+        self.provtag = provtag
         self.just_download = just_download
         self.worker_log_level = worker_log_level
         self.verify = verify
@@ -249,6 +256,7 @@ class ExposureLauncher:
                                                         self.node_id,
                                                         onlychips=self.onlychips,
                                                         through_step=through_step,
+                                                        provtag=self.provtag,
                                                         worker_log_level=self.worker_log_level )
                 exposure_processor.secure_exposure()
                 if self.just_download:
@@ -340,16 +348,22 @@ environment variable anyway.)
                          help="Log level for the main process (error, warning, info, or debug)" )
     parser.add_argument( "-w", "--worker-log-level", default="warning",
                          help="Log level for worker processes (error, warning, info, or debug)" )
+    parser.add_argument( "-i", "--instrument", default=None, help="Just get exposures for this instrument." )
     parser.add_argument( "--chips", default=None, nargs="+",
                          help="Only do these sensor sections (for debugging purposese)" )
+    parser.add_argument( "--types", default=None, nargs='+',
+                         help="Just get exposures of these types.  Allowed vaues include Sci, Bias, Dark, TwiFlat." )
+    parser.add_argument( "-p", "--provtag", default=argparse.SUPPRESS, type=str,
+                         help=( "Provenance tag to save data products to.  Will create it if it does not "
+                                "exist.  If you don't specify this, then whatever is in the config will be "
+                                "used.  If you give it the special string \"None\", then no provenance "
+                                "tag will be created.  (If there already is a provenance tag pointing "
+                                "to the provenance, it won't be deleted." ) )
     parser.add_argument( "-t", "--through-step", default=None,
                          help=( "Only run through this step; default=run everything.  Step can be "
                                 "exposure, preprocessing, extraction, astrocal, photocal, "
                                 "subtraction, detection, cutting, measuring, scoring.  Will run "
                                 "through the earlier of this step or the through step given by the conductor." ) )
-    parser.add_argument( "--types", default=None, nargs='+',
-                         help="Just get exposures of these types.  Allowed vaues include Sci, Bias, Dark, TwiFlat." )
-    parser.add_argument( "-i", "--instrument", default=None, help="Just get exposures for this instrument." )
     parser.add_argument( "--just-download", default=False, action='store_true',
                          help=( "Just download exposures and load them into the database, don't run the pipeline. "
                                 "Many other options (including -t, --chips, -w, --numprocs) are irrelevant if "
@@ -368,11 +382,21 @@ environment variable anyway.)
         raise ValueError( f"Unknown worker log level {args.worker_log_level}" )
     worker_log_level = loglookup[ args.worker_log_level.lower() ]
 
-    elaunch = ExposureLauncher( args.cluster_id, args.node_id, numprocs=args.numprocs, onlychips=args.chips,
-                                verify=not args.noverify, through_step=args.through_step,
-                                max_run_time=args.max_run_time, max_idle_time=args.max_idle_time,
-                                worker_log_level=worker_log_level, types=args.types, instrument=args.instrument,
-                                just_download=args.just_download )
+    args = [ args.cluster_id, args.node_id ]
+    kwargs = { "numprocs": args.numprocs,
+               "onlychips": args.chips,
+               "verify": not args.noverify,
+               "through_step": args.through_step,
+               "max_run_time": args.max_run_time,
+               "max_idle_time": args.max_idle_time,
+               "worker_log_level": worker_log_level,
+               "types": args.types,
+               "instrument": args.instrument,
+               "just_download": args.just_download }
+    if 'provtag' in vars( args ):
+        kwargs['provtag'] = None if args.provtag == "None" else args.provtag
+    
+    elaunch = ExposureLauncher( *args, **kwargs )
     elaunch.register_worker()
 
     def goodbye( signum, frame ):

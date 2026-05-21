@@ -342,24 +342,18 @@ class AstroCalibrator:
         sources = ds.get_sources( session=session )
         if sources is None:
             raise ValueError( f'Cannot find a source list corresponding to the datastore inputs: {ds.inputs_str}' )
-        # Building in a possible inefficiency here.  The file may
-        #  already exist on disk, in which case we could just point
-        #  astrometry.net at it.  However, to do that, we have to call
-        #  image.get_fullpath() with components='image', and if the file
-        #  does *not* yet already exist on disk, then, according to our
-        #  (not-well-documented) design, image.components is supposed to
-        #  be None, and get_fullpath() will fail.  ARGH.  We do need the
-        #  ability to figure out what the path of an image is supposed
-        #  to be even if it isn't written yet.  But, right now, that's
-        #  painful, and I don't want to work around it with hacks as
-        #  that will just make the whole thing worse.  So, always write
-        #  a temp file that we're going to pass to astrometry.net, even
-        #  though sometimes that's not necessary.  I should make an
-        #  issue for this, but data is here and I'm trying to do too
-        #  many things too fast.
-        imagepath = tmpdir / 'image.fits'
-        fits.writeto( imagepath, image.data, image.header )
 
+        # Write an xyls file for astrometry.net to eat.  (It could eat
+        # an image, but then it would be running sextractor itself,
+        # which is a waste of time since we've already done it.)
+        #
+        # ...I'm *assuming* that astrometry.net coordinates are 1-offset, so we have to convert
+        xyls = Table( { 'XIMAGE': sources.x + 1.,
+                        'YIMAGE': sources.y + 1.,
+                        'FLUX': sources.psffluxadu()[0] } )
+        inputpath = tmpdir / 'input_xyls.fits'
+        fits.writeto( inputpath, xyls )
+        
         try:
             SCLogger.debug( f"Starting astrometry.net on {imagepath.name}" )
             # If I did this right, it won't write any files anywhere other than into tmpdir.
@@ -404,7 +398,7 @@ class AstroCalibrator:
                               '--dec', str( ds.exposure.dec ),
                               '--radius', str( exprad ) ] )
 
-            com.append( str(imagepath) )
+            com.append( str(inputpath) )
 
             t0 = time.perf_counter()
             try:

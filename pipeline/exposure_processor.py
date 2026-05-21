@@ -26,7 +26,7 @@ class ExposureProcessor:
     def __init__( self, instrument, identifier, numprocs, cluster_id,
                   node_id, machine_name=None, onlychips=None,
                   through_step=None, ignore_known_exposures=False, nosave=False,
-                  worker_log_level=logging.WARNING ):
+                  provtag=False, worker_log_level=logging.WARNING ):
         """A class that processes all images in a single exposure, potentially using multiprocessing.
 
         It's sort of a wrapper around top_level.py::Pipeline, but
@@ -75,6 +75,12 @@ class ExposureProcessor:
           If True, then nothing is saved, and the knownexposures table
           won't be updated. Useful, possibly, for testing.
 
+        provtag : str or None or False
+          If False, use the config's value for the Pipeline
+          provenance_tag parameter.  Otherwise, pass this value.  (The
+          default is not None because None is something you might use to
+          override what's in the config.)
+        
         worker_log_level : log level, default logging.WARNING
           The log level for the worker processes.  Here so that you can
           have a different log level for the overall control process
@@ -92,7 +98,7 @@ class ExposureProcessor:
         self.ignore_known_exposures = ignore_known_exposures
         self.nosave = nosave
         self.worker_log_level = worker_log_level
-        self.provtag = Config.get().value( 'pipeline.provenance_tag' )
+        self.provtag = provtag
 
     def cleanup( self ):
         """Do our best to free memory."""
@@ -333,12 +339,14 @@ class ExposureProcessor:
             SCLogger.replace( midformat=me.name, level=self.worker_log_level )
             SCLogger.info( f"Processing chip {chip} in process {me.name} PID {me.pid}..." )
             SCLogger.setLevel( self.worker_log_level )
+            pipelineargs = {}
             if self.nosave:
-                pipeline = Pipeline( pipeline={ 'do_not_save': True } )
-            else:
-                pipeline = Pipeline()
+                pipelineargs['do_not_save'] = True
+            if self.provtag is not False:
+                pipelineargs['provenance_tag'] = self.provtag
             if ( self.through_step is not None ) and ( self.through_step != 'exposure' ):
-                pipeline.pars.through_step = self.through_step
+                pipelineargs['through_step'] = self.through_step
+            pipeline = Pipeline( pipeline=pipelineargs )
             ds = DataStore.from_args( self.exposure, chip )
             ds.cluster_id = self.cluster_id
             ds.node_id = self.node_id
@@ -476,7 +484,7 @@ variables are actually used in SeeChange, but it won't hurt to set the
 environment variable anyway.)
 
 TODO: provide a mechanism to run an exposure that's *not* in the
-knownexpsoures table.
+knownexpsoures table.  (...done?  cf:--ignore-known-exposures)
 
 Warning: be careful.  exposure_processor does not contact the conductor,
 nor does it entirely verify that another process isn't already working
@@ -518,15 +526,21 @@ to start it.
                                 "Can't be used with --ignore-known-exposures." ) )
     parser.add_argument( '--really-delete', default=False, action='store_true',
                          help="Must be specified if -d or --delete is specified for it to do its dirty work." )
-    parser.add_argument( '-l', '--log-level', default='info',
-                         help="Log level (error, warning, info, or debug) (defaults to info)" )
-    parser.add_argument( '-w', '--worker-log-level', default='warning',
-                         help="Log level for the chip worker subprocesses (defaults to warning)" )
+    parser.add_argument( '-l', '--log-level', default='INFO',
+                         help="Log level (ERROR, WARNING, INFO, or DEBUG) (defaults to INFO)" )
+    parser.add_argument( '-w', '--worker-log-level', default='WARNING',
+                         help="Log level for the chip worker subprocesses (defaults to WARNING)" )
     parser.add_argument( '--assume-claimed', default=False, action='store_true',
                          help=( "Normally, will object if the exposure is in the claimed or running state, "
                                 "and it is not claimed by the cluster given in --cluster-id. Set "
                                 "this flag to True to ignore claims in the knownexposures table.  "
                                 "Irrelevant if --ingore-known-exposures is set" ) )
+    parser.add_argument( '--provtag', default=argparse.SUPPRESS, type=str,
+                         help=( "Provenance tag to save data products to.  Will create it if it does not "
+                                "exist.  If you don't specify this, then whatever is in the config will be "
+                                "used.  If you give it the special string \"None\", then no provenance "
+                                "tag will be created.  (If there already is a provenance tag pointing "
+                                "to the provenance, it won't be deleted." ) )
     parser.add_argument( '--ignore-known-exposures', default=False, action='store_true',
                          help=( "Normally, reads and writes to the knownexposures table.  Set this to "
                                 "skip that.  You need this if you're running exposures outside of the "
@@ -536,24 +550,23 @@ to start it.
 
     args = parser.parse_args()
 
-    loglookup = { 'error': logging.ERROR,
-                  'warning': logging.WARNING,
-                  'info': logging.INFO,
-                  'debug': logging.DEBUG }
-    if args.log_level.lower() not in loglookup.keys():
-        raise ValueError( f"Unknown log level {args.log_level}" )
-    SCLogger.setLevel( loglookup[ args.log_level.lower() ] )
+    SCLogger.setLevel( args.log_level )
 
     reallydelete = args.delete and args.really_delete
     numprocs = args.numprocs if args.numprocs is not None else ( psutil.cpu_count( logical=False ) -1  )
     SCLogger.info( f"Running with {numprocs} chip processors" )
 
-    processor = ExposureProcessor( args.instrument, args.identifier, numprocs,
-                                   args.cluster_id, args.node, machine_name=args.machine,
-                                   onlychips=args.chips, through_step=args.through_step,
-                                   ignore_known_exposures=args.ignore_known_exposures, nosave=args.do_not_save,
-                                   worker_log_level=loglookup[args.worker_log_level.lower()] )
-
+    args = [ args.instrument, args.identifier, numprocs, args.cluster_id, args.node ]
+    kwargs = { 'machine_name': args.machine,
+               'onlychips': args.chips,
+               'through_step': args.through_step,
+               'ignore_known_exposures': args.ignore_known_exposures,
+               'nosave': args.do_not_save,
+               'worker_log_level': args.worker_log_level }
+    if 'provtag' in vars( args ):
+        kwargs['provtag'] = None if args.provtag == "None" else args.provtag
+    
+    processor = ExposureProcessor( *args, **kwargs )
     processor.secure_exposure( assume_claimed=args.assume_claimed, cont=args.cont, delete=reallydelete )
     if not args.just_download:
         processor()
