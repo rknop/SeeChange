@@ -6,6 +6,8 @@ import pytz
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 import multiprocessing
 import functools
+import logging
+import tracemalloc
 
 import numpy as np
 import psycopg.rows
@@ -26,6 +28,17 @@ from util.logger import SCLogger
 from util.config import Config
 import util.fits
 import util.util
+
+
+# THOUGHT REQUIRED
+#
+# Right now, the massive_stack where all images are read together is
+# stored as float64.  For bias, this is definitely overkill; you do not
+# need lots of extra precision to calculate a median!  For flats, it's a
+# bit more subtle, because you're normalizing all the flats.  Still,
+# this is almost certainly vast overkill, and we should probably just
+# use float32 for everything.  Yeah, you know what, you're right.
+_massive_stack_dtype = np.float32
 
 
 class ParsFlatBuilder(Parameters):
@@ -359,7 +372,19 @@ class FlatBuilder:
             if self.pars.exposure_mode and ( self.section_keyword is None ):
                 raise ValueError( "Must give a section_keyword when running with nodb and exposure_mode" )
 
+        self._dumping_memory = False
         self.results = None
+
+
+    def memdump( self, when ):
+        if not self._dumping_memory:
+            if SCLogger.getEffectiveLevel() == logging.DEBUG:
+                tracemalloc.start()
+                self._dumping_memory=True
+
+        if self._dumping_memory:
+            curmem, maxmem = tracemalloc.get_traced_memory()
+            SCLogger.debug( f"{when}: cur: {curmem/1024/1024:.2f} MB, max: {maxmem/1024/1024:.2f} MB" )
 
 
     def find_input_files( self, i_know_what_im_doing=False ):
@@ -458,7 +483,7 @@ class FlatBuilder:
                 if len(rows) < self.pars.min:
                     raise RuntimeError( f"Found {len(oldrows)} {table}, but after duplicate rejection, "
                                         f"only {len(rows)} were left, which is < {self.pars.nmin}" )
-                SCLogger.info( f"Found {len(oldrows)} exposure, {len(rows)} left after ra/dec duplicate rejection." )
+                SCLogger.info( f"Found {len(oldrows)} {table}, {len(rows)} left after ra/dec duplicate rejection." )
                 if ( self.pars.nmax is not None ) and ( len(rows) > self.pars.nmax ):
                     SCLogger.info( f"Reducing to {self.pars.nmax} images as specified" )
                     rows = rows[:self.pars.nmax]
@@ -565,10 +590,6 @@ class FlatBuilder:
         else:
             SCLogger.info( f"Reading {len(self.files)} images" )
 
-
-        # Going to store the read images as float64 even though that's almost certainly overkill.
-        # Whatever.  Memory is cheap now, yes?
-
         if self.nodb:
             # At the very least, need to generate an all-True mask
             raise RuntimeError( "nodb is broken at the moment" )
@@ -594,7 +615,7 @@ class FlatBuilder:
                     if massive_stack is None:
                         # Make the file index the first one, so that the images stay contiguous in memory
                         massive_stack = np.empty( ( len(self.files), data.shape[0], data.shape[1] ),
-                                                       dtype=np.float64 )
+                                                       dtype=_massive_stack_dtype )
                     if data.shape != massive_stack.shape[1:3]:
                         raise RuntimeError( f"First image {self.files[0]} had shape {massive_stack.shape[1:3]}, "
                                             f"but {fname} has shape {data.shape}" )
@@ -606,6 +627,9 @@ class FlatBuilder:
                     else:
                         min_mjd = min( mjd, min_mjd )
                         max_mjd = max( mjd, max_mjd )
+
+                if ( i % 10 == 0 ) and ( i > 0 ):
+                    SCLogger.debug( f"Read {i} of {len(self.files)} images" )
 
             # TODO : flags/mask images when not in db mode?
 
@@ -636,7 +660,7 @@ class FlatBuilder:
 
                     if massive_stack is None:
                         massive_stack = np.ma.array( np.empty( ( len(self.files), data.shape[0], data.shape[1] ),
-                                                               dtype=np.float64 ),
+                                                               dtype=_massive_stack_dtype ),
                                                      mask=np.full( ( len(self.files), data.shape[0], data.shape[1] ),
                                                                    False ) )
                     if data.shape != massive_stack.shape[1:3]:
@@ -651,10 +675,17 @@ class FlatBuilder:
                         min_mjd = min( mjd, min_mjd )
                         max_mjd = max( mjd, max_mjd )
 
+                    if ( i % 10 == 0 ) and ( i > 0 ):
+                        SCLogger.debug( f"Read {i} of {len(self.files)} images" )
+
         return massive_stack, min_mjd, max_mjd
 
 
     def calculate_flat( self, massive_stack, section_id=None ):
+        """Warning: destroys massive_stack."""
+
+        self.memdump( "Before normalization" )
+
         section_id = '' if section_id is None else f' for {section_id}'
         if self.pars.normalize_mode is not None:
             SCLogger.info( f"Normalizing all images{section_id}..." )
@@ -664,16 +695,39 @@ class FlatBuilder:
                 else:
                     raise ValueError( f"Unknown normalization method {self.pars.normalize_mode}" )
 
+        self.memdump( "After normalization" )
+
         # Combine all the images
         SCLogger.info( f"Building combined image{section_id}..." )
         if self.pars.combine_mode == "median":
             self.combined = np.ma.median( massive_stack, axis=0 )
-            mad = np.ma.median( np.abs( massive_stack - self.combined[ np.newaxis, :, : ] ), axis=0 )
+            self.memdump( "After median" )
+            # Do this in more than one step in an attempt to use less memory than numpy would
+            #   grab if we did it all at once.
+            # Doesn't help as much as I'd like, because the np.ma.median call above
+            #   already goes from 4.9GB of memory for a stack of 121
+            #   2048×4096 images to >22GB of memory.  Why so much?  Does
+            #   it really need *three more* copies of the full input
+            #   array?  (I know, I should implement my own efficient
+            #   masked median code before I complain so I know what I'm
+            #   talking about.)  (But still.)
+            #    ....maybe I should be using nanmedian instead?
+            # In any event, still saves about an image worth of memory usage.
+            # mad = np.ma.median( np.abs( massive_stack - self.combined[ np.newaxis, :, : ] ), axis=0 )
+            massive_stack -= self.combined[ np.newaxis, :, : ]
+            self.memdump( "After subtracting median" )
+            # ...documentation doesn't say we can do this (i.e. make out= the same as the thing
+            # we're working on), but it seems like it ought to work...
+            massive_stack = np.abs( massive_stack, out=massive_stack )
+            self.memdump( "After abs" )
+            mad = np.ma.median( massive_stack, axis=0, overwrite_input=True )
+            self.memdump( "After mad" )
             self.nmad = ( self.nmad_k * mad ).astype( np.float32, copy=False )
+            self.memdump( "After nmad" )
             if self.pars.bad_threshold is not None:
-                threshold = self.pars.bad_threshold * self.nmad_k * np.median( self.nmad )
+                threshold = self.pars.bad_threshold * self.nmad_k * np.ma.median( self.nmad )
                 self.combined.mask = np.logical_or( self.combined.mask, self.nmad > threshold )
-
+            self.memdump( "End of calculate_flat" )
         else:
             raise ValueError( f"Unknown combination mode {self.pars.comine_mode}" )
 
@@ -846,8 +900,14 @@ class FlatBuilder:
     def _do_the_things( cls, self, section_id ):
         try:
             SCLogger.multiprocessing_replace()
+            # If we were already tracemallocing, we want to start over because we're in a new process.
+            # Because we did fork, the self._dumping_memory will have been copied over
+            self._dumping_memory = False
+            self.memdump( "Starting traced memory" )
             massive_stack, min_mjd, max_mjd = self.read_files( section_id )
+            self.memdump( "After read_files" )
             self.calculate_flat( massive_stack, section_id )
+            self.memdump( "After calculate_flat" )
             del massive_stack
             return section_id, self.combined, self.nmad, min_mjd, max_mjd
         except Exception:
@@ -856,10 +916,14 @@ class FlatBuilder:
 
 
     def __call__( self, i_know_what_im_doing=False ):
+        self.memdump( "Starting traced memory" )
+
         if self.pars.find_images:
             self.find_input_files( i_know_what_im_doing=i_know_what_im_doing )
         else:
             self.set_input_files( i_know_what_im_doing=i_know_what_im_doing )
+
+        self.memdump( "After find/set_input_files" )
 
         if self.pars.exposure_mode:
             failed = []
@@ -885,6 +949,7 @@ class FlatBuilder:
                         SCLogger.exception( f"Exception working on section {sec}, skipping it." )
                         if sec in collected_results:
                             del collected_results[sec]
+
                         failed.append( sec )
 
             else:
@@ -916,6 +981,8 @@ class FlatBuilder:
 
                 pool.shutdown()
 
+            self.memdump( "After building flat" )
+
             self.results = collected_results
             SCLogger.info( f"...done work on {len(self.section_ids)} sections.\n"
                            f"   ...succeded (maybe): {succeeded}\n"
@@ -930,14 +997,18 @@ class FlatBuilder:
                     self.save_to_db()
                     SCLogger.info( "...done saving." )
 
+                self.memdump( "After saving to database" )
 
         else:
             # Image mode, no need for multiprocessing.  (That is, we could still use it, and it
             #  would be faster, but whatever.)
 
             massive_stack, min_mjd, max_mjd = self.read_files()
+            self.memdump( "After reading images" )
             self.calculate_flat( massive_stack )
+            self.memdump( "After calculating flat" )
             del massive_stack
+            self.memdump( "After del massivestack" )
 
             self.results = { 'section_id': self.section_id,
                              'comb': self.combined,
@@ -951,6 +1022,7 @@ class FlatBuilder:
                 SCLogger.info( "Saving to database..." )
                 self.save_to_db()
                 SCLogger.info( "...done saving" )
+                self.memdump( "After save_to_db" )
 
         SCLogger.info( "flat_bias_builder all done" )
 

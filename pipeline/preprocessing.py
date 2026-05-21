@@ -74,8 +74,32 @@ class ParsPreprocessor(Parameters):
                       critical=True )
         self.add_alias( 'calibrator_set', 'calibset' )
 
+        self.add_par( 'zero_provtag',
+                      None,
+                      ( str, type(None) ),
+                      ( "If given, then when searching for a zero for bias subtraction, only accept "
+                        "zero images that have a provenance tagged with this provenance tag.  "
+                        "Do not use with externally_supplied, or you will probably regret it." ),
+                      critical=True )
+
         self.add_par( 'flattype', 'externally_supplied', str,
                       "One of the FlatTypeConverter enum. ",
+                      critical=True )
+
+        self.add_par( 'flat_provtag',
+                      None,
+                      ( str, type(None) ),
+                      ( "If given, when searching for a flat for flatfielding, only accept "
+                        "flat images that have a provenance tagged with this provenance tag.  "
+                        "Do not use with externally_supplied, or will will probably regret it." ),
+                      critical=True )
+
+        self.add_par( 'fringe_provtag',
+                      None,
+                      ( str, type(None) ),
+                      ( "If given, when searching for a fringe image for fringe correction, only accept "
+                        "fringe images that have a provenance tagged with this provenance tag.  "
+                        "Do not use with externally_supplied, or will will probably regret it." ),
                       critical=True )
 
         self.add_par( 'purge_raw_data',
@@ -189,7 +213,11 @@ class Preprocessor:
                                                                                self.pars.flattype,
                                                                                ds.section_id,
                                                                                baseobj.filter,
-                                                                               baseobj.mjd )
+                                                                               baseobj.mjd,
+                                                                               zero_provtag=self.pars.zero_provtag,
+                                                                               flat_provtag=self.pars.flat_provtag,
+                                                                               fringe_provtag=self.pars.fringe_provtag
+                                                                              )
                 SCLogger.debug("preprocessing: got calibrator files")
             else:
                 preprocparam = {}

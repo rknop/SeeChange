@@ -119,8 +119,11 @@ class SCLogger:
         return cls._instance
 
     @classmethod
-    def multiprocessing_replace( cls, *args, **kwargs ):
+    def multiprocessing_replace( cls, skipifnotdef=False, *args, **kwargs ):
         """Shorthand for replace with midformat parsed from the current multiprocessing process."""
+
+        if ( not cls._instance._using_default_handler ) and skipifnotdef:
+            return
 
         if ( ( cls._instance is not None ) and ( not cls._instance._using_default_handler ) and
              ( "handler" not in kwargs ) ):

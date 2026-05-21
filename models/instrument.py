@@ -8,6 +8,8 @@ from enum import Enum
 import numpy as np
 import numpy.polynomial.chebyshev
 
+import psycopg
+from psycopg import sql
 import sqlalchemy as sa
 
 import astropy.time
@@ -15,8 +17,9 @@ from astropy.io import fits
 import astropy.units as u
 from astropy.coordinates import SkyCoord, Distance
 
-from models.base import Base, SmartSession, UUIDMixin
-from models.provenance import Provenance, ProvenanceTag
+from models.base import Base, SmartSession, UUIDMixin, PsycopgConnection
+from models.provenance import Provenance
+from models.enums_and_bitflags import CalibratorSetConverter, CalibratorTypeConverter, FlatTypeConverter
 
 from pipeline.catalog_tools import Bandpass
 from util.fits import read_fits_image
@@ -1544,7 +1547,9 @@ class Instrument:
 
         return None
 
-    def preprocessing_calibrator_files( self, calibset, flattype, section, filter, mjd, provtag=None, nofetch=False ):
+    def preprocessing_calibrator_files( self, calibset, flattype, section, filter, mjd,
+                                        zero_provtag=None, flat_provtag=None, fringe_provtag=None,
+                                        nofetch=False ):
         """Get a dictionary of calibrator images/datafiles for a given mjd and sensor section.
 
         Don't call this when you're holding open a database session, as
@@ -1578,8 +1583,12 @@ class Instrument:
           be the short filter name, not the long filter name.
         mjd: float
           The mjd where the calibrator params are valid
-        provtag: str or None
-          If given, the provenance tag of the image or data file to get
+        zero_provtag: str or None
+          If given, the provenance tag of the bias image to get.
+        flat_provtag: str or None
+          If given, the provenance tag of the flat image to get.
+        fringe_provtag: str or None
+          If given, the provenance tag of the fringe image to get.
         nofetch: bool
           If True, will only search the database for an
           externally_supplied calibrator.  If False (default), will call
@@ -1606,13 +1615,6 @@ class Instrument:
         if ( calibset == 'externally_supplied' ) != ( flattype == 'externally_supplied' ):
             raise ValueError( "Doesn't make sense to have only one of calibset and flattype be externally_supplied" )
 
-        # Import CalibratorFile here.  We can't import it at the top of
-        # the file because calibrator.py imports image.py, image.py
-        # imports exposure.py, and exposure.py imports instrument.py --
-        # leading to a circular import
-        from models.calibratorfile import CalibratorFile
-        from models.image import Image
-
         params = {}
 
         expdatetime = pytz.utc.localize( astropy.time.Time( mjd, format='mjd' ).datetime )
@@ -1621,71 +1623,84 @@ class Instrument:
             if calibtype in self.preprocessing_nofile_steps:
                 continue
 
-            SCLogger.debug( f'Looking for calibrators for {section} type {calibtype}' )
+            provtag = ( zero_provtag if calibtype=='zero'
+                        else flat_provtag if calibtype=='flat'
+                        else fringe_provtag if calibtype=='fringe'
+                        else None )
+
+            SCLogger.debug( f'Looking for calibrators for {section} type {calibtype}'
+                            f'{f" provtag {provtag}" if provtag is not None else ""}' )
 
             calib = None
-            with SmartSession() as dbsess:
-                calibquery = dbsess.query( CalibratorFile )
+            with PsycopgConnection() as conn:
+                cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
+                q = sql.SQL( "SELECT c.* FROM calibrator_files c\n"
+                             "LEFT JOIN images i ON c.image_id=i._id\n"
+                             "LEFT JOIN data_files d ON c.datafile_id=d._id\n"
+                            )
                 if provtag is not None:
-                    calibquery = ( calibquery.join( ProvenanceTag,
-                                                    CalibratorFile.provenance_id == ProvenanceTag.provenance_id )
-                                   .filter( ProvenanceTag.tag == provtag )
-                                  )
-                calibquery = ( calibquery
-                               .filter( CalibratorFile.calibrator_set == calibset )
-                               .filter( CalibratorFile.instrument == self.name )
-                               .filter( CalibratorFile.type == calibtype )
-                               .filter( CalibratorFile.sensor_section == section )
-                               .filter( sa.or_( CalibratorFile.validity_start.is_(None),
-                                                CalibratorFile.validity_start <= expdatetime ) )
-                               .filter( sa.or_( CalibratorFile.validity_end.is_(None),
-                                                CalibratorFile.validity_end >= expdatetime ) )
-                              )
-                if calibtype == 'flat':
-                    calibquery = calibquery.filter( CalibratorFile.flat_type == flattype )
+                    q += sql.SQL( "LEFT JOIN provenance_tags it ON i.provenance_id=it.provenance_id\n"
+                                  "LEFT JOIN provenance_tags dt ON d.provenance_id=dt.provenance_id\n" )
+                q += sql.SQL( "WHERE c._calibrator_set={calibset}\n"
+                              "  AND c._type={calibtype}\n"
+                              "  AND c.instrument={instr}\n"
+                              "  AND c.sensor_section={sec}\n"
+                              "  AND ( c.validity_start IS NULL OR c.validity_start <= {expdatetime} )\n"
+                              "  AND ( c.validity_end IS NULL OR c.validity_end >= {expdatetime} )\n"
+                             ).format( calibset=CalibratorSetConverter.to_int(calibset),
+                                       calibtype=CalibratorTypeConverter.to_int(calibtype),
+                                       instr=self.name,
+                                       sec=section,
+                                       expdatetime=expdatetime )
+                if calibtype == "flat":
+                    q += ( sql.SQL( "  AND _flat_type={flat_type}\n" )
+                           .format( flat_type=FlatTypeConverter.to_int(flattype) ) )
                 if ( calibtype in [ 'flat', 'fringe', 'illumination' ] ) and ( filter is not None ):
-                    calibquery = ( calibquery.join( Image, CalibratorFile.image_id==Image._id )
-                                   .filter( Image.filter == filter ) )
+                    q += sql.SQL( "  AND i.filter={filter}\n" ).format( filter=filter )
+                if provtag is not None:
+                    q += sql.SQL( "  AND ( it.tag={provtag} OR dt.tag={provtag} )\n" ).format( provtag=provtag )
+
                 # Select thing with most recent validity start; if there are more than one with the same
                 #   validity_start, choose the one made most recently.
-                # (I really hope that SQLAlchemy will make this order by validity_start desc, created_at desc)
-                calibquery = calibquery.order_by( CalibratorFile.validity_start.desc(),
-                                                  CalibratorFile.created_at.desc() )
+                q += sql.SQL( "ORDER BY c.validity_start DESC, c.created_at DESC\n" )
 
-                if calibquery.count() > 1:
-                    SCLogger.warning( f"Found {calibquery.count()} valid {calibtype}s for "
-                                      f"{self.name} {section}, picking the latest one, or, failing "
-                                      f"that, picking a 'random' one." )
-                if calibquery.count() > 0:
-                    SCLogger.debug( f"Got an existing valid {calibtype} for {self.name} {section}" )
-                    calibs = calibquery.all()
-                    calib = None
-                    for checkcalib in calibs:
-                        if checkcalib.validity_start is not None:
-                            calib = checkcalib
-                            break
-                    if calib is None:
-                        calib = calibs[0]
+                cursor.execute( q )
+                rows = cursor.fetchall()
 
-            if ( calib is None ) and ( calibset == 'externally_supplied' ) and ( not nofetch ):
-                # This is the real reason we got the calibfile downloadlock, but of course
-                # we had to do it before searching for the file so that we don't have a race
-                # condition for multiple processes all downloading the file at once.
+            if len(rows) > 1:
+                SCLogger.warning( f"Found {len(rows)} valid {calibtype}s for "
+                                  f"{self.name} {section}, picking the latest one, or, failing "
+                                  f"that, picking a 'random' one." )
+            if len(rows) > 0:
+                SCLogger.debug( f"Got an existing valid {calibtype} for {self.name} {section}" )
+                matchedrow = None
+                for row in rows:
+                    if row['validity_start'] is not None:
+                        matchedrow = row
+                        break
+                if matchedrow is None:
+                    matchedrow = row[0]
+
+            if ( ( matchedrow is None ) and
+                 ( CalibratorSetConverter.to_string( calibset ) == 'externally_supplied' ) and
+                 ( not nofetch )
+                ):
                 calib = self._get_default_calibrator( mjd, section, calibtype=calibtype, filter=filter )
                 SCLogger.debug( f"Got default calibrator {calib} for {calibtype} {section}" )
+                matchedrow = calib.to_dict()
 
-            if calib is None:
+            if matchedrow is None:
                 params[ f'{calibtype}_isimage' ] = False
                 params[ f'{calibtype}_fileid' ] = None
             else:
-                if calib.image_id is not None:
+                if matchedrow['image_id'] is not None:
                     params[ f'{calibtype}_isimage' ] = True
-                    params[ f'{calibtype}_fileid' ] = calib.image_id
-                elif calib.datafile_id is not None:
+                    params[ f'{calibtype}_fileid' ] = matchedrow['image_id']
+                elif matchedrow['datafile_id'] is not None:
                     params[ f'{calibtype}_isimage' ] = False
-                    params[ f'{calibtype}_fileid' ] = calib.datafile_id
+                    params[ f'{calibtype}_fileid' ] = matchedrow['datafile_id']
                 else:
-                    raise RuntimeError( f'Data corruption: CalibratorFile {calib.id} has neither '
+                    raise RuntimeError( f'Data corruption: CalibratorFile {matchedrow["_id"]} has neither '
                                         f'image_id nor datafile_id' )
         return params
 

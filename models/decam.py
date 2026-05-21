@@ -617,8 +617,6 @@ class DECam(Instrument):
                                                           calibtype=calibtype,
                                                           flattype=( 'externally_supplied' if calibtype == 'flat'
                                                                      else None ) ):
-                retry_download( url, fileabspath )
-
                 # We know calibtype will be one of fringe, flat, or illumination
                 if calibtype == 'fringe':
                     dbtype = 'Fringe'
@@ -627,29 +625,50 @@ class DECam(Instrument):
                 elif calibtype == 'illumination':
                     dbtype = 'ComSkyFlat'
                 mjd = float( cfg.value( "DECam.calibfiles.mjd" ) )
-                image = Image( format='fits', type=dbtype, provenance_id=prov.id, instrument='DECam',
-                               telescope='CTIO4m', filter=filter, section_id=section, filepath=str(filepath),
-                               mjd=mjd, end_mjd=mjd,
-                               info={}, exp_time=0, ra=0., dec=0.,
-                               ra_corner_00=0., ra_corner_01=0.,ra_corner_10=0., ra_corner_11=0.,
-                               dec_corner_00=0., dec_corner_01=0., dec_corner_10=0., dec_corner_11=0.,
-                               minra=0, maxra=0, mindec=0, maxdec=0,
-                               target="", project="" )
-                # Use FileOnDiskMixin.save instead of Image.save here because we're doing
-                # a lower-level operation.  image.save would be if we wanted to read and
-                # save FITS data, but here we just want to have it make sure the file
-                # is in the right place and check its md5sum.  (FileOnDiskMixin.save, when
-                # given a filename, will move that file to where it goes in the local data
-                # storage unless it's already in the right place.)
-                FileOnDiskMixin.save( image, fileabspath )
-                calfile = CalibratorFile( type=calibtype,
-                                          calibrator_set='externally_supplied',
-                                          flat_type='externally_supplied' if calibtype == 'flat' else None,
-                                          instrument='DECam',
-                                          sensor_section=section,
-                                          image_id=image.id )
-                image.insert()
-                calfile.insert()
+
+                # Gotta check to see if the file was there because another process pulled
+                #   it down while we were waiting for the lock.
+                with SmartSession() as session:
+                    image = session.query( Image ).filter( Image.filepath==str(filepath) )
+                    if image is not None:
+                        calfile = ( session.query( CalibratorFile )
+                                    .filter( CalibratorFile.type==calibtype )
+                                    .filter( CalibratorFile.calibrator_set=='externally_supplied' )
+                                    .filter( CalibratorFile.flat_type==('externally_supplied'
+                                                                        if calibtype=='flat' else None) )
+                                    .filter( CalibratorFile.instrument=='DECam' )
+                                    .filter( CalibratorFile.sensor_secton==section )
+                                    .filter( CalibratorFile.image_id==image.id ) )
+                        if calfile is None:
+                            raise RuntimeError( f"Image {filepath} exists, but the corresponding CalibratorFile "
+                                                f"does not exist." )
+                if image is None:
+                    retry_download( url, fileabspath )
+
+                    image = Image( format='fits', type=dbtype, provenance_id=prov.id, instrument='DECam',
+                                   telescope='CTIO4m', filter=filter, section_id=section, filepath=str(filepath),
+                                   mjd=mjd, end_mjd=mjd,
+                                   info={}, exp_time=0, ra=0., dec=0.,
+                                   ra_corner_00=0., ra_corner_01=0.,ra_corner_10=0., ra_corner_11=0.,
+                                   dec_corner_00=0., dec_corner_01=0., dec_corner_10=0., dec_corner_11=0.,
+                                   minra=0, maxra=0, mindec=0, maxdec=0,
+                                   target="", project="" )
+                    # Use FileOnDiskMixin.save instead of Image.save here because we're doing
+                    # a lower-level operation.  image.save would be if we wanted to read and
+                    # save FITS data, but here we just want to have it make sure the file
+                    # is in the right place and check its md5sum.  (FileOnDiskMixin.save, when
+                    # given a filename, will move that file to where it goes in the local data
+                    # storage unless it's already in the right place.)
+                    FileOnDiskMixin.save( image, fileabspath )
+                    calfile = CalibratorFile( type=calibtype,
+                                              calibrator_set='externally_supplied',
+                                              flat_type='externally_supplied' if calibtype == 'flat' else None,
+                                              instrument='DECam',
+                                              sensor_section=section,
+                                              image_id=image.id )
+                    image.insert()
+                    calfile.insert()
+
             SCLogger.debug( f"decam_get_default_calibrator: releasing calibfile lock for {self.name} {section} "
                             f"calibset='externally_supplied' calibtype={calibtype}" )
 

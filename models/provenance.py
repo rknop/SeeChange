@@ -83,7 +83,7 @@ class CodeVersion(Base, UUIDMixin):
         'referencing' : (0,1,0),
         'coaddition' : (0,1,0),
         'positioning': (0,1,0),
-        'flat_bias_builder': (0,1,0),
+        'flat_bias_builder': (0,3,0),
 
         # The next couple are processes whose direct data products
         #   are not saved to the database.  If their version change,
