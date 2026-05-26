@@ -470,7 +470,6 @@ class SeeChangeBase:
                     session.rollback()
                     time.sleep( sleeptime )
         if failed:
-            # import pdb; pdb.set_trace()
             session.rollback()
             SCLogger.error( f"Repeated failures getting lock on {tablename}." )
             raise RuntimeError( f"Repeated failures getting lock on {tablename}." )

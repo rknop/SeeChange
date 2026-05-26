@@ -247,10 +247,6 @@ def test_overscan( loaded_singleamp_multifile_exposure ):
         assert np.median( im.data[1929:1940, 1563:1573] ) == pytest.approx( regionmedian[chip], abs=0.1 )
 
 
-    # import pdb; pdb.set_trace()
-    # pass
-
-
 # def test_dualamp_manual_load__exposure( loaded_dualamp_exposure ):
 #     exp = loaded_dualamp_exposure
 

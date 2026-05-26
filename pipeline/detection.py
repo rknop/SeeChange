@@ -543,13 +543,14 @@ class Detector:
                 sources, _, _ = self._run_sextractor_once( image, bg, apers=[aperrad],
                                                            psffile=None, wcs=wcs, tempname=tempnamebase )
 
+                # ****
+                # sources.ds9_regfile( 'them.reg', radcolor={'star': (2,'yellow'), 'nonstar': (2,'blue'),
+                #                                            'bad': (2.4, 'red'), 'flagged': (2.8,'orange'),
+                #                                            'highsn': (3.0, 'green') } )
+                # import pdb; pdb.set_trace()
+                # ****
+
                 # Get the PSF
-                # ****
-                sources.ds9_regfile( 'them.reg', radcolor={'star': (2,'yellow'), 'nonstar': (2,'blue'),
-                                                           'bad': (2.4, 'red'), 'flagged': (2.8,'orange'),
-                                                           'highsn': (3.0, 'green') } )
-                import pdb; pdb.set_trace()
-                # ****
                 SCLogger.debug( "detection: determining psf" )
                 psf = self._run_psfex( tempnamebase, image, do_not_cleanup=True )
                 psfpath = pathlib.Path( FileOnDiskMixin.temp_path ) / f'{tempnamebase}.sources.psf'
@@ -843,7 +844,6 @@ class Detector:
                                 sourcefile ]
                     _psfcom = " ".join( f'"{str(i)}"' if ' ' in str(i) else str(i) for i in command )
                     SCLogger.debug( f"Running command {_psfcom}" )
-                    import pdb; pdb.set_trace()
                     res = subprocess.run(
                         command,
                         cwd=sourcefile.parent,

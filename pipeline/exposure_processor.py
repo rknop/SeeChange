@@ -424,10 +424,7 @@ class ExposureProcessor:
                 # process interaction issues (like database locks)).
                 SCLogger.info( f"Running {len(chips)} chips serially" )
                 for chip in chips:
-                    res = self.processchip( chip )
-                    # if not res[2]:
-                    #     import pdb; pdb.set_trace()
-                    self.collate( res )
+                    self.collate( self.processchip( chip ) )
 
             succeeded = { k for k, v in self.results.items() if v }
             failed = { k for k, v in self.results.items() if not v }
