@@ -1830,11 +1830,17 @@ class UUIDMixin:
     #   id property of a created object before it's saved to the datbase, or it will
     #   be set in our insert/upsert methods, as we only very rarely let SQLAlchemy
     #   itself actually save anything to the database.)
+    # ...and that was really annoying, because as I wrote more code that didn't
+    #   use SQLAlchemy, having SQLAlchmey handle the default was troublesome.
+    #   However, I'm afraid of removing the SQLAlchmey default, because it will
+    #   probably break lots of code in lots of places, so just try putting in
+    #   both here.  Cf. Issue #516.
     _id = sa.Column(
         sqlUUID,
         primary_key=True,
         index=True,
         default=uuid.uuid4,            # This is the one exception to always using server_default
+        server_default=func.gen_random_uuid(),
         doc="Unique identifier for this row",
     )
 
@@ -2745,8 +2751,8 @@ class ArchiveLock( Base, UUIDMixin ):
                 cursor = con.cursor()
                 cursor.execute( "DELETE FROM archive_locks "
                                 "WHERE serverpath=%(path)s "
-                                "  AND host=%(host)s "
-                                "  AND pid=%(pid)s",
+                                "  AND hostname=%(host)s "
+                                "  AND pid=%(pid)s"
                                 "  AND identifier=%(id)s",
                                 { 'path': serverpath,
                                   'host': socket.gethostname(),
@@ -2756,7 +2762,7 @@ class ArchiveLock( Base, UUIDMixin ):
                 con.commit()
                 return
 
-        rng = np.random.default_generator()
+        rng = np.random.default_rng()
         sleept = sleep_init
         t0 = time.perf_counter()
         ok = False
