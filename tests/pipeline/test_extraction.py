@@ -339,6 +339,8 @@ def test_extract_sources_sextractor( decam_datastore_through_preprocessing,
     assert sources.apfluxadu()[0].mean() == pytest.approx( 17757., rel=0.01 )
     assert sources.apfluxadu()[0].std() == pytest.approx( 117502., rel=0.01 )
 
+    import pdb; pdb.set_trace()
+
     assert sources.good.sum() == pytest.approx(975, rel=0.01)
     # This is what you get with CLASS_STAR; you'll get different values with SPREAD_MODEL
     assert sources.is_star.sum() == pytest.approx(479, rel=0.01)

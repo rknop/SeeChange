@@ -797,8 +797,8 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
 
         return arr
 
-    def ds9_regfile( self, regfile, color='green', radius=2, width=2, whichsources='all',
-                     flagbit=0x10, clobber=True ):
+    def ds9_regfile( self, regfile, color='green', radius=2, radcolor=None, width=2, sncut=5.,
+                     whichsources='all', flagbit=0x10, clobber=True ):
         """Write a DS9 region file with circles on the sources.
 
         See https://ds9.si.edu/doc/ref/region.html for file format
@@ -814,10 +814,25 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         radius: float
            The radius of the circles in pixels
 
+        radcolor: dict, default None
+           If given, supercedes color and radius.  A dictionary like:
+             { 'star': ( 2, 'yellow'),
+               'nonstar': ( 2, 'blue' ),
+               'highsn': ( 3.0, 'green' ),
+               'lowsn': ( 3.0, 'pink' ),
+               'bad': ( 2.4, 'red' ),
+               'flagged': (2.8,'orange' ),
+              }
+           'star' and 'nonstar' are required, the other are optional.
+           A circle will be drawn for every category that an object
+           matches.  (Since everything is either a star or a nonstar,
+           and those are exclusive, that means everything will apply.)
+
+
         width: float
            The width of the circle line (in whatever unigs DS9 uses)
 
-        whichsources: str or list, including 'all', 'stars', 'nonstars', 'good', 'notgood', 'flagged'
+        whichsources: str or list
            Which objects to write regions for.  If 'all', all of them.
            If 'stars', only the ones for which self.is_star is True.  If
            'nonstar', only the ones for which self.is_star is False.
@@ -829,11 +844,23 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
            self.data['FLAGS'].  This probably only works for
            sextractor-created sources.
 
+           If 'highsn', then only sources with flux/dflux >= sncut are
+           included.
+
+           If 'lowsn', then only sources with flux/dflux < sncut are
+           included.
+
+           (For both 'highsn' and 'lowsn', it uses self.psfflux() if
+           that works, and if not, sources.apfluxapdu().)
+
            Or, make this a list, and then the logical and of the
            *rejection* criteria will be used.  It's easy to end up with
            nothing doing this (e.g. whichsources=['stars', 'nonstars']).
            If you pass an empty list, that's the same as passing "all".
            Passing a list with "all" and something else is gratuitous.
+
+        sncut : float, default 5.
+           The S/N cut to use for "highsn" and "lowsn" in whichsources.
 
         flagbit : int
            A bitfield to bitwise and with self.sources.data['FLAGS']
@@ -851,24 +878,50 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         if any( [ i not in known for i in whichsources ] ):
             raise ValueError( f"whichsources can only include {known}" )
 
-        which = np.full_like( ( self.num_sources, ), True )
+        which = np.full( ( self.num_sources, ), True )
+        try:
+            flux, dflux = self.spffluxadu()
+        except Exception:
+            flux, dflux = self.apfluxadu()
 
-        if 'stars' in whichsources:
-            which = which & self.is_star
-        if 'nonstars' in whichsources:
-            which = which & ( ~self.is_star )
-        if 'good' in whichsources:
-            which = which & self.good
-        if 'notgood' in whichsources:
-            which = which & ~self.good
-        if 'flagged' in whichsources:
-            which = which & ( ( self.data['FLAGS'] & flagbit ) != 0 )
+        if 'all' not in whichsources:
+            if 'stars' in whichsources:
+                which = which & self.is_star
+            if 'nonstars' in whichsources:
+                which = which & ( ~self.is_star )
+            if 'good' in whichsources:
+                which = which & self.good
+            if 'notgood' in whichsources:
+                which = which & ~self.good
+            if 'flagged' in whichsources:
+                which = which & ( ( self.data['FLAGS'] & flagbit ) != 0 )
+            if 'higsn' in whichsources:
+                which = which & ( flux / dflux >= sncut )
+            if 'lowsn' in whichsources :
+                which = which & ( flux / dflux < sncut )
+
+        # write with +1 to go from C-coordinates to FITS-coordinates
+        def _circle( ofp, x, y, rad, col, width ):
+            ofp.write( f"image;circle({x+1},{y+1},{rad}) # color={col} width={width}\n" )
+
+        conds = { 'star': self.is_star,
+                  'nonstar': ~self.is_star,
+                  'highsn': ( flux / dflux ) >= sncut,
+                  'lowsn': ( flux / dflux ) < sncut,
+                  'bad': ~self.good,
+                  'flagged': ( self.data['FLAGS'] & flagbit ) != 0
+                 }
 
         with open( regfile, "w" ) as ofp:
-            for x, y, use in zip( self.x, self.y, which ):
+            for i, ( x, y, use )  in enumerate( zip( self.x, self.y, which ) ):
                 if use:
-                    # +1 to go from C-coordinates to FITS-coordinates
-                    ofp.write( f"image;circle({x+1},{y+1},{radius}) # color={color} width={width}\n" )
+                    if radcolor is not None:
+                        for objtype, cond in conds.items():
+                            if ( objtype in radcolor ) and cond[i]:
+                                _circle( ofp, x, y, radcolor[objtype][0], radcolor[objtype][1], width )
+                    else:
+                        _circle( ofp, x, y, radius, color, width )
+
 
     def get_upstreams(self, session=None):
         """Get the image that was used to make this source list. """

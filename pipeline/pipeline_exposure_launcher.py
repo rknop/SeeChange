@@ -382,7 +382,7 @@ environment variable anyway.)
         raise ValueError( f"Unknown worker log level {args.worker_log_level}" )
     worker_log_level = loglookup[ args.worker_log_level.lower() ]
 
-    args = [ args.cluster_id, args.node_id ]
+    posargs = [ args.cluster_id, args.node_id ]
     kwargs = { "numprocs": args.numprocs,
                "onlychips": args.chips,
                "verify": not args.noverify,
@@ -396,7 +396,7 @@ environment variable anyway.)
     if 'provtag' in vars( args ):
         kwargs['provtag'] = None if args.provtag == "None" else args.provtag
 
-    elaunch = ExposureLauncher( *args, **kwargs )
+    elaunch = ExposureLauncher( *posargs, **kwargs )
     elaunch.register_worker()
 
     def goodbye( signum, frame ):

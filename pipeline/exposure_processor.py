@@ -424,7 +424,10 @@ class ExposureProcessor:
                 # process interaction issues (like database locks)).
                 SCLogger.info( f"Running {len(chips)} chips serially" )
                 for chip in chips:
-                    self.collate( self.processchip( chip ) )
+                    res = self.processchip( chip )
+                    # if not res[2]:
+                    #     import pdb; pdb.set_trace()
+                    self.collate( res )
 
             succeeded = { k for k, v in self.results.items() if v }
             failed = { k for k, v in self.results.items() if not v }
@@ -556,7 +559,7 @@ to start it.
     numprocs = args.numprocs if args.numprocs is not None else ( psutil.cpu_count( logical=False ) -1  )
     SCLogger.info( f"Running with {numprocs} chip processors" )
 
-    args = [ args.instrument, args.identifier, numprocs, args.cluster_id, args.node ]
+    posargs = [ args.instrument, args.identifier, numprocs, args.cluster_id, args.node ]
     kwargs = { 'machine_name': args.machine,
                'onlychips': args.chips,
                'through_step': args.through_step,
@@ -566,7 +569,7 @@ to start it.
     if 'provtag' in vars( args ):
         kwargs['provtag'] = None if args.provtag == "None" else args.provtag
 
-    processor = ExposureProcessor( *args, **kwargs )
+    processor = ExposureProcessor( *posargs, **kwargs )
     processor.secure_exposure( assume_claimed=args.assume_claimed, cont=args.cont, delete=reallydelete )
     if not args.just_download:
         processor()

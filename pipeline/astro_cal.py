@@ -422,7 +422,8 @@ class AstroCalibrator:
 
             t0 = time.perf_counter()
             try:
-                SCLogger.debug( f"Sending to subprocess.run: {com}" )
+                _anetcom = " ".join( f'"{str(i)}"' if ' ' in str(i) else str(i) for i in com )
+                SCLogger.debug( f"Sending to subprocess.run: {_anetcom}" )
                 res = subprocess.run( com, capture_output=True, timeout=self.pars.subproc_timeout )
             except Exception:
                 strstr = io.StringIO()

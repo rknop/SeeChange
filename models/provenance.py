@@ -67,7 +67,7 @@ class CodeVersion(Base, UUIDMixin):
     CODE_VERSION_DICT = {
         # The core processes of the pipeline
         'acquire_exposure': (0,2,0),
-        'preprocessing': (0,3,0),
+        'preprocessing': (0,4,0),
         'extraction': (0,2,0),
         'astrocal' : (0,1,0),
         'photocal' : (0,1,0),

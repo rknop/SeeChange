@@ -89,12 +89,21 @@ class ParsDetector(Parameters):
             critical=True
         )
 
+        self.initial_thredshold = self.add_par(
+            'initial_threshold',
+            3.0, # 6.0,
+            [float, int],
+            'Like threshold, but used for the initial sextractor run before psf determination. '
+            'You want this to be higher so that only decent detections are passed on to psfex.',
+            critical=True
+        )
+
         self.threshold = self.add_par(
             'threshold',
             3.0,
             [float, int],
             'The number of standard deviations above the background '
-            'to use as the threshold for detecting a source. ',
+            'to use as the threshold for detecting a source.  (WE THINK.  See code.  Scary.)',
             critical=True
         )
 
@@ -535,6 +544,12 @@ class Detector:
                                                            psffile=None, wcs=wcs, tempname=tempnamebase )
 
                 # Get the PSF
+                # ****
+                sources.ds9_regfile( 'them.reg', radcolor={'star': (2,'yellow'), 'nonstar': (2,'blue'),
+                                                           'bad': (2.4, 'red'), 'flagged': (2.8,'orange'),
+                                                           'highsn': (3.0, 'green') } )
+                import pdb; pdb.set_trace()
+                # ****
                 SCLogger.debug( "detection: determining psf" )
                 psf = self._run_psfex( tempnamebase, image, do_not_cleanup=True )
                 psfpath = pathlib.Path( FileOnDiskMixin.temp_path ) / f'{tempnamebase}.sources.psf'
@@ -629,11 +644,13 @@ class Detector:
             File that has the PSF to use for PSF photometry.  If None,
             won't do psf photometry.
 
-          psfnorm: float
-            The normalization of the PSF image (i.e., the sqrt of the
-            sum of squares of the psf values).  This is used to set the
-            threshold for sextractor.  When the PSF is not known, we
-            will use a rough approximation and set this value to 3.0.
+          psfnorm: float, default 3.0
+            This is complicated. SExtractor detect_thresh and
+            analysis_thresh are the thresholds, respectively, for
+            finding something in the first place to look at, and for
+            including in an object's isophotal area.
+
+            OMG I'M SO CONFLUSED.  See Issue #536.
 
           wcs: WorldCoordinates or None
             If passed, will replace the WCS in the image header with the
@@ -688,14 +705,16 @@ class Detector:
                 tempname = pathlib.Path( FileOnDiskMixin.temp_path ) / tempname
 
             imgdata = image.data if bg is None else bg.subtract_me( image.data )
+            thresh = self.pars.initial_threshold if psffile is None else self.pars.threshold
+            thresh /= psfnorm
             sextr_res = run_sextractor(
                 image.header,
                 imgdata,
                 image.weight,
                 maskdata = image.flags,
                 outbase = tempname,
-                detect_thresh = self.pars.threshold / psfnorm,
-                analysis_thresh = self.pars.threshold / psfnorm,
+                detect_thresh = thresh,
+                analysis_thresh = thresh,
                 apers = apers,
                 psffile = psffile,
                 wcs = wcs,
@@ -822,6 +841,9 @@ class Detector:
                                 '-XML_URL', 'file:///usr/share/psfex/psfex.xsl',
                                 # '-PSFVAR_DEGREES', '4',  # polynomial order for PSF fitting across image
                                 sourcefile ]
+                    _psfcom = " ".join( f'"{str(i)}"' if ' ' in str(i) else str(i) for i in command )
+                    SCLogger.debug( f"Running command {_psfcom}" )
+                    import pdb; pdb.set_trace()
                     res = subprocess.run(
                         command,
                         cwd=sourcefile.parent,

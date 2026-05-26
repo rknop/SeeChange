@@ -392,9 +392,6 @@ class Preprocessor:
 
             # Build the weight images (if necessary)
             if image.weight is None:
-                # Start with the Instrument standard bad pixel mask for this image
-                image._flags = self.instrument.get_standard_flags_image( ds.section_id )
-
                 # Estimate the background rms with sep
                 boxsize = self.instrument.background_box_size
                 filtsize = self.instrument.background_filt_size
@@ -412,8 +409,8 @@ class Preprocessor:
                 subim = image.data - sky
                 SCLogger.debug( "Building weight image and augmenting flags image" )
 
-                wbad = np.where( rms <= 0 )
-                wgood = np.where( rms > 0 )
+                wbad = ( rms <= 0 ) | ( image.flags != 0 )
+                wgood = np.logical_not( wbad )
                 rms = rms ** 2
                 subim[ subim < 0 ] = 0
                 gain = self.instrument.average_gain( image )
@@ -422,6 +419,11 @@ class Preprocessor:
                 rms += subim / gain
                 image._weight = np.zeros( image.data.shape, dtype=np.float32 )
                 image._weight[ wgood ] = 1. / rms[ wgood ]
+                # This next one is a little bit tautological.  In fact,
+                #   because we start with a sky noise I think it's
+                #   totally tautological: something will have 0 "rms"
+                #   (really, at this point, variance) iff it is a flagged pixel.
+                #   ...or, maybe.  Depends what sep.Background does.
                 image._flags[ wbad ] |= string_to_bitflag( "zero weight", flag_image_bits_inverse )
                 # Now make the weight zero on the bad pixels too
                 image._weight[ image._flags != 0 ] = 0.

@@ -420,6 +420,7 @@ extraction:
   best_aper_num: 0
   aperunit: fwhm
   separation_fwhm: 1.0
+  initial_threshold: 6.0
   threshold: 3.0
   subtraction: false
   backgrounding:
