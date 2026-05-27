@@ -57,8 +57,10 @@ class CodeVersion(Base, UUIDMixin):
     )
 
     # represents the versions of each process in the current repository
-    #     sometimes when changing certain values here, hardcoded provenances in ptf and decam fixtures
-    # will need to be updated or tests will fail (Check warnings for base path not matching)
+    #
+    #     sometimes when changing certain values here, hardcoded provenances in ptf and decam
+    #     fixtures will need to be updated or tests will fail, or at the very least be slower as
+    #     they won't use teh cache right (Check warnings for base path not matching)
     #
     #     NOTE: PATCH changes should never result in a change in any data produced, and can be changed without
     #     affecting provenances. MINOR changes will result in some change in the data products, and MAJOR will
@@ -67,7 +69,7 @@ class CodeVersion(Base, UUIDMixin):
     CODE_VERSION_DICT = {
         # The core processes of the pipeline
         'acquire_exposure': (0,2,0),
-        'preprocessing': (0,4,0),
+        'preprocessing': (0,5,0),
         'extraction': (0,2,0),
         'astrocal' : (0,1,0),
         'photocal' : (0,1,0),
@@ -83,7 +85,7 @@ class CodeVersion(Base, UUIDMixin):
         'referencing' : (0,1,0),
         'coaddition' : (0,1,0),
         'positioning': (0,1,0),
-        'flat_bias_builder': (0,3,0),
+        'flat_bias_builder': (0,4,0),
 
         # The next couple are processes whose direct data products
         #   are not saved to the database.  If their version change,
