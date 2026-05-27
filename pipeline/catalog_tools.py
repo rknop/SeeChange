@@ -140,11 +140,7 @@ def _download_gaia_dr3_custom_server( minra, maxra, mindec, maxdec, minmag, maxm
     if minmag is not None:
         url += f"/{minmag}"
 
-    #### TEMP -- don't verify the cert until I can figure out the problem stopping me
-    # from getting a new cert from LBNL
-    res = requests.post( url, timeout=cfg.value( 'catalog_gaiadr3.server_timeout_sec' ), verify=False )
-    # res = requests.post( url, timeout=cfg.value( 'catalog_gaiadr3.server_timeout_sec' ) )
-    ####
+    res = requests.post( url, timeout=cfg.value( 'catalog_gaiadr3.server_timeout_sec' ) )
     if res.status_code != 200:
         raise RuntimeError( f"Requests to custom gaia dr3 server returned status {res.status_code}" )
 
