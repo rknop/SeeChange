@@ -154,7 +154,7 @@ class Preprocessor:
         return string_to_bitflag( strng, image_preprocessing_inverse )
 
 
-    def run( self, *args, **kwargs ):
+    def run( self, *args, do_not_load=False, **kwargs ):
         """Run preprocessing for a given exposure and section_identifier.
 
         Parameters are passed to the data_store constructor (see
@@ -226,7 +226,10 @@ class Preprocessor:
             prov = ds.get_provenance('preprocessing', self.pars.get_critical_pars())
 
             # check if the image already exists in memory or in the database:
-            image = ds.get_image(prov)
+            if not do_not_load:
+                image = ds.get_image(prov)
+            else:
+                image = None
 
             image_was_from_exposure = False
             if image is None:  # need to make new image

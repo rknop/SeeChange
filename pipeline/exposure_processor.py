@@ -25,7 +25,7 @@ from pipeline.configchooser import ConfigChooser
 class ExposureProcessor:
     def __init__( self, instrument, identifier, numprocs, cluster_id,
                   node_id, machine_name=None, onlychips=None,
-                  through_step=None, ignore_known_exposures=False, nosave=False,
+                  through_step=None, ignore_known_exposures=False, nosave=False, do_not_load=False,
                   provtag=False, worker_log_level=logging.WARNING ):
         """A class that processes all images in a single exposure, potentially using multiprocessing.
 
@@ -72,8 +72,15 @@ class ExposureProcessor:
           read or update the known exposures table.
 
         nosave : bool, default False
-          If True, then nothing is saved, and the knownexposures table
-          won't be updated. Useful, possibly, for testing.
+          If True, then nothing is saved (...except maybe provenances?
+          and provenance tags? TODO CHECK THIS), and the knownexposures
+          table won't be updated. Useful, possibly, for testing.
+
+        do_not_load : bool, default False
+          If data products already exist in the database, ignore them
+          and rerun stuff.  Useful for testing/debugging.  You will get
+          exceptions if you don't also set nosave=True.  TODO : make this
+          finer grained so we can start at a later step.
 
         provtag : str or None or False
           If False, use the config's value for the Pipeline
@@ -97,6 +104,7 @@ class ExposureProcessor:
         self.through_step = through_step
         self.ignore_known_exposures = ignore_known_exposures
         self.nosave = nosave
+        self.do_not_load = do_not_load
         self.worker_log_level = worker_log_level
         self.provtag = provtag
 
@@ -342,6 +350,8 @@ class ExposureProcessor:
             pipelineargs = {}
             if self.nosave:
                 pipelineargs['do_not_save'] = True
+            if self.do_not_load:
+                pipelineargs['do_not_load'] = True
             if self.provtag is not False:
                 pipelineargs['provenance_tag'] = self.provtag
             if ( self.through_step is not None ) and ( self.through_step != 'exposure' ):
@@ -545,8 +555,13 @@ to start it.
                          help=( "Normally, reads and writes to the knownexposures table.  Set this to "
                                 "skip that.  You need this if you're running exposures outside of the "
                                 "context of a conductor." ) )
+    parser.add_argument( '--do-not-load', default=False, action='store_true',
+                         help=( "Always rerun everything, don't load existing products from the database. "
+                                "You will get an exception if you don't also pass --do-not-save. "
+                                "For testing/debugging purposes." ) )
     parser.add_argument( '--do-not-save', default=False, action='store_true',
-                         help="Set to run the pipeline but not save anything.  (For testing purposes.)" )
+                         help=( "Set to run the pipeline but not save anything.  (Well, provenances "
+                                "might get saved, unsure.)  For testing/debugging purposes." ) )
 
     args = parser.parse_args()
 
@@ -562,6 +577,7 @@ to start it.
                'through_step': args.through_step,
                'ignore_known_exposures': args.ignore_known_exposures,
                'nosave': args.do_not_save,
+               'do_not_load': args.do_not_load,
                'worker_log_level': args.worker_log_level }
     if 'provtag' in vars( args ):
         kwargs['provtag'] = None if args.provtag == "None" else args.provtag

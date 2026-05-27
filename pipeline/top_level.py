@@ -110,10 +110,21 @@ class ParsPipeline(Parameters):
             'do_not_save',
             False,
             bool,
-            ( 'Set true to disable all saving.  If True, overrides all other save flags, '
-              'effectively setting them all to False.' ),
+            ( 'Set true to disable all saving.  (Well, most saving; provenances will probably still '
+              'get saved.)  If True, overrides all other save flags, effectively setting them all to False.' ),
             critical=False,
         )
+
+        self.do_not_laod = self.add_par(
+            'do_not_load',
+            False,
+            bool,
+            ( 'Set to True to force all pipeline steps (well, the ones that have implemented this) to always '
+              'rerun, even if the product already exists in the database.  Will throw an exception if '
+              'do_not_save is not also set.  This is useful for debugging.' ),
+            critical=False
+        )
+
 
         self.provenance_tag = self.add_par(
             'provenance_tag',
@@ -537,6 +548,9 @@ class Pipeline:
         ds = None
         step = None
         try:
+            if self.pars.do_not_load and ( not self.pars.do_not_save ):
+                raise RuntimeError( "Setting do_not_load also requires setting do_not_save." )
+
             ds = self.setup_datastore(*args, **kwargs)
             stepstodo = self._get_stepstodo()
             SCLogger.debug( f"Pipeline going to do steps: {stepstodo}" )
@@ -609,7 +623,7 @@ class Pipeline:
 
                     if step in stepstodo:
                         SCLogger.info( f'Pipeline starting {step}' )
-                        ds = procobj.run( ds )
+                        ds = procobj.run( ds, do_not_load=self.pars.do_not_load )
                         ds.update_report( step )
 
                         if step == 'preprocessing':
@@ -700,7 +714,7 @@ class Pipeline:
                                                   [ self.subtractor, self.detector, self.cutter,
                                                     self.measurer, self.scorer ] ):
                             SCLogger.info( f"Running {step} with fake-injected image id {ds.image.id}" )
-                            fakeds = procobj.run( fakeds )
+                            fakeds = procobj.run( fakeds, do_not_load=self.pars.do_not_load )
 
                         SCLogger.info( f"Looking to see which fakes are detected on fake-injected subtraction "
                                        f"of image id {ds.image.id}" )
