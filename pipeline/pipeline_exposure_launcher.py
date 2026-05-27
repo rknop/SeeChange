@@ -352,7 +352,9 @@ environment variable anyway.)
     parser.add_argument( "--chips", default=None, nargs="+",
                          help="Only do these sensor sections (for debugging purposese)" )
     parser.add_argument( "--types", default=None, nargs='+',
-                         help="Just get exposures of these types.  Allowed vaues include Sci, Bias, Dark, TwiFlat." )
+                         help=( "Just get exposures of these types.  Allowed vaues include Sci, Bias, Dark, TwiFlat. "
+                                "Although the default is none, at least as of the writing of this help string, "
+                                "the conductor defaults to only sending back Sci images." ) )
     parser.add_argument( "-p", "--provtag", default=argparse.SUPPRESS, type=str,
                          help=( "Provenance tag to save data products to.  Will create it if it does not "
                                 "exist.  If you don't specify this, then whatever is in the config will be "

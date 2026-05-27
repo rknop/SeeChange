@@ -420,13 +420,14 @@ class FlatBuilder:
                 if self.pars.find_provenance_tag is not None:
                     raise ValueError( "Only specify one of find_provenance_id or find_provenance_tag" )
                 q += sql.SQL( "WHERE provenance_id={provid}\n" ).format( provid=self.pars.find_provenance_id )
+                _where = "  AND"
             else:
                 if self.pars.find_provenance_tag is None:
                     raise ValueError( "Must specify exactly one of find_provenance_id or find_provenance_tag" )
                 q += ( sql.SQL( "INNER JOIN provenance_tags t ON m.provenance_id=t.provenance_id\n"
                                 "                            AND t.tag={tag}\n" )
                        .format( tag=self.pars.find_provenance_tag ) )
-            _where = "WHERE"
+                _where = "WHERE"
             if self.pars.searchtype is not None:
                 imtype = ImageTypeConverter.to_int( self.pars.searchtype )
                 q += sql.SQL( "{where} m._type={type}\n" ).format( where=sql.SQL(_where), type=imtype )
@@ -659,15 +660,17 @@ class FlatBuilder:
                         del imgobj
 
                     if massive_stack is None:
-                        massive_stack = np.ma.array( np.empty( ( len(self.files), data.shape[0], data.shape[1] ),
-                                                               dtype=_massive_stack_dtype ),
-                                                     mask=np.full( ( len(self.files), data.shape[0], data.shape[1] ),
-                                                                   False ) )
+                        # I'm not using a masked array for two reasons.  First, I think if we can do
+                        #  np.nanmedian, memory use will be less than doing a median on a masked array
+                        #  (We shall see.)  Second, I want the data to be there even where it is masked.
+                        massive_stack = np.empty( ( len(self.files), data.shape[0], data.shape[1] ),
+                                                  dtype=_massive_stack_dtype )
+                        massive_stack_mask = np.full( ( len(self.files), data.shape[0], data.shape[1] ), False )
                     if data.shape != massive_stack.shape[1:3]:
                         raise RuntimeError( f"First image had shape {massive_stack.shape[1:3]}, but "
                                             f"{fname} has shape {data.shape}" )
                     massive_stack[ i ] = data
-                    massive_stack.mask[ i ] = ( flags != 0 )
+                    massive_stack_mask[ i ] = ( flags != 0 )
                     if min_mjd is None:
                         min_mjd = mjd
                         max_mjd = mjd
@@ -678,20 +681,26 @@ class FlatBuilder:
                     if ( i % 10 == 0 ) and ( i > 0 ):
                         SCLogger.debug( f"Read {i} of {len(self.files)} images" )
 
-        return massive_stack, min_mjd, max_mjd
+        return massive_stack, massive_stack_mask, min_mjd, max_mjd
 
 
-    def calculate_flat( self, massive_stack, section_id=None ):
+    def calculate_flat( self, massive_stack, massive_stack_mask, section_id=None ):
         """Warning: destroys massive_stack."""
 
-        self.memdump( "Before normalization" )
-
         section_id = '' if section_id is None else f' for {section_id}'
+
+        # Normalize all the images if necessary
+        self.memdump( "Before normalization" )
         if self.pars.normalize_mode is not None:
             SCLogger.info( f"Normalizing all images{section_id}..." )
             for i in range(len(self.files)):
                 if self.pars.normalize_mode == 'median':
-                    massive_stack[ i, :, : ] /= np.ma.median( massive_stack[ i, :, : ] )
+                    # Make a copy of the image so that we can NaNify the bad pixels
+                    #   without nuking the corresponding pixels in massive_stack
+                    tmpim = np.array( massive_stack[ i, :, : ] )
+                    tmpim[ massive_stack_mask[ i, :, : ] ] = np.nan
+                    massive_stack[ i, :, : ] /= np.nanmedian( tmpim )
+                    del tmpim
                 else:
                     raise ValueError( f"Unknown normalization method {self.pars.normalize_mode}" )
 
@@ -700,34 +709,53 @@ class FlatBuilder:
         # Combine all the images
         SCLogger.info( f"Building combined image{section_id}..." )
         if self.pars.combine_mode == "median":
-            self.combined = np.ma.median( massive_stack, axis=0 )
-            self.memdump( "After median" )
-            # Do this in more than one step in an attempt to use less memory than numpy would
-            #   grab if we did it all at once.
-            # Doesn't help as much as I'd like, because the np.ma.median call above
-            #   already goes from 4.9GB of memory for a stack of 121
-            #   2048×4096 images to >22GB of memory.  Why so much?  Does
-            #   it really need *three more* copies of the full input
-            #   array?  (I know, I should implement my own efficient
-            #   masked median code before I complain so I know what I'm
-            #   talking about.)  (But still.)
-            #    ....maybe I should be using nanmedian instead?
-            # In any event, still saves about an image worth of memory usage.
-            # mad = np.ma.median( np.abs( massive_stack - self.combined[ np.newaxis, :, : ] ), axis=0 )
+            # OMG MAKING A COPY OF massive_stack, so much memory used!
+            # Reason: I previously used masked arrays, and I think that actually used *more* memory.
+            #    Maybe.  We shall see.  But, also, I need to do this in two passes: I want to
+            #    nanmedian, but if things in the result have a nan, then I know they need to be
+            #    masked, but I want the value to be something sane, so that flatfields won't create
+            #    inf or nan spikes on images where pixels are masked.
+            self.memdump( "Before copy" )
+            massive_tmp = massive_stack.copy()
+            self.memdump( "After copy" )
+            massive_tmp[ massive_stack_mask ] = np.nan
+            self.combined = np.nanmedian( massive_tmp, axis=0 )
+            self.memdump( "After nanmedian" )
+            del massive_tmp
+            self.memdump( "After del massive_tmp" )
+            # Now patch in the median of all-masked pixels so we don't have a nan there
+            self.combined_mask = np.isnan( self.combined )
+            if np.any( self.combined_mask ):
+                self.combined[ self.combined_mask ] = np.nanmedian( massive_stack[:, self.cominbed_mask], axis=0 )
+            self.memdump( "After patch median" )
+            # If there were any all-nan pixels, paste in the median of the whole image just to have something sane
+            if np.any( np.isnan( self.combined ) ):
+                self.combined[ np.isnan( self.combined ) ] = np.nanmedian( self.combined )
+            self.memdump( "After patch of patch median" )
+
+            # Build the nmad image ("normalized median absolute deviation")
             massive_stack -= self.combined[ np.newaxis, :, : ]
             self.memdump( "After subtracting median" )
             # ...documentation doesn't say we can do this (i.e. make out= the same as the thing
             # we're working on), but it seems like it ought to work...
             massive_stack = np.abs( massive_stack, out=massive_stack )
+            # We can freely destory massive_stack now
+            massive_stack[ massive_stack_mask ] = np.nan
             self.memdump( "After abs" )
-            mad = np.ma.median( massive_stack, axis=0, overwrite_input=True )
+            del massive_stack_mask
+            mad = np.nanmedian( massive_stack, axis=0, overwrite_input=True )
             self.memdump( "After mad" )
             self.nmad = ( self.nmad_k * mad ).astype( np.float32, copy=False )
             self.memdump( "After nmad" )
             if self.pars.bad_threshold is not None:
-                threshold = self.pars.bad_threshold * self.nmad_k * np.ma.median( self.nmad )
-                self.combined.mask = np.logical_or( self.combined.mask, self.nmad > threshold )
+                threshold = self.pars.bad_threshold * self.nmad_k * np.nanmedian( self.nmad )
+                SCLogger.debug( f"Going to try to do a logcal or of self.combined_mask "
+                                f"(dtype {self.combined_mask.dtype}), np.isnan(self.nmad) "
+                                f"(dtype {np.isnan(self.nmad).dtype}), and self.nmad>threshold "
+                                f"(dtype {(self.nmad>threshold).dtype})" )
+                self.combined_mask = ( self.combined_mask | np.isnan( self.nmad ) | ( self.nmad > threshold ) )
             self.memdump( "End of calculate_flat" )
+
         else:
             raise ValueError( f"Unknown combination mode {self.pars.comine_mode}" )
 
@@ -768,8 +796,9 @@ class FlatBuilder:
                             } )
             imgobj = Image( **imkwargs )
             imgobj.header = self._make_header( results, results['section_id'] )
-            imgobj.data = results['comb'].data
-            imgobj.flags = results['comb'].mask.astype( np.int16 )
+            imgobj.data = results['comb']
+            # This will save all masked pixels (True in comb_mask) as 1, not masked as 0
+            imgobj.flags = results['comb_mask'].astype( np.int16 )
             imgobj.weight = results['nmad']
             imgobj.filepath = imgobj.invent_filepath( name_convention=self.pars.name_convention )
             imgobj.save()
@@ -871,13 +900,13 @@ class FlatBuilder:
             if outfile is not None:
                 fname = f'{outfile}{f"_{section_id}" if section_id is not None else ""}.fits.fz'
                 SCLogger.info( f"Writing combined image to to {fname}..." )
-                util.fits.write_compressed_fits_fz( fname, results['comb'].data, header, overwrite=True )
+                util.fits.write_compressed_fits_fz( fname, results['comb'], header, overwrite=True )
                 SCLogger.info( "...written." )
 
             if outmask is not None:
                 fname = f'{outmask}{f"_{section_id}" if section_id is not None else ""}.fits.fz'
                 SCLogger.info( f"Writing mask to {fname}..." )
-                util.fits.write_compressed_fits_fz( fname, results['comb'].mask.astype(np.int16),
+                util.fits.write_compressed_fits_fz( fname, results['comb_mask'].astype(np.int16),
                                                     header, overwrite=True )
                 SCLogger.info( "...written." )
 
@@ -904,12 +933,13 @@ class FlatBuilder:
             # Because we did fork, the self._dumping_memory will have been copied over
             self._dumping_memory = False
             self.memdump( "Starting traced memory" )
-            massive_stack, min_mjd, max_mjd = self.read_files( section_id )
+            massive_stack, massive_stack_mask, min_mjd, max_mjd = self.read_files( section_id )
             self.memdump( "After read_files" )
-            self.calculate_flat( massive_stack, section_id )
+            self.calculate_flat( massive_stack, massive_stack_mask, section_id )
             self.memdump( "After calculate_flat" )
             del massive_stack
-            return section_id, self.combined, self.nmad, min_mjd, max_mjd
+            del massive_stack_mask
+            return section_id, self.combined, self.combined_mask, self.nmad, min_mjd, max_mjd
         except Exception:
             SCLogger.exception( f"Exception in process running chip {section_id}" )
             raise
@@ -934,12 +964,13 @@ class FlatBuilder:
                 SCLogger.info( f"Doing {len(self.section_ids)} sections serially" )
                 for sec in self.section_ids:
                     try:
-                        massive_stack, min_mjd, max_mjd = self.read_files( sec )
-                        self.calculate_flat( massive_stack, sec )
+                        massive_stack, massive_stack_mask, min_mjd, max_mjd = self.read_files( sec )
+                        self.calculate_flat( massive_stack, massive_stack_mask, sec )
                         del massive_stack
                         collected_results[sec] = {
                             'section_id': sec,
                             'comb': self.combined,
+                            'comb_mask': self.combined_mask,
                             'nmad': self.nmad,
                             'min_mjd': min_mjd,
                             'max_mjd': max_mjd
@@ -960,12 +991,13 @@ class FlatBuilder:
                 for sec, res in zip( self.section_ids,
                                      pool.map( doer, self.section_ids, timeout=self.pars.timeout ) ):
                     try:
-                        sec_id, comb, nmad, min_mjd, max_mjd = res
+                        sec_id, comb, comb_mask, nmad, min_mjd, max_mjd = res
                         if sec_id != sec:
                             raise RuntimeError( "This should never happen." )
                         collected_results[sec_id] = {
                             'section_id': sec,
                             'comb': comb,
+                            'comb_mask': comb_mask,
                             'nmad': nmad,
                             'min_mjd': min_mjd,
                             'max_mjd': max_mjd
@@ -1003,15 +1035,16 @@ class FlatBuilder:
             # Image mode, no need for multiprocessing.  (That is, we could still use it, and it
             #  would be faster, but whatever.)
 
-            massive_stack, min_mjd, max_mjd = self.read_files()
+            massive_stack, massive_stack_mask, min_mjd, max_mjd = self.read_files()
             self.memdump( "After reading images" )
-            self.calculate_flat( massive_stack )
+            self.calculate_flat( massive_stack, massive_stack_mask )
             self.memdump( "After calculating flat" )
             del massive_stack
             self.memdump( "After del massivestack" )
 
             self.results = { 'section_id': self.section_id,
                              'comb': self.combined,
+                             'comb_mask': self.combined_mask,
                              'nmad': self.nmad,
                              'min_mjd': min_mjd,
                              'max_mjd': max_mjd }
@@ -1089,13 +1122,6 @@ def main():
                          help=( "Normally, works on images which have already been overscanned and trimmed "
                                 "(and maybe more).  Use this to work on raw exposures.  Maybe want to "
                                 "set numproc > 1 in that case." ) )
-    parser.add_argument( "-u", "--use-masks", action='store_true', default=argparse.SUPPRESS,
-                         help=( "Use masks to reject pixels before doing things like normalization.  If image "
-                                "masks are available, use those, otherwise use instrument-standard masks." ) )
-    parser.add_argument( "--mask-file", default=argparse.SUPPRESS,
-                         help=( "Manually specify a master mask file; this is the path to that file.  In exposure "
-                                "mode, this is just a base path, and _<sensor_section_id>.fits will be appended; "
-                                "all those files must exist." ) )
     parser.add_argument( "--section-keyword", default=argparse.SUPPRESS,
                          help=( "Normally, use the image record in the database to figure out the sensor section. "
                                 "If this is set, instead read it from this keyword of the FITS header.  Required "
