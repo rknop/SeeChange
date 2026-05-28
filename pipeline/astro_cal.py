@@ -356,7 +356,7 @@ class AstroCalibrator:
         # an image, but then it would be running sextractor itself,
         # which is a waste of time since we've already done it.)
         #
-        # ...I'm *assuming* that astrometry.net coordinates are 1-offset, so we have to convert
+        # astrometry.net coordinates are 1-offset, so we have to convert
         xyls = Table( { 'XIMAGE': sources.x + 1.,
                         'YIMAGE': sources.y + 1.,
                         'FLUX': sources.psffluxadu()[0] } )

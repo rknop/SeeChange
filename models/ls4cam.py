@@ -517,8 +517,8 @@ class LS4Cam(Instrument):
 
 
     def get_standard_flags_image( self, section_id ):
-        rempath = pathlib.Path( f'masks/20260518/FP_mask_{section_id}.fits.fz' )
-        localpath = ( pathlib.Path( FileOnDiskMixin.local_path ) / f'masks/20260518/FP_mask_{section_id}.fits.fz' )
+        rempath = pathlib.Path( f'masks/20260527/FP_mask_{section_id}.fits.fz' )
+        localpath = ( pathlib.Path( FileOnDiskMixin.local_path ) / f'masks/20260527/FP_mask_{section_id}.fits.fz' )
         if not localpath.is_file():
             cfg = Config.get()
             url = f'{cfg.value("LS4Cam.calibfiles.urlbase")}{str(rempath)}'

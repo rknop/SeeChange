@@ -69,8 +69,8 @@ class CodeVersion(Base, UUIDMixin):
     CODE_VERSION_DICT = {
         # The core processes of the pipeline
         'acquire_exposure': (0,2,0),
-        'preprocessing': (0,5,0),
-        'extraction': (0,2,0),
+        'preprocessing': (0,8,0),
+        'extraction': (0,4,0),
         'astrocal' : (0,1,0),
         'photocal' : (0,1,0),
         'subtraction': (0,1,0),
@@ -85,7 +85,7 @@ class CodeVersion(Base, UUIDMixin):
         'referencing' : (0,1,0),
         'coaddition' : (0,1,0),
         'positioning': (0,1,0),
-        'flat_bias_builder': (0,4,0),
+        'flat_bias_builder': (0,5,0),
 
         # The next couple are processes whose direct data products
         #   are not saved to the database.  If their version change,

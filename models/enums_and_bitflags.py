@@ -527,11 +527,11 @@ image_preprocessing_inverse = {EnumConverter.c(v):k for k, v in image_preprocess
 # bitflag used in flag images
 # Stored as 16-bit integers, only use bits 0 through 14
 flag_image_bits = {
-    0: 'bad pixel',         # Catchall for 
-    1: 'zero weight',       # Somehow had zero 1/σ²
+    0: 'bad pixel',         # Catchall for things that are bad and we don't really know why
+    1: 'zero weight',       # Somehow had zero 1/σ² (also zero or negative σ; cf preprocessing.py)
     2: 'saturated',         # Pixel value in raw image hit image saturation level
     3: 'out of bounds',     # caused by alignment (swarp etc)
-    4: 'vignetting',        # A part of the array that doesn't receive light
+    4: 'vignetting',        # A part of the array that doesn't receive (enough) light
     5: 'filter blend',      # A part of the array where multiple filters contribute and it's a mess
     6: 'edge',              # Edge around each chip if appropriate for the instrument
     7: 'bad chip',          # Dead amp or some such.

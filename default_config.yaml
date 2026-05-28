@@ -316,6 +316,7 @@ flat_bias_builder:
   dup_reject: null
   combine_mode: median
   normalize_mode: null
+  use_instrument_mask: False
   bad_threshold: 5.0
   nmin: 7
   nmax: 21
@@ -336,6 +337,7 @@ flat_bias_builder:
     dup_reject: 0.03
     combine_mode: median
     normalize_mode: median
+    use_instrument_mask: True
     bad_threshold: 5.0
     nmin: 21
     nmax: 61
@@ -403,6 +405,8 @@ preprocessing:
   use_base_mask: true
   use_zero_mask: true
   use_flat_mask: true
+  masked_pixels_to_replace: []
+  masked_pixel_replacement: {}
   
 # ======================================================================
 # Extraction and Backgrounding are done in one step.

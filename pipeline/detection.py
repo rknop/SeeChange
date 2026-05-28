@@ -417,6 +417,7 @@ class Detector:
                 ds.psf = psf
                 if ds.image.fwhm_estimate is None:
                     ds.image.fwhm_estimate = psf.fwhm_pixels * ds.image.instrument_object.pixel_scale
+                    SCLogger.debug( f"FWHM estimate = {ds.image.fwhm_estimate:.02f} arcsec" )
 
                 if ds.update_runtimes:
                     ds.runtimes['extraction'] = time.perf_counter() - t_start
@@ -551,8 +552,10 @@ class Detector:
                 # ****
 
                 # Get the PSF
-                SCLogger.debug( "detection: determining psf" )
+                SCLogger.debug( "detection: determining psf..." )
                 psf = self._run_psfex( tempnamebase, image, do_not_cleanup=True )
+                SCLogger.debug( f"...psf done, got FWHM = "
+                                f"{psf.fwhm_pixels*image.instrument_object.pixel_scale:.03f} arcsec" )
                 psfpath = pathlib.Path( FileOnDiskMixin.temp_path ) / f'{tempnamebase}.sources.psf'
                 _psfxmlpath = pathlib.Path( FileOnDiskMixin.temp_path ) / f'{tempnamebase}.sources.psf.xml'
                 delfiles.extend( [ psfpath, _psfxmlpath ] )
@@ -651,7 +654,9 @@ class Detector:
             finding something in the first place to look at, and for
             including in an object's isophotal area.
 
-            OMG I'M SO CONFLUSED.  See Issue #536.
+            OMG I'M SO CONFUSED.  See Issue #536.
+
+            FOR NOW THIS IS NOT USED AT ALL.
 
           wcs: WorldCoordinates or None
             If passed, will replace the WCS in the image header with the
@@ -707,7 +712,7 @@ class Detector:
 
             imgdata = image.data if bg is None else bg.subtract_me( image.data )
             thresh = self.pars.initial_threshold if psffile is None else self.pars.threshold
-            thresh /= psfnorm
+            # thresh /= psfnorm
             sextr_res = run_sextractor(
                 image.header,
                 imgdata,
