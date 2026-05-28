@@ -300,6 +300,11 @@ class Preprocessor:
                         SCLogger.debug( str(ex) )
                     image.preproc_bitflag |= string_to_bitflag( 'overscan', image_preprocessing_inverse )
 
+                # If, for some reason, we don't yet have a  flags array, make sure we now do
+                if image.flags is None:
+                    image.flags = np.zeros( image.data.shape, dtype=np.int16 )
+                    made_flags = True
+
                 # At this point, we won't use image.raw_data again.  Set it
                 #   to None so the memory will be freed if it's not also
                 #   referred somewhere else.
@@ -387,8 +392,12 @@ class Preprocessor:
                     if yeet in image.header:
                         del image.header[yeet]
 
+            # If we STILL don't have a flags image, by golly, we need one
+            if image.flags is None:
+                image.flags = np.zeros( image.data.shape, dtype=np.int16 )
+                made_flags = True
 
-            # Add the instrument base flags to the flags if we just created the flags here
+            # OR in the standard instrument mask if we're supposed to
             if made_flags and self.pars.use_base_mask:
                 basemask = self.instrument.get_standard_flags_image( ds.section_id )
                 image.flags = np.bitwise_or( image.flags, basemask )
