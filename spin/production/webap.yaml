@@ -31,7 +31,7 @@ spec:
         workload.user.cattle.io/workloadselector: deployment-ls4-production-webap
     spec:
       containers:
-      - image: registry.nersc.gov/m4616/seechange-webap:ls4-production-20260518a
+      - image: registry.nersc.gov/m4616/seechange-webap:ls4-production-2026029a
         imagePullPolicy: IfNotPresent
         name: seechange-webap
         resources: {}
@@ -77,8 +77,7 @@ spec:
           claimName: webap-sessions-pvc
       - name: seechange-archive-dir
         hostPath:
-          # path: /global/cfs/cdirs/m4616/archive-production
-          path: /global/cfs/cdirs/m4616/archive-ls4
+          path: /global/cfs/cdirs/ls4/archive-ls4
           type: Directory
 ---
 apiVersion: v1

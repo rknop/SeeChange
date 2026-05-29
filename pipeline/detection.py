@@ -14,6 +14,7 @@ import sep
 from astropy.io import fits, votable
 
 from util.logger import SCLogger
+from util.config import Config
 
 from pipeline.parameters import Parameters
 from pipeline.data_store import DataStore
@@ -553,12 +554,16 @@ class Detector:
 
                 # Get the PSF
                 SCLogger.debug( "detection: determining psf..." )
-                psf = self._run_psfex( tempnamebase, image, do_not_cleanup=True )
-                SCLogger.debug( f"...psf done, got FWHM = "
-                                f"{psf.fwhm_pixels*image.instrument_object.pixel_scale:.03f} arcsec" )
-                psfpath = pathlib.Path( FileOnDiskMixin.temp_path ) / f'{tempnamebase}.sources.psf'
-                _psfxmlpath = pathlib.Path( FileOnDiskMixin.temp_path ) / f'{tempnamebase}.sources.psf.xml'
-                delfiles.extend( [ psfpath, _psfxmlpath ] )
+                cfg = Config.get()
+                if cfg.value('extraction.psf.method') == 'psfex':
+                    psf = self._run_psfex( tempnamebase, image, do_not_cleanup=True )
+                    SCLogger.debug( f"...psf done, got FWHM = "
+                                    f"{psf.fwhm_pixels*image.instrument_object.pixel_scale:.03f} arcsec" )
+                    psfpath = pathlib.Path( FileOnDiskMixin.temp_path ) / f'{tempnamebase}.sources.psf'
+                    _psfxmlpath = pathlib.Path( FileOnDiskMixin.temp_path ) / f'{tempnamebase}.sources.psf.xml'
+                    delfiles.extend( [ psfpath, _psfxmlpath ] )
+                else:
+                    raise ValueError( f"Unknown psf method {cfg.value('psf_method')}; only psfex is supported." )
 
             elif psf is not None:
                 # Make a copy of the psf and wipe out the id and the sources id so that
@@ -811,31 +816,41 @@ class Detector:
         psffile = pathlib.Path( FileOnDiskMixin.temp_path ) / f'{tempname}.sources.psf'
         psfxmlfile = pathlib.Path( FileOnDiskMixin.temp_path ) / f'{tempname}.sources.psf.xml'
 
-        if psf_size is not None:
-            psf_size = int( psf_size )
-            if psf_size % 2 == 0:
-                psf_size += 1
+        psf_init_size = psf_size if psf_size is not None else Config.get().value( 'extraction.psf.psf_init_size' )
+        psf_final_size = psf_size if psf_size is not None else Config.get().value( 'extraction.psf.psf_final_size' )
+
+        psf_init_size = int( psf_init_size )
+        if psf_init_size % 2 == 0:
+            psf_init_size += 1
+
+        if psf_final_size is not None:
+            psf_final_size = int( psf_final_size )
+            if psf_final_size % 2 == 0:
+                psf_final_size += 1
+
         psf_sampling = 1.
 
         try:
-            usepsfsize = psf_size if psf_size is not None else 25
+            usepsfsize = psf_init_size
             for i in range(2):
+                if ( i == 1 ) and ( psf_final_size is not None ):
+                    usepsfsize = psf_final_size
                 psfdatasize = int( usepsfsize / psf_sampling + 0.5 )
                 if psfdatasize % 2 == 0:
                     psfdatasize += 1
 
-                # TODO: make the fwhmmax tried configurable
+                minfwhm = Config.get().value( 'extraction.psf.min_fwhm' )
                 #  (This is just a range of things to try to see if we can
                 #  get psfex to succeed; it will stop after the first one that does.)
-                fwhmmaxtotry = [ 10.0, 15.0, 20.0, 25.0 ]
-                #
+                fwhmmaxtotry = Config.get().value( 'extraction.psf.fwhm_max_to_try' )
+
                 # TODO: make -XML_URL configurable.  (The default there is what
                 #  is installed if you install the psfex package on a
                 #  debian-based distro, which is what the Dockerfile is built from.)
                 for fwhmmaxdex, fwhmmax in enumerate( fwhmmaxtotry ):
                     command = [ 'psfex',
                                 '-PSF_SIZE', f'{psfdatasize},{psfdatasize}',
-                                '-SAMPLE_FWHMRANGE', f'0.5,{fwhmmax}',
+                                '-SAMPLE_FWHMRANGE', f'{minfwhm},{fwhmmax}',
                                 '-SAMPLE_VARIABILITY', "0.2",   # Allowed FWHM variability (1.0 = 100%)
                                 '-SAMPLE_IMAFLAGMASK', "0xff",
                                 '-SAMPLE_MINSN', '5',  # Minimum S/N for sampling

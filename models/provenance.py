@@ -70,7 +70,7 @@ class CodeVersion(Base, UUIDMixin):
         # The core processes of the pipeline
         'acquire_exposure': (0,2,0),
         'preprocessing': (0,8,0),
-        'extraction': (0,4,0),
+        'extraction': (0,5,0),
         'astrocal' : (0,1,0),
         'photocal' : (0,1,0),
         'subtraction': (0,1,0),

@@ -434,6 +434,12 @@ extraction:
     poly_order: 1
     box_size: null
     filt_size: null
+  psf:
+    method: psfex
+    min_fwhm: 0.5
+    fwhm_max_to_try: [ 10.0, 15.0, 20.0, 25.0 ]
+    psf_init_size: 25
+    psf_final_size: null
 
 # ======================================================================
 # World Coordinates
