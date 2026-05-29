@@ -415,11 +415,10 @@ class PGDB:
 
         """
 
-        # TODO : make these next two configurable rather than hardcoded
-        # These are useful for debugging, but are profligate for production
-        _echoqueries = False
-        _alwaysexplain = False
-        _alwaysanalyze = False
+        cfg = config.Config.get()
+        _echoqueries = cfg.value( 'db.echoqueries' )
+        _alwaysexplain = cfg.value( 'db.alwaysexplain' )
+        _alwaysanalyze = cfg.value( 'db.alwaysanalyze' )
 
         if con is not None:
             if isinstance( con, PGDB ):
