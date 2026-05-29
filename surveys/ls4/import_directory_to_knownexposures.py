@@ -15,7 +15,12 @@ def main():
                                       description='Import a directory of files to known_exposures' )
     parser.add_argument( 'direc', help="Path to directory" )
     parser.add_argument( '--no-hold', action='store_true', default=False,
-                         help='By default, loaded exposures are marked as held.  Set this to make them not held.' )
+                         help='By default, loaded exposures are marked as held.  Set this to make them ready.' )
+    parser.add_argument( '-d', '--mark-done-if-exposure', action='store_true', default=False,
+                         help=( 'By default, loaded exposures are marked as ready or held based on --no-hold. '
+                                'Set this to True to check if an exposure already exists in the databse for '
+                                'this knownexposure; if so, mark it as done instead of ready or held.' ) )
+
     args = parser.parse_args()
 
     ls4cam = Instrument.get_instrument_instance( "LS4Cam" )
@@ -71,7 +76,9 @@ def main():
             else:
                 with fits.open( fpath ) as hdul:
                     if len(hdul) != 33:
-                        raise ValueError( f"Opened a {fpath.name}, saw {len(hdul)} HDUs, expected 33." )
+                        SCLogger.error( f"Opened a {fpath.name}, saw {len(hdul)} HDUs, expected 33; "
+                                        f"skipping this file." )
+                        continue
 
                     hdrinfo = ls4cam.extract_header_info( hdul[1].header, [ 'mjd', 'exp_time',
                                                                             'project', 'target' ] )
@@ -94,17 +101,18 @@ def main():
                                )
             ke.calculate_coordinates()
 
-            with PsycopgConnection() as con:
-                cursor = con.cursor( row_factory=psycopg.rows.dict_row )
-                cursor.execute( "SELECT _id FROM exposures WHERE provenance_id=%(prov)s "
-                                "  AND origin_identifier=%(id)s",
-                                { 'id': expinfo.origin_identifier, 'prov': provenance.id } )
-                rows = cursor.fetchall()
-                if len(rows) > 1:
-                    raise RuntimeError( "This should never happen" )
-                if len(rows) == 1:
-                    ke.exposure_id = rows[0]['_id']
-                    ke.state = 'done'
+            if args.mark_done_if_exposure:
+                with PsycopgConnection() as con:
+                    cursor = con.cursor( row_factory=psycopg.rows.dict_row )
+                    cursor.execute( "SELECT _id FROM exposures WHERE provenance_id=%(prov)s "
+                                    "  AND origin_identifier=%(id)s",
+                                    { 'id': expinfo.origin_identifier, 'prov': provenance.id } )
+                    rows = cursor.fetchall()
+                    if len(rows) > 1:
+                        raise RuntimeError( "This should never happen" )
+                    if len(rows) == 1:
+                        ke.exposure_id = rows[0]['_id']
+                        ke.state = 'done'
 
                 ke.insert( session=con )
 

@@ -82,7 +82,7 @@ spec:
       - hostPath:
           # /dvs_ro doesn't work on spin
           # path: /dvs_ro/cfs/cdirs/m4616/archive-ls4
-          path: /global/cfs/cdirs/m4616/archive-ls4
+          path: /global/cfs/cdirs/ls4/archive-ls4
           type: Directory
         name: file-archive-storage-ro
       - hostPath:
