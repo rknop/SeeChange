@@ -18,7 +18,7 @@ from psycopg.errors import UniqueViolation
 import util.config as config
 from util.logger import SCLogger
 import models.base
-from models.base import Base, SmartSession, PsycopgConnection, UUIDMixin, FileOnDiskMixin, FourCorners
+from models.base import Base, SmartSession, PsycopgConnection, PGDB, UUIDMixin, FileOnDiskMixin, FourCorners
 from models.image import Image
 from models.datafile import DataFile
 from models.object import Object
@@ -335,6 +335,45 @@ def test_upsert_list( provenance_base, provenance_extra ):
         logging.getLogger( 'sqlalchemy.engine' ).removeHandler( loghandler )
 
 
+
+def test_PGDB( provenance_base, provenance_extra ):
+    with PGDB() as con:
+        with PGDB( con ) as con2:
+            assert con.con is con2.con
+
+        rows, cols = con.execute( "SELECT * FROM provenances" )
+        assert len(rows) == 2
+        assert all( x in cols for x in [ '_id', 'process', 'parameters', 'is_bad', 'bad_comment',
+                                         'is_outdated', 'replaced_by', 'is_testing', 'created_at',
+                                         'modified', 'code_version_id' ] )
+        coldex = { c: i for i, c in enumerate(cols) }
+        assert set( r[coldex['process']] for r in rows ) == { 'test_process', 'test_extra_process' }
+        dex = 0 if rows[0][coldex['process']] == 'test_process' else 1
+        assert rows[dex][coldex['parameters']] == { "test_parameter": provenance_base.parameters['test_parameter'] }
+
+        # Test that if we don't commit, things don't happen
+        con.execute_nofetch( "DELETE FROM provenances WHERE process='test_process'" )
+        rows, cols = con.execute( "SELECT * FROM provenances" )
+        assert len(rows) == 1
+
+    with PGDB() as con:
+        rows, cols = con.execute( "SELECT * FROM provenances" )
+        assert len(rows) == 2
+
+        # Now that that deletion sticks if we commit
+        con.execute_nofetch( "DELETE FROM provenances WHERE process='test_process'" )
+        con.commit()
+
+    with PGDB( dictcursor=True ) as con:
+        rows = con.execute( "SELECT * FROM provenances" )
+        assert len(rows) == 1
+        assert rows[0]['process'] == 'test_extra_process'
+
+
+    # TODO MORE : test if you pass psycopg.sql.SQL, test explain, etc.
+
+
+
 # ======================================================================
 # FileOnDiskMixin test
 #
@@ -445,6 +484,7 @@ def test_fileondisk_save_failuremodes( diskfile ):
 
 
 def test_fileondisk_save_singlefile( diskfile, archive, test_config, data_dir ):
+    import pdb; pdb.set_trace()
     archive_dir = archive.test_folder_path
     diskfile.filepath = 'test_fileondisk_save.dat'
     rng = np.random.default_rng()

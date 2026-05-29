@@ -115,7 +115,7 @@ class ParsPipeline(Parameters):
             critical=False,
         )
 
-        self.do_not_laod = self.add_par(
+        self.do_not_load = self.add_par(
             'do_not_load',
             False,
             bool,
@@ -622,6 +622,11 @@ class Pipeline:
                         break
 
                     if step in stepstodo:
+                        # Don't do alerting if do_not_save is True
+                        if ( step == 'alerting' ) and ( self.pars.do_not_save ):
+                            SCLogger.warning( "do_not_save is true, skipping step alerting" )
+                            continue
+
                         SCLogger.info( f'Pipeline starting {step}' )
                         ds = procobj.run( ds, do_not_load=self.pars.do_not_load )
                         ds.update_report( step )
@@ -662,12 +667,16 @@ class Pipeline:
                 if self.pars.save_at_finish and ( not everything_saved ):
                     self.save_data_products( 'final', ds )
 
-
                 # Parallel pipeline path for fake injection
-                if ( all( s in stepstodo
-                          for s in [ 'subtraction', 'detection', 'cutting', 'measuring', 'scoring' ] )
-                     and ( self.pars.inject_fakes )
-                    ):
+                mustdofakes = ( all( s in stepstodo
+                                     for s in [ 'subtraction', 'detection', 'cutting',
+                                                'measuring', 'scoring' ] )
+                                and ( self.pars.inject_fakes ) )
+                if mustdofakes and ( self.pars.do_not_load or self.pars.do_not_save ):
+                    SCLogger.warning( "Skipping fake injection when either do_not_load "
+                                      "or do_not_save is set.  (TODO: think about this.)" )
+
+                elif mustdofakes:
                     # Try to free up some memory of stuff we don't need any more in the datastore,
                     #   to reduce overall memory usage.  (We're gonna create new copies of all of
                     #   this with the fake subtraction.)

@@ -10,6 +10,7 @@ import datetime
 import uuid
 import socket
 import threading
+import logging
 from uuid import UUID
 from contextlib import contextmanager
 
@@ -122,6 +123,33 @@ setup_warning_filters()  # need to call this here and also call it explicitly wh
 _engine = None
 _Session = None
 _psycopg_params = None
+
+
+def _get_psycopg_params():
+    global _psycopg_params
+
+    if _psycopg_params is None:
+        cfg = config.Config.get()
+        if cfg.value( "db.engine" ) != "postgresql+psycopg":
+            raise ValueError( "This pipeline only supports PostgreSQL as a database engine" )
+
+        password = cfg.value( 'db.password' )
+        if password is None:
+            if cfg.value( "db.password_file" ) is None:
+                raise RuntimeError( "Must specify either db.password or db.password_file in config" )
+            with open( cfg.value( "db.password_file" ) ) as ifp:
+                password = ifp.readline().strip()
+
+        # psycopg docs seems to suggest that the client_encoding parameter isn't necessary,
+        #   but empirically it is.
+        _psycopg_params = { 'host': cfg.value('db.host'),
+                            'port': cfg.value('db.port'),
+                            'dbname': cfg.value('db.database'),
+                            'user': cfg.value('db.user'),
+                            'password': password,
+                            'client_encoding': 'UTF8' }
+
+    return _psycopg_params
 
 
 def Session():
@@ -293,7 +321,6 @@ def PsycopgConnection( current=None ):
        block exits.
 
     """
-    global _psycopg_params
 
     if current is not None:
         if not isinstance( current, psycopg.Connection ):
@@ -305,29 +332,9 @@ def PsycopgConnection( current=None ):
 
     # If a connection wasn't passed, make one, and then be sure to roll it back and close it when we're done
 
-    if _psycopg_params is None:
-        cfg = config.Config.get()
-        if cfg.value( "db.engine" ) != "postgresql+psycopg":
-            raise ValueError( "This pipeline only supports PostgreSQL as a database engine" )
-
-        password = cfg.value( 'db.password' )
-        if password is None:
-            if cfg.value( "db.password_file" ) is None:
-                raise RuntimeError( "Must specify either db.password or db.password_file in config" )
-            with open( cfg.value( "db.password_file" ) ) as ifp:
-                password = ifp.readline().strip()
-
-        # psycopg docs seems to suggest that the client_encoding parameter isn't necessary,
-        #   but empirically it is.
-        _psycopg_params = { 'host': cfg.value('db.host'),
-                            'port': cfg.value('db.port'),
-                            'dbname': cfg.value('db.database'),
-                            'user': cfg.value('db.user'),
-                            'password': password,
-                            'client_encoding': 'UTF8' }
-
     try:
-        conn = psycopg.connect( **_psycopg_params )
+        params = _get_psycopg_params()
+        conn = psycopg.connect( **params )
         yield conn
 
     finally:
@@ -342,7 +349,290 @@ def PsycopgConnection( current=None ):
         conn.close()
 
 
+class PGDBTimings:
+    def __init__( self ):
+        self.reset()
+
+    def reset( self ):
+        self.last_query_time = None
+        self.last_commit_time = None
+        self.last_fetch_time = None
+        self.tot_query_time = 0.
+        self.tot_commit_time = 0.
+        self.tot_fetch_time = 0.
+
+
+class PGDB:
+    """A class that encapsulates a psycopg connection to the databsae.
+
+    Use this in a context manager:
+
+       with PGDB() as dbcon:
+           rows, cols = dbcon.execute( query, subdict )
+           # do other things
+
+    It will automatically close the connection when the with block ends.
+    You can pass either a psycopg.connection or a PGDB object to the
+    PGDB constructor, and it will reuse that connection; in that case,
+    it *won't* close the connection, trusting wherever the connection
+    came from to close it.  Do this if you call functions within a block
+    where you already have an open connection; pass the PGDB object to
+    the function, have the function use that in the constructor.
+
+    Send queries using DBCon.execute() and DBCon.execute_nofetch()
+
+    If for some reason you need access to the underlying cursor, you can
+    get it from the cursor property.
+
+    """
+
+    # I originally wrote this class for DESC FASTDB, but it was useful
+    # so I imported it here.
+
+    def __init__( self, con=None, dictcursor=False ):
+        """Instantiate.
+
+        If you use this, either use it in a with block that doesn't last
+        too long, or call close(), and soon.
+
+        Parameters
+        ----------
+          con : psycopg.Connection or PGDB
+            If None (the default), will make a new connection, and will
+            roll back and close it when done.  If not None, then will
+            instead wrap this connection; when close() is called, or
+            when the context manager that created this object ends, will
+            roll back and close the connection.  However, if con is not
+            None, then the assumption is that somebody else is managing
+            the connection, so will not rollback or close.
+
+          dictcursor : bool, default False
+            If True, then the cursor uses psycopg.rows.dict_row as its
+            row factory.  execite() will return a list of dictionaries,
+            with each element of the list being one row of the result.
+            If False, then execute returns two lists: a list of tuples
+            (the rows) and a list of strings (the column names).
+
+        """
+
+        cfg = config.Config.get()
+        _echoqueries = cfg.value( 'db.echoqueries' )
+        _alwaysexplain = cfg.value( 'db.alwaysexplain' )
+        _alwaysanalyze = cfg.value( 'db.alwaysanalyze' )
+
+        if con is not None:
+            if isinstance( con, PGDB ):
+                self.con = con.con
+                self.timings = con.timings
+                self.echoqueries = con.echoqueries
+                self.alwaysexplain = con.alwaysexplain
+                self.alwaysanalyze = con.alwaysanalyze
+            elif isinstance( con, psycopg.Connection ):
+                self.con = con
+                self.timings = PGDBTimings()
+                self.echoqueries = _echoqueries
+                self.alwaysexplain = _alwaysexplain
+                self.alwaysanalyze = _alwaysanalyze
+            else:
+                raise TypeError( f"con must be None, a PGDB, or a psycopg.Connection, not a {type(con)}" )
+            self._con_is_mine = False
+        else:
+            params = _get_psycopg_params()
+            self.con = psycopg.connect( **params )
+            self._con_is_mine = True
+            self.timings = PGDBTimings()
+            self.echoqueries = _echoqueries
+            self.alwaysexplain = _alwaysexplain
+            self.alwaysanalyze = _alwaysanalyze
+
+        self.dictcursor = dictcursor
+        self.remake_cursor()
+
+
+    def __enter__( self ):
+        return self
+
+    def __exit__( self, type, value, traceback ):
+        self.close()
+
+    def remake_cursor( self, dictcursor=None ):
+        """Recreate the cursor used for database communication.
+
+        Parameters
+        ----------
+          dictcursor : bool, default None
+            If None, will make a cursor that returns dictionaries
+            (vs. tuples) for rows based on what was passed to the
+            dictcursor argument of the DBCon constructor.  If True,
+            makes a cursor that will cause execute() to return a list of
+            dictionaries.  If False, makes a cursor that will cause
+            execute() to return two lists; the first is a list of tuples
+            (the rows), the second is a list of strings (the column
+            names).
+
+        """
+        self.curcursorisdict = self.dictcursor if dictcursor is None else dictcursor
+        if self.curcursorisdict:
+            self.cursor = self.con.cursor( row_factory=psycopg.rows.dict_row )
+        else:
+            self.cursor = self.con.cursor()
+
+
+    def close( self ):
+        """Rolls back and closes the connection if appropriate.
+
+        If you did stuff you want kept, make sure to call commit.
+
+        If the constructor was called with con=None, then the connection
+        will be rolled back.  If the constructor was callled with a
+        non-None none, then this method does nothing.
+
+        """
+        if self._con_is_mine:
+            self.con.rollback()
+            self.con.close()
+
+
+    def rollback( self ):
+        """Rollback any ongoing transaction.
+
+        Also be all cavalier about python function calling overhead.
+
+        """
+        self.con.rollback()
+
+    def commit( self ):
+        """Commit changes to the database.
+
+        Call this if you've done any INSERT or UPDATE or similar
+        commands that change the database, and you want your commands to
+        stick.
+
+        """
+        t0 = time.perf_counter()
+        self.con.commit()
+        t1 = time.perf_counter()
+        self.timings.last_commit_time = t1 - t0
+        self.timings.tot_commit_time += t1 - t0
+        self.remake_cursor( self.curcursorisdict )  # ...is this necessary?
+
+
+    def execute_nofetch( self, q, subdict={}, echo=None, explain=None, analyze=None ):
+        """Runs a query where you don't expect to fetch results.
+
+        Parameters are the same as execute().  Returns nothing.
+
+        """
+
+        t0 = time.perf_counter()
+
+        alreadydid = False
+        if not isinstance( q, ( sql.SQL, sql.Composed ) ):
+            q = sql.SQL( q )
+
+        if SCLogger.instance().get().level <= logging.DEBUG:
+            echo = echo if echo is not None else self.echoqueries
+            explain = explain if explain is not None else self.alwaysexplain
+            analyze = analyze if analyze is not None else self.alwaysanalyze
+            if echo:
+                SCLogger.debug( f"Sending query\n{q.as_string()}\nwith substitutions: {subdict}" )
+
+            nl = '\n'
+            if explain:
+                SCLogger.debug( "Explaining..." )
+                self.cursor.execute( sql.SQL("EXPLAIN ") + q, subdict )
+                rows = self.cursor.fetchall()
+                dex = 'QUERY PLAN' if self.curcursorisdict else 0
+                SCLogger.debug( f"Query plan:\n{nl.join([r[dex] for r in rows])}" )
+            if analyze:
+                SCLogger.debug( "Doing EXPLAIN ANALYZE..." )
+                self.cursor.execute( sql.SQL("EXPLAIN ANALYZE ") + q, subdict )
+                alreadydid = True
+                rows = self.cursor.fetchall()
+                dex = 'QUERY PLAN' if self.curcursorisdict else 0
+                SCLogger.debug( f"Query plan:\n{nl.join([r[dex] for r in rows])}" )
+
+        # NOTE: if we ran with EXPLAIN ANALYZE, any side effects of the query happened!
+        # So don't run the query again.  This is why execute() forces analyze to
+        # be false, because you can't EXPLAIN ANALYZE the query and get the results
+        # all in one call.
+        if not alreadydid:
+            self.cursor.execute( q, subdict )
+
+        if ( SCLogger.instance().get().level <= logging.DEBUG ) and ( echo or explain ):
+            SCLogger.debug( "Query complete." )
+
+        t1 = time.perf_counter()
+        self.timings.last_query_time = t1 - t0
+        self.timings.tot_query_time += t1 - t0
+
+    def execute( self, q, subdict={}, silent=False, echo=None, explain=None ):
+        """Runs a query, and returns either (rows, columns) or just rows.
+
+        Parmaeters
+        ----------
+          q : str or sql.Composed
+            The query.  Use %(var)s in the string for a substitution, if
+            necessary.  The key "var" must then show up in subdict.
+
+          subdict : dict
+            Substitution dictionary. For every %(var)s that shows up in
+            q, there must be a key "var" in this dictionary with the
+            value to be substituted.  Extra keys are ignored.  Do not
+            pass this if q is a Composed; in that case, you've already
+            built in the substitutions.
+
+          echo : bool, default None
+            If True, echo queries before sending them.  If False, don't.
+            If None, use the default (self.echoqueries, initialized from
+            the _echoqueries variable at the top of this module).
+
+          explain : bool, default None
+            If True, before running the query run an EXPLAIN on it and
+            send the output to debug logging.  If False, don't.  If
+            None, use the default (self.alwaysexplain, initialized from
+            the _alwaysexplain variable at the top of this module).
+
+            WARNING: use of this makes you susceptible to SQL injection
+            attacks if you aren't completely and totally confident about
+            where your SQL came from.  Do not get bobby tablesed!
+
+        Returns
+        -------
+          If the current cursor is a dict cursor, returns a list of dictionaries.
+
+          If the current cursor is not a dict cursor, returns two lists.
+          The first is a list of lists, with the rows pulled from the
+          dictionary.  The second is a list of column names.
+
+        """
+        self.execute_nofetch( q, subdict, echo=echo, explain=explain, analyze=False )
+        if self.curcursorisdict:
+            if self.cursor.description is None:
+                return None
+            else:
+                t0 = time.perf_counter()
+                rval = self.cursor.fetchall()
+                t1 = time.perf_counter()
+                self.timings.last_fetch_time = t1 - t0
+                self.timings.tot_fetch_time += t1 - t0
+                return rval
+        else:
+            if self.cursor.description is None:
+                return None, None
+            t0 = time.perf_counter()
+            rows = self.cursor.fetchall()
+            cols = [ desc[0] for desc in self.cursor.description ]
+            t1 = time.perf_counter()
+            self.timings.last_fetch_time = t1 - t0
+            self.timings.tot_fetch_time += t1 - t0
+            return rows, cols
+
+
+
+
 def db_stat(obj):
+
     """Check the status of an object. It can be one of: transient, pending, persistent, deleted, detached."""
     for word in ['transient', 'pending', 'persistent', 'deleted', 'detached']:
         if getattr(sa.inspect(obj), word):
@@ -2794,8 +3084,11 @@ class ArchiveLock( Base, UUIDMixin ):
                     raise RuntimeError( f"Failed to get archive lock on {serverpath} after "
                                         f"{time.perf_counter()-t0:.1f}s" )
                 actualsleept = max( sleep_min, sleept + rng.normal( scale=sleep_fuzz * sleept ) )
-                SCLogger.info( "Archive lock exists on {serverpath}; sleeping {actualsleept:.1f}s and trying again." )
-                SCLogger.debug( f"Lock held by {rows[0][1]} PID {rows[0][2]} thread {rows[0][3]} at {rows[0][4]}" )
+                SCLogger.debug( f"PID {os.getpid()} thread {threading.get_ident()} didn't get "
+                                f"archive lock on {serverpath}" )
+                SCLogger.debug( f"Archive lock held by {rows[0][1]} PID {rows[0][2]} thread "
+                                f"{rows[0][3]} at {rows[0][4]}" )
+                SCLogger.info( f"Archive lock exists on {serverpath}; sleeping {actualsleept:.1f}s and trying again." )
                 if len(rows) > 1:
                     SCLogger.error( f"{len(rows)} locks held on {serverpath}; that's not supposed to happen!" )
                 time.sleep( actualsleept )

@@ -487,7 +487,7 @@ class AstroCalibrator:
 
     # ----------------------------------------------------------------------
 
-    def run(self, *args, **kwargs):
+    def run(self, *args, do_not_load=False, **kwargs):
         """Extract sources and use their positions to calculate the astrometric solution.
 
         Arguments are parsed by the DataStore.parse_args() method.
@@ -508,7 +508,7 @@ class AstroCalibrator:
             prov = ds.get_provenance('astrocal', self.pars.get_critical_pars())
 
             # try to find the world coordinates in memory or in the database:
-            wcs = ds.get_wcs( provenance=prov )
+            wcs = None if do_not_load else ds.get_wcs( provenance=prov )
 
             if wcs is None:  # must create a new WorldCoordinate object
                 self.has_recalculated = True

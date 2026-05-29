@@ -85,6 +85,10 @@ path:
 #
 # Note that as of this writing, psycopg3 requires an SQLAlchemy engine
 #   of "postgresql+psycopg"; otherwise, it will try to use psycopg2.
+#
+# echoqueries, alwaysexplain, and alwaysanalyze are useful for
+# debugging, but you do *not* want them on in practice.  They will spam
+# the debug output.  They are used by class models/base.py::PGDB
 
 db:
   engine: postgresql+psycopg
@@ -94,6 +98,9 @@ db:
   host: localhost
   port: 5432
   database: seechange
+  echoqueries: false
+  alwaysexplain: false
+  alwaysanalyze: false
 
 # ======================================================================
 # Local file storage
