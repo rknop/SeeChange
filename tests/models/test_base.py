@@ -336,42 +336,53 @@ def test_upsert_list( provenance_base, provenance_extra ):
 
 
 
+
 def test_PGDB( provenance_base, provenance_extra ):
-    with PGDB() as con:
-        with PGDB( con ) as con2:
-            assert con.con is con2.con
+    try:
+        with PsycopgConnection() as con:
+            cursor = con.cursor()
+            cursor.execute( "CREATE TABLE cats( name text, color text )" )
+            cursor.execute( "INSERT INTO cats VALUES ('Guiseppe', 'B&W')" )
+            cursor.execute( "INSERT INTO cats VALUES ('Antonin', 'Mottled Grey')" )
+            con.commit()
 
-        rows, cols = con.execute( "SELECT * FROM provenances" )
-        assert len(rows) == 2
-        assert all( x in cols for x in [ '_id', 'process', 'parameters', 'is_bad', 'bad_comment',
-                                         'is_outdated', 'replaced_by', 'is_testing', 'created_at',
-                                         'modified', 'code_version_id' ] )
-        coldex = { c: i for i, c in enumerate(cols) }
-        assert set( r[coldex['process']] for r in rows ) == { 'test_process', 'test_extra_process' }
-        dex = 0 if rows[0][coldex['process']] == 'test_process' else 1
-        assert rows[dex][coldex['parameters']] == { "test_parameter": provenance_base.parameters['test_parameter'] }
+        with PGDB() as con:
+            with PGDB( con ) as con2:
+                assert con.con is con2.con
 
-        # Test that if we don't commit, things don't happen
-        con.execute_nofetch( "DELETE FROM provenances WHERE process='test_process'" )
-        rows, cols = con.execute( "SELECT * FROM provenances" )
-        assert len(rows) == 1
+            rows, cols = con.execute( "SELECT * FROM cats" )
+            assert len(rows) == 2
+            assert set(cols) == { 'name', 'color' }
+            coldex = { c: i for i, c in enumerate(cols) }
+            assert set( r[coldex['name']] for r in rows ) == { 'Guiseppe', 'Antonin' }
+            dex = 0 if rows[0][coldex['name']] == 'Guiseppe' else 1
+            assert rows[dex][coldex['color']] == "B&W"
 
-    with PGDB() as con:
-        rows, cols = con.execute( "SELECT * FROM provenances" )
-        assert len(rows) == 2
+            # Test that if we don't commit, things don't happen
+            con.execute_nofetch( "DELETE FROM cats WHERE name='Antonin'" )
+            rows, cols = con.execute( "SELECT * FROM cats" )
+            assert len(rows) == 1
 
-        # Now that that deletion sticks if we commit
-        con.execute_nofetch( "DELETE FROM provenances WHERE process='test_process'" )
-        con.commit()
+        with PGDB() as con:
+            rows, cols = con.execute( "SELECT * FROM cats" )
+            assert len(rows) == 2
 
-    with PGDB( dictcursor=True ) as con:
-        rows = con.execute( "SELECT * FROM provenances" )
-        assert len(rows) == 1
-        assert rows[0]['process'] == 'test_extra_process'
+            # Now that that deletion sticks if we commit
+            con.execute_nofetch( "DELETE FROM cats WHERE name='Antonin'" )
+            con.commit()
 
+        with PGDB( dictcursor=True ) as con:
+            rows = con.execute( "SELECT * FROM cats" )
+            assert len(rows) == 1
+            assert rows[0]['name'] == 'Guiseppe'
 
-    # TODO MORE : test if you pass psycopg.sql.SQL, test explain, etc.
+        # TODO MORE : test if you pass psycopg.sql.SQL, test explain, etc.
 
+    finally:
+        with PsycopgConnection() as con:
+            cursor = con.cursor()
+            cursor.execute( "DROP TABLE IF EXISTS cats" )
+            con.commit()
 
 
 # ======================================================================

@@ -27,15 +27,6 @@ class ParsPreprocessor(Parameters):
 
         self.add_par( 'steps_required', [], list, "Steps that need to be done to each exposure" )
 
-        self.add_par( 'steps_ok_to_skip',
-                      [],
-                      list,
-                      ( "OK to skip this step if necessary.  This list should be a subset of the "
-                        "steps_required list.  This is if, e.g., you have fringe as a step required, "
-                        "but only some filters have fringe calibration images." ),
-                      critical=True
-                     )
-
         self.add_par( 'preprocessing',
                       'internal',
                       str,
@@ -296,20 +287,31 @@ class Preprocessor:
             #   instrument's preprocessing_step_skip_by_filter).
             already_done = set( image.preprocessing_done.split(', ') if image.preprocessing_done else [] )
 
+            stilltodo = needed_steps - already_done
             # If self.pars.preprocessing is anything other than
             #   'internal', there should be nothing left to do except
             #   set the image provenance, and maybe calculate the weight
             #   and flags.  Verify that.
             if self.pars.preprocessing != 'internal':
-                if len( needed_steps - already_done ) > 0:
+                if len( stilltodo ) > 0:
                     raise ValueError( f"Preprocessing error: self.pars.preprocessing is {self.pars.preprocessing}, "
-                                      f"but we still need to do steps {needed_steps-already_done} "
+                                      f"but we still need to do steps {stilltodo} "
                                       f"(needed_steps={needed_steps}, preproc_bitflag={image.preproc_bitflag})" )
 
-            if not needed_steps.issubset(already_done):  # still things to do here
+            if len( stilltodo ) == 0:
+                SCLogger.debug( f"{pathlib.Path(image.filepath).name} has already been preprocessed, returning." )
+                if ds.update_runtimes:
+                    ds.runtimes['preprocessing'] = time.perf_counter() - t_start
+                if ds.update_memory_usages:
+                    import tracemalloc
+                    ds.memory_usages['preprocessing'] = tracemalloc.get_traced_memory()[1] / 1024 ** 2  # in MB
+                return ds
+
+            else:
+                # Still stuff to do!
                 self.has_recalculated = True
                 # Overscan is always first (as it reshapes the image)
-                if 'overscan' in needed_steps:
+                if 'overscan' in stilltodo:
                     SCLogger.debug('preprocessing: overscan and trim')
                     image.data = self.instrument.overscan_and_trim( image, method=self.pars.overscan_method,
                                                                     **self.pars.overscan_kwargs )
@@ -336,7 +338,7 @@ class Preprocessor:
 
                 # Apply steps in the order expected by the instrument
                 for step in self.pars.steps_required:
-                    if step not in needed_steps:
+                    if step not in stilltodo:
                         continue
                     if step == 'overscan':
                         continue
@@ -351,16 +353,8 @@ class Preprocessor:
                         raise RuntimeError( f"Can't find calibration file for preprocessing step {step}" )
 
                     if stepfileid is None:
-                        if step in self.pars.steps_ok_to_skip:
-                            SCLogger.info(f"Skipping step {step} for filter {baseobj.filter} "
-                                             f"because there is no calibration file (this may be normal)")
-                            # ...not clear if we should mark this step done even though it wasn't.
-                            # Probably don't.
-                            # image.preproc_bitflag |= string_to_bitflag( step, image_preprocessing_inverse )
-                            continue
-                        else:
-                            raise FileNotFoundError( f"Failed to find a {step} calibrator for filter "
-                                                     f"section {image.section_id}, filter {baseobj.filter}" )
+                        raise FileNotFoundError( f"Failed to find a {step} calibrator for filter "
+                                                 f"section {image.section_id}, filter {baseobj.filter}" )
 
                     # Use the cached calibrator file for this step if it's the right one; otherwise, grab it
                     if ( stepfileid in self.stepfilesids ) and ( self.stepfilesids[step] == stepfileid ):

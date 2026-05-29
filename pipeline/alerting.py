@@ -88,7 +88,7 @@ class Alerting:
         return self.send( *args, **kwargs )
 
 
-    def send( self, ds, skip_bad=True ):
+    def send( self, ds, skip_bad=True, do_not_load=False ):
         """Send alerts from a fully processed DataStore.
 
         The DataStore must have run all the way through scoring.
@@ -118,6 +118,9 @@ class Alerting:
         """
         if not self.send_alerts:
             return ds
+
+        if do_not_load:
+            raise RuntimeError( "Alerting was called when do_not_load was True; this should never happen." )
 
         t_start = time.perf_counter()
         try:

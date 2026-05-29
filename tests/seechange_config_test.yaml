@@ -19,6 +19,9 @@ path:
 
 db:
   host: postgres
+  echoqueries: true
+  alwaysexplain: false
+  alwaysanalyze: false
 
 archive:
   archive_url: http://archive:8080/
@@ -51,7 +54,7 @@ pipeline:
 
 astrocal:
   astrometry_net_indexdir: /seechange/tests/astrometry_net_data
-  
+
 # Need the sep box and filt size for historical reasons
 #  (These used to be the defaults, so some test results
 #   depend on them.)
@@ -59,7 +62,7 @@ extraction:
   backgrounding:
     box_size: 128
     filt_size: 3
-  
+
 subtraction:
   method: zogy
   refset: test_refset_decam    # This is needed for the pipeline_exposure_launcher test

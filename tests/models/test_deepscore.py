@@ -52,6 +52,7 @@ def test_multiple_algorithms(decam_exposure, decam_reference, decam_default_cali
 
         p2 = Pipeline( pipeline={'provenance_tag': 'test_multiple_algorithms2'} )
         p2.subtractor.pars.refset = 'test_refset_decam'
+        import pdb; pdb.set_trace()
         p2.scorer.pars.algorithm = "allperfect"
         ds2 = p2.run(exposure, sec_id)
         ds2.save_and_commit()

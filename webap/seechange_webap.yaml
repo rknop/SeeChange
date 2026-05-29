@@ -13,8 +13,11 @@ augments:
 
 db:
   host: postgres
+  echoqueries: true
+  alwaysexplain: false
+  alwaysanalyze: false
 
-# This flask secret key is what we use in your tests.  You would be advised to
+# This flask secret key is what we use in our tests.  You would be advised to
 # make it something else for your environment.  Better, leave it null,
 # and have flask_secret_key_file point to a file that's stored as a
 # kubernetes secret and that has one line with a 64-characters string of barf.
@@ -27,7 +30,7 @@ webap:
 archive:
   archive_url: null
   local_read_dir: /archive-storage/base/test
-  
+
 # The webap will not be using these,
 #  but it has to have something because
 #  startup code that will get run upon

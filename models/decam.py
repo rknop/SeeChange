@@ -148,6 +148,7 @@ class DECam(Instrument):
         Instrument.__init__(self, **kwargs)
 
         self.preprocessing_steps_available = [ 'overscan', 'linearity', 'flat', 'illumination', 'fringe' ]
+        self.preprocessing_step_skip_by_filter = { 'g': [ 'fringe' ], 'r': [ 'fringe' ], 'i': [ 'fringe' ] }
         self.preprocessing_steps_done = []
 
 

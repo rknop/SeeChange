@@ -402,7 +402,6 @@ pipeline:
 
 preprocessing:
   steps_required: [ 'overscan', 'linearity', 'flat', 'fringe' ]
-  steps_ok_to_skip: [ 'fringe' ]
   calibset: externally_supplied
   overscan_method: median
   overscan_kwargs: {}
