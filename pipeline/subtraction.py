@@ -559,7 +559,7 @@ class Subtractor:
                 shutil.rmtree( tmpdir )
 
 
-    def run(self, *args, **kwargs):
+    def run(self, *args, do_not_load=True, **kwargs):
         """Get a reference image and subtract it from the new image.
 
         Arguments are parsed by the DataStore.parse_args() method.
@@ -600,8 +600,8 @@ class Subtractor:
                     )
 
                 prov = ds.get_provenance('subtraction', self.pars.get_critical_pars())
-
-                if ds.get_sub_image( prov, session=session ) is None:
+                sub_image = None if do_not_load else ds.get_sub_image( prov, session=session )
+                if sub_image is None:
                     self.has_recalculated = True
                     image = ds.get_image(session=session)
                     zp = ds.get_zp(session=session)

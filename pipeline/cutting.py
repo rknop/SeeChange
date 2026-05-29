@@ -39,7 +39,7 @@ class Cutter:
         # the object did any work or just loaded from DB or datastore
         self.has_recalculated = False
 
-    def run(self, *args, **kwargs):
+    def run(self, *args, do_not_load=False, **kwargs):
         """Create a Cutouts objects for a list of sources.
 
         Go over a list of sources and for each source position, cut out
@@ -76,7 +76,7 @@ class Cutter:
                                   f'the datastore inputs: {ds.inputs_str}' )
 
             # try to find some cutouts in memory or in the database:
-            cutouts = ds.get_cutouts(prov)
+            cutouts = None if do_not_load else ds.get_cutouts(prov)
 
             if cutouts is not None:
                 cutouts.load_all_co_data()

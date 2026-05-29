@@ -218,7 +218,7 @@ class PhotCalibrator:
 
         return zpval, dzpval
 
-    def run(self, *args, **kwargs):
+    def run(self, *args, do_not_load=False, **kwargs):
         """Perform the photometric calibration.
 
         Gets the image sources, finds a catalog Excerpt (using code in
@@ -263,7 +263,7 @@ class PhotCalibrator:
                 raise ValueError(f'Cannot find a wcs for image {image.filepath}')
 
             # try to find the world coordinates in memory or in the database:
-            zp = ds.get_zp( provenance=prov )
+            zp = None if do_not_load else ds.get_zp( provenance=prov )
 
             if zp is None:  # must create a new ZeroPoint object
                 self.has_recalculated = True

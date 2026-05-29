@@ -254,10 +254,7 @@ class Preprocessor:
             prov = ds.get_provenance('preprocessing', self.pars.get_critical_pars())
 
             # check if the image already exists in memory or in the database:
-            if not do_not_load:
-                image = ds.get_image(prov)
-            else:
-                image = None
+            image = None if do_not_load else ds.get_image( prov )
 
             image_was_from_exposure = False
             if image is None:  # need to make new image

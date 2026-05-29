@@ -264,7 +264,7 @@ class Detector:
         self.backgrounder = Backgrounder( **(self.pars.backgrounding) )
 
 
-    def run(self, *args, input_psf=None, **kwargs):
+    def run(self, *args, input_psf=None, do_not_load=False, **kwargs):
         """Extract sources (and possibly a psf) from a regular image or a subtraction image.
 
         Paramters
@@ -322,7 +322,7 @@ class Detector:
                 prov = ds.get_provenance('detection', self.pars.get_critical_pars())
 
                 # try to find the sources/detections in memory or in the database:
-                detections = ds.get_detections(prov)
+                detections = None if do_not_load else ds.get_detections( prov )
 
                 if detections is None:
                     self.has_recalculated = True

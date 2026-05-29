@@ -179,7 +179,7 @@ class Measurer:
         self.has_recalculated = False
 
 
-    def run(self, *args, sub_psf=None, **kwargs):
+    def run(self, *args, sub_psf=None, do_not_load=False, **kwargs):
         """Measure sources found on subtraction images.
 
         Measure the psf flux and aperture fluxes (depending on config)
@@ -249,7 +249,7 @@ class Measurer:
                 sub_psf = ds.psf
 
             # try to find some measurements in memory or in the database:
-            measurement_set = ds.get_measurement_set( prov )
+            measurement_set = None if do_not_load else ds.get_measurement_set( prov )
 
             # note that if measurement_set is already in the datastore,
             #  there will not be an all_measurements appended to datastore!

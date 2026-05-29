@@ -2794,8 +2794,11 @@ class ArchiveLock( Base, UUIDMixin ):
                     raise RuntimeError( f"Failed to get archive lock on {serverpath} after "
                                         f"{time.perf_counter()-t0:.1f}s" )
                 actualsleept = max( sleep_min, sleept + rng.normal( scale=sleep_fuzz * sleept ) )
-                SCLogger.info( "Archive lock exists on {serverpath}; sleeping {actualsleept:.1f}s and trying again." )
-                SCLogger.debug( f"Lock held by {rows[0][1]} PID {rows[0][2]} thread {rows[0][3]} at {rows[0][4]}" )
+                SCLogger.debug( f"PID {os.getpid()} thread {threading.get_ident()} didn't get "
+                                f"archive lock on {serverpath}" )
+                SCLogger.debug( f"Archive lock held by {rows[0][1]} PID {rows[0][2]} thread "
+                                f"{rows[0][3]} at {rows[0][4]}" )
+                SCLogger.info( f"Archive lock exists on {serverpath}; sleeping {actualsleept:.1f}s and trying again." )
                 if len(rows) > 1:
                     SCLogger.error( f"{len(rows)} locks held on {serverpath}; that's not supposed to happen!" )
                 time.sleep( actualsleept )

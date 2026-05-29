@@ -261,6 +261,9 @@ def pytest_sessionfinish(session, exitstatus):
         # remove database records for any catalog excerpts.  (We'll remove the files below.)
         cursor.execute( "DELETE FROM catalog_excerpts" )
 
+        # remove any archive locks
+        cursor.execute( "DELETE FROM archive_locks" )
+
         conn.commit()
 
     # remove empty folders from the archive
