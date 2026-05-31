@@ -339,8 +339,6 @@ def test_extract_sources_sextractor( decam_datastore_through_preprocessing,
     assert sources.apfluxadu()[0].mean() == pytest.approx( 17757., rel=0.01 )
     assert sources.apfluxadu()[0].std() == pytest.approx( 117502., rel=0.01 )
 
-    import pdb; pdb.set_trace()
-
     assert sources.good.sum() == pytest.approx(975, rel=0.01)
     # This is what you get with CLASS_STAR; you'll get different values with SPREAD_MODEL
     assert sources.is_star.sum() == pytest.approx(479, rel=0.01)
@@ -401,7 +399,7 @@ def test_compare_sep_sextractor( extractor ):
     image.data = data
     image.header = fits.Header( { 'SATURATE': 40000. } )
     image.weight = 1./var
-    image.flags = np.zeros_like( image.data, dtype=np.uint16 )
+    image.flags = np.zeros_like( image.data, dtype=np.int16 )
 
     sexsrc, _bkg, _bkgsig = extractor._run_sextractor_once( image, None )
     sepsrc = extractor.extract_sources_sep( image )

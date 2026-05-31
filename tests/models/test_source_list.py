@@ -310,12 +310,12 @@ def test_write_sextractor(archive):
 def test_calc_apercor( decam_datastore ):
     sources = decam_datastore.get_sources()
 
-    assert sources.calc_aper_cor() == pytest.approx(-0.2476, abs=0.01)
-    assert sources.calc_aper_cor(aper_num=1) == pytest.approx(-0.0589, abs=0.01)
-    assert sources.calc_aper_cor(inf_aper_num=3) == pytest.approx(-0.2476, abs=0.01)
-    assert sources.calc_aper_cor(inf_aper_num=1) == pytest.approx(-0.1879, abs=0.01)
-    assert sources.calc_aper_cor(aper_num=2) == pytest.approx(-0.0190, abs=0.01)
-    assert sources.calc_aper_cor(aper_num=2, inf_aper_num=3) == pytest.approx(-0.0190, abs=0.01)
+    assert sources.calc_aper_cor() == pytest.approx(-0.2590, abs=0.01)
+    assert sources.calc_aper_cor(aper_num=1) == pytest.approx(-0.0645, abs=0.01)
+    assert sources.calc_aper_cor(inf_aper_num=3) == pytest.approx(-0.2590, abs=0.01)
+    assert sources.calc_aper_cor(inf_aper_num=1) == pytest.approx(-0.1940, abs=0.01)
+    assert sources.calc_aper_cor(aper_num=2) == pytest.approx(-0.0229, abs=0.01)
+    assert sources.calc_aper_cor(aper_num=2, inf_aper_num=3) == pytest.approx(-0.0229, abs=0.01)
 
 
 def test_lim_mag_estimate( ptf_datastore_through_zp ):
@@ -329,7 +329,7 @@ def test_lim_mag_estimate( ptf_datastore_through_zp ):
         limMagEst = ds.sources.estimate_lim_mag( aperture=1, zp=ds.zp )
 
     # check the limiting magnitude is consistent with previous runs
-    assert limMagEst == pytest.approx(20.11, abs=0.05)
+    assert limMagEst == pytest.approx(20.29, abs=0.05)
 
     with pytest.raises( RuntimeError, match="Must pass a zp to get a limiting magnitude." ):
         _ = ds.sources.estimate_lim_mag( aperture=1 )

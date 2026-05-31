@@ -592,6 +592,7 @@ class Detector:
             SCLogger.debug( "detection: running sextractor with psf to get final source list" )
 
             psf_clip = psf.get_clip()
+            # NOTE -- at the moment, _run_sextractor_once doesnt' use this next value
             psf_norm = 1 / np.sqrt(np.sum(psf_clip ** 2))  # normalization factor for the sextractor thresholds
 
             sources, bkg, bkgsig = self._run_sextractor_once(

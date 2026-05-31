@@ -1043,6 +1043,11 @@ class Instrument:
         It should be overriden by any subclass that has such a default
         flags image.  By default, it returns a data array of all zeros.
 
+        NOTE: SeeChange flags images are int16, not uint16, because the
+        FITS standard doesn't have a unsigned int type . Yes, yes, we
+        could BSCALE it, but it's safer and simpler to just have 15 bits
+        of flags to play with.
+
         Parameters
         ----------
         section_id: int or str
@@ -1050,12 +1055,12 @@ class Instrument:
 
         Returns
         -------
-        A 2d numpy array of uint16 with shape [ sensorsection.size_y, sensorsection.size_x ]
+        A 2d numpy array of int16 with shape [ sensorsection.size_y, sensorsection.size_x ]
 
         """
 
         sec = self.get_section( section_id )
-        return np.zeros( [ sec.size_y, sec.size_x ], dtype=np.uint16 )
+        return np.zeros( [ sec.size_y, sec.size_x ], dtype=np.int16 )
 
     def convert_reduced_flags_to_seechange_flags( self, flagdata ):
         """Convert the dqmask flags for source-supplied reduced images to the SeeChange bitmask.

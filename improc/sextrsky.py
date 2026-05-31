@@ -43,7 +43,7 @@ def single_sextrsky( imagedata, maskdata=None, sigcut=3 ):
     """
     done = False
     if maskdata is None:
-        maskdata = np.zeros_like( imagedata, dtype=np.uint8 )
+        maskdata = np.zeros_like( imagedata, dtype=np.int16 )
     w = maskdata == 0
     lastn = imagedata.size
     nincreases = 0

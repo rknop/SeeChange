@@ -79,7 +79,7 @@ def ptf_bad_pixel_map(download_url, data_dir, ptf_cache_dir):
             shutil.copy2(cache_path, data_path)
 
     with fits.open(data_path) as hdul:
-        data = (hdul[0].data == 0).astype('uint16')  # invert the mask (good is False, bad is True)
+        data = (hdul[0].data == 0).astype('int16')  # invert the mask (good is False, bad is True)
 
     data = np.roll(data, -1, axis=0)  # shift the mask by one pixel (to match the PTF data)
     data[-1, :] = 0  # the last row that got rolled seems to be wrong

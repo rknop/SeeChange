@@ -523,7 +523,7 @@ class ImageAligner:
 
             warpedim.weight = read_fits_image(outwt)
             warpedim.flags = read_fits_image(outfl)
-            warpedim.flags = np.rint(warpedim.flags).astype(np.uint16)  # convert back to integers
+            warpedim.flags = np.rint(warpedim.flags).astype(np.int16)  # convert back to integers
 
             warpedim.md5sum = None
             # warpedim.md5sum_components = [ None, None, None ]
@@ -587,7 +587,7 @@ class ImageAligner:
             # expand bad pixel mask to allow for warping that smears the badness
             warpedim.flags = dilate_bitflag(warpedim.flags, iterations=1)  # use the default structure
 
-            # warpedim.flags = np.zeros( warpedim.weight.shape, dtype=np.uint16 )  # Do I want int16 or uint16?
+            # warpedim.flags = np.zeros( warpedim.weight.shape, dtype=np.int16 )
             # TODO : a good cutoff for this weight
             #  For most images I've seen, no image
             #  will have a pixel with noise above 100000,

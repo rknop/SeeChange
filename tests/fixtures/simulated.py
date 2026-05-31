@@ -203,7 +203,7 @@ def generate_image_fixture(commit=True, filter=None, seed=None ):
         im = Image.from_exposure(exp, section_id=0)
         im.provenance_id = provenance_preprocessing.id
         im.data = np.float32(im.raw_data)  # this replaces the bias/flat preprocessing
-        im.flags = rng.integers(0, 100, size=im.raw_data.shape, dtype=np.uint32)
+        im.flags = rng.integers(0, 100, size=im.raw_data.shape, dtype=np.int16)
         im.weight = np.full(im.raw_data.shape, 1.0, dtype=np.float32)
         im.format = 'fits'
 
@@ -259,7 +259,7 @@ def sim_reference(provenance_preprocessing, provenance_extraction, provenance_ex
         exp.update_instrument()
         im = Image.from_exposure(exp, section_id=0)
         im.data = im.raw_data - np.median(im.raw_data)
-        im.flags = rng.integers(0, 100, size=im.raw_data.shape, dtype=np.uint32)
+        im.flags = rng.integers(0, 100, size=im.raw_data.shape, dtype=np.int16)
         im.weight = np.full(im.raw_data.shape, 1.0, dtype=np.float32)
         im.provenance_id = provenance_preprocessing.id
         im.ra = ra

@@ -495,7 +495,6 @@ def test_fileondisk_save_failuremodes( diskfile ):
 
 
 def test_fileondisk_save_singlefile( diskfile, archive, test_config, data_dir ):
-    import pdb; pdb.set_trace()
     archive_dir = archive.test_folder_path
     diskfile.filepath = 'test_fileondisk_save.dat'
     rng = np.random.default_rng()

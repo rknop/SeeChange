@@ -192,6 +192,8 @@ class Preprocessor:
         """
         self.has_recalculated = False
 
+        made_image = False
+        made_flags = False
         ds = None
         try:
             ds = DataStore.from_args( *args, **kwargs )
@@ -252,6 +254,7 @@ class Preprocessor:
                 # get the single-chip image from the exposure
                 image = Image.from_exposure( ds.exposure, ds.section_id )
                 image_was_from_exposure = True
+                made_image = True
 
             if image is None:
                 raise ValueError('Image cannot be None at this point!')
@@ -299,13 +302,7 @@ class Preprocessor:
                                       f"(needed_steps={needed_steps}, preproc_bitflag={image.preproc_bitflag})" )
 
             if len( stilltodo ) == 0:
-                SCLogger.debug( f"{pathlib.Path(image.filepath).name} has already been preprocessed, returning." )
-                if ds.update_runtimes:
-                    ds.runtimes['preprocessing'] = time.perf_counter() - t_start
-                if ds.update_memory_usages:
-                    import tracemalloc
-                    ds.memory_usages['preprocessing'] = tracemalloc.get_traced_memory()[1] / 1024 ** 2  # in MB
-                return ds
+                SCLogger.debug( "Image has already been preprocessed." )
 
             else:
                 # Still stuff to do!
@@ -316,6 +313,7 @@ class Preprocessor:
                     image.data = self.instrument.overscan_and_trim( image, method=self.pars.overscan_method,
                                                                     **self.pars.overscan_kwargs )
                     image.flags = np.zeros( image.data.shape, dtype=np.int16 )
+                    made_flags = True
                     # Update the header ra/dec calculations now that we know the real width/height
                     try:
                         image.set_corners_from_header_wcs(setradec=True)
@@ -329,6 +327,7 @@ class Preprocessor:
                 # If, for some reason, we don't yet have a  flags array, make sure we now do
                 if image.flags is None:
                     image.flags = np.zeros( image.data.shape, dtype=np.int16 )
+                    made_flags = True
 
                 # At this point, we won't use image.raw_data again.  Set it
                 #   to None so the memory will be freed if it's not also
@@ -423,9 +422,10 @@ class Preprocessor:
             # If we STILL don't have a flags image, by golly, we need one
             if image.flags is None:
                 image.flags = np.zeros( image.data.shape, dtype=np.int16 )
+                made_flags = True
 
             # OR in the standard instrument mask if we're supposed to
-            if self.pars.use_base_mask:
+            if made_flags and self.pars.use_base_mask:
                 basemask = self.instrument.get_standard_flags_image( ds.section_id )
                 image.flags |= basemask
 
@@ -474,8 +474,9 @@ class Preprocessor:
                     image.flags[ wsat ] |= string_to_bitflag( "saturated", flag_image_bits_inverse )
                     image.weight[ wsat ] = 0.
 
-            # Replace some flagged pixels in the image if we were told to
-            if len(self.pars.masked_pixels_to_replace) > 0:
+            # Replace some flagged pixels in the image if we were told to,
+            #   and if we did anything to the image.  (Otherwise, don't touch it.)
+            if ( made_image or ( len(stilltodo) > 0 ) ) and ( len(self.pars.masked_pixels_to_replace) > 0 ):
                 SCLogger.debug( "Replacing some flagged pixels in image" )
                 didmask = np.int16(0)
                 for pixname in self.pars.masked_pixels_to_replace:

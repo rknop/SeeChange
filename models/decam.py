@@ -301,7 +301,7 @@ class DECam(Instrument):
         #  (If we ever change this, we have to fix the
         #  flag_image_bits dictionary in enums_and_bitflags,
         #  and everything that has used it...)
-        bpm = np.zeros( rawbpm.shape, dtype=np.uint16 )
+        bpm = np.zeros( rawbpm.shape, dtype=np.int16 )
         bpm[ rawbpm != 0 ] = string_to_bitflag( 'bad pixel', flag_image_bits_inverse )
 
         return bpm
