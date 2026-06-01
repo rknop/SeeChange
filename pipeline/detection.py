@@ -199,7 +199,7 @@ class ParsDetector(Parameters):
             'psf_params',
             { 'fwhm_min': 0.5,
               'fwhm_max_to_try': [ 10.0, 15.0, 20.0, 25.0 ],
-              'psf_int_size': 25,
+              'psf_init_size': 25,
               'psf_final_size': None
              },
             dict,
@@ -349,6 +349,15 @@ class Detector:
                                                                 wcs=ds.wcs,
                                                                 score=getattr( ds, 'zogy_score', None  ),
                                                                 zogy_alpha=getattr( ds, 'zogy_alpha', None ) )
+                    # ****** OMG ROB LOOK AT THIS ******
+                    # _imname = pathlib.Path( ds.image.filepath ).name
+                    # wcshdr = ds.wcs.wcs.to_header()
+                    # fits.writeto( f'temp-{_imname}.fits', ds.image.data, wcshdr, overwrite=True )
+                    # fits.writeto( f'temp-{_imname}_sub.fits', ds.sub_image.data, wcshdr, overwrite=True )
+                    # fits.writeto( f'temp-{_imname}_zogyscore.fits', ds.zogy_score, wcshdr, overwrite=True )
+                    # fits.writeto( f'temp-{_imname}_zogyalpha.fits', ds.zogy_alpha, wcshdr, overwrite=True )
+                    # detections.ds9_regfile( f'temp-{_imname}.reg', radcolor=None )
+                    # ****** OMG ROB LOOK AT THIS ******
                     detections.image_id = ds.sub_image.id
                     if detections.provenance_id is None:
                         detections.provenance_id = prov.id
@@ -466,7 +475,7 @@ class Detector:
           self.pars.measure_psf is False, then for method=sextractor
           this is needed.
 
-        wcs: WorldCoordiantes or None
+        wcs: WorldCoordinates or None
           Needed if self.pars.method is 'filter'.  If self.pars.method
           is 'sextractor', this will be used in place of the one in the
           image header to get RA and Dec.
@@ -778,18 +787,17 @@ class Detector:
                 sextr_res[ 'sources' ].unlink( missing_ok=True )
 
 
-    def _run_psfex( self, tempname, image, psf_size=None, do_not_cleanup=False ):
+    def _run_psfex( self, tempname, image, do_not_cleanup=False ):
         """Create a PSF from a SExtractor catalog file.
 
         Will run psfex twice, to make sure it has the right data size.
         The first pass, it will use a resampled PSF data array size of
-        psf_size in x and y (or 25, if psf_size is None).  The second
-        pass, it will use a resampled PSF data array size
-        psf_size/psfsamp, where psfsamp is the psf sampling determined
-        in the first pass.  In the second pass, psf_size will be what
-        was passed; if None was passed, then it will be 5 times the
-        measured FWHM (using the "FWHM" determined from the half-light
-        radius) in the first pass.
+        psf__init_size in x and y.  The second pass, it will use a
+        resampled PSF data array size psf_final_size/psfsamp, where
+        psfsamp is the psf sampling determined in the first pass.  In
+        the second pass, if psf_final_size is None, then it will be 5
+        times the measured FWHM (using the "FWHM" determined from the
+        half-light radius) in the first pass.
 
         Parameters
         ----------
@@ -799,11 +807,6 @@ class Detector:
 
           image: Image
             The Image that the sources were extracted from.
-
-          psf_size: int or None
-            The size of one side of the thumbnail of the PSF, in pixels.
-            Should be odd; if it's not, 1 will be added to it.
-            If None, will be determined automatically.
 
           do_not_cleanup: bool, default False
             If True, don't delete the psf and psfxml files that will be
@@ -824,8 +827,8 @@ class Detector:
         psffile = pathlib.Path( FileOnDiskMixin.temp_path ) / f'{tempname}.sources.psf'
         psfxmlfile = pathlib.Path( FileOnDiskMixin.temp_path ) / f'{tempname}.sources.psf.xml'
 
-        psf_init_size = psf_size if psf_size is not None else self.pars.psf_params['psf_init_size']
-        psf_final_size = psf_size if psf_size is not None else self.pars.psf_params['psf_final_size']
+        psf_init_size = self.pars.psf_params['psf_init_size']
+        psf_final_size = self.pars.psf_params['psf_final_size']
 
         psf_init_size = int( psf_init_size )
         if psf_init_size % 2 == 0:
@@ -839,18 +842,21 @@ class Detector:
         psf_sampling = 1.
 
         try:
-            usepsfsize = psf_init_size
+            found_fwhm = None
             for i in range(2):
-                if i == 1:
-                    if psf_final_size is not None:
-                        usepsfsize = psf_final_size
-                    minfwhm = 0.75 * found_fwhm          # noqa: F821
-                    fwhmmaxtotry = [ 1.5 * found_fwhm ]  # noqa: F821
-                else:
+                if i == 0:
+                    usepsfsize = psf_init_size
                     minfwhm = self.pars.psf_params['fwhm_min']
                     #  (This is just a range of things to try to see if we can
                     #  get psfex to succeed; it will stop after the first one that does.)
                     fwhmmaxtotry = self.pars.psf_params['fwhm_max_to_try']
+                else:
+                    if psf_final_size is None:
+                        usepsfsize = int( np.ceil( 5.0 * found_fwhm ) )
+                    else:
+                        usepsfsize = psf_final_size
+                    minfwhm = 0.75 * found_fwhm
+                    fwhmmaxtotry = [ 1.5 * found_fwhm ]
 
                 psfdatasize = int( usepsfsize / psf_sampling + 0.5 )
                 if psfdatasize % 2 == 0:
@@ -891,17 +897,11 @@ class Detector:
                         if psf_sampling <= 0:
                             psf_sampling = last_psf_sampling
                             success = False
-                        if success and ( psf_size is None ):
-                            last_usepsfsize = usepsfsize
-                            found_fwhm = psfstats.array['FWHM_FromFluxRadius_Mean'][0]
-                            usepsfsize = int( np.ceil( found_fwhm * 5. ) )
-                            if usepsfsize <= 0:
-                                success = False
-                                usepsfsize = last_usepsfsize
-                            elif usepsfsize % 2 == 0:
-                                usepsfsize += 1
                         if success:
-                            fwhmmaxtotry = [ fwhmmax ]
+                            found_fwhm = psfstats.array['FWHM_FromFluxRadius_Mean'][0]
+                            if found_fwhm <= 0:
+                                success = False
+                                found_fwhm = None
                     if success:
                         break
                     else:

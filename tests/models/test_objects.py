@@ -252,7 +252,7 @@ def test_associate_measurements( sim_lightcurve_complete_dses_module,
             #   is challenging, because some of the supernovae
             #   are on very bright host galaxies.  Maybe what
             #   I should do is turn off the deletion thresholds,
-            #   and then look at is_bad?  For now, just do ~1.5 * 1381.
+            #   and then look at is_bad?
             assert found or ( flux < 2000. )
             if found:
                 thisdet.append( ds )

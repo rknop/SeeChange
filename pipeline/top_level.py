@@ -98,6 +98,17 @@ class ParsPipeline(Parameters):
             critical=False
         )
 
+        self.save_after_steps = self.add_par(
+            'save_after_steps',
+            [],
+            list,
+            "If you don't want to save after every step, but want to save more often than "
+            "after the subtraction and at the end of the whole thing, then list the steps "
+            "here you want to save after.  Steps include preprocessing, extraction, astrocal, "
+            "photocal, subtraction, detection, cutting, measuring, scoring, alerting",
+            critical=False
+        )
+
         self.save_at_finish = self.add_par(
             'save_at_finish',
             True,
@@ -288,6 +299,7 @@ class Pipeline:
                 SCLogger.warning( "Turning off all save flags because do_not_save is set" )
             for i in save_flags:
                 setattr( self.pars, i, False )
+            self.pars.save_after_steps = []
 
 
     def override_parameters(self, **kwargs):
@@ -652,7 +664,7 @@ class Pipeline:
                         # There are a couple of steps where we might want to save
                         #   before being completely finished
                         if ( not everything_saved ) and ( stepi < len(steps)-1 ):
-                            if self.pars.save_after_each_step:
+                            if self.pars.save_after_each_step or ( step in self.pars.save_after_steps ):
                                 self.save_data_products( f'save_after_{step}', ds )
                                 everything_saved = True
 

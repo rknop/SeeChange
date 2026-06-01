@@ -885,10 +885,12 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
             raise ValueError( f"whichsources can only include {known}" )
 
         which = np.full( ( self.num_sources, ), True )
-        try:
-            flux, dflux = self.spffluxadu()
-        except Exception:
-            flux, dflux = self.apfluxadu()
+
+        if ( 'highsn' in whichsources ) or ( 'lowsn' in whichsources ) or ( radcolor is not None ):
+            try:
+                flux, dflux = self.spffluxadu()
+            except Exception:
+                flux, dflux = self.apfluxadu()
 
         if 'all' not in whichsources:
             if 'stars' in whichsources:
@@ -910,13 +912,14 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         def _circle( ofp, x, y, rad, col, width ):
             ofp.write( f"image;circle({x+1},{y+1},{rad}) # color={col} width={width}\n" )
 
-        conds = { 'star': self.is_star,
-                  'nonstar': ~self.is_star,
-                  'highsn': ( flux / dflux ) >= sncut,
-                  'lowsn': ( flux / dflux ) < sncut,
-                  'bad': ~self.good,
-                  'flagged': ( self.data['FLAGS'] & flagbit ) != 0
-                 }
+        if radcolor is not None:
+            conds = { 'star': self.is_star,
+                      'nonstar': ~self.is_star,
+                      'highsn': ( flux / dflux ) >= sncut,
+                      'lowsn': ( flux / dflux ) < sncut,
+                      'bad': ~self.good,
+                      'flagged': ( self.data['FLAGS'] & flagbit ) != 0
+                     }
 
         with open( regfile, "w" ) as ofp:
             for i, ( x, y, use )  in enumerate( zip( self.x, self.y, which ) ):

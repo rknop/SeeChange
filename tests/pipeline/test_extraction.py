@@ -279,7 +279,7 @@ def test_run_psfex( decam_datastore_through_extraction, extractor ):
         assert psf._header['CHI2'] == pytest.approx( 1.02, abs=0.1 )
         bio = io.BytesIO( psf._info.encode( 'utf-8' ) )
         psfstats = votable.parse( bio ).get_table_by_index(1)
-        assert psfstats.array['FWHM_FromFluxRadius_Max'] == pytest.approx( 4.174, abs=0.01 )
+        assert psfstats.array['FWHM_FromFluxRadius_Max'] == pytest.approx( 4.143, abs=0.01 )
         assert not tmppsffile.exists()
         assert not tmppsfxmlfile.exists()
 
@@ -288,10 +288,6 @@ def test_run_psfex( decam_datastore_through_extraction, extractor ):
         assert tmppsfxmlfile.exists()
         tmppsffile.unlink()
         tmppsfxmlfile.unlink()
-
-        psf = extractor._run_psfex( tempname, ds.image, psf_size=26 )
-        assert psf._header['PSFAXIS1'] == 31
-        assert psf._header['PSFAXIS1'] == 31
 
     finally:
         tmpsourcefile.unlink( missing_ok=True )
@@ -336,20 +332,20 @@ def test_extract_sources_sextractor( decam_datastore_through_preprocessing,
     expected_radii = np.array([1.0, 2.0, 3.0, 5.0]) * psf.fwhm_pixels
     assert sources.aper_rads == pytest.approx(expected_radii, abs=0.01 )
     assert sources.inf_aper_num == -1
-    assert psf.fwhm_pixels == pytest.approx( 4.161, abs=0.01 )
+    assert psf.fwhm_pixels == pytest.approx( 4.139, abs=0.01 )
     assert psf.fwhm_pixels == pytest.approx( psf.header['PSF_FWHM'], rel=1e-5 )
     assert psf.data.shape == ( 6, 25, 25 )
     assert psf.sources_id == sources.id
 
-    assert sources.apfluxadu()[0].min() == pytest.approx( 490.52, rel=0.01 )
-    assert sources.apfluxadu()[0].max() == pytest.approx( 1895991., rel=0.01 )
-    assert sources.apfluxadu()[0].mean() == pytest.approx( 20475., rel=0.01 )
-    assert sources.apfluxadu()[0].std() == pytest.approx( 126954., rel=0.01 )
+    assert sources.apfluxadu()[0].min() == pytest.approx( 491.15, rel=0.01 )
+    assert sources.apfluxadu()[0].max() == pytest.approx( 1892054., rel=0.01 )
+    assert sources.apfluxadu()[0].mean() == pytest.approx( 20392., rel=0.01 )
+    assert sources.apfluxadu()[0].std() == pytest.approx( 126243, rel=0.01 )
 
-    assert sources.good.sum() == pytest.approx(1028, rel=0.01)
+    assert sources.good.sum() == pytest.approx(1029, rel=0.01)
     # This is what you get with CLASS_STAR; you'll get different values with SPREAD_MODEL
     assert sources.is_star.sum() == pytest.approx(307, rel=0.01)
-    assert ( sources.good & sources.is_star ).sum() == pytest.approx(210, abs=5)
+    assert ( sources.good & sources.is_star ).sum() == pytest.approx(209, abs=5)
 
     try:  # make sure saving the PSF and source list goes as expected, and cleanup at the end
         sources.provenance_id = provenance_base.id

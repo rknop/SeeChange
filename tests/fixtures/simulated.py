@@ -322,7 +322,7 @@ def sim_reference(provenance_preprocessing, provenance_extraction, provenance_ex
     # Likewise, garbage throwaway wcs and zp
     wcs = WorldCoordinates( wcs=WCS(), provenance_id=provenance_extra.id, md5sum=uuid.uuid4(), filepath="foo",
                             sources_id=sc.id )
-    zp = ZeroPoint( wcs_id=wcs.id, zp=25., dzp=0.1, provenacne_id=provenance_extra.id )
+    zp = ZeroPoint( wcs_id=wcs.id, zp=25., dzp=0.1, provenance_id=provenance_extra.id )
 
     sc.insert()
     wcs.insert()
