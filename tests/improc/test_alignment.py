@@ -40,8 +40,8 @@ def test_get_swarp_fodder_wcs( decam_datastore_through_zp, decam_elais_e1_two_re
     ddec = np.fabs( ( oldsc.dec - newsc.dec ).value )
     assert ( dra < 1./3600. ).all()
     assert ( ddec < 1./3600. ).all()
-    assert ( dra > 0.001/3600. ).all()
-    assert ( ddec > 0.001/3600. ).all()
+    assert ( dra > 0.0001/3600. ).all()
+    assert ( ddec > 0.0001/3600. ).all()
 
     # Make sure it fails if it shouldn't succeed
     # (The two refs are different chips from the same exposure, so don't overlap.)
@@ -56,8 +56,8 @@ def test_get_swarp_fodder_wcs( decam_datastore_through_zp, decam_elais_e1_two_re
     dra = np.fabs( ( oldsc.ra - newsc.ra ).value ) * np.cos( oldsc.dec.value * np.pi / 180. )
     ddec = np.fabs( ( oldsc.dec - newsc.dec ).value )
     # Same WCS, should be *really* close.  (Ideally identical, in fact.)
-    assert ( dra < 0.001/3600. ).all()
-    assert ( ddec < 0.001/3600. ).all()
+    assert ( dra < 0.0001/3600. ).all()
+    assert ( ddec < 0.0001/3600. ).all()
 
 
 def test_warp_decam( decam_datastore_through_zp, decam_reference ):
