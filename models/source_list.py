@@ -797,8 +797,14 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
 
         return arr
 
-    def ds9_regfile( self, regfile, color='green', radius=2, radcolor=None, width=2, sncut=5.,
-                     whichsources='all', flagbit=0x10, clobber=True ):
+    def ds9_regfile( self, regfile, color='green', radius=2, width=2, sncut=5., whichsources='all', flagbit=0x10,
+                     radcolor={ 'star': (2.0, 'yellow'),
+                                'nostar': (2.0, 'blue' ),
+                                'highsn': (3.0, 'green' ),
+                                'lowsn': (3.0, 'pink' ),
+                                'bad': (2.4, 'red'),
+                                'flagged': (2.8, 'orange') },
+                     clobber=True ):
         """Write a DS9 region file with circles on the sources.
 
         See https://ds9.si.edu/doc/ref/region.html for file format

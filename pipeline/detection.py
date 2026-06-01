@@ -178,16 +178,32 @@ class ParsDetector(Parameters):
             critical=True
         )
 
-        self.psf = self.add_par(
-            'psf',
-            { 'method': 'psfex',
-              'fwhm_min': 0.5,
+        self.psf_method = self.add_par(
+            'psf_method',
+            'psfex',
+            str,
+            ( "Which PSF method to use.  (Currently only psfex is supported.)  If subtraction is "
+              "True, no PSF fitting is done, so all psf_* parameters are ignored" ),
+            critical=True
+        )
+
+        self.psf_timeout = self.add_par(
+            'psf_timeout',
+            240.,
+            ( float, int ),
+            "How many seconds to try fitting the PSF before assuming the process is hung",
+            critical=False
+        )
+
+        self.psf_params = self.add_par(
+            'psf_params',
+            { 'fwhm_min': 0.5,
               'fwhm_max_to_try': [ 10.0, 15.0, 20.0, 25.0 ],
               'psf_int_size': 25,
               'psf_final_size': None
              },
             dict,
-            ( "Parameters for psf fitting.  Ignored if subraction is true." ),
+            "Parameters for PSF extraction; details depend on psf_method.",
             critical=True
         )
 
@@ -544,7 +560,7 @@ class Detector:
                 # Get the PSF
                 SCLogger.debug( "detection: determining psf..." )
                 cfg = Config.get()
-                if self.pars.psf['method'] == 'psfex':
+                if self.pars.psf_method == 'psfex':
                     psf = self._run_psfex( tempnamebase, image, do_not_cleanup=True )
                     SCLogger.debug( f"...psf done, got FWHM = "
                                     f"{psf.fwhm_pixels*image.instrument_object.pixel_scale:.03f} arcsec" )
@@ -808,8 +824,8 @@ class Detector:
         psffile = pathlib.Path( FileOnDiskMixin.temp_path ) / f'{tempname}.sources.psf'
         psfxmlfile = pathlib.Path( FileOnDiskMixin.temp_path ) / f'{tempname}.sources.psf.xml'
 
-        psf_init_size = psf_size if psf_size is not None else self.pars.psf['psf_init_size']
-        psf_final_size = psf_size if psf_size is not None else self.pars.psf['psf_final_size']
+        psf_init_size = psf_size if psf_size is not None else self.pars.psf_params['psf_init_size']
+        psf_final_size = psf_size if psf_size is not None else self.pars.psf_params['psf_final_size']
 
         psf_init_size = int( psf_init_size )
         if psf_init_size % 2 == 0:
@@ -825,16 +841,20 @@ class Detector:
         try:
             usepsfsize = psf_init_size
             for i in range(2):
-                if ( i == 1 ) and ( psf_final_size is not None ):
-                    usepsfsize = psf_final_size
+                if i == 1:
+                    if psf_final_size is not None:
+                        usepsfsize = psf_final_size
+                    minfwhm = 0.75 * found_fwhm          # noqa: F821
+                    fwhmmaxtotry = [ 1.5 * found_fwhm ]  # noqa: F821
+                else:
+                    minfwhm = self.pars.psf_params['fwhm_min']
+                    #  (This is just a range of things to try to see if we can
+                    #  get psfex to succeed; it will stop after the first one that does.)
+                    fwhmmaxtotry = self.pars.psf_params['fwhm_max_to_try']
+
                 psfdatasize = int( usepsfsize / psf_sampling + 0.5 )
                 if psfdatasize % 2 == 0:
                     psfdatasize += 1
-
-                minfwhm = self.pars.psf['fwhm_min']
-                #  (This is just a range of things to try to see if we can
-                #  get psfex to succeed; it will stop after the first one that does.)
-                fwhmmaxtotry = self.pars.psf['fwhm_max_to_try']
 
                 # TODO: make -XML_URL configurable.  (The default there is what
                 #  is installed if you install the psfex package on a
@@ -860,7 +880,7 @@ class Detector:
                         command,
                         cwd=sourcefile.parent,
                         capture_output=True,
-                        timeout=self.pars.sextractor_timeout
+                        timeout=self.pars.psf_timeout
                     )
                     if res.returncode == 0:
                         success = True
@@ -873,7 +893,8 @@ class Detector:
                             success = False
                         if success and ( psf_size is None ):
                             last_usepsfsize = usepsfsize
-                            usepsfsize = int( np.ceil( psfstats.array['FWHM_FromFluxRadius_Mean'][0] * 5. ) )
+                            found_fwhm = psfstats.array['FWHM_FromFluxRadius_Mean'][0]
+                            usepsfsize = int( np.ceil( found_fwhm * 5. ) )
                             if usepsfsize <= 0:
                                 success = False
                                 usepsfsize = last_usepsfsize
@@ -892,7 +913,7 @@ class Detector:
                         SCLogger.warning( f"psfex failed with fwhmmax={fwhmmax}, trying {fwhmmaxtotry[fwhmmaxdex+1]}" )
 
 
-            psf = PSFExPSF( fwhm_pixels=float(psfstats.array['FWHM_FromFluxRadius_Mean'][0]) )
+            psf = PSFExPSF( fwhm_pixels=float(found_fwhm) )
             psf.load( psfpath=psffile, psfxmlpath=psfxmlfile )
             psf.header['IMAXIS1'] = image.data.shape[1]
             psf.header['IMAXIS2'] = image.data.shape[0]

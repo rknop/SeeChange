@@ -448,8 +448,9 @@ extraction:
     poly_order: 1
     box_size: null
     filt_size: null
-  psf:
-    method: psfex
+  psf_method: psfex
+  psf_timeout: 240.
+  psf_params:
     fwhm_min: 0.5
     fwhm_max_to_try: [ 10.0, 15.0, 20.0, 25.0 ]
     psf_init_size: 25
