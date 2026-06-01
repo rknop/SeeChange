@@ -414,9 +414,9 @@ class Subtractor:
             # save us extra writes, but right now I'm being lazy and just sticking
             # everything in the temp directory.  We don't in general expect
             # the aligned ref to be on disk, so we will have to do some writes.)
-            save_fits_image_file( newim, new_image.data, new_image.header )
+            _path, new_image.header = save_fits_image_file( newim, new_image.data, new_image.header )
             save_fits_image_file( newflags, new_image.flags, new_image.header )
-            save_fits_image_file( refim, ref_image.data, ref_image.header )
+            _path, ref_image.header = save_fits_image_file( refim, ref_image.data, ref_image.header )
             save_fits_image_file( refflags, ref_image.flags, ref_image.header )
 
             # hotpants needs noise images not 1/σ² weight images, so do that:

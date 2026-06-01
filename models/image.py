@@ -1377,9 +1377,9 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             fpack = ( self.format == 'fitsfz' )
             # save the imaging data
             extensions.append('image')
-            imgpath = save_fits_image_file( full_path, self.data, self.header,
-                                            extname='image', single_file=single_file, fpack=fpack,
-                                            just_update_header=just_update_header )
+            imgpath, self.header = save_fits_image_file( full_path, self.data, self.header,
+                                                         extname='image', single_file=single_file, fpack=fpack,
+                                                         just_update_header=just_update_header )
             files_written['image'] = imgpath
 
             # save the other extensions
@@ -1392,15 +1392,14 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                         continue
                     array = getattr(self, array_name)
                     if array is not None:
-                        extpath = save_fits_image_file(
-                            full_path,
-                            array,
-                            fits.Header(),
-                            extname=array_name,
-                            single_file=single_file,
-                            fpack=fpack,
-                            lossless=(array_name in self.lossless_components)
-                        )
+                        extpath, _nullhdr = save_fits_image_file( full_path,
+                                                                  array,
+                                                                  fits.Header(),
+                                                                  extname=array_name,
+                                                                  single_file=single_file,
+                                                                  fpack=fpack,
+                                                                  lossless=(array_name in self.lossless_components)
+                                                                 )
                         extensions.append(array_name)
                         if not single_file:
                             files_written[array_name] = extpath

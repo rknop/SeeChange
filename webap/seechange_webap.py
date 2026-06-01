@@ -13,12 +13,14 @@ import pathlib
 import logging
 import base64
 import uuid
+import textwrap
 
 import numpy
 import h5py
 import PIL
 import astropy.time
 import astropy.visualization
+from psycopg import sql
 
 import flask
 import flask_session
@@ -26,7 +28,7 @@ import flask_session
 from util.config import Config
 from util.util import asUUID
 from models.enums_and_bitflags import ImageTypeConverter
-from models.base import PsycopgConnection
+from models.base import PsycopgConnection, PGDB
 from models.deepscore import DeepScoreSet
 from models.fakeset import FakeSet, FakeAnalysis
 from models.report import Report
@@ -425,9 +427,7 @@ class Exposures( BaseView ):
 
 class ExposureImages( BaseView ):
     def do_the_things( self, expid, provtag ):
-        with PsycopgConnection() as conn:
-            cursor = conn.cursor()
-
+        with PGDB( dictcursor=True ) as conn:
             # Going to do this in a few steps again.  Might be able to write one
             # bigass query, but it's probably more efficient to use temp tables.
             # Easier to build the queries that way too.
@@ -435,81 +435,85 @@ class ExposureImages( BaseView ):
             subdict = { 'expid': str(expid), 'provtag': provtag }
 
             # Step 0: Get exposure information
-            q = cursor.execute( "SELECT * FROM exposures WHERE _id=%(expid)s", subdict )
-            columns = { cursor.description[i][0]: i for i in range(len(cursor.description)) }
-            exposure_info = cursor.fetchone()
-            if exposure_info is None:
+            rows = conn.execute( sql.SQL( "SELECT * FROM exposures WHERE _id={expid}" ).format( **subdict ) )
+            if len(rows) == 0:
                 return { 'status': 'error',
                          'error': f"Unknown exposure {str(expid)}" }
-            exposure_info = { c: exposure_info[columns[c]] for c in columns.keys() }
+            exposure_info = rows[0]
 
             # Step 1: collect image info into temp_exposure_images
-            q = ( 'SELECT i._id, i.filepath, i.ra, i.dec, i.gallat, i.exposure_id, i.section_id, i.fwhm_estimate, '
-                  '       i.zero_point_estimate, i.lim_mag_estimate, i.bkg_mean_estimate, i.bkg_rms_estimate '
-                  'INTO TEMP TABLE temp_exposure_images '
-                  'FROM images i '
-                  'INNER JOIN provenance_tags ipt ON ipt.provenance_id=i.provenance_id '
-                  'WHERE i.exposure_id=%(expid)s '
-                  '  AND ipt.tag=%(provtag)s '
-                 )
-            #  app.logger.debug( f"exposure_images finding images; query: {cursor.mogrify(q,subdict)}" )
-            cursor.execute( q, subdict )
-            cursor.execute( "ALTER TABLE temp_exposure_images ADD PRIMARY KEY(_id)" )
+            q = sql.SQL( textwrap.dedent(
+                """
+                SELECT i._id, i.filepath, i.ra, i.dec, i.gallat, i.exposure_id, i.section_id, i.fwhm_estimate,
+                       i.zero_point_estimate, i.lim_mag_estimate, i.bkg_mean_estimate, i.bkg_rms_estimate
+                INTO TEMP TABLE temp_exposure_images
+                FROM images i
+                INNER JOIN provenance_tags ipt ON ipt.provenance_id=i.provenance_id
+                WHERE i.exposure_id={expid}
+                  AND ipt.tag={provtag}
+                """
+                ) ).format( **subdict )
+            conn.execute_nofetch( q )
+            conn.execute_nofetch( "ALTER TABLE temp_exposure_images ADD PRIMARY KEY(_id)",
+                                  explain=False, analyze=False )
             # ****
-            # cursor.execute( "SELECT COUNT(*) FROM temp_exposure_images" )
-            # app.logger.debug( f"Got {cursor.fetchone()[0]} images" )
+            # rows = conn.execute( "SELECT COUNT(*) AS n FROM temp_exposure_images" )
+            # app.logger.debug( f"Got {rows[0]['n']} images" )
             # ****
 
             # Step 2: count measurements by joining temp_exposure_images to many things.
-            q = ( 'SELECT i._id, s._id AS subid, ssl.num_sources AS numsources, COUNT(m._id) AS nummeasurements '
-                  'INTO TEMP TABLE temp_exposure_images_counts '
-                  'FROM temp_exposure_images i '
-                  'LEFT JOIN ( '
-                  '  SELECT sli._id, sli.image_id FROM source_lists sli '
-                  '  INNER JOIN provenance_tags slipt ON slipt.provenance_id=sli.provenance_id '
-                  '                                   AND slipt.tag=%(provtag)s '
-                  ') sl ON sl.image_id=i._id '
-                  'LEFT JOIN ( '
-                  '  SELECT wcsi._id, wcsi.sources_id FROM world_coordinates wcsi '
-                  '  INNER JOIN provenance_tags wcsipt ON wcsipt.provenance_id=wcsi.provenance_id '
-                  '                                    AND wcsipt.tag=%(provtag)s '
-                  ') wcs ON wcs.sources_id=sl._id '
-                  'LEFT JOIN ( '
-                  '  SELECT zpi._id, zpi.wcs_id FROM zero_points zpi '
-                  '  INNER JOIN provenance_tags zpipt ON zpipt.provenance_id=zpi.provenance_id '
-                  '                                   AND zpipt.tag=%(provtag)s '
-                  ') zp ON zp.wcs_id=wcs._id '
-                  'LEFT JOIN image_subtraction_components isc ON isc.new_zp_id=zp._id '
-                  'LEFT JOIN ( '
-                  '   SELECT si._id, si.is_sub FROM images si '
-                  '   INNER JOIN provenance_tags sipt ON sipt.provenance_id=si.provenance_id '
-                  '                                   AND sipt.tag=%(provtag)s '
-                  ') s ON s.is_sub AND s._id=isc.image_id '
-                  'LEFT JOIN ( '
-                  '  SELECT ssli._id, ssli.image_id, ssli.num_sources FROM source_lists ssli '
-                  '  INNER JOIN provenance_tags sslpt ON sslpt.provenance_id=ssli.provenance_id '
-                  '                                   AND sslpt.tag=%(provtag)s '
-                  ') ssl ON ssl.image_id=s._id '
-                  'LEFT JOIN ('
-                  '  SELECT cu._id, cu.sources_id FROM cutouts cu '
-                  '  INNER JOIN provenance_tags cupt ON cupt.provenance_id=cu.provenance_id AND cupt.tag=%(provtag)s '
-                  ') c ON c.sources_id=ssl._id '
-                  'LEFT JOIN ( '
-                  '  SELECT sms._id, sms.cutouts_id FROM measurement_sets sms '
-                  '  INNER JOIN provenance_tags mspt ON mspt.provenance_id=sms.provenance_id AND mspt.tag=%(provtag)s '
-                  ') ms ON ms.cutouts_id=c._id '
-                  'LEFT JOIN measurements m ON m.measurementset_id=ms._id '
-                  'GROUP BY i._id, s._id, ssl.num_sources '
-                 )
-            # app.logger.debug( f"exposure_images counting sources: query {cursor.mogrify(q,subdict)}" )
-            cursor.execute( q, subdict )
+            q = sql.SQL( textwrap.dedent(
+                """
+                SELECT i._id, s._id AS subid, ssl.num_sources AS numsources, COUNT(m._id) AS nummeasurements
+                INTO TEMP TABLE temp_exposure_images_counts
+                FROM temp_exposure_images i
+                LEFT JOIN (
+                  SELECT sli._id, sli.image_id FROM source_lists sli
+                  INNER JOIN provenance_tags slipt ON slipt.provenance_id=sli.provenance_id
+                                                   AND slipt.tag={provtag}
+                ) sl ON sl.image_id=i._id
+                LEFT JOIN (
+                  SELECT wcsi._id, wcsi.sources_id FROM world_coordinates wcsi
+                  INNER JOIN provenance_tags wcsipt ON wcsipt.provenance_id=wcsi.provenance_id
+                                                    AND wcsipt.tag={provtag}
+                ) wcs ON wcs.sources_id=sl._id
+                LEFT JOIN (
+                  SELECT zpi._id, zpi.wcs_id FROM zero_points zpi
+                  INNER JOIN provenance_tags zpipt ON zpipt.provenance_id=zpi.provenance_id
+                                                   AND zpipt.tag={provtag}
+                ) zp ON zp.wcs_id=wcs._id
+                LEFT JOIN image_subtraction_components isc ON isc.new_zp_id=zp._id
+                LEFT JOIN (
+                   SELECT si._id, si.is_sub FROM images si
+                   INNER JOIN provenance_tags sipt ON sipt.provenance_id=si.provenance_id
+                                                   AND sipt.tag={provtag}
+                ) s ON s.is_sub AND s._id=isc.image_id
+                LEFT JOIN (
+                  SELECT ssli._id, ssli.image_id, ssli.num_sources FROM source_lists ssli
+                  INNER JOIN provenance_tags sslpt ON sslpt.provenance_id=ssli.provenance_id
+                                                   AND sslpt.tag={provtag}
+                ) ssl ON ssl.image_id=s._id
+                LEFT JOIN (
+                  SELECT cu._id, cu.sources_id FROM cutouts cu
+                  INNER JOIN provenance_tags cupt ON cupt.provenance_id=cu.provenance_id AND cupt.tag={provtag}
+                ) c ON c.sources_id=ssl._id
+                LEFT JOIN (
+                  SELECT sms._id, sms.cutouts_id FROM measurement_sets sms
+                  INNER JOIN provenance_tags mspt ON mspt.provenance_id=sms.provenance_id AND mspt.tag={provtag}
+                ) ms ON ms.cutouts_id=c._id
+                LEFT JOIN measurements m ON m.measurementset_id=ms._id
+                GROUP BY i._id, s._id, ssl.num_sources
+                """
+            ) ).format( **subdict )
+            conn.execute_nofetch( q )
             # We will get an error here if there are multiple rows for a given image.
             # (Which is good; there shouldn't be multiple rows!  There should only be
             # one (e.g.) source list child of the image for a given provenance tag, etc.)
-            cursor.execute( "ALTER TABLE temp_exposure_images_counts ADD PRIMARY KEY(_id)" )
+            conn.execute_nofetch( "ALTER TABLE temp_exposure_images_counts ADD PRIMARY KEY(_id)",
+                                  explain=False, analyze=False )
             # ****
-            # cursor.execute( "SELECT COUNT(*) FROM temp_exposure_images_counts" )
-            # app.logger.debug( f"Got {cursor.fetchone()[0]} rows with counts" )
+            # rows = conn.execute( "SELECT COUNT(*) AS n FROM temp_exposure_images_counts" )
+            # app.logger.debug( f"Got {rows[0]['n'} rows with counts" )
             # ****
 
             # Step 3: join to the report table.  Because we might have multiple reports
@@ -518,123 +522,130 @@ class ExposureImages( BaseView ):
             # This mess is very similar to the mess in Exposures, to make sure we're selecting
             #   the right reports.
 
-            q = ( 'SELECT i._id, r.error_step, r.error_type, r.error_message, r.warnings, r.start_time, r.finish_time, '
-                  '       r.process_memory, r.process_runtime, r.progress_steps_bitflag, r.products_exist_bitflag '
-                  'INTO TEMP TABLE temp_exposure_images_reports '
-                  'FROM temp_exposure_images i '
-                  'INNER JOIN ( '
-                  '  SELECT DISTINCT ON(re.exposure_id, re.section_id) re.exposure_id, re.section_id, '
-                  '         re.error_step, re.error_type, re.error_message, re.warnings, '
-                  '         re.process_memory, re.process_runtime, '
-                  '         re.progress_steps_bitflag, re.products_exist_bitflag, '
-                  '         re.start_time, re.finish_time '
-                  '  FROM ( SELECT re1.exposure_id, re1.section_id, re1.error_step, re1.error_type, re1.error_message, '
-                  '                re1.warnings, re1.process_memory, re1.process_runtime, re1.progress_steps_bitflag, '
-                  '                re1.products_exist_bitflag, re1.start_time, re1.finish_time, '
-                  '                array_agg(%(provtag)s=ANY(re1.tags)) as gotem '
-                  '         FROM ( SELECT re2.exposure_id, re2.section_id, re2.error_step, re2.error_type, '
-                  '                       re2.error_message, re2.warnings, re2.process_memory, re2.process_runtime, '
-                  '                       re2.progress_steps_bitflag, re2.products_exist_bitflag, re2.start_time, '
-                  '                       re2.finish_time, array_agg(re2.tag) AS tags '
-                  '                FROM ( SELECT DISTINCT ON( re3._id, x.key, r3pt.tag ) '
-                  '                              re3._id, re3.exposure_id, re3.section_id, re3.error_step, '
-                  '                              re3.error_type, re3.error_message, re3.warnings, re3.process_memory, '
-                  '                              re3.process_runtime, re3.progress_steps_bitflag, '
-                  '                              re3.products_exist_bitflag, re3.start_time, re3.finish_time, '
-                  '                              x.key AS process, r3pt.tag '
-                  '                        FROM reports re3 '
-                  '                        CROSS JOIN jsonb_each_text( re3.process_provid ) x '
-                  '                        INNER JOIN provenance_tags r3pt ON x.value=r3pt.provenance_id '
-                  '                        ORDER BY re3._id, r3pt.tag '
-                  '                     ) re2 '
-                  '                GROUP BY ( re2.exposure_id, re2.section_id, re2.error_step, re2.error_type, '
-                  '                           re2.error_message, re2.warnings, re2.process_memory, '
-                  '                           re2.process_runtime, re2.progress_steps_bitflag, '
-                  '                           re2.products_exist_bitflag, re2.start_time, re2.finish_time ) '
-                  '              ) re1 '
-                  '         GROUP BY ( re1.exposure_id, re1.section_id, re1.error_step, re1.error_type, '
-                  '                    re1.error_message, re1.warnings, re1.process_memory, re1.process_runtime, '
-                  '                    re1.progress_steps_bitflag, re1.products_exist_bitflag, re1.start_time, '
-                  '                    re1.finish_time ) '
-                  '       ) re '
-                  '  WHERE true=ALL(gotem) '
-                  '  ORDER BY re.exposure_id, re.section_id, re.start_time DESC '
-                  ') r ON r.exposure_id=i.exposure_id AND r.section_id=i.section_id ' )
-            # app.logger.debug( f"exposure_images getting reports; query {cursor.mogrify(q,subdict)}" )
-            cursor.execute( q, subdict )
+            q = sql.SQL( textwrap.dedent(
+                """
+                SELECT i._id, r.error_step, r.error_type, r.error_message, r.warnings, r.start_time, r.finish_time,
+                       r.process_memory, r.process_runtime, r.progress_steps_bitflag, r.products_exist_bitflag
+                INTO TEMP TABLE temp_exposure_images_reports
+                FROM temp_exposure_images i
+                INNER JOIN (
+                  SELECT DISTINCT ON(re.exposure_id, re.section_id) re.exposure_id, re.section_id,
+                         re.error_step, re.error_type, re.error_message, re.warnings,
+                         re.process_memory, re.process_runtime,
+                         re.progress_steps_bitflag, re.products_exist_bitflag,
+                         re.start_time, re.finish_time
+                  FROM ( SELECT re1.exposure_id, re1.section_id, re1.error_step, re1.error_type, re1.error_message,
+                                re1.warnings, re1.process_memory, re1.process_runtime, re1.progress_steps_bitflag,
+                                re1.products_exist_bitflag, re1.start_time, re1.finish_time,
+                                array_agg({provtag}=ANY(re1.tags)) as gotem
+                         FROM ( SELECT re2.exposure_id, re2.section_id, re2.error_step, re2.error_type,
+                                       re2.error_message, re2.warnings, re2.process_memory, re2.process_runtime,
+                                       re2.progress_steps_bitflag, re2.products_exist_bitflag, re2.start_time,
+                                       re2.finish_time, array_agg(re2.tag) AS tags
+                                FROM ( SELECT DISTINCT ON( re3._id, x.key, r3pt.tag )
+                                              re3._id, re3.exposure_id, re3.section_id, re3.error_step,
+                                              re3.error_type, re3.error_message, re3.warnings, re3.process_memory,
+                                              re3.process_runtime, re3.progress_steps_bitflag,
+                                              re3.products_exist_bitflag, re3.start_time, re3.finish_time,
+                                              x.key AS process, r3pt.tag
+                                        FROM reports re3
+                                        CROSS JOIN jsonb_each_text( re3.process_provid ) x
+                                        INNER JOIN provenance_tags r3pt ON x.value=r3pt.provenance_id
+                                        ORDER BY re3._id, r3pt.tag
+                                     ) re2
+                                GROUP BY ( re2.exposure_id, re2.section_id, re2.error_step, re2.error_type,
+                                           re2.error_message, re2.warnings, re2.process_memory,
+                                           re2.process_runtime, re2.progress_steps_bitflag,
+                                           re2.products_exist_bitflag, re2.start_time, re2.finish_time )
+                              ) re1
+                         GROUP BY ( re1.exposure_id, re1.section_id, re1.error_step, re1.error_type,
+                                    re1.error_message, re1.warnings, re1.process_memory, re1.process_runtime,
+                                    re1.progress_steps_bitflag, re1.products_exist_bitflag, re1.start_time,
+                                    re1.finish_time )
+                       ) re
+                  WHERE true=ALL(gotem)
+                  ORDER BY re.exposure_id, re.section_id, re.start_time DESC
+                ) r ON r.exposure_id=i.exposure_id AND r.section_id=i.section_id
+                """
+            ) ).format( **subdict )
+            conn.execute_nofetch( q )
             # Again, we will get an error here if there are multiple rows for a given image.
             #   Because of the distinct on exposure_id/section_id, I don't think that should happen.
-            cursor.execute( "ALTER TABLE temp_exposure_images_reports ADD PRIMARY KEY(_id)" )
+            conn.execute_nofetch( "ALTER TABLE temp_exposure_images_reports ADD PRIMARY KEY(_id)",
+                                  explain=False, analyze=False )
             # ****
-            # cursor.execute( "SELECT COUNT(*) FROM temp_exposure_images_reports" )
-            # app.logger.debug( f"Got {cursor.fetchone()[0]} rows with reports" )
+            # rows = conn.execute( "SELECT COUNT(*) AS n FROM temp_exposure_images_reports" )
+            # app.logger.debug( f"Got {rows[0]['n']} rows with reports" )
             # ****
 
-            cursor.execute( "SELECT t1.*, t2.*, t3.* "
-                            "FROM temp_exposure_images t1 "
-                            "LEFT JOIN temp_exposure_images_counts t2 ON t1._id=t2._id "
-                            "LEFT JOIN temp_exposure_images_reports t3 ON t1._id=t3._id "
-                            "ORDER BY t1.section_id" )
-            columns = { cursor.description[i][0]: i for i in range(len(cursor.description)) }
-            rows = cursor.fetchall()
+            q = sql.SQL( textwrap.dedent(
+                """
+                SELECT t1.*, t2.*, t3.*
+                FROM temp_exposure_images t1
+                LEFT JOIN temp_exposure_images_counts t2 ON t1._id=t2._id
+                LEFT JOIN temp_exposure_images_reports t3 ON t1._id=t3._id
+                ORDER BY t1.section_id
+                """
+            ) )
+            rows = conn.execute( q )
             # app.logger.debug( f"exposure_images got {len(rows)} rows from the final query." )
 
-            # Calculate average seeing and average limiting magnitude
-            totfwhm = 0.
-            nfwhm = 0
-            totlimmag = 0.
-            nlimmag = 0
-            for row in rows:
-                if row[columns['fwhm_estimate']] is not None:
-                    totfwhm += row[columns['fwhm_estimate']]
-                    nfwhm += 1
-                if row[columns['lim_mag_estimate']] is not None:
-                    totlimmag += row[columns['lim_mag_estimate']]
-                    nlimmag += 1
-            exposure_info['seeingavg'] = None if nfwhm == 0 else totfwhm / nfwhm
-            exposure_info['limmagavg'] = None if nlimmag == 0 else totlimmag / nlimmag
+        # Calculate average seeing and average limiting magnitude
+        totfwhm = 0.
+        nfwhm = 0
+        totlimmag = 0.
+        nlimmag = 0
+        for row in rows:
+            if row['fwhm_estimate'] is not None:
+                totfwhm += row['fwhm_estimate']
+                nfwhm += 1
+            if row['lim_mag_estimate'] is not None:
+                totlimmag += row['lim_mag_estimate']
+                nlimmag += 1
+        exposure_info['seeingavg'] = None if nfwhm == 0 else totfwhm / nfwhm
+        exposure_info['limmagavg'] = None if nlimmag == 0 else totlimmag / nlimmag
 
-            fields = ( '_id', 'ra', 'dec', 'gallat', 'section_id', 'fwhm_estimate', 'zero_point_estimate',
-                       'lim_mag_estimate', 'bkg_mean_estimate', 'bkg_rms_estimate',
-                       'numsources', 'nummeasurements', 'subid',
-                       'error_step', 'error_type', 'error_message', 'warnings', 'start_time', 'finish_time',
-                       'process_memory', 'process_runtime', 'progress_steps_bitflag', 'products_exist_bitflag' )
+        fields = ( '_id', 'ra', 'dec', 'gallat', 'section_id', 'fwhm_estimate', 'zero_point_estimate',
+                   'lim_mag_estimate', 'bkg_mean_estimate', 'bkg_rms_estimate',
+                   'numsources', 'nummeasurements', 'subid',
+                   'error_step', 'error_type', 'error_message', 'warnings', 'start_time', 'finish_time',
+                   'process_memory', 'process_runtime', 'progress_steps_bitflag', 'products_exist_bitflag' )
 
-            retval = { 'status': 'ok',
-                       'provenancetag': provtag,
-                       'exposure': exposure_info,
-                       'name': [] }
+        retval = { 'status': 'ok',
+                   'provenancetag': provtag,
+                   'exposure': exposure_info,
+                   'name': [] }
 
-            for field in fields :
+        for field in fields :
+            rfield = 'id' if field == '_id' else field
+            retval[ rfield ] = []
+
+        lastimg = -1
+        multiples = set()
+        slashre = re.compile( '^.*/([^/]+)$' )
+        for row in rows:
+            if row['_id'] == lastimg:
+                multiples.add( row['id'] )
+                continue
+            lastimg = row['_id']
+
+            match = slashre.search( row['filepath'] )
+            retval['name'].append( row['filepath'] if match is None else match.group(1) )
+            for field in fields:
                 rfield = 'id' if field == '_id' else field
-                retval[ rfield ] = []
+                if ( rfield in ( 'start_time', 'finish_time' ) ) and ( row[field] is not None ):
+                    retval[rfield].append( row[field].isoformat() )
+                else:
+                    retval[rfield].append( row[field] )
 
-            lastimg = -1
-            multiples = set()
-            slashre = re.compile( '^.*/([^/]+)$' )
-            for row in rows:
-                if row[columns['_id']] == lastimg:
-                    multiples.add( row[columns['id']] )
-                    continue
-                lastimg = row[columns['_id']]
+        if len(multiples) != 0:
+            return { 'status': 'error',
+                     'error': ( f'Some images had multiple rows in the query; this probably indicates '
+                                f'that the reports table is not well-formed.  Or maybe something else. '
+                                f'offending images: {multiples}' ) }
 
-                match = slashre.search( row[columns['filepath']] )
-                retval['name'].append( row[columns['filepath']] if match is None else match.group(1) )
-                for field in fields:
-                    rfield = 'id' if field == '_id' else field
-                    if ( rfield in ( 'start_time', 'finish_time' ) ) and ( row[columns[field]] is not None ):
-                        retval[rfield].append( row[columns[field]].isoformat() )
-                    else:
-                        retval[rfield].append( row[columns[field]] )
-
-            if len(multiples) != 0:
-                return { 'status': 'error',
-                         'error': ( f'Some images had multiple rows in the query; this probably indicates '
-                                    f'that the reports table is not well-formed.  Or maybe something else. '
-                                    f'offending images: {multiples}' ) }
-
-            # app.logger.debug( f"exposure_images returning {retval}" )
-            return retval
+        # app.logger.debug( f"exposure_images returning {retval}" )
+        return retval
 
 
 # ======================================================================

@@ -658,7 +658,7 @@ class PSFPaletteMaker:
 
         hdu = fits.PrimaryHDU( data=self.img )
         hdu.writeto( self.imagename, overwrite=True )
-        hdu = fits.PrimaryHDU( data=np.zeros_like( self.img, dtype=np.uint8 ) )
+        hdu = fits.PrimaryHDU( data=np.zeros_like( self.img, dtype=np.int16 ) )
         hdu.writeto( self.flagsname, overwrite=True )
         hdu = fits.PrimaryHDU( data=np.full( self.img.shape, 1. / ( self.noiselevel**2 ) ) )
         hdu.writeto( self.weightname, overwrite=True )

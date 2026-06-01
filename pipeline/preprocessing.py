@@ -27,15 +27,6 @@ class ParsPreprocessor(Parameters):
 
         self.add_par( 'steps_required', [], list, "Steps that need to be done to each exposure" )
 
-        self.add_par( 'steps_ok_to_skip',
-                      [],
-                      list,
-                      ( "OK to skip this step if necessary.  This list should be a subset of the "
-                        "steps_required list.  This is if, e.g., you have fringe as a step required, "
-                        "but only some filters have fringe calibration images." ),
-                      critical=True
-                     )
-
         self.add_par( 'preprocessing',
                       'internal',
                       str,
@@ -201,6 +192,8 @@ class Preprocessor:
         """
         self.has_recalculated = False
 
+        made_image = False
+        made_flags = False
         ds = None
         try:
             ds = DataStore.from_args( *args, **kwargs )
@@ -261,6 +254,7 @@ class Preprocessor:
                 # get the single-chip image from the exposure
                 image = Image.from_exposure( ds.exposure, ds.section_id )
                 image_was_from_exposure = True
+                made_image = True
 
             if image is None:
                 raise ValueError('Image cannot be None at this point!')
@@ -296,24 +290,30 @@ class Preprocessor:
             #   instrument's preprocessing_step_skip_by_filter).
             already_done = set( image.preprocessing_done.split(', ') if image.preprocessing_done else [] )
 
+            stilltodo = needed_steps - already_done
             # If self.pars.preprocessing is anything other than
             #   'internal', there should be nothing left to do except
             #   set the image provenance, and maybe calculate the weight
             #   and flags.  Verify that.
             if self.pars.preprocessing != 'internal':
-                if len( needed_steps - already_done ) > 0:
+                if len( stilltodo ) > 0:
                     raise ValueError( f"Preprocessing error: self.pars.preprocessing is {self.pars.preprocessing}, "
-                                      f"but we still need to do steps {needed_steps-already_done} "
+                                      f"but we still need to do steps {stilltodo} "
                                       f"(needed_steps={needed_steps}, preproc_bitflag={image.preproc_bitflag})" )
 
-            if not needed_steps.issubset(already_done):  # still things to do here
+            if len( stilltodo ) == 0:
+                SCLogger.debug( "Image has already been preprocessed." )
+
+            else:
+                # Still stuff to do!
                 self.has_recalculated = True
                 # Overscan is always first (as it reshapes the image)
-                if 'overscan' in needed_steps:
+                if 'overscan' in stilltodo:
                     SCLogger.debug('preprocessing: overscan and trim')
                     image.data = self.instrument.overscan_and_trim( image, method=self.pars.overscan_method,
                                                                     **self.pars.overscan_kwargs )
                     image.flags = np.zeros( image.data.shape, dtype=np.int16 )
+                    made_flags = True
                     # Update the header ra/dec calculations now that we know the real width/height
                     try:
                         image.set_corners_from_header_wcs(setradec=True)
@@ -327,6 +327,7 @@ class Preprocessor:
                 # If, for some reason, we don't yet have a  flags array, make sure we now do
                 if image.flags is None:
                     image.flags = np.zeros( image.data.shape, dtype=np.int16 )
+                    made_flags = True
 
                 # At this point, we won't use image.raw_data again.  Set it
                 #   to None so the memory will be freed if it's not also
@@ -336,7 +337,7 @@ class Preprocessor:
 
                 # Apply steps in the order expected by the instrument
                 for step in self.pars.steps_required:
-                    if step not in needed_steps:
+                    if step not in stilltodo:
                         continue
                     if step == 'overscan':
                         continue
@@ -351,16 +352,8 @@ class Preprocessor:
                         raise RuntimeError( f"Can't find calibration file for preprocessing step {step}" )
 
                     if stepfileid is None:
-                        if step in self.pars.steps_ok_to_skip:
-                            SCLogger.info(f"Skipping step {step} for filter {baseobj.filter} "
-                                             f"because there is no calibration file (this may be normal)")
-                            # ...not clear if we should mark this step done even though it wasn't.
-                            # Probably don't.
-                            # image.preproc_bitflag |= string_to_bitflag( step, image_preprocessing_inverse )
-                            continue
-                        else:
-                            raise FileNotFoundError( f"Failed to find a {step} calibrator for filter "
-                                                     f"section {image.section_id}, filter {baseobj.filter}" )
+                        raise FileNotFoundError( f"Failed to find a {step} calibrator for filter "
+                                                 f"section {image.section_id}, filter {baseobj.filter}" )
 
                     # Use the cached calibrator file for this step if it's the right one; otherwise, grab it
                     if ( stepfileid in self.stepfilesids ) and ( self.stepfilesids[step] == stepfileid ):
@@ -429,9 +422,10 @@ class Preprocessor:
             # If we STILL don't have a flags image, by golly, we need one
             if image.flags is None:
                 image.flags = np.zeros( image.data.shape, dtype=np.int16 )
+                made_flags = True
 
             # OR in the standard instrument mask if we're supposed to
-            if self.pars.use_base_mask:
+            if made_flags and self.pars.use_base_mask:
                 basemask = self.instrument.get_standard_flags_image( ds.section_id )
                 image.flags |= basemask
 
@@ -480,8 +474,9 @@ class Preprocessor:
                     image.flags[ wsat ] |= string_to_bitflag( "saturated", flag_image_bits_inverse )
                     image.weight[ wsat ] = 0.
 
-            # Replace some flagged pixels in the image if we were told to
-            if len(self.pars.masked_pixels_to_replace) > 0:
+            # Replace some flagged pixels in the image if we were told to,
+            #   and if we did anything to the image.  (Otherwise, don't touch it.)
+            if ( made_image or ( len(stilltodo) > 0 ) ) and ( len(self.pars.masked_pixels_to_replace) > 0 ):
                 SCLogger.debug( "Replacing some flagged pixels in image" )
                 didmask = np.int16(0)
                 for pixname in self.pars.masked_pixels_to_replace:

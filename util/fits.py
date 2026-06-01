@@ -253,7 +253,8 @@ def save_fits_image_file( filename,
 
     Returns
     -------
-    The full absolute path to the file saved (or written to).
+    tuple : string, astropy.io.fits.Header
+      The full absolute path to the file saved (or written to), and the FITS header written.
 
     """
 
@@ -326,7 +327,7 @@ def save_fits_image_file( filename,
                 else:
                     filehdu[ext].header[kw] = ( header[kw], header.comments[kw] )
 
-        return str( finalfilepath )
+            return str( finalfilepath ), filehdu[ext].header
 
     # Make sure the directory exists and is in a legal place
     safe_mkdir( direc )
@@ -337,9 +338,12 @@ def save_fits_image_file( filename,
         if lossless:
             kwargs.update( { 'quantize_method': 'NO_DITHER', 'quantize_level': 0 } )
         hdu = make_compressed_fits_hdu( data, header, name=extname, **kwargs )
+        header = hdu.header
 
     else:
         hdu = fits.ImageHDU( data, header, name=extname ) if single_file else fits.PrimaryHDU( data, header )
+        header = hdu.header
+
 
     if single_file:
         # TODO: what happens if there already is an extension in an existing file with name extname?
@@ -347,7 +351,7 @@ def save_fits_image_file( filename,
             if len(hdul) == 0:
                 hdul.append( fits.PrimaryHDU() )
             hdul.append( hdu )
-        return str( finalfilepath )
+        return str( finalfilepath ), header
 
     else:
         # Single-HDU FITS file in the case where an object uses a different file for each extension
@@ -361,4 +365,4 @@ def save_fits_image_file( filename,
 
         hdul.writeto( finalfilepath )
 
-        return str( finalfilepath )
+        return str( finalfilepath ), header

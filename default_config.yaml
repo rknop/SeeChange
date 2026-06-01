@@ -402,7 +402,6 @@ pipeline:
 
 preprocessing:
   steps_required: [ 'overscan', 'linearity', 'flat', 'fringe' ]
-  steps_ok_to_skip: [ 'fringe' ]
   calibset: externally_supplied
   overscan_method: median
   overscan_kwargs: {}
@@ -432,8 +431,9 @@ extraction:
   best_aper_num: 0
   aperunit: fwhm
   separation_fwhm: 1.0
-  initial_threshold: 6.0
-  threshold: 3.0
+  initial_threshold: 1.5
+  sextr_threshold: 1.5
+  snr_threshold: 3.0
   subtraction: false
   backgrounding:
     format: map
@@ -519,7 +519,7 @@ subtraction:
 detection:
   subtraction: true
   method: filter
-  threshold: 5.0
+  snr_threshold: 5.0
 
 # ======================================================================#
 # Cutting
@@ -739,7 +739,9 @@ coaddition:
       ignore_flags: 0
   extraction:
     measure_psf: true
-    threshold: 3.0
+    initial_threshold: 1.5
+    sextr_threshold: 3.0
+    snr_threshold: 3.0
     method: sextractor
   backgrounding:
     format: map

@@ -4,7 +4,7 @@ from improc.bitmask_tools import dilate_bitflag
 
 
 def test_bitmask_dilation():
-    array = np.zeros((10, 10), dtype=np.uint16)
+    array = np.zeros((10, 10), dtype=np.int16)
     array[3, 3] = 1
     array[5, 5] = 2
     array[7, 7] = 3
@@ -74,5 +74,5 @@ def test_bitmask_dilation():
     assert dilated[8, 9] == 4
     assert dilated[9, 8] == 4
 
-    dilated = dilate_bitflag(array.astype('uint16'), iterations=1)
+    dilated = dilate_bitflag(array.astype('int16'), iterations=1)
     assert dilated.dtype == array.dtype

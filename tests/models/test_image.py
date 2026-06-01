@@ -170,7 +170,7 @@ def test_image_archive_singlefile(sim_image_uncommitted, archive):
     im = sim_image_uncommitted
     im.data = np.float32( im.raw_data )
     rng = np.random.default_rng()
-    im.flags = rng.integers(0, 100, size=im.raw_data.shape, dtype=np.uint16)
+    im.flags = rng.integers(0, 100, size=im.raw_data.shape, dtype=np.int16)
 
     archive_dir = archive.test_folder_path
 
@@ -237,7 +237,7 @@ def test_image_archive_multifile(sim_image_uncommitted, archive):
     im = sim_image_uncommitted
     im.data = np.float32( im.raw_data )
     rng = np.random.default_rng()
-    im.flags = rng.integers(0, 100, size=im.raw_data.shape, dtype=np.uint16)
+    im.flags = rng.integers(0, 100, size=im.raw_data.shape, dtype=np.int16)
     im.weight = None
 
     archive_dir = archive.test_folder_path
@@ -316,7 +316,7 @@ def test_image_save_justheader( sim_image1 ):
     try:
         sim_image1.data = np.full( (64, 32), 0.125, dtype=np.float32 )
         rng = np.random.default_rng()
-        sim_image1.flags = rng.integers(0, 100, size=sim_image1.data.shape, dtype=np.uint16)
+        sim_image1.flags = rng.integers(0, 100, size=sim_image1.data.shape, dtype=np.int16)
         sim_image1.weight = np.full( (64, 32), 4., dtype=np.float32 )
 
         archive = sim_image1.archive
@@ -363,7 +363,7 @@ def test_image_save_justheader( sim_image1 ):
 def test_image_save_onlyimage( sim_image1 ):
     sim_image1.data = np.full( (64, 32), 0.125, dtype=np.float32 )
     rng = np.random.default_rng()
-    sim_image1.flags = rng.integers(0, 100, size=sim_image1.data.shape, dtype=np.uint16)
+    sim_image1.flags = rng.integers(0, 100, size=sim_image1.data.shape, dtype=np.int16)
     sim_image1.weight = np.full( (64, 32), 4., dtype=np.float32 )
 
     _ = ImageCleanup.save_image( sim_image1, archive=False, seed=342637704 )
@@ -1056,7 +1056,7 @@ def test_image_multifile(sim_image_uncommitted, provenance_base):
     im = sim_image_uncommitted
     im.data = np.float32(im.raw_data)
     rng = np.random.default_rng()
-    im.flags = rng.integers(0, 100, size=im.raw_data.shape, dtype=np.uint32)
+    im.flags = rng.integers(0, 100, size=im.raw_data.shape, dtype=np.int16)
     im.weight = None
     im.provenance_id = provenance_base.id
 

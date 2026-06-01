@@ -27,7 +27,7 @@ def test_sep_find_sources_in_small_image(decam_small_image, extractor, blocking_
     det = extractor
     det.pars.method = 'sep'
     det.pars.subtraction = False
-    det.pars.threshold = 3.0
+    det.pars.snr_threshold = 3.0
     det.pars.test_parameter = uuid.uuid4().hex
     sources, _, _, _ = det.extract_sources(decam_small_image, None)
 
@@ -58,7 +58,7 @@ def test_sep_find_sources_in_small_image(decam_small_image, extractor, blocking_
         plt.show(block=True)
 
     # increasing the threshold should find fewer sources
-    det.pars.threshold = 7.5
+    det.pars.snr_threshold = 7.5
     sources2, _, _, _ = det.extract_sources(decam_small_image, None)
     assert sources2.num_sources < sources.num_sources
 
@@ -77,7 +77,7 @@ def test_sep_save_source_list(decam_small_image, provenance_base, extractor):
 
     extractor.pars.method = 'sep'
     extractor.pars.subtraction = False
-    extractor.pars.threshold = 3.0
+    extractor.pars.snr_threshold = 3.0
     extractor.pars.test_parameter = uuid.uuid4().hex
     sources, _, _, _ = extractor.extract_sources(decam_small_image, None)
     prov = Provenance(
@@ -131,7 +131,8 @@ def test_sextractor_extract_once( decam_datastore_through_preprocessing, extract
             extractor.pars.method = 'sextractor'
             extractor.pars.subtraction = False
             extractor.pars.apers = [ 5. ]
-            extractor.pars.threshold = 4.5
+            extractor.pars.initial_threshold = 4.5
+            extractor.pars.sextr_threshold = 4.5
             if test_trials == 0:
                 # Do a run of sextractor where we don't subtract a background a priori, but
                 #   use sextractor's built-in background subtraction.  (This isn't fully usable
@@ -167,7 +168,7 @@ def test_sextractor_extract_once( decam_datastore_through_preprocessing, extract
                 #   checks below come out the same, so  ¯\_(ツ)_/¯
                 assert bkgsig == pytest.approx( 13.2531, abs=0.01 )
 
-            assert sourcelist.num_sources == 1311
+            assert sourcelist.num_sources == 534
             assert len(sourcelist.data) == sourcelist.num_sources
             assert sourcelist.aper_rads == [ 5. ]
 
@@ -195,27 +196,27 @@ def test_sextractor_extract_once( decam_datastore_through_preprocessing, extract
             #     f'\nsnr.mean()= {snr.mean()}'
             #     f'\nsnr.std()= {snr.std()}'
             # )
-            assert sourcelist.x.min() == pytest.approx( 15.44, abs=0.1 )
-            assert sourcelist.x.max() == pytest.approx( 2039.97, abs=0.1 )
+            assert sourcelist.x.min() == pytest.approx( 15.43, abs=0.1 )
+            assert sourcelist.x.max() == pytest.approx( 2037.91, abs=0.1 )
             assert sourcelist.y.min() == pytest.approx( 25.18, abs=0.1 )
-            assert sourcelist.y.max() == pytest.approx( 4087.88, abs=0.1 )
+            assert sourcelist.y.max() == pytest.approx( 4048.87, abs=0.1 )
             assert sourcelist.errx.min() == pytest.approx( 0.00182, abs=1e-4 )
-            assert sourcelist.errx.max() == pytest.approx( 1.298, abs=0.01 )
+            assert sourcelist.errx.max() == pytest.approx( 0.1686, abs=0.001 )
             assert sourcelist.erry.min() == pytest.approx( 0.00096, abs=1e-4 )
-            assert sourcelist.erry.max() == pytest.approx( 1.306, abs=0.01 )
+            assert sourcelist.erry.max() == pytest.approx( 0.17115, abs=0.001 )
             assert ( np.sqrt( sourcelist.varx ) == sourcelist.errx ).all()
             assert ( np.sqrt( sourcelist.vary ) == sourcelist.erry ).all()
-            assert sourcelist.apfluxadu()[0].min() == pytest.approx( -93.90485, rel=1e-5 )
-            assert sourcelist.apfluxadu()[0].max() == pytest.approx( 2624645.2, rel=1e-5 )
-            assert snr.min() == pytest.approx( -0.806, abs=0.1 )
-            assert snr.max() == pytest.approx( 2222.799, abs=1. )
-            assert snr.mean() == pytest.approx( 56.63, abs=0.1 )
-            assert snr.std() == pytest.approx( 181.7, abs=1. )
+            assert sourcelist.apfluxadu()[0].min() == pytest.approx( 564.4713, rel=1e-5 )
+            assert sourcelist.apfluxadu()[0].max() == pytest.approx( 2624847., rel=1e-5 )
+            assert snr.min() == pytest.approx(    4.77, abs=0.1 )
+            assert snr.max() == pytest.approx( 2222.87, abs=1. )
+            assert snr.mean() == pytest.approx( 126.617, abs=0.1 )
+            assert snr.std() == pytest.approx( 269.56, abs=1. )
 
             # Test multiple apertures
             sourcelist, _, _ = extractor._run_sextractor_once( ds.image, bg, apers=[ 2., 5. ])
 
-            assert sourcelist.num_sources == 1311    # It *finds* the same things
+            assert sourcelist.num_sources == 534    # It *finds* the same things
             assert len(sourcelist.data) == sourcelist.num_sources
             assert sourcelist.aper_rads == [ 2., 5. ]
 
@@ -236,14 +237,14 @@ def test_sextractor_extract_once( decam_datastore_through_preprocessing, extract
             #     f'\nsourcelist.apfluxadu(apnum=0)[0].min()= {sourcelist.apfluxadu(apnum=0)[0].min()}'
             #     f'\nsourcelist.apfluxadu(apnum=0)[0].max()= {sourcelist.apfluxadu(apnum=0)[0].max()}'
             # )
-            assert sourcelist.x.min() == pytest.approx( 15.44, abs=0.1 )
-            assert sourcelist.x.max() == pytest.approx( 2039.97, abs=0.1 )
+            assert sourcelist.x.min() == pytest.approx( 15.43, abs=0.1 )
+            assert sourcelist.x.max() == pytest.approx( 2037.91, abs=0.1 )
             assert sourcelist.y.min() == pytest.approx( 25.18, abs=0.1 )
-            assert sourcelist.y.max() == pytest.approx( 4087.88, abs=0.1 )
-            assert sourcelist.apfluxadu(apnum=1)[0].min() == pytest.approx( -93.9048, rel=1e-5 )
-            assert sourcelist.apfluxadu(apnum=1)[0].max() == pytest.approx( 2624645.25, rel=1e-5 )
-            assert sourcelist.apfluxadu(apnum=0)[0].min() == pytest.approx( 155.472946, rel=1e-5 )
-            assert sourcelist.apfluxadu(apnum=0)[0].max() == pytest.approx( 513817.81, rel=1e-5 )
+            assert sourcelist.y.max() == pytest.approx( 4048.87, abs=0.1 )
+            assert sourcelist.apfluxadu(apnum=1)[0].min() == pytest.approx( 564.4713, rel=1e-5 )
+            assert sourcelist.apfluxadu(apnum=1)[0].max() == pytest.approx( 2624847., rel=1e-5 )
+            assert sourcelist.apfluxadu(apnum=0)[0].min() == pytest.approx( 576.9875, rel=1e-5 )
+            assert sourcelist.apfluxadu(apnum=0)[0].max() == pytest.approx( 513817.8, rel=1e-5 )
 
         finally:  # cleanup temporary file
             if 'sourcefile' in locals():
@@ -267,16 +268,18 @@ def test_run_psfex( decam_datastore_through_extraction, extractor ):
     try:
         extractor.pars.method = 'sextractor'
         extractor.pars.subtraction = False
-        extractor.pars.threshold = 4.5
+        extractor.pars.initial_threshold = 4.5
+        extractor.pars.sextr_threshold = 4.5
+        extractor.pars.snr_threshold = 4.5
         psf = extractor._run_psfex( tempname, ds.image )
         assert psf._header['PSFAXIS1'] == 25
         assert psf._header['PSFAXIS2'] == 25
         assert psf._header['PSFAXIS3'] == 6
-        assert psf._header['PSF_SAMP'] == pytest.approx( 0.91, abs=0.01 )
-        assert psf._header['CHI2'] == pytest.approx( 0.97, abs=0.1 )
+        assert psf._header['PSF_SAMP'] == pytest.approx( 0.89, abs=0.01 )
+        assert psf._header['CHI2'] == pytest.approx( 1.02, abs=0.1 )
         bio = io.BytesIO( psf._info.encode( 'utf-8' ) )
         psfstats = votable.parse( bio ).get_table_by_index(1)
-        assert psfstats.array['FWHM_FromFluxRadius_Max'] == pytest.approx( 4.276, abs=0.01 )
+        assert psfstats.array['FWHM_FromFluxRadius_Max'] == pytest.approx( 4.174, abs=0.01 )
         assert not tmppsffile.exists()
         assert not tmppsfxmlfile.exists()
 
@@ -302,7 +305,7 @@ def test_extract_sources_sextractor( decam_datastore_through_preprocessing,
 
     extractor.pars.method = 'sextractor'
     extractor.measure_psf = True
-    extractor.pars.threshold = 5.0
+    extractor.pars.snr_threshold = 5.0
     # Have to set sextractor subtract the background, because we aren't
     #    running the part of the code that esimates the background
     extractor.pars.sextractor_back_type = 'AUTO'
@@ -314,37 +317,39 @@ def test_extract_sources_sextractor( decam_datastore_through_preprocessing,
     # Make True to write some ds9 regions
     if os.getenv('MAKE_PLOTS', False):
         basepath = os.path.join(CODE_ROOT, 'tests/plots/test_sources')
-        sources.ds9_regfile( basepath + '_stars.reg', color='green', radius=4, whichsources='stars' )
-        sources.ds9_regfile( basepath + '_nonstars.reg', color='red', radius=4, whichsources='nonstars' )
-
+        sources.ds9_regfile( basepath + '.reg', radcolor={ 'star': ( 2, 'yellow'),
+                                                           'nonstar': ( 2, 'blue' ),
+                                                           'highsn': ( 3.0, 'green' ),
+                                                           'lowsn': ( 3.0, 'pink' ),
+                                                           'bad': ( 2.4, 'red' ),
+                                                           'flagged': (2.8,'orange' ) }
+                            )
         # Manually write one that uses CLASS_STAR instead of SPREAD_MODEL
         use = sources.data['CLASS_STAR'] > 0.5
         with open( basepath + '_class_star.reg', 'w' ) as ofp:
             for x, y, use in zip( sources.x, sources.y, use ):
                 if use:
-                    ofp.write( f"image;circle({x+1},{y+1},6) # color=blue width=2\n" )
+                    ofp.write( f"image;circle({x+1},{y+1},6) # color=magenta width=3.5\n" )
 
-    assert sources.num_sources > 1400
+    assert sources.num_sources > 1200
     assert sources.num_sources == len(sources.data)
     expected_radii = np.array([1.0, 2.0, 3.0, 5.0]) * psf.fwhm_pixels
     assert sources.aper_rads == pytest.approx(expected_radii, abs=0.01 )
     assert sources.inf_aper_num == -1
-    assert psf.fwhm_pixels == pytest.approx( 4.126, abs=0.01 )
+    assert psf.fwhm_pixels == pytest.approx( 4.161, abs=0.01 )
     assert psf.fwhm_pixels == pytest.approx( psf.header['PSF_FWHM'], rel=1e-5 )
     assert psf.data.shape == ( 6, 25, 25 )
     assert psf.sources_id == sources.id
 
     assert sources.apfluxadu()[0].min() == pytest.approx( 490.52, rel=0.01 )
-    assert sources.apfluxadu()[0].max() == pytest.approx( 1876754., rel=0.01 )
-    assert sources.apfluxadu()[0].mean() == pytest.approx( 17757., rel=0.01 )
-    assert sources.apfluxadu()[0].std() == pytest.approx( 117502., rel=0.01 )
+    assert sources.apfluxadu()[0].max() == pytest.approx( 1895991., rel=0.01 )
+    assert sources.apfluxadu()[0].mean() == pytest.approx( 20475., rel=0.01 )
+    assert sources.apfluxadu()[0].std() == pytest.approx( 126954., rel=0.01 )
 
-    import pdb; pdb.set_trace()
-
-    assert sources.good.sum() == pytest.approx(975, rel=0.01)
+    assert sources.good.sum() == pytest.approx(1028, rel=0.01)
     # This is what you get with CLASS_STAR; you'll get different values with SPREAD_MODEL
-    assert sources.is_star.sum() == pytest.approx(479, rel=0.01)
-    assert ( sources.good & sources.is_star ).sum() == pytest.approx(337, abs=5)
+    assert sources.is_star.sum() == pytest.approx(307, rel=0.01)
+    assert ( sources.good & sources.is_star ).sum() == pytest.approx(210, abs=5)
 
     try:  # make sure saving the PSF and source list goes as expected, and cleanup at the end
         sources.provenance_id = provenance_base.id
@@ -401,7 +406,7 @@ def test_compare_sep_sextractor( extractor ):
     image.data = data
     image.header = fits.Header( { 'SATURATE': 40000. } )
     image.weight = 1./var
-    image.flags = np.zeros_like( image.data, dtype=np.uint16 )
+    image.flags = np.zeros_like( image.data, dtype=np.int16 )
 
     sexsrc, _bkg, _bkgsig = extractor._run_sextractor_once( image, None )
     sepsrc = extractor.extract_sources_sep( image )

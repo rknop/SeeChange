@@ -7,7 +7,9 @@ configchoice:
 
 # TODO : Edit this (and default.yaml) appropriately when we address Issue #437.
 extraction:
-  threshold: 10.0
+  initial_threshold: 5.0
+  sextr_thredshold: 5.0
+  snr_threshold: 10.0
 
 astrocal:
   max_catalog_mag: [15., 16., 17.]
@@ -18,7 +20,9 @@ photocal:
   mag_range_catalog: 3.0
 
 detection:
-  threshold: 10.0
+  initial_threshold: 5.0
+  sextr_threshold: 5.0
+  snr_threshold: 10.0
 
 fakeinjection:
   min_fake_mag: -4.

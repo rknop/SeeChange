@@ -417,6 +417,7 @@ class PGDB:
 
         cfg = config.Config.get()
         _echoqueries = cfg.value( 'db.echoqueries' )
+        SCLogger.warning( f"Setting _echoqueries to {_echoqueries}" )
         _alwaysexplain = cfg.value( 'db.alwaysexplain' )
         _alwaysanalyze = cfg.value( 'db.alwaysanalyze' )
 

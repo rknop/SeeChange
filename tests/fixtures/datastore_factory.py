@@ -366,7 +366,7 @@ def datastore_factory(data_dir, pipeline_factory, request, test_config):
                     #   the saturation limit? )
                     mask = make_saturated_flag(ds.image.data, ds.image.instrument_object.saturation_limit,
                                                iterations=2, no_really_i_know_i_want_to_run_this=True)
-                    ds.image.flags |= (mask * 2 ** BitFlagConverter.convert('saturated')).astype(np.uint16)
+                    ds.image.flags |= (mask * 2 ** BitFlagConverter.convert('saturated')).astype(np.int16)
                     # This is what I'd rather be doing, and is what's done in preprocessing already
                     #   (so it doesn't have to be done here).
                     # wsat = image.data >= ds.image.instrument_object.average_saturation_limit( ds.image )

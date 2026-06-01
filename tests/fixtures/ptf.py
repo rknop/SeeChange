@@ -79,7 +79,7 @@ def ptf_bad_pixel_map(download_url, data_dir, ptf_cache_dir):
             shutil.copy2(cache_path, data_path)
 
     with fits.open(data_path) as hdul:
-        data = (hdul[0].data == 0).astype('uint16')  # invert the mask (good is False, bad is True)
+        data = (hdul[0].data == 0).astype('int16')  # invert the mask (good is False, bad is True)
 
     data = np.roll(data, -1, axis=0)  # shift the mask by one pixel (to match the PTF data)
     data[-1, :] = 0  # the last row that got rolled seems to be wrong
@@ -167,8 +167,8 @@ def ptf_datastore_through_cutouts( datastore_factory, ptf_exposure, ptf_ref, ptf
         ptf_exposure,
         11,
         cache_dir=ptf_cache_dir,
-        cache_base_name='187/PTF_20110429_040004_11_R_Sci_NJXSRT',
-        overrides={'extraction': {'threshold': 5}, 'subtraction': {'refset': 'test_refset_ptf'}},
+        cache_base_name='187/PTF_20110429_040004_11_R_Sci_4Z7EEC',
+        overrides={'extraction': {'snr_threshold': 5}, 'subtraction': {'refset': 'test_refset_ptf'}},
         bad_pixel_map=ptf_bad_pixel_map,
         provtag='ptf_datastore',
         through_step='cutting'
@@ -197,8 +197,8 @@ def ptf_datastore_through_zp( datastore_factory, ptf_exposure, ptf_ref, ptf_cach
         ptf_exposure,
         11,
         cache_dir=ptf_cache_dir,
-        cache_base_name='187/PTF_20110429_040004_11_R_Sci_NJXSRT',
-        overrides={'extraction': {'threshold': 5}, 'subtraction': {'refset': 'test_refset_ptf'}},
+        cache_base_name='187/PTF_20110429_040004_11_R_Sci_4Z7EEC',
+        overrides={'extraction': {'snr_threshold': 5}, 'subtraction': {'refset': 'test_refset_ptf'}},
         bad_pixel_map=ptf_bad_pixel_map,
         provtag='ptf_datastore',
         through_step='photocal'
@@ -227,8 +227,8 @@ def ptf_datastore(datastore_factory, ptf_exposure, ptf_ref, ptf_cache_dir, ptf_b
         ptf_exposure,
         11,
         cache_dir=ptf_cache_dir,
-        cache_base_name='187/PTF_20110429_040004_11_R_Sci_NJSXRT',
-        overrides={'extraction': {'threshold': 5}, 'subtraction': {'refset': 'test_refset_ptf'}},
+        cache_base_name='187/PTF_20110429_040004_11_R_Sci_4Z7EEC',
+        overrides={'extraction': {'snr_threshold': 5}, 'subtraction': {'refset': 'test_refset_ptf'}},
         bad_pixel_map=ptf_bad_pixel_map,
         provtag='ptf_datastore'
     )
@@ -272,7 +272,7 @@ def ptf_images_datastore_factory(ptf_urls, ptf_downloader, datastore_factory, pt
 
     def factory( start_date='2009-04-04', end_date='2013-03-03',
                  max_images=None, provtag='ptf_images_factory',
-                 overrides={'extraction': {'threshold': 5}} ):
+                 overrides={'extraction': {'snr_threshold': 5}} ):
         # translate the strings into datetime objects
         start_time = datetime.strptime(start_date, '%Y-%m-%d') if start_date is not None else datetime(1, 1, 1)
         end_time = datetime.strptime(end_date, '%Y-%m-%d') if end_date is not None else datetime(3000, 1, 1)

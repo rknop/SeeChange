@@ -215,7 +215,7 @@ class Coadder:
 
         outwt = 1 / np.sqrt(np.sum(varmap, axis=0))
 
-        outfl = np.zeros(outim.shape, dtype='uint16')
+        outfl = np.zeros(outim.shape, dtype='int16')
         for f in flags:
             outfl |= f
 
@@ -487,7 +487,7 @@ class Coadder:
         # noise.
         outwt = np.ones_like( outim, dtype=np.float32 )
 
-        outfl = np.zeros(outim.shape, dtype='uint16')
+        outfl = np.zeros(outim.shape, dtype='int16')
         for f, p in zip(flags, psf_fwhms):
             splash_pixels = int(np.ceil(p * self.pars.flag_fwhm_factor))
             outfl = outfl | dilate_bitflag(f, iterations=splash_pixels)

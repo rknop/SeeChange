@@ -1,3 +1,5 @@
+# TODO : add tests of the header returned by save_fits_image_file
+
 import os
 import copy
 
@@ -48,7 +50,7 @@ def fits_file():
     hdr[ 'TEST1' ] = 'testing 1'
     hdr[ 'TEST2' ] = 'testing 2'
 
-    savedpath = pathlib.Path( save_fits_image_file( str(filepath), data, hdr ) )
+    savedpath = pathlib.Path( save_fits_image_file( str(filepath), data, hdr )[0] )
 
     yield filepath, savedpath
 
@@ -66,7 +68,7 @@ def fits_single_file():
     hdr[ 'TEST2' ] = 'testing 2'
 
     savedpath = pathlib.Path( save_fits_image_file( str(filepath), data, hdr,
-                                                                   extname='image', single_file=True ) )
+                                                                   extname='image', single_file=True )[0] )
 
     yield filepath, savedpath
 
@@ -83,13 +85,13 @@ def two_extension_fits_file():
     hdr[ 'TEST1' ] = 'testing 64'
     hdr[ 'TEST2' ] = 'testing 128'
 
-    savedpath1 = save_fits_image_file( str(filepath), data, hdr, extname='image', single_file=True )
+    savedpath1 = save_fits_image_file( str(filepath), data, hdr, extname='image', single_file=True )[0]
 
     data = np.full( (64, 32), 2.718, dtype=np.float32 )
     hdr[ 'TEST1' ] = 'Rosencrantz'
     hdr[ 'TEST2' ] = 'Guildenstern'
 
-    savedpath2 = save_fits_image_file( str(filepath), data, hdr, extname='weight', single_file=True )
+    savedpath2 = save_fits_image_file( str(filepath), data, hdr, extname='weight', single_file=True )[0]
 
     assert savedpath1 == savedpath2
 
@@ -173,7 +175,7 @@ def test_no_overwrite( fits_file ):
     hdr[ 'TEST2' ] = 'testing 64738'
 
     with pytest.raises( OSError, match='save_fits_image_file not overwriting' ):
-        _ = pathlib.Path( save_fits_image_file( str(filepath), data, hdr, overwrite=False ) )
+        _ = pathlib.Path( save_fits_image_file( str(filepath), data, hdr, overwrite=False )[0] )
     with fits.open( fullpath ) as ifp:
         assert ifp[0].header['TEST1'] == 'testing 1'
         assert ifp[0].header['TEST2'] == 'testing 2'
@@ -188,7 +190,7 @@ def test_overwrite( fits_file ):
     hdr[ 'TEST1' ] = 'testing 42'
     hdr[ 'TEST2' ] = 'testing 64738'
 
-    savedpath = pathlib.Path( save_fits_image_file( str(filepath), data, hdr, overwrite=True ) )
+    savedpath = pathlib.Path( save_fits_image_file( str(filepath), data, hdr, overwrite=True )[0] )
     assert savedpath == fullpath
     with fits.open( fullpath ) as ifp:
         assert ifp[0].header['TEST1'] == 'testing 42'
@@ -255,7 +257,7 @@ def test_just_update_header( fits_file ):
     header['TEST3'] = 'added'
     data = np.full( (64, 32), 1.414, dtype=np.float32 )
 
-    savedpath = save_fits_image_file( str(filepath), data, header, just_update_header=True )
+    savedpath = save_fits_image_file( str(filepath), data, header, just_update_header=True )[0]
     assert pathlib.Path( savedpath ) == fullpath
 
     with fits.open( fullpath) as ifp:
@@ -271,7 +273,7 @@ def fpacked_fits_file( decam_fits_image_filename, cache_dir ):
     fzpath = basepath.parent / f"{basepath.name}.fits.fz"
     try:
         data, header = read_fits_image( origpath, output='both' )
-        outpath = save_fits_image_file( fzpath, data, header, fpack=True )
+        outpath = save_fits_image_file( fzpath, data, header, fpack=True )[0]
         # Make sure the right file was written
         assert outpath.endswith( '.fz' )
         assert str(fzpath.resolve()) == outpath
@@ -369,7 +371,7 @@ def test_fpack_image_update_header( fpacked_fits_file ):
     tmphdr = copy.deepcopy( origheader )
     tmphdr[ 'UPDTEST' ] = ( 42, "Header has been updated" )
 
-    outpath = save_fits_image_file( fpacked_fits_file, None, tmphdr, fpack=True, just_update_header=True )
+    outpath = save_fits_image_file( fpacked_fits_file, None, tmphdr, fpack=True, just_update_header=True )[0]
     assert outpath.endswith( '.fz' )
 
     newdata, newheader = read_fits_image( fpacked_fits_file, output="both" )

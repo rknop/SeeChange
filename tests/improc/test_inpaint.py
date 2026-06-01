@@ -8,7 +8,7 @@ from util.logger import SCLogger
 
 def test_trivial_inpaint():
     im = np.ones((10, 10))
-    flags = np.zeros((10, 10), dtype='uint16')
+    flags = np.zeros((10, 10), dtype='int16')
     flags[5, 5] = 1
     im[5, 5] = 100
     weight = np.ones((10, 10))
@@ -32,7 +32,7 @@ def test_trivial_inpaint():
     # make the images not exactly the same
     im[1] *= 1.2
     im[2] *= 1.4
-    flags = np.zeros((3, 10, 10), dtype='uint16')
+    flags = np.zeros((3, 10, 10), dtype='int16')
 
     # make a bad pixel but assume it is bad across all images (repair this using in-image inpainting)
     im[1, 5, 5] = 100
@@ -70,7 +70,7 @@ def test_trivial_inpaint():
 
     # try to make it fail on purpose by adding too many bad pixels
     im = np.ones((3, 5, 5))
-    flags = np.zeros((3, 5, 5), dtype='uint16')
+    flags = np.zeros((3, 5, 5), dtype='int16')
     # can't fix these bad pixels using other images
     im[:, :, 2] = 100
     flags[:, :, 2] = 1
