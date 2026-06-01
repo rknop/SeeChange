@@ -416,13 +416,20 @@ preprocessing:
   masked_pixel_replacement: {}
   
 # ======================================================================
-# Extraction and Backgrounding are done in one step.
+# Extraction, Backgrounding, and PSF are done in one step.
 #
-# (Reason: you might want to find sources to mask them for finding
-#  the background.  Or, you might want to subtract the background
-#  before finding sources.  Or you might want to iterate back and
-#  forth.)
+# (Reason: For background, you might want to find sources to mask them
+#  for finding the background.  Or, you might want to subtract the
+#  background before finding sources.  Or you might want to iterate back
+#  and forth.  For psf, there's always an iterative thing: find sources
+#  so we have something to get the psf from, and then redo the find
+#  sources and photometry once we have a psf estimate.)
 #
+# NOTE : because of the way the parameters in detection.py are defined,
+#   make sure that *all* of the possibilities for background and psf
+#   are listed here in this default_config.yaml file, or the the values
+#   will get lost.
+
 extraction:
   method: sextractor
   measure_psf: true
@@ -443,7 +450,7 @@ extraction:
     filt_size: null
   psf:
     method: psfex
-    min_fwhm: 0.5
+    fwhm_min: 0.5
     fwhm_max_to_try: [ 10.0, 15.0, 20.0, 25.0 ]
     psf_init_size: 25
     psf_final_size: null

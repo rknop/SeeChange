@@ -178,6 +178,19 @@ class ParsDetector(Parameters):
             critical=True
         )
 
+        self.psf = self.add_par(
+            'psf',
+            { 'method': 'psfex',
+              'fwhm_min': 0.5,
+              'fwhm_max_to_try': [ 10.0, 15.0, 20.0, 25.0 ],
+              'psf_int_size': 25,
+              'psf_final_size': None
+             },
+            dict,
+            ( "Parameters for psf fitting.  Ignored if subraction is true." ),
+            critical=True
+        )
+
         self._enforce_no_new_attrs = True
 
         self.override(kwargs)
@@ -531,7 +544,7 @@ class Detector:
                 # Get the PSF
                 SCLogger.debug( "detection: determining psf..." )
                 cfg = Config.get()
-                if cfg.value('extraction.psf.method') == 'psfex':
+                if self.pars.psf['method'] == 'psfex':
                     psf = self._run_psfex( tempnamebase, image, do_not_cleanup=True )
                     SCLogger.debug( f"...psf done, got FWHM = "
                                     f"{psf.fwhm_pixels*image.instrument_object.pixel_scale:.03f} arcsec" )
@@ -795,8 +808,8 @@ class Detector:
         psffile = pathlib.Path( FileOnDiskMixin.temp_path ) / f'{tempname}.sources.psf'
         psfxmlfile = pathlib.Path( FileOnDiskMixin.temp_path ) / f'{tempname}.sources.psf.xml'
 
-        psf_init_size = psf_size if psf_size is not None else Config.get().value( 'extraction.psf.psf_init_size' )
-        psf_final_size = psf_size if psf_size is not None else Config.get().value( 'extraction.psf.psf_final_size' )
+        psf_init_size = psf_size if psf_size is not None else self.pars.psf['psf_init_size']
+        psf_final_size = psf_size if psf_size is not None else self.pars.psf['psf_final_size']
 
         psf_init_size = int( psf_init_size )
         if psf_init_size % 2 == 0:
@@ -818,10 +831,10 @@ class Detector:
                 if psfdatasize % 2 == 0:
                     psfdatasize += 1
 
-                minfwhm = Config.get().value( 'extraction.psf.min_fwhm' )
+                minfwhm = self.pars.psf['fwhm_min']
                 #  (This is just a range of things to try to see if we can
                 #  get psfex to succeed; it will stop after the first one that does.)
-                fwhmmaxtotry = Config.get().value( 'extraction.psf.fwhm_max_to_try' )
+                fwhmmaxtotry = self.pars.psf['fwhm_max_to_try']
 
                 # TODO: make -XML_URL configurable.  (The default there is what
                 #  is installed if you install the psfex package on a

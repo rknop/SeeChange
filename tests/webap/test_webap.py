@@ -97,7 +97,8 @@ def test_webap_clone_provtag( webap_admin_client, provenance_base, provenance_ex
             assert all( r[1] == provenance_base.id for r in rows )
 
         # Make sure that we can't clone to an existing provenance if we don't ask to
-        with pytest.raises( RuntimeError, match="Got response 500: Tag current_tempnotcurrent already exists and clobber was False" ):
+        with pytest.raises( RuntimeError, match=( "Got response 500: Tag current_tempnotcurrent already exists "
+                                                  "and clobber was False" ) ):
             res = webap_admin_client.send( '/cloneprovtag/plugh/current_tempnotcurrent' )
 
         # Make sure we can clone an existing provenance if we ask to
