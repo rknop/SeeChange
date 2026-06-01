@@ -91,19 +91,29 @@ class ParsDetector(Parameters):
 
         self.initial_thredshold = self.add_par(
             'initial_threshold',
-            3.0, # 6.0,
+            1.5,
             [float, int],
-            'Like threshold, but used for the initial sextractor run before psf determination. '
-            'You want this to be higher so that only decent detections are passed on to psfex.',
+            ( 'Like sextr_threshold, but used for the initial sextractor run before psf determination. '
+              'You want this to be higher so that only decent detections are passed on to psfex.' ),
             critical=True
         )
 
-        self.threshold = self.add_par(
-            'threshold',
+        self.sextr_threshold = self.add_par(
+            'sextr_threshold',
+            1.5,
+            [float, int],
+            ( 'The number of standard deviations above the background to use as the threshold '
+              'for detecting a source.  Passed to sextractor DETECT_THRESH and ANALYSIS_THRDSH '
+              'on the second pass when the psf is known.' ),
+            critical=True
+        )
+
+
+        self.snr_threshold = self.add_par(
+            'snr_threshold',
             3.0,
             [float, int],
-            'The number of standard deviations above the background '
-            'to use as the threshold for detecting a source.  (WE THINK.  See code.  Scary.)',
+            'Only keep things whose S/N is at least this high.',
             critical=True
         )
 
@@ -215,40 +225,6 @@ class Detector:
 
         NOTE : if you change self.pars.backgrounding, call make_backgrounder to
         get an updated backgrounding object!
-
-        Parmameters
-        -----------
-          method: str, default sextractor
-            sextractor or sep.  sep is not fully supported
-
-          measure_psf: bool, default False
-            Measure the psf?  Does not make sense to set this True for
-            subtraction images; for subtraction images, you must pass a
-            psf using the psf parameter.
-
-          psf: PSF, default None
-            A PSF object.  Ignored if measure_psf is True.  If passed,
-            will be used to determine the image FWHM to set aperture
-            sizes, and will be used for PSF photometry.
-
-          apers: list of float, default None
-            Apertures in which to do aperture photometry.  If None, will
-            use a default set of apertures that is (1, 2, 3, 4, 5, 7,
-            10) times the FWHM.  (If this is None and no psf is measured
-            or passed, then the apertures will be fixed at (2, 4, 6, 8,
-            10, 14, 20) pixels.)  The "primary" aperture should be the
-            first one on the list.
-
-          aperunit: str, default fwhm
-            The unit (fwhm or pixel) apers is given in; ignored if apers
-            is None.
-
-          threshold: float, default 5.0
-            Threshold for finding sources in units of sigma.
-
-          subtraction: bool, default False
-            Is this Detector intended to find sources on a subtraction?
-            If False, it's for finding sources on a regular image.
 
         """
 
@@ -608,9 +584,11 @@ class Detector:
             SCLogger.debug( f"detection: sextractor found {len(sources.data)} sources on image {image.filepath}" )
 
             snr = sources.apfluxadu()[0] / sources.apfluxadu()[1]
-            if snr.min() > self.pars.threshold:
+            if snr.min() > 0.75 * self.pars.snr_threshold:
                 warnings.warn( "SExtractor may not have detected everything down to your threshold." )
-            w = np.where( snr >= self.pars.threshold )
+            w = np.where( snr >= self.pars.snr_threshold )
+            SCLogger.debug( f"{len(w[0])} out of {len(sources.data)} sources abuve the SNR cut of "
+                            f"{self.pars.snr_threshold}" )
             sources.data = sources.data[w]
             sources.num_sources = len( sources.data )
             sources.inf_aper_num = self.pars.inf_aper_num
@@ -712,7 +690,7 @@ class Detector:
                 tempname = pathlib.Path( FileOnDiskMixin.temp_path ) / tempname
 
             imgdata = image.data if bg is None else bg.subtract_me( image.data )
-            thresh = self.pars.initial_threshold if psffile is None else self.pars.threshold
+            thresh = self.pars.initial_threshold if psffile is None else self.pars.sextr_threshold
             # thresh /= psfnorm
             sextr_res = run_sextractor(
                 image.header,
@@ -935,7 +913,7 @@ class Detector:
 
         data_sub = data - b.back()
 
-        objects = sep.extract(data_sub, self.pars.threshold, err=b.rms())
+        objects = sep.extract(data_sub, self.pars.snr_threshold, err=b.rms())
 
         # get the radius containing half the flux for each source
         r, _ = sep.flux_radius(data_sub, objects['x'], objects['y'], 6.0 * objects['a'], 0.5, subpix=5)
@@ -1014,7 +992,7 @@ class Detector:
         # TODO: we should check if we still need this after b/g subtraction on the input images
         mu, sigma = sigma_clipping(score)
         score = (score - mu) / sigma
-        det_map = abs(score) > self.pars.threshold  # catch negative peaks too (can get rid of them later)
+        det_map = abs(score) > self.pars.snr_threshold  # catch negative peaks too (can get rid of them later)
 
         # dilate the map to merge nearby peaks
         struc = np.zeros((3, 3), dtype=bool)
@@ -1056,7 +1034,7 @@ class Detector:
         tab = astropy.table.Table(
             [ra, dec, x, y, label_fluxes, fluxes, region_sizes, num_flagged, scores],
             names=('ra', 'dec', 'x', 'y', 'flux', 'psf_flux', 'num_pixels', 'num_flagged', 'score'),
-            meta={'fwhm': fwhm, 'threshold': self.pars.threshold}
+            meta={'fwhm': fwhm, 'threshold': self.pars.snr_threshold}
         )
 
         sources = SourceList(data=tab, format='filter', num_sources=num_sources)

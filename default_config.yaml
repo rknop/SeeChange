@@ -432,7 +432,8 @@ extraction:
   aperunit: fwhm
   separation_fwhm: 1.0
   initial_threshold: 1.5
-  threshold: 1.5
+  sextr_threshold: 1.5
+  snr_threshold: 3.0
   subtraction: false
   backgrounding:
     format: map
@@ -512,7 +513,7 @@ subtraction:
 detection:
   subtraction: true
   method: filter
-  threshold: 5.0
+  snr_threshold: 5.0
 
 # ======================================================================#
 # Cutting
@@ -732,7 +733,9 @@ coaddition:
       ignore_flags: 0
   extraction:
     measure_psf: true
-    threshold: 3.0
+    initial_threshold: 1.5
+    sextr_threshold: 3.0
+    snr_threshold: 3.0
     method: sextractor
   backgrounding:
     format: map
