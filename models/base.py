@@ -187,7 +187,7 @@ def Session():
         _engine = sa.create_engine( url,
                                     future=True,
                                     poolclass=sa.pool.NullPool,
-                                    connect_args={ "options": "-c timezone=utc" }
+                                    connect_args={ "options": "-c timezone=UTC" }
                                    )
 
         _Session = sessionmaker(bind=_engine, expire_on_commit=False)
@@ -1276,6 +1276,43 @@ class SeeChangeBase:
 
 
 Base = declarative_base(cls=SeeChangeBase)
+
+
+def table_class_map():
+    # Imports here.  All these things import base.py, so we can't do them at the
+    #   top of the file or we'd have conflits.
+    # TODO: think if there's a reflection way we can get these imports
+    #   without having to remember to add a file here every time we
+    #   add something to models.
+    import models.background        # noqa: F401
+    import models.calibratorfile    # noqa: F401
+    import models.catalog_excerpt   # noqa: F401
+    import models.cutouts           # noqa: F401
+    import models.datafile          # noqa: F401
+    import models.deepscore         # noqa: F401
+    import models.exposure          # noqa: F401
+    import models.fakeset           # noqa: F401
+    import models.image             # noqa: F401
+    import models.knownexposure     # noqa: F401
+    import models.measurements      # noqa: F401
+    import models.object            # noqa: F401
+    import models.provenance        # noqa: F401
+    import models.psf               # noqa: F401
+    import models.reference         # noqa: F401
+    import models.refset            # noqa: F401
+    import models.report            # noqa: F401
+    import models.source_list       # noqa: F401
+    import models.user              # noqa: F401
+    import models.world_coordinates # noqa: F401
+    import models.zero_point        # noqa: F401
+
+    tabclsmap = {}
+    for cls in Base.__subclasses__():
+        if hasattr( cls, '__tablename__' ):
+            tabclsmap[cls.__tablename__] = cls
+
+    return tabclsmap
+
 
 ARCHIVE = None
 
