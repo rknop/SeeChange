@@ -85,29 +85,29 @@ def test_webap_provinfo( webap_rkauth_client, provenance_base, provenance_extra 
 def test_webap_clone_provtag( webap_admin_client, provenance_base, provenance_extra, provenance_tags_loaded ):
     try:
         # Make sure we can clone to a non-existent current
-        res = webap_admin_client.send( '/cloneprovtag/xyzzy/current' )
+        res = webap_admin_client.send( '/cloneprovtag/xyzzy/current_tempnotcurrent' )
         assert 'status' in res and res['status'] == 'ok'
 
         with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( "SELECT tag, provenance_id FROM provenance_tags "
-                            "WHERE tag=ANY( ARRAY['xyzzy', 'current'] )" )
+                            "WHERE tag=ANY( ARRAY['xyzzy', 'current_tempnotcurrent'] )" )
             rows = cursor.fetchall()
-            assert set( r[0] for r in rows ) == { 'xyzzy', 'current' }
+            assert set( r[0] for r in rows ) == { 'xyzzy', 'current_tempnotcurrent' }
             assert all( r[1] == provenance_base.id for r in rows )
 
         # Make sure that we can't clone to an existing provenance if we don't ask to
-        with pytest.raises( RuntimeError, match="Got response 500: Tag current already exists and clobber was False" ):
-            res = webap_admin_client.send( '/cloneprovtag/plugh/current' )
+        with pytest.raises( RuntimeError, match="Got response 500: Tag current_tempnotcurrent already exists and clobber was False" ):
+            res = webap_admin_client.send( '/cloneprovtag/plugh/current_tempnotcurrent' )
 
         # Make sure we can clone an existing provenance if we ask to
-        res = webap_admin_client.send( '/cloneprovtag/plugh/current/1' )
+        res = webap_admin_client.send( '/cloneprovtag/plugh/current_tempnotcurrent/1' )
         assert 'status' in res and res['status'] == 'ok'
 
         with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( "SELECT tag, provenance_id FROM provenance_tags "
-                            "WHERE tag=ANY( ARRAY['xyzzy', 'plugh', 'current'] )" )
+                            "WHERE tag=ANY( ARRAY['xyzzy', 'plugh', 'current_tempnotcurrent'] )" )
             rows = cursor.fetchall()
             foundtags = {}
             for row in rows:
@@ -115,15 +115,15 @@ def test_webap_clone_provtag( webap_admin_client, provenance_base, provenance_ex
                     foundtags[row[0]].add( row[1] )
                 else:
                     foundtags[row[0]] = { row[1] }
-            assert set( foundtags.keys() ) ==  { 'xyzzy', 'plugh', 'current' }
+            assert set( foundtags.keys() ) ==  { 'xyzzy', 'plugh', 'current_tempnotcurrent' }
             assert len( foundtags['xyzzy'] ) == 1
             assert len( foundtags['plugh'] ) == 2
-            assert foundtags['plugh'] == foundtags['current']
+            assert foundtags['plugh'] == foundtags['current_tempnotcurrent']
 
     finally:
         with PsycopgConnection() as conn:
             cursor = conn.cursor()
-            cursor.execute( "DELETE FROM provenance_tags WHERE tag='current'" )
+            cursor.execute( "DELETE FROM provenance_tags WHERE tag='current_tempnotcurrent'" )
             conn.commit()
 
 
