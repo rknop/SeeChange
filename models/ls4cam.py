@@ -638,7 +638,7 @@ class LS4Cam(Instrument):
         # All three (g, i, z) coefficients have been refit against
         # LS DR10 PSF stars using the multi-color (Gaia BP-RP + DR10 g-r,
         # r-i, i-z) total-degree-3 polynomial, marginalized to a 1-D
-        # Gaia-only production polynomial.  See hacks/refit_ls4_color_terms.py
+        # Gaia-only production polynomial.  See hacks/nugent/refit_ls4_color_terms.py
         # --multi-color and the per-filter provenance comments in the
         # transformations dict below.
 
@@ -648,7 +648,7 @@ class LS4Cam(Instrument):
             filter_short = self.get_short_filter_name( filter )
         else:
             filter_short = filter
-        # All coefficients refit via hacks/refit_ls4_color_terms.py
+        # All coefficients refit via hacks/nugent/refit_ls4_color_terms.py
         # --multi-color, using a multi-color (Gaia BP-RP + DR10 g-r, r-i, i-z)
         # total-degree-3 polynomial, marginalized to a 1-D production
         # polynomial in (BP-RP) via the calibration field's
