@@ -85,7 +85,7 @@ services:
         - "${MAILHOG_PORT:-8025}:8025"
 
   kafka-server:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/kafka:${IMGTAG:-test202600415}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/kafka:${IMGTAG:-test20260602}
     build:
       context: ../docker/test_kafka
     environment:
