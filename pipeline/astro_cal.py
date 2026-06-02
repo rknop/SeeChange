@@ -474,7 +474,7 @@ class AstroCalibrator:
                                     f"and {ncat} catalog objects, which isn't enough." )
 
             dx = corr['field_x'] - corr['index_x']
-            dy = corr['field_y'] - corr['field_y']
+            dy = corr['field_y'] - corr['index_y']
             resid = np.median( np.sqrt( dx*dx + dy*dy ) )
             resid *= image.instrument_object.pixel_scale
             if resid > self.pars.max_arcsec_residual:
