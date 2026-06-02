@@ -386,11 +386,17 @@ class Detector:
                 ds = DataStore.from_args(*args, **kwargs)
                 prov = ds.get_provenance('extraction', self.pars.get_critical_pars())
 
-                sources = ds.get_sources(provenance=prov)
-                psf = ds.get_psf(provenance=prov)
-                bg = ds.get_background()
+                if do_not_load:
+                    sources = None
+                    psf = None
+                    bg = None
+                else:
+                    sources = ds.get_sources(provenance=prov)
+                    psf = ds.get_psf(provenance=prov)
+                    bg = ds.get_background()
 
-                bg = self.backgrounder.run( ds )
+                if bg is None:
+                    bg = self.backgrounder.run( ds )
 
                 t_start = time.perf_counter()
                 if ds.update_memory_usages:

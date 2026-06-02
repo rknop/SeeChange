@@ -356,10 +356,27 @@ class AstroCalibrator:
         # an image, but then it would be running sextractor itself,
         # which is a waste of time since we've already done it.)
         #
+        # THOUGHT REQUIRED.  Should we only write the good sources, or all of them?
+        #   If the positions of the saturated stars are good, then they are actually
+        #   providing it useful information.
+        #
         # astrometry.net coordinates are 1-offset, so we have to convert
-        xyls = Table( { 'XIMAGE': sources.x + 1.,
-                        'YIMAGE': sources.y + 1.,
-                        'FLUX': sources.psffluxadu()[0] } )
+        xyls = Table( { 'X': sources.x + 1.,
+                        'Y': sources.y + 1.,
+                        'FLUX': sources.apfluxadu()[0] } )
+        # Sort by descending flux because that's what astrometry.net wants
+        xyls = xyls[ xyls.argsort( 'FLUX', reverse=True ) ]
+        # Remove flux <= 0; not sure what sextrator is telling us there
+        #  (Generally this doesn't happen for aperture fluxes, but it was happening for psf fluxes.)
+        xyls = xyls[ xyls['FLUX'] > 0 ]
+        # Remove flux column
+        xyls.remove_column( 'FLUX' )
+        if len( xyls ) > 2000:
+            # Empirically, astrometry.net sometimes fails when there are lots of stars, but does
+            #   better if there are fewer.  It's also faster when there are fewer.
+            SCLogger.debug( f"Cutting {len(xyls)} sources down to 2000 to feed to astrometry.net" )
+            xyls = xyls[:2000]
+        # ...
         inputpath = tmpdir / 'input_xyls.fits'
         xyls.write( inputpath, format='fits' )
 
@@ -371,9 +388,9 @@ class AstroCalibrator:
             com = [ str( pathlib.Path( self.pars.astrometry_net_bindir ) / "solve-field" ),
                     '--dir', tmpdir,
                     '-m', tmptmpdir,
-                    '--x-column', 'XIMAGE',
-                    '--y-column', 'YIMAGE',
-                    '--sort-column', 'FLUX',
+                    '--x-column', 'X',
+                    '--y-column', 'Y',
+                    # '--sort-column', 'FLUX',
                     '--width', str( image.data.shape[1] ),
                     '--height', str( image.data.shape[0] ),
                     '-p',                               # png images; -p disables them

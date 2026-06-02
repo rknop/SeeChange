@@ -302,19 +302,35 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         some issue with the extraction (which could be deblending, too
         close to the edge, etc.).
 
-        For sextractor, "bad" is anything that has FLAGS != 0, or that
-        has IMAFLAGS_ISO & 0x7fff != 0 (the bitwise AND chosen because
-        empirically many objects have bit 0x8000 set; this probably is
-        an issue having to do with signed vs. unsigned integers, and
-        saving and loading of the FITS files, and should be
-        investigated; Issue #112).
+        For sextractor, "bad" is anything that has a FLAGS bit other
+        than 2⁰ or 2¹ set, or that has IMAFLAGS_ISO & 0x7fff != 0 (the
+        bitwise AND chosen because empirically many objects have bit
+        0x8000 set; this probably is an issue having to do with signed
+        vs. unsigned integers, and saving and loading of the FITS files,
+        and should be investigated; Issue #112).
 
         """
 
         if self.format != 'sextrfits':
             raise NotImplementedError( f"good not currently implemented for format {self.format}" )
 
-        return ( self.data['IMAFLAGS_ISO'] & 0x7fff == 0 ) & ( self.data['FLAGS'] == 0 )
+        # IMAFLAGS_ISO comes from our flags image, and everything is bad. Ignore the top
+        #   bit because we're afraid of signed ints.
+        # SExtractor flags are:
+        #   1   aperture photometry is likely to be biased by neighboring sources
+        #       or by more than 10% of bad pixels in any aperture
+        #   2   the object has been deblended
+        #   4   at least one object pixel is saturated
+        #   8   the isophotal footprint of the detected object is truncated (too close to an image boundary)
+        #  16   at least one photometric aperture is incomplete or corrupted (hitting buffer or memory limits)
+        #  32   the isophotal footprint is incomplete or corrupted (hitting buffer or memory limits)
+        #  64   a memory overflow occurred during deblending
+        # 128   a memory overflow occurred during extraction
+        #
+        # We shouldn't throw out deblended sources, and by and large that also means not throwing
+        #   out things with 2^1 set, even though that is scary.  Throw out all the others
+
+        return ( self.data['IMAFLAGS_ISO'] & 0x7fff == 0 ) & ( self.data['FLAGS'] & 0x7ffc== 0 )
 
     @property
     def is_star( self ):

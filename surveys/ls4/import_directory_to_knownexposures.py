@@ -101,8 +101,8 @@ def main():
                                )
             ke.calculate_coordinates()
 
-            if args.mark_done_if_exposure:
-                with PsycopgConnection() as con:
+            with PsycopgConnection() as con:
+                if args.mark_done_if_exposure:
                     cursor = con.cursor( row_factory=psycopg.rows.dict_row )
                     cursor.execute( "SELECT _id FROM exposures WHERE provenance_id=%(prov)s "
                                     "  AND origin_identifier=%(id)s",
