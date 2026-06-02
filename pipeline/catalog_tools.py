@@ -514,7 +514,8 @@ def fetch_gaia_dr3_excerpt( image, minstars=50, maxmags=None, magrange=None,
                 if q.count() > 0:
                     catexp = q.first()
 
-                    if not os.path.isfile( catexp.get_fullpath() ):
+                    fullpath = catexp.get_fullpath( nofile=False )
+                    if not os.path.isfile( fullpath ):
                         SCLogger.error( f"CatalogExcerpt {catexp.id} has no file at {catexp.filepath}!" )
                         raise RuntimeError( f"CatalogExcerpt {catexp.id} has no file at {catexp.filepath}!" )
 
