@@ -86,7 +86,7 @@ spec:
           type: Directory
         name: file-archive-storage-ro
       - hostPath:
-          path: /global/cfs/cdirs/m4616/archive-ls4
+          path: /global/cfs/cdirs/ls4/archive-ls4
           type: Directory
         name: file-archive-storage
       - persistentVolumeClaim:
