@@ -6,59 +6,54 @@
 # The docker-compose.yaml files in tests and devshell each do a few
 # different builds from this Dockerfile.
 #
-# There's also two (well, four) different versions of the image.  There
-# are "bindmount_code" and "included_code" images; "bindmount" images
-# expect there to be a bind-mounted directory with the actual SeeChange
-# code.  "included" images run a make in order to install the SeeChange
-# code inside the image.  For a production environment, you'd probably
-# want to use the "included_code" version, but for development and tests
-# you want to use "bindmount" so you don't have to rebuild the docker
-# image every time you edit a line of code.
+# There are several different "final" versions of the image:
+#   included_code : with the Seechange code included, for production running
+#   bindmount_code : SeeChange code not included, must be bindmounted, for development (and maybe production)
+#   webap : The image that runs on the web ap.  NOTE: you must customize local_overrides.yaml for your case!
+#   test_bindmount : dev image including extra stuff for testing, must bindmount SeeChange
+#   test_included : dev image including extra stuff for testsing, SeeChange code embedded.
 #
-# The targets with selenium included (the "test_*" environments) add
-# ~0.5GB to the image because web browsers are gigantic unwieldy beasts.
-# We need that for our tests, but it is not needed for a production
-# environment, and (may) not be needed for a dev environment (depending
-# on what you're working on).
+# The dev (test) environments are made separately because they bloat the docker image a bit.
 #
 # The targets in this Dockerfile
 #
 # base
 #   build
+#     build_dev
 #     included_code_build
 #       webap_build
-#     build_selenium
-#   included_code
-#     webap
-#   bindmount_code
-#   base_selenium
+#   bindmount_code      ** One of these two is the primary
+#   included_code       **   production image
+#   webap
+#   base_dev
 #     test_included
 #     test_bindmount    ** Image used in github CI tests
 #
-# As of 2026-01-08, the sizes of images from the various stages are as follows:
-#   base                0.79GB
-#   build               3.46GB
-#   included_code_build 3.59GB
-#   webap_build         3.59GB
-#   build_selenium      3.53GB
-#   included_code       2.56GB
-#   webap               2.56GB
-#   bindmount_code      2.55GB
-#   base_selenium       1.17GB
-#   test_bindmount      2.98GB
-#   test_included       2.99GB
+# As of 2026-06-02, the sizes of images from the various stages are as follows:
+#   base                0.82GB
+#   build               3.50GB
+#   build_dev           3.62GB
+#   included_code_build 3.63GB
+#   webap_build         3.64GB
+#   bindmount_code      2.60GB
+#   included_code       2.60GB
+#   webap               2.61GB
+#   base_dev            1.21GB
+#   test_included       3.07GB
+#   test_bindmount      3.07GB
 #
 # The "smallest usable image" is bindmount_code, as it includes all the
-# pip requirements, but does not include firefox or selenium.
+# pip requirements for production, but doesn't include stuff needed
+# for the web server or for tests.
 #
-# (Note that installing chromium instead of firefox into base_selenium
+# (Note that installing chromium instead of firefox into base_dev
 # changes the image size by only 20MB.)
 
 # ======================================================================
 # The base target defines the base system that all other images
 #   will be built on top of.
 
-FROM debian:trixie-20251229 AS base
+FROM debian:trixie-20260518 AS base
 
 LABEL maintainer="Rob Knop <raknop@lbl.gov>"
 
@@ -237,9 +232,14 @@ RUN source /venv/bin/activate \
     && pip install --upgrade pip setuptools wheel \
     && pip install  -r /seechange/requirements.txt
 
+
 # Pytorch
+# Need uv specifically for torch
 RUN source /venv/bin/activate \
-    && uv pip install torch==2.9.1+cpu --find-links https://download.pytorch.org/whl/torch
+   && pip install "uv>=0.9.22,<0.10" \
+   && uv pip install torch==2.9.1+cpu --find-links https://download.pytorch.org/whl/torch \
+   && pip uninstall -y uv
+
 
 # RBbot
 # Remove the requirements.txt file because it will install
@@ -270,14 +270,13 @@ RUN curl -L https://astrometry.net/downloads/astrometry.net-$astrometry_net_ver.
 
 
 # ======================================================================
-# A small addendum to build that adds selenium-firefox to /venv
-# (I hope it works to pip install selenium-firefox when firefox
-# itself is not installed, since firefox isn't in build.)
+# Add the packages needed for tests
 
-FROM build AS build_selenium
+FROM build AS build_dev
 
+COPY requirements-dev.txt /seechange/requirements-dev.txt
 RUN source /venv/bin/activate \
-    && pip install selenium-firefox==2.0.8
+    && pip install -r /seechange/requirements-dev.txt
 
 # ======================================================================
 # This target is for running the "make install" to install
@@ -334,6 +333,10 @@ RUN make install
 
 FROM included_code_build AS webap_build
 
+COPY requirements-webap.txt /seechange/requirements-webap.txt
+RUN source /venv/bin/activate \
+    && pip install -r /seechange/requirements-webap.txt
+
 RUN mkdir -p /usr/src/seechange/webap
 ADD webap/ /usr/src/seechange/webap/
 ADD extern/rkwebutil /usr/src/seechange/extern/rkwebutil
@@ -367,11 +370,12 @@ FROM base AS included_code
 COPY --from=build /usr/bin/hotpants /usr/bin/hotpants
 COPY --from=build /venv/ /venv/
 COPY --from=build /astrometry.net/ /astrometry.net/
-ENV PATH=/venv/bin:$PATH
-
 COPY --from=included_code_build /seechange/lib /seechange/lib
+
 COPY default_config.yaml /seechange/default_config.yaml
 COPY docker/application/local_overrides.yaml /seechange/local_overrides.yaml
+
+ENV PATH=/venv/bin:$PATH
 ENV SEECHANGE_CONFIG=/seechange/default_config.yaml
 ENV PYTHONPATH="/seechange/lib"
 
@@ -387,15 +391,15 @@ CMD ["tail", "-f", "/etc/issue"]
 # ======================================================================
 # This is the target for the webap
 
-FROM included_code AS webap
+FROM base AS webap
 
+COPY --from=webap_build /usr/bin/hotpants /usr/bin/hotpants
+COPY --from=webap_build /venv/ /venv/
+COPY --from=webap_build /astrometry.net/ /astrometry.net/
 COPY --from=webap_build /webap_code/ /webap_code/
-WORKDIR /webap_code/
-RUN chmod 755 run_webap.sh
+COPY --from=webap_build /seechange/lib /seechange/lib
 
-RUN mkdir /sessions
-RUN chmod 777 /sessions
-
+COPY default_config.yaml /seechange/default_config.yaml
 COPY webap/seechange_webap.yaml /seechange/seechange_webap.yaml
 COPY webap/local_overrides.yaml /seechange/local_overrides.yaml
 COPY webap/local_augments.yaml /seechange/local_augments.yaml
@@ -407,20 +411,27 @@ COPY docker/application/webap_bogus_key.pem /webap_code/bogus_key.pem
 COPY docker/application/webap_bogus_cert.pem /webap_code/bogus_cert.pem
 RUN chmod a+r /webap_code/bogus*pem
 
+ENV PATH=/venv/bin:$PATH
 ENV SEECHANGE_CONFIG=/seechange/seechange_webap.yaml
 ENV PYTHONPATH="/seechange/lib"
 
+RUN mkdir /sessions
+RUN chmod 777 /sessions
+
+WORKDIR /webap_code/
+RUN chmod 755 run_webap.sh
+
 CMD [ "./run_webap.sh", "8080" ]
 
-
 # ======================================================================
-# This is the base image that includes selenium and a web browser
+# This is the base image plus some dev stuff (including firefox...!)
 
-FROM base AS base_selenium
+FROM base AS base_dev
 
 RUN apt-get update \
     && DEBIAN_FRONTEND="noninteractive" apt-get -y upgrade \
-    && DEBIAN_FRONTEND="noninteractive" apt-get -y install firefox-esr --no-install-recommends \
+    && DEBIAN_FRONTEND="noninteractive" apt-get -y install --no-install-recommends \
+       firefox-esr iproute2 net-tools rlwrap socat \
     && apt-get -y autoremove \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
@@ -431,23 +442,22 @@ RUN apt-get update \
 # built into the docker image.  This is what's used in our automatically
 # run tests.
 
-FROM base_selenium AS test_included
+FROM base_dev AS test_included
 
-COPY --from=build_selenium /usr/bin/hotpants /usr/bin/hotpants
-COPY --from=build_selenium /venv/ /venv/
-COPY --from=build_selenium /astrometry.net/ /astrometry.net/
-ENV PATH=/venv/bin:$PATH
-
+COPY --from=build_dev /usr/bin/hotpants /usr/bin/hotpants
+COPY --from=build_dev /venv/ /venv/
+COPY --from=build_dev /astrometry.net/ /astrometry.net/
 COPY --from=included_code_build /seechange/lib /seechange/lib
+
 COPY default_config.yaml /seechange/default_config.yaml
 COPY docker/application/local_overrides.yaml /seechange/local_overrides.yaml
+
+ENV PATH=/venv/bin:$PATH
 ENV SEECHANGE_CONFIG=/seechange/default_config.yaml
 ENV PYTHONPATH="/seechange/lib"
 
 RUN mkdir /seechange/data
 RUN mkdir /seechange/temp
-
-ENV PYTHONPATH="/seechange"
 
 # A gratuitous command so that the container will persist
 CMD ["tail", "-f", "/etc/issue"]
@@ -457,14 +467,15 @@ CMD ["tail", "-f", "/etc/issue"]
 # This is the image that includes a web browser but expects the code
 # to be bind-mounted at /seechange.  This is for dev purposes.
 
-FROM base_selenium AS test_bindmount
+FROM base_dev AS test_bindmount
 
-COPY --from=build_selenium /usr/bin/hotpants /usr/bin/hotpants
-COPY --from=build_selenium /venv/ /venv/
-COPY --from=build_selenium /astrometry.net/ /astrometry.net/
+COPY --from=build_dev /usr/bin/hotpants /usr/bin/hotpants
+COPY --from=build_dev /venv/ /venv/
+COPY --from=build_dev /astrometry.net/ /astrometry.net/
+
 ENV PATH=/venv/bin:$PATH
-
 ENV PYTHONPATH="/seechange"
+
 WORKDIR /seechange
 
 # A gratuitous command so that the container will persist

@@ -41,7 +41,6 @@ from models.world_coordinates import WorldCoordinates
 from models.zero_point import ZeroPoint
 from models.fakeset import FakeSet
 
-from util.archive import Archive
 from util.util import remove_empty_folders, env_as_bool
 from util.retrydownload import retry_download
 from util.logger import SCLogger
@@ -528,12 +527,7 @@ def archive_path(test_config):
 
 @pytest.fixture(scope="session")
 def archive(test_config, archive_path):
-    archive_specs = test_config.value('archive')
-    if archive_specs is None:
-        raise ValueError( "archive in config is None" )
-    archive_specs[ 'logger' ] = SCLogger
-    archive = Archive( **archive_specs )
-
+    archive = get_archive_object()
     archive.test_folder_path = archive_path  # track the place where these files actually go in the test suite
     yield archive
 

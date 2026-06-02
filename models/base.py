@@ -3082,18 +3082,17 @@ class ArchiveLock( Base, UUIDMixin ):
                   sleep_fac=2,
                   sleep_fuzz=0.1 ):
         if unlock:
-            with PsycopgConnection() as con:
-                cursor = con.cursor()
-                cursor.execute( "DELETE FROM archive_locks "
-                                "WHERE serverpath=%(path)s "
-                                "  AND hostname=%(host)s "
-                                "  AND pid=%(pid)s"
-                                "  AND identifier=%(id)s",
-                                { 'path': serverpath,
-                                  'host': socket.gethostname(),
-                                  'pid': os.getpid(),
-                                  'id': str(threading.get_ident()) }
-                               )
+            with PGDB() as con:
+                q = sql.SQL( "DELETE FROM archive_locks "
+                             "WHERE serverpath={path} "
+                             "  AND hostname={host} "
+                             "  AND pid={pid} "
+                             "  AND identifier={id}",
+                            ).format( path=serverpath,
+                                      host=socket.gethostname(),
+                                      pid=os.getpid(),
+                                      id=str(threading.get_ident()) )
+                con.execute_nofetch( q )
                 con.commit()
                 return
 

@@ -8,6 +8,8 @@ import random
 import uuid
 import json
 import logging
+import multiprocessing
+import time
 
 import numpy as np
 
@@ -1106,7 +1108,8 @@ def test_archive_lock( archive, temp_dir ):
     tempfile = pathlib.Path( temp_dir ) / 'test_archive_lock.dat'
 
     def _download_tempfile():
-        archive.download( pathlib.Path( 'test_archive_lock' ) / tempfile.name, sleeptest=5 )
+        SCLogger.warning( f"Subprocess downloading {tempfile}" )
+        archive.download( pathlib.Path( 'test_archive_lock' ) / tempfile.name, tempfile, sleeptest=5 )
 
     proc = None
     try:
@@ -1122,6 +1125,10 @@ def test_archive_lock( archive, temp_dir ):
             # Before we start, there should be no archive locks
             rows = con.execute( "SELECT * FROM archive_locks" )
             assert len(rows) == 0
+            # ...postgres by default works in a transaction, and this will
+            #    keep a shared lock on archive_locks!  Rollback to get
+            #    rid of it so the test doesn't freeze.
+            con.rollback()
 
             # Start the download
             proc = multiprocessing.Process( target=_download_tempfile )
@@ -1134,6 +1141,7 @@ def test_archive_lock( archive, temp_dir ):
             #   the file and releasing the lock.
             rows = con.execute( "SELECT * FROM archive_locks" )
             assert len(rows) == 1
+            con.rollback()
 
             # Wait for the subprocess to finish
             proc.join()
