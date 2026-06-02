@@ -694,6 +694,16 @@ def sim_lightcurve_image_parameters():
         con.commit()
 
 
+@pytest.fixture
+def sim_lightcurve_rng():
+    return np.random.default_rng( seed=64738 )
+
+
+@pytest.fixture( scope="module" )
+def sim_lightcurve_rng_module():
+    return np.random.default_rng( seed=64738 )
+
+
 @pytest.fixture( scope="session" )
 def sim_lightcurve_persistent_sources():
     # These positions were chosen visually to be near galaxies on the
@@ -947,7 +957,7 @@ def sim_lightcurve_image_datastore_maker_factory( sim_lightcurve_image_parameter
 
 
 # This function is used by the next two fixtures
-def _do_sim_lightcurve_new_ds_factory( imageinfo, imageargs, refds, sources, wcshdrs, maker, dsentodel ):
+def _do_sim_lightcurve_new_ds_factory( imageinfo, imageargs, refds, sources, wcshdrs, maker, dsentodel, rng ):
     def add_source_to_data( data, x0, y0, flux, seesig, patchwid ):
         ix0 = int( np.floor( x0 ) )
         iy0 = int( np.floor( y0 ) )
@@ -965,10 +975,9 @@ def _do_sim_lightcurve_new_ds_factory( imageinfo, imageargs, refds, sources, wcs
         data[ ly:hy, lx:hx ] += patch[ py0:py1, px0:px1 ]
 
 
-    def make_new_ds( mjdoff, extranoise=25., extrarandsourcefluxes=[], random_seed=64738 ):
+    def make_new_ds( mjdoff, extranoise=25., extrarandsourcefluxes=[] ):
         instr = Instrument.get_instrument_instance( 'DemoInstrument' )
         mjd = imageinfo['refmjd'] + mjdoff
-        rng = np.random.default_rng( seed=random_seed )
         data = refds.image.data + instr.gain * rng.normal( 0., extranoise, size=refds.image.data.shape )
         weight = 1. / ( ( 1. / refds.image.weight ) + ( instr.gain  * extranoise ) ** 2 )
         flags = refds.image.flags.copy()
@@ -1019,16 +1028,18 @@ def sim_lightcurve_new_ds_factory( sim_lightcurve_image_parameters,
                                    sim_lightcurve_wcs_headers,
                                    sim_lightcurve_reference,
                                    sim_lightcurve_image_datastore_maker_factory,
-                                   sim_lightcurve_persistent_sources
+                                   sim_lightcurve_persistent_sources,
+                                   sim_lightcurve_rng
                                   ):
     imageinfo, imageargs = sim_lightcurve_image_parameters
     _, refds = sim_lightcurve_reference
     sources = sim_lightcurve_persistent_sources
     wcshdrs = sim_lightcurve_wcs_headers
     maker = sim_lightcurve_image_datastore_maker_factory
+    rng = sim_lightcurve_rng
     dsentodel = []
 
-    yield _do_sim_lightcurve_new_ds_factory( imageinfo, imageargs, refds, sources, wcshdrs, maker, dsentodel )
+    yield _do_sim_lightcurve_new_ds_factory( imageinfo, imageargs, refds, sources, wcshdrs, maker, dsentodel, rng )
 
     for ds in dsentodel:
         ds.delete_everything()
@@ -1045,16 +1056,18 @@ def sim_lightcurve_new_ds_factory_module( sim_lightcurve_image_parameters,
                                           sim_lightcurve_wcs_headers,
                                           sim_lightcurve_reference_module,
                                           sim_lightcurve_image_datastore_maker_factory,
-                                          sim_lightcurve_persistent_sources
+                                          sim_lightcurve_persistent_sources,
+                                          sim_lightcurve_rng_module
                                          ):
     imageinfo, imageargs = sim_lightcurve_image_parameters
     _, refds = sim_lightcurve_reference_module
     sources = sim_lightcurve_persistent_sources
     wcshdrs = sim_lightcurve_wcs_headers
     maker = sim_lightcurve_image_datastore_maker_factory
+    rng = sim_lightcurve_rng_module
     dsentodel = []
 
-    yield _do_sim_lightcurve_new_ds_factory( imageinfo, imageargs, refds, sources, wcshdrs, maker, dsentodel )
+    yield _do_sim_lightcurve_new_ds_factory( imageinfo, imageargs, refds, sources, wcshdrs, maker, dsentodel, rng )
 
     for ds in dsentodel:
         ds.delete_everything()
@@ -1070,16 +1083,15 @@ def sim_lightcurve_new_ds_factory_module( sim_lightcurve_image_parameters,
 #   oh well.  Code for the general case, watch it be inefficient in
 #   a specific case.
 @pytest.fixture
-def sim_lightcurve_news( sim_lightcurve_new_ds_factory ):
-    rng = np.random.default_rng( seed=221084103 )
+def sim_lightcurve_news( sim_lightcurve_new_ds_factory, sim_lightcurve_rng ):
+    rng = sim_lightcurve_rng
 
     dses = []
     mjdoffs = np.array( [ 30., 32., 37., 40., 45., 55. ] )
     for mjdoff in mjdoffs:
         nextrafluxes = rng.integers( 1, 4 )
         extrafluxes = rng.uniform( 2000., 20000., size=nextrafluxes )
-        dses.append( sim_lightcurve_new_ds_factory( mjdoff, random_seed=rng.integers( 0, 2**31 ),
-                                                    extrarandsourcefluxes=extrafluxes ) )
+        dses.append( sim_lightcurve_new_ds_factory( mjdoff, extrarandsourcefluxes=extrafluxes ) )
 
     # sim_lightcurve_new_ds_factory handles cleanup
     return dses
@@ -1087,16 +1099,15 @@ def sim_lightcurve_news( sim_lightcurve_new_ds_factory ):
 
 # Same as previous fixture, but module scope
 @pytest.fixture( scope='module' )
-def sim_lightcurve_news_module( sim_lightcurve_new_ds_factory_module ):
-    rng = np.random.default_rng( seed=221084103 )
+def sim_lightcurve_news_module( sim_lightcurve_new_ds_factory_module, sim_lightcurve_rng_module ):
+    rng = sim_lightcurve_rng_module
 
     dses = []
     mjdoffs = np.array( [ 30., 32., 37., 40., 45., 55. ] )
     for mjdoff in mjdoffs:
         nextrafluxes = rng.integers( 1, 4 )
         extrafluxes = rng.uniform( 2000., 20000., size=nextrafluxes )
-        dses.append( sim_lightcurve_new_ds_factory_module( mjdoff, random_seed=rng.integers( 0, 2**31 ),
-                                                           extrarandsourcefluxes=extrafluxes ) )
+        dses.append( sim_lightcurve_new_ds_factory_module( mjdoff, extrarandsourcefluxes=extrafluxes ) )
 
     # sim_lightcurve_new_ds_factory handles cleanup
     return dses
@@ -1134,22 +1145,20 @@ def sim_lightcurve_complete_dses_module( sim_lightcurve_reference_module, sim_li
 
 
 @pytest.fixture
-def sim_lightcurve_one_new( sim_lightcurve_new_ds_factory ):
-    rng = np.random.default_rng( seed=1708950305 )
+def sim_lightcurve_one_new( sim_lightcurve_new_ds_factory, sim_lightcurve_rng ):
+    rng = sim_lightcurve_rng
     nextrafluxes = rng.integers( 1, 4 )
     extrafluxes = rng.uniform( 2000., 20000., size=nextrafluxes )
-    ds = sim_lightcurve_new_ds_factory( 30., random_seed=rng.integers( 0, 2**31 ),
-                                        extrarandsourcefluxes=extrafluxes )
+    ds = sim_lightcurve_new_ds_factory( 30., extrarandsourcefluxes=extrafluxes )
     return ds
 
 
 @pytest.fixture( scope="module" )
-def sim_lightcurve_one_new_module( sim_lightcurve_new_ds_factory_module ):
-    rng = np.random.default_rng( seed=1708950305 )
+def sim_lightcurve_one_new_module( sim_lightcurve_new_ds_factory_module, sim_lightcurve_rng_module ):
+    rng = sim_lightcurve_rng_module
     nextrafluxes = rng.integers( 1, 4 )
     extrafluxes = rng.uniform( 2000., 20000., size=nextrafluxes )
-    ds = sim_lightcurve_new_ds_factory_module( 30., random_seed=rng.integers( 0, 2**31 ),
-                                               extrarandsourcefluxes=extrafluxes )
+    ds = sim_lightcurve_new_ds_factory_module( 30., extrarandsourcefluxes=extrafluxes )
     return ds
 
 
