@@ -332,6 +332,7 @@ def PsycopgConnection( current=None ):
 
     # If a connection wasn't passed, make one, and then be sure to roll it back and close it when we're done
 
+    conn = None
     try:
         params = _get_psycopg_params()
         conn = psycopg.connect( **params )
@@ -345,8 +346,9 @@ def PsycopgConnection( current=None ):
         #   on the caller having done that.  (E.g., if there's an
         #   exception, the caller may have short-circuited, which is why
         #   the yield is in a try and this cleaup is in a finally.)
-        conn.rollback()
-        conn.close()
+        if conn is not None:
+            conn.rollback()
+            conn.close()
 
 
 class PGDBTimings:
@@ -3072,7 +3074,13 @@ class ArchiveLock( Base, UUIDMixin ):
 
 
     @staticmethod
-    def lockfunc( serverpath, unlock=False, sleep_min=0.5, sleep_init=2, sleep_max=16, sleep_fac=2, sleep_fuzz=0.1 ):
+    def lockfunc( serverpath,
+                  unlock=False,
+                  sleep_min=0.5,
+                  sleep_init=2,
+                  sleep_max=32,
+                  sleep_fac=2,
+                  sleep_fuzz=0.1 ):
         if unlock:
             with PsycopgConnection() as con:
                 cursor = con.cursor()
