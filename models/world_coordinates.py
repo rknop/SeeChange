@@ -33,7 +33,6 @@ class WorldCoordinates(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         sa.ForeignKey('source_lists._id', ondelete='CASCADE', name='world_coordinates_source_list_id_fkey'),
         nullable=False,
         index=True,
-        unique=True,
         doc="ID of the source list this world coordinate system is associated with. "
     )
 
