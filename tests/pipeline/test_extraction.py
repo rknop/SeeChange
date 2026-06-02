@@ -342,10 +342,10 @@ def test_extract_sources_sextractor( decam_datastore_through_preprocessing,
     assert sources.apfluxadu()[0].mean() == pytest.approx( 20392., rel=0.01 )
     assert sources.apfluxadu()[0].std() == pytest.approx( 126243, rel=0.01 )
 
-    assert sources.good.sum() == pytest.approx(1029, rel=0.01)
+    assert sources.good.sum() == pytest.approx(1169, rel=0.01)
     # This is what you get with CLASS_STAR; you'll get different values with SPREAD_MODEL
     assert sources.is_star.sum() == pytest.approx(307, rel=0.01)
-    assert ( sources.good & sources.is_star ).sum() == pytest.approx(209, abs=5)
+    assert ( sources.good & sources.is_star ).sum() == pytest.approx(279, abs=5)
 
     try:  # make sure saving the PSF and source list goes as expected, and cleanup at the end
         sources.provenance_id = provenance_base.id

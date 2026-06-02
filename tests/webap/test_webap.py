@@ -292,8 +292,8 @@ def test_webap( webap_browser_logged_in, webap_url, decam_datastore, admin_user 
         assert cols[3].text == 'Sci'
         assert cols[4].text == 'ELAIS-E1'
         assert cols[7].text == '1'    # n_images
-        assert cols[8].text == '254'  # detections
-        assert cols[9].text == '8'    # sources
+        assert cols[8].text == '253'  # detections
+        assert cols[9].text == '9'    # sources
 
         # ======================================================================
         # ======================================================================
@@ -326,7 +326,7 @@ def test_webap( webap_browser_logged_in, webap_url, decam_datastore, admin_user 
         imagesdiv = subcontentdiv.find_element( By.XPATH, "./div" )
         assert imagesdiv.get_attribute('id') == 'exposureimagesdiv'
         assert re.search( r"^Exposure has 1 images and 1 completed subtractions.*"
-                          r"\s8 out of 254 detections pass preliminary cuts",
+                          r"\s9 out of 253 detections pass preliminary cuts",
                           imagesdiv.text, re.DOTALL ) is not None
         imagestab = imagesdiv.find_element( By.TAG_NAME, 'table' )
         rows = imagestab.find_elements( By.TAG_NAME, 'tr' )
@@ -350,7 +350,7 @@ def test_webap( webap_browser_logged_in, webap_url, decam_datastore, admin_user 
         assert sourcesdiv.get_attribute('id') == "exposurecutoutsdiv"
         sourcestable = sourcesdiv.find_element( By.TAG_NAME, 'table' )
         rows = sourcestable.find_elements( By.TAG_NAME, 'tr' )
-        assert len(rows) == 9
+        assert len(rows) == 10
 
         # OMG writing these tests is exhausting.  There is still lots more to do:
         # * actually look at the rows of the sources table

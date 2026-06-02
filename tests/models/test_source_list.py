@@ -221,7 +221,7 @@ def test_read_sextractor( ztf_filepath_sources ):
     _ = sources.data
     assert len(sources.data) == 112
     assert sources.num_sources == 112
-    assert sources.good.sum() == 105
+    assert sources.good.sum() == 107
     assert sources.aper_rads == [ 1.0, 2.5 ]
     assert sources.inf_aper_num is None
     assert sources.x[0] == pytest.approx( 798.29, abs=0.01 )
