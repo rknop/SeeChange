@@ -1100,3 +1100,67 @@ def test_fourcorners_overlap_frac():
 
     # TODO : not-square-to-the-sky tests where the centers don't overlap
     # TODO : not-square-to-the-sky tests where dra does not equal ddec
+
+
+def test_archive_lock( archive, temp_dir ):
+    tempfile = pathlib.Path( temp_dir ) / 'test_archive_lock.dat'
+
+    def _download_tempfile():
+        archive.download( pathlib.Path( 'test_archive_lock' ) / tempfile.name, sleeptest=5 )
+
+    proc = None
+    try:
+        # Upload a gratuitous file
+        with open( tempfile, "w" ) as ofp:
+            ofp.write( "testing\n" )
+        archive.upload( tempfile, 'test_archive_lock' )
+
+        # Delete the tempfile so we have to download it again
+        tempfile.unlink( missing_ok=True )
+
+        with PGDB( dictcursor=True ) as con:
+            # Before we start, there should be no archive locks
+            rows = con.execute( "SELECT * FROM archive_locks" )
+            assert len(rows) == 0
+
+            # Start the download
+            proc = multiprocessing.Process( target=_download_tempfile )
+            proc.start()
+            # Give the subprocess time to get going and make the lock.
+            time.sleep( 1 )
+            # By now the subprocess should have created the lock.
+            #   We used the sleeptests parameter, so it will
+            #   pause for 5 seconds before actually downloading
+            #   the file and releasing the lock.
+            rows = con.execute( "SELECT * FROM archive_locks" )
+            assert len(rows) == 1
+
+            # Wait for the subprocess to finish
+            proc.join()
+            proc.close()
+            proc = None
+
+            # The lock should now be gone
+            rows = con.execute( "SELECT * FROM archive_locks" )
+            assert len(rows) == 0
+
+            # The file should exist
+            assert tempfile.is_file()
+
+    finally:
+        # Make sure the subprocess is gone
+        if proc is not None:
+            if proc.is_alive():
+                proc.kill()
+            proc.join()
+            proc.close()
+        # Make sure archive locks is cleaned out.
+        # (This is perhaps a bit heavy-handed... but, really,
+        # during the tests, nothing was supposed to leave a
+        # lock behind, so we may be cleaning up after another
+        # badly behaved tests.)
+        with PGDB() as con:
+            con.execute_nofetch( "DELETE FROM archive_locks" )
+            con.commit()
+        # Make sure temp file is gone
+        tempfile.unlink( missing_ok=True )
