@@ -366,7 +366,9 @@ def patch_image_overlap_limits( patchwid, x, y, imageshape ):
 
 
 def retry_with_sleep( func, sleepmin=0.1, sleept=0.5, sleepfac=2, sleepfuzz=0.1, sleepmax=32,
-                      failmessage="to do the thing", exception_on_fail=True, retval_on_fail=None, randseed=None ):
+                      failmessage="to do the thing", exception_on_fail=True, retval_on_fail=None, randseed=None,
+                      check_result=None, return_attr=None, good_returns=None, bad_returns=None,
+                      badreturn_handler=None ):
     failedatleastonce = False
     succeeded = False
     done = False
@@ -377,9 +379,36 @@ def retry_with_sleep( func, sleepmin=0.1, sleept=0.5, sleepfac=2, sleepfuzz=0.1,
         try:
             tries += 1
             result = func()
-            done = True
-            succeeded = True
+
+            if check_result is not None:
+                if not check_result( result ):
+                    raise ValueError( "Unacceptable result.")
+
+            if ( good_returns is not None ) or ( bad_returns is not None ):
+                retval = result if return_attr is None else getattr( result, return_attr )
+                try:
+                    sretval = str(retval)
+                except Exception:
+                    sretval = ""
+                if good_returns is not None:
+                    if retval in good_returns:
+                        done = True
+                        succeeded = True
+                    else:
+                        if badreturn_handler is not None:
+                            badreturn_handler( retval )
+                        raise ValueError( f"Got return {sretval} {'that' if sretval=='' else 'which'} is not good" )
+                elif retval in bad_returns:
+                    if badreturn_handler is not None:
+                        badreturn_handler( retval )
+                    raise ValueError( f"Got bad return {sretval}" )
+
+            else:
+                done = True
+                succeeded = True
+
             t1 = time.monotonic()
+
         except Exception as ex:
             t1 = time.monotonic()
             failedatleastonce = True

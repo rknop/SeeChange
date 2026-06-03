@@ -1,6 +1,8 @@
 import io
 import uuid
 import numbers
+import requests
+import functools
 
 import numpy as np
 
@@ -22,9 +24,8 @@ from models.deepscore import DeepScore, DeepScoreSet
 from models.reference import image_subtraction_components
 from pipeline.catalog_tools import download_gaia_dr3
 from util.config import Config
-from util.retrypost import retry_post
 from util.logger import SCLogger
-from util.util import parse_dateobs
+from util.util import parse_dateobs, retry_with_sleep
 
 object_name_max_used = sa.Table(
     'object_name_max_used',
@@ -990,7 +991,7 @@ class ObjectLegacySurveyMatch( Base, ObjectCatalogMatch ):
           liuserver: str
              Location of the liu server.  Required.
 
-          **kwargs : passed on to retry_post to liuserver
+          **kwargs : passed on to requests.post (posting to liuserver)
 
         Returns
         -------
@@ -1001,7 +1002,17 @@ class ObjectLegacySurveyMatch( Base, ObjectCatalogMatch ):
         if liuserver is None:
             raise ValueError( "Must supply liuserver." )
 
-        res = retry_post( f"{liuserver}/getsources/{ra}/{dec}/{radius}", returnjson=True, **kwargs )
+        url = f"{liuserver}/getsources/{ra}/{dec}/{radius}"
+
+        def _errmsg( res ):
+            SCLogger.error( f"Failed to contact {url}; got HTTP status {res.status_code}: \""
+                            f"{res.text if len(res.text) < 240 else res.text[:240]}\"." )
+
+        do_the_thing = functools.partial( requests.post, url, **kwargs )
+        res = retry_with_sleep( do_the_thing, sleepmin=0.2, sleept=1.0, sleepmax=32.0, sleepfac=2.,
+                                sleepfuzz=0.1, failmessage=f"contacting {liuserver}",
+                                good_returns=[200], return_attr='status_code', badreturn_handler=_errmsg )
+        res = res.json()
 
         expected_keys = [ 'lsid', 'ra', 'dec', 'dist', 'white_mag', 'xgboost', 'is_star' ]
         if ( ( not isinstance( res, dict ) ) or

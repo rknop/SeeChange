@@ -4,6 +4,7 @@ import os
 import time
 import pathlib
 import requests
+import functools
 
 import numpy as np
 import pandas
@@ -17,7 +18,7 @@ from models.base import SmartSession, FileOnDiskMixin
 from models.catalog_excerpt import CatalogExcerpt, GaiaDR3DownloadLock
 
 from util.exceptions import CatalogNotFoundError
-from util.util import listify
+from util.util import listify, retry_with_sleep
 from util.logger import SCLogger
 from util.config import Config
 
@@ -221,19 +222,12 @@ def download_gaia_dr3( minra, maxra, mindec, maxdec, padding=0.1, minmag=18., ma
     df = None
 
     if cfg.value( 'catalog_gaiadr3.use_server' ):
-        for i in range(5):
-            try:
-                df = _download_gaia_dr3_custom_server( ralow, rahigh, declow, dechigh, minmag, maxmag )
-                break
-            except Exception as ex:
-                SCLogger.warning( f"Exception trying to download ra=({ralow}:{rahigh}), dec=({declow}:{dechigh}), "
-                                f"mag=({minmag}:{maxmag}) from custom gaia server: {ex}" )
-                if i < 4:
-                    SCLogger.debug( "Sleeping 1s and retrying gaia query" )
-                    time.sleep( 1 )
-        else:
-            SCLogger.error( f"Repeated failures trying to download  ra=({ralow}:{rahigh}), dec=({declow}:{dechigh}), "
-                            f"mag=({minmag}:{maxmag}) from custom gaia server" )
+        dodownload = functools.partial( _download_gaia_dr3_custom_server,
+                                        ralow, rahigh, declow, dechigh, minmag, maxmag )
+        df = retry_with_sleep( dodownload, sleepmin=0.1, sleept=1.0, sleepfac=2., sleepfuzz=0.1, sleepmax=64,
+                               failmessage=( f"trying to download ra=({ralow}:{rahigh}), dec=({declow}:{dechigh}), "
+                                             f"mag=({minmag}:{maxmag}) from custom gaia server" ),
+                               exception_on_fail=False, retval_on_fail=None )
 
     if ( ( df is None ) and cfg.value( 'catalog_gaiadr3.fallback_datalab' ) ):
         SCLogger.error( 'Skipping quering NOIRLab Astro Data Archive for Gaia DR3 stars; '
