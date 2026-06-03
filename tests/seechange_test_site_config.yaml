@@ -1,0 +1,18 @@
+preloads:
+  - ../site_config.yaml
+
+path:
+  data_root: '/seechange/tests/test_filestore'
+  data_temp: '/seechange/tests/test_tempdata'
+
+archive:
+  archive_url: http://archive:8080/
+  verify_cert: false
+  path_base: test/
+  local_read_dir: null
+  local_write_dir: null
+  token: insecure
+
+astrocal:
+  astrometry_net_indexdir: /seechange/tests/astrometry_net_data
+

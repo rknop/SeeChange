@@ -64,6 +64,16 @@ class ParsConfigChooser( Parameters ):
             critical=False
         )
 
+        self.configs = self.add_par(
+            'configs',
+            { 'galactic': 'default_config_galactic.yaml',
+              'extragalactic': 'default_config_extragalactic.yaml' },
+            dict,
+            ( "Dictionary used by choice_algorithm's implementation to decide "
+              "what to replace the config with." ),
+            critical=False
+        )
+
         self._enforce_no_new_attrs = True
 
         self.override( kwargs )
@@ -85,7 +95,9 @@ class ConfigChooser:
     """
 
     def __init__( self, **kwargs ):
-        self.pars = ParsConfigChooser( **kwargs )
+        cfg = Config.get()
+        self.pars = ParsConfigChooser( **(cfg.value('configchoice', {})) )
+        self.pars.augment( kwargs )
 
 
     def run( self, *args ):
@@ -138,10 +150,8 @@ class ConfigChooser:
         Decides if this is a galactic or extragalactic field by reading
         tablefile and looking up the density of stars per healpix for
         mag≤maglim at the healpix (32, nest=True, lonlat=True) of ra,
-        dec.  Uses the current config's value of
-        configchoice.configs.galactic or
-        configchoice.configs.extragalactic as a config file to read and
-        set as the default config going forward.
+        dec.  Uses configs['galactic'] or configs['extragalactic']
+        as replacement config files.
 
         Parameters
         ----------
@@ -153,9 +163,8 @@ class ConfigChooser:
 
         """
 
-        cfg = Config.get()
-        if cfg.value( 'configchoice.config_dir' ) is not None:
-            tablefile = pathlib.Path( cfg.value( 'configchoice.config_dir' ) )
+        if self.pars.config_dir is not None:
+            tablefile = pathlib.Path( self.pars.config_dir )
         else:
             tablefile = pathlib.Path( CODE_ROOT )
         tablefile = tablefile / self.pars.gaia_density_catalog
@@ -175,11 +184,12 @@ class ConfigChooser:
 
         dens = row[ str(maglim) ].values[ 0 ]
 
-        cfg = Config.get()
-
         if dens >= densitycut:
-            configfile = cfg.value( 'configchoice.configs.galactic' )
+            configfile = self.pars.configs['galactic']
         else:
-            configfile = cfg.value( 'configchoice.configs.extragalactic' )
+            configfile = self.pars.configs['extragalactic']
+
+        SCLogger.info( f"Changing default config to {configfile}" )
+        cfg = Config.get()
         configfile = cfg._path.parent / configfile
         Config.init( configfile, setdefault=True )

@@ -1,9 +1,10 @@
 preloads:
-  - seechange_config_test.yaml
+  - seechange_test_pipeline_config.yaml
+  - seechange_test_site_config.yaml
+  - seechange_test_alert_config.yaml
 
 configchoice:
   choice_algorithm: null
-  configs: null
 
 extraction:
   initial_threshold: 5.0

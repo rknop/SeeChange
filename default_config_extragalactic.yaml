@@ -10,7 +10,9 @@ overrides:
   - pipeline_config.yaml
   - site_config.yaml
   - alert_config.yaml
-  - default_local_overrides.yaml
+  - local_overrides.yaml
+augments:
+  - local_augments.yaml
   
 configchoice:
   choice_algorithm: null
