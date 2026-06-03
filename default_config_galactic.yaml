@@ -1,39 +1,16 @@
-preloads:
-  - default_config.yaml
+# This includes all the same stuff as default_config_extragalactic.yaml,
+#   but then adds stuff that might modify things for the galaxy.
+
 overrides:
-  - local_overrides_galactic.yaml
-augments:
-  - local_augments_galactic.yaml
+  - pipeline_config.yaml
+  - pipeline_config_galactic.yaml
+  - site_config.yaml
+  - site_config_galactic.yaml
+  - alert_config.yaml
+  - alert_config_galactic.yaml
+  - default_local_overrides.yaml
+  - default_local_overrides_galactic.yaml
+
 
 configchoice:
   choice_algorithm: null
-  configs: null
-
-pipeline:
-  provenance_tag: current_gal
-
-extraction:
-  threshold_snr: 10.0
-
-wcs:
-  max_catalog_mag: [15., 16., 17.]
-  mag_range_catalog: 2.0
-
-zp:
-  max_catalog_mag: [17., 18., 19.]
-  mag_range_catalog: 3.0
-
-detection:
-  threshold_snr: 10.0
-
-fakeinjection:
-  min_fake_mag: -4.
-  max_fake_mag: 1.
-  mag_rel_limmag: true
-  num_fakes: 400
-  mag_prob_ratio: 1.
-  random_seed: 0
-  hostless_frac: 0.
-  host_minmag: -3.
-  host_maxmag: 1.
-  host_distscale: 0.

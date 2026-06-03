@@ -7,15 +7,9 @@
 preloads:
   - default_config.yaml
 overrides:
-  - local_overrides.yaml
+  - webap_local_overrides.yaml
 augments:
-  - local_augments.yaml
-
-db:
-  host: postgres
-  echoqueries: true
-  alwaysexplain: false
-  alwaysanalyze: false
+  - webap_local_augments.yaml
 
 # This flask secret key is what we use in our tests.  You would be advised to
 # make it something else for your environment.  Better, leave it null,
@@ -41,3 +35,22 @@ archive:
 path:
   data_root: /tmp
   data_temp: /tmp
+
+# ======================================================================
+# Email for Webap
+#
+# These configs are only used by the webap; their values do not matter
+# for the main pipeline.  The configs below are what's needed for our
+# test environment, and are definitely wrong for any production
+# environment.
+
+email:
+  email_from: 'Seechange <nobody@nowhere.org>'
+  email_subject: 'Seechange password reset'
+  email_system_name: 'Seechange'
+  smtp_server: 'mailhog'
+  smtp_port: 1025
+  smtp_use_ssl: false
+  smtp_username: null
+  smtp_password: null
+  smtp_password_file: null

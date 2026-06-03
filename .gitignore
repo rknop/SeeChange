@@ -2,18 +2,16 @@
 
 ### Misc
 temp/*
-local_config.yaml
 ./local_overrides.yaml
 ./local_augments.yaml
-tests/local_config.yaml
-tests/local_overrides.yaml
-tests/local_augments.yaml
 tests/improc/cache/*
 data/cache*
 data/DECam_default_calibrators
 .pytest.ini
 tests/plots
 tests/temp_data
+tests/test_filestore
+tests/test_tempdata
 # These next webap thingies are created
 #   during webap install as symbolic
 #   links into extern/rkwebutil, so
@@ -32,13 +30,6 @@ util/githash.py
 
 
 ### Stuff created by autoconf and ./configure
-# THOUGHT REQUIRED : do we want to add the various
-#   Makefile.in files from autoconf to the archive?
-#   That's often what people do.  Right now,
-#   installation requires rerunning autoconf,
-#   which can be inconvenient.  If we ever
-#   want to drop that requirement, then we
-#   need to remove some of these following lines
 Makefile
 aclocal.m4
 autom4te.cache/
