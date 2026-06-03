@@ -1,10 +1,18 @@
-preloads:
-  - default_config.yaml
-overrides:
-  - local_overrides_extragalactic.yaml
-augments:
-  - local_augments_extragalactic.yaml
+# This file should be identical to default_config.yaml except that it
+# has configchooser disabled.
+#
+# The idea is that if you use either this or default_config.yaml, you
+# get the same configuration.  The only difference is that
+# default_config.yaml has the possibility of switching out to a galactic
+# config, whereas once you're here, you can't switch any more.
 
+overrides:
+  - pipeline_config.yaml
+  - site_config.yaml
+  - alert_config.yaml
+  - local_overrides.yaml
+augments:
+  - local_augments.yaml
+  
 configchoice:
   choice_algorithm: null
-  configs: null

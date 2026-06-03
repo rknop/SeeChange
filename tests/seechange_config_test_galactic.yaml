@@ -1,11 +1,11 @@
 preloads:
-  - seechange_config_test.yaml
+  - seechange_test_pipeline_config.yaml
+  - seechange_test_site_config.yaml
+  - seechange_test_alert_config.yaml
 
 configchoice:
   choice_algorithm: null
-  configs: null
 
-# TODO : Edit this (and default.yaml) appropriately when we address Issue #437.
 extraction:
   initial_threshold: 5.0
   sextr_thredshold: 5.0

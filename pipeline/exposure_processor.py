@@ -405,10 +405,6 @@ class ExposureProcessor:
             #   based on the needs of the current exposure.  So, in
             #   the finally block below, we try to restore the original
             #   config.
-            # NOTE: Config chooser is currently horribly broken.  If the config
-            #   doesn't have the choice_algorithm set to null, these next
-            #   two lines will fail... until we fix ConfigChooser.  At which point
-            #   this comment will be wrong.
             config_chooser = ConfigChooser( **( cfg.value('configchoice') ) )
             config_chooser.run( self.exposure )
 

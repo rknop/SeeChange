@@ -1,0 +1,6 @@
+flaky>=3.8.1,<4.0
+pytest>=9.0.2,<10.0
+pytest-timestamper==0.0.10
+remote-pdb>=2.1.0,<3.0
+ruff>=0.14.10,<0.15.0
+selenium-firefox>=2.0.8,<3.0

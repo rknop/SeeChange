@@ -373,6 +373,11 @@ COPY --from=build /astrometry.net/ /astrometry.net/
 COPY --from=included_code_build /seechange/lib /seechange/lib
 
 COPY default_config.yaml /seechange/default_config.yaml
+COPY pipeline_conifg.yaml /seechange/pipeline_config.yaml
+COPY site_config.yaml /seechange/site_config.yaml
+COPY default_config_extragalactic.yaml /seechange/default_config_extragalactic.yaml
+COPY default_config_galactic.yaml /seeconage/default_config_galactic.yaml
+COPY pipeline_config_galactic.yaml /seechange/pipeline_config_galactic.yaml
 COPY docker/application/local_overrides.yaml /seechange/local_overrides.yaml
 
 ENV PATH=/venv/bin:$PATH
@@ -400,9 +405,14 @@ COPY --from=webap_build /webap_code/ /webap_code/
 COPY --from=webap_build /seechange/lib /seechange/lib
 
 COPY default_config.yaml /seechange/default_config.yaml
+COPY pipeline_conifg.yaml /seechange/pipeline_config.yaml
+COPY site_config.yaml /seechange/site_config.yaml
+COPY default_config_extragalactic.yaml /seechange/default_config_extragalactic.yaml
+COPY default_config_galactic.yaml /seeconage/default_config_galactic.yaml
+COPY pipeline_config_galactic.yaml /seechange/pipeline_config_galactic.yaml
 COPY webap/seechange_webap.yaml /seechange/seechange_webap.yaml
-COPY webap/local_overrides.yaml /seechange/local_overrides.yaml
-COPY webap/local_augments.yaml /seechange/local_augments.yaml
+COPY webap/webap_local_overrides.yaml /seechange/webap_local_overrides.yaml
+COPY webap/webap_local_augments.yaml /seechange/webap_local_augments.yaml
 
 # Copy in the self-signed certificate we need to use in tests.
 # This should *not* be used in production, even though it's
@@ -440,7 +450,7 @@ RUN apt-get update \
 # ======================================================================
 # This is the image that includes a web browser and includes the code
 # built into the docker image.  This is what's used in our automatically
-# run tests.
+# run tests.  (...actually, I think it may use test_bindmount? hmmm...)
 
 FROM base_dev AS test_included
 
@@ -450,6 +460,11 @@ COPY --from=build_dev /astrometry.net/ /astrometry.net/
 COPY --from=included_code_build /seechange/lib /seechange/lib
 
 COPY default_config.yaml /seechange/default_config.yaml
+COPY pipeline_conifg.yaml /seechange/pipeline_config.yaml
+COPY site_config.yaml /seechange/site_config.yaml
+COPY default_config_extragalactic.yaml /seechange/default_config_extragalactic.yaml
+COPY default_config_galactic.yaml /seeconage/default_config_galactic.yaml
+COPY pipeline_config_galactic.yaml /seechange/pipeline_config_galactic.yaml
 COPY docker/application/local_overrides.yaml /seechange/local_overrides.yaml
 
 ENV PATH=/venv/bin:$PATH

@@ -1,0 +1,120 @@
+# site_config has the stuff that might be different between one cluster
+# and another when they're running on the same database.
+#
+# This is the default one, used for extragalactic fields.  For galactic
+# fields, some stuff may be overriden
+
+overrides:
+  - site_config_local.yaml
+
+# ======================================================================
+# Paths
+
+path:
+  data_root: null
+  data_temp: null
+
+# ======================================================================
+# Archive
+#
+# This is in the site_config because it may well be that different
+# systems have different ways of accessing the same archive.  (E.g., LS4
+# runs at NERSC, so compute jobs at NERSC can just use the local_*dir
+# configs, but jobs run elsewhere have to go through the server.)  Make
+# sure that every system using the archive is using the actual same
+# files!  That is, use the same server, and if you don't use the same
+# server, make sure you've pointed the directories at the right place!
+#
+# Set to null if there is no archive; otherwise, a dict
+#
+# Fields of the dict:
+#
+#   archive_url: string or null
+#     The URL of the archive server, or null if archive is on the filesystem
+#
+#   verify_cert: bool
+#     Should we verify the SSL cert of the archive server?  You usually
+#     want this to be true, but at least for testing we set this to
+#     false so we don't have to deal with getting certificates for
+#     our internally contained docker environment.
+#
+#   path_base: string
+#     The base of the collection on the archive server (a string unique
+#     to this dataset).  (This is not a full path, but relative to the
+#     base of the overall archive, and will usually just be a single
+#     word.)
+#
+#   token : string or null
+#     The token necessary to authenticate on the server.
+#
+#   token_file : string
+#     If token is null, read the token from this file
+#
+#   local_read_dir: string or null
+#     The directory to read from if the archive is on the local
+#     filesystem, or null.  Different from local_write_dir in case
+#     the system has a faster read-only method of accessing the same
+#     files (which is the case on NERSC).  If null, then the archive
+#     is not accessible locally, and the archive_url server will be
+#     used instead.  May be the same as local_write_dir.
+#
+#   local_write_dir: string or null
+#     The directory to write to if the archive is on the local
+#     filesystem, or null if we need to use archive_url.
+
+
+archive: null
+
+
+# ======================================================================
+# ======================================================================
+# ======================================================================
+# Pipeline components
+#
+
+# ======================================================================
+# Overall pipeline
+#
+# Also configed in pipeline_config.yaml; see comments there
+
+pipeline:
+  save_before_subtraction: true
+  save_at_finish: true
+
+# ======================================================================
+# Extraction, Backgrounding, and PSF are done in one step.
+
+extraction:
+  psf_timeout: 240.
+
+
+# ======================================================================
+# World Coordinates
+
+astrocal:
+  astrometry_net_indexdir: /seechange/tests/astronomy_net_data
+
+
+# ======================================================================
+# Scoring
+
+scoring:
+  rbbot_model_dir: /seechange/share/RBbot_models
+
+
+# ======================================================================
+# ======================================================================
+# ======================================================================
+# Astromatic utility config (sextractor, scamp, swarp, psfex)
+#
+# config_dir: string or null
+#    An absolute path to the base of the path where astromatic config
+#    files are.  If null, will use $CODE_ROOT.
+#
+# config_subdir: string or null
+#   A path relative to config_dir where the astromatic config files are.
+#   Can't be null.
+
+astromatic:
+  config_dir: null
+  config_subdir: share/astromatic
