@@ -101,6 +101,7 @@ db:
   echoqueries: false
   alwaysexplain: false
   alwaysanalyze: false
+  sa_connect_timeout: 20
 
 # ======================================================================
 # Local file storage
