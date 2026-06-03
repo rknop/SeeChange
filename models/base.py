@@ -187,7 +187,9 @@ def Session():
         _engine = sa.create_engine( url,
                                     future=True,
                                     poolclass=sa.pool.NullPool,
-                                    connect_args={ "options": "-c timezone=UTC" }
+                                    connect_args={ "options": "-c timezone=UTC",
+                                                   "connect_timeout": cfg.value("db.sa_connect_timeout")
+                                                  }
                                    )
 
         _Session = sessionmaker(bind=_engine, expire_on_commit=False)
