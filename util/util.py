@@ -366,11 +366,11 @@ def patch_image_overlap_limits( patchwid, x, y, imageshape ):
 
 
 def retry_with_sleep( func, sleepmin=0.1, sleept=0.5, sleepfac=2, sleepfuzz=0.1, sleepmax=32,
-                      failmessage="to do the thing", exception_on_fail=True, retval_on_fail=None ):
+                      failmessage="to do the thing", exception_on_fail=True, retval_on_fail=None, randseed=None ):
     failedatleastonce = False
-    succeeded = True
+    succeeded = False
     done = False
-    rng = np.random.default_rng()
+    rng = np.random.default_rng( randseed )
     t0 = time.monotonic()
     tries = 0
     while not done:
@@ -383,20 +383,21 @@ def retry_with_sleep( func, sleepmin=0.1, sleept=0.5, sleepfac=2, sleepfuzz=0.1,
         except Exception as ex:
             t1 = time.monotonic()
             failedatleastonce = True
-            nextsleept = sleept * sleepfac
-            if nextsleept > sleepmax:
-                SCLogger.error( f"Repeated failures {failmessage} after {t1-t0:.2f}s and {tries} tries, giving up." )
+            if sleept > sleepmax:
+                SCLogger.error( f"Repeated failures {failmessage} after {t1-t0:.2f}s and {tries} tries, giving up.  "
+                                f"Last exception: {ex}" )
                 done = True
             else:
-                actualsleept = sleept + max( sleepmin, rng.normal(sleepfuzz * sleept) )
+                actualsleept = max( sleepmin, rng.normal(sleept, sleepfuzz * sleept) )
                 SCLogger.warning( f"Failed {failmessage} after {tries} tries, "
-                                  f"will sleep {actualsleept:.2f}s and try again." )
+                                  f"will sleep {actualsleept:.2f}s (nominally {sleept:.2f}s) and try again.  "
+                                  f"Exception: {ex}" )
                 time.sleep( actualsleept )
-                sleept = nextsleept
-                
-    if succeeded = True:
+                sleept *= sleepfac
+
+    if succeeded:
         if failedatleastonce:
-            SCLogger.info( f"Succeeded {failmessage} after {t1-t0:.2f}s and {tries} tries" )
+            SCLogger.info( f"Succeeded {failmessage} after {t1-t0:.2f}s and {tries} tries." )
         return result
 
     else:
@@ -404,4 +405,3 @@ def retry_with_sleep( func, sleepmin=0.1, sleept=0.5, sleepfac=2, sleepfuzz=0.1,
             raise RuntimeError( f"Failed {failmessage} after {t1-t0:.2f}s and {tries} tries." )
         else:
             return retval_on_fail
-    

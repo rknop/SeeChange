@@ -1,8 +1,13 @@
 import pytest
 import pathlib
 import random
+import functools
+import logging
+import time
+import re
 
-from util.util import listify, ensure_file_does_not_exist
+from util.logger import SCLogger
+from util.util import listify, ensure_file_does_not_exist, retry_with_sleep
 
 # TODO : tests of most of the stuff in util...!  (Issue #384)
 
@@ -65,3 +70,109 @@ def test_ensure_file_does_not_exist():
                 fpath.unlink()
             else:
                 fpath.rmdir()
+
+
+def test_retry_with_sleep( caplog ):
+    caplog.set_level( logging.INFO, logger=SCLogger.instance()._logger.name )
+
+    def _failfast():
+        raise RuntimeError( "I failed because you told me to." )
+
+    def _failntimes( s ):
+        s['count'] -= 1
+        if s['count'] > 0:
+            raise RuntimeError( f"Failed because count={s['count']+1}" )
+        else:
+            return 42
+
+    def _succeed():
+        return 42
+
+
+    def _check_fail( t1, ex=None ):
+        assert len( caplog.records ) == 5
+        for i, t in enumerate( [ '0.12', '0.25', '0.50', '1.00' ] ):
+            mat = re.search( r"Failed beating my head against a wall after (\d+) tries, will sleep "
+                             r".* \(nominally (\d\.\d\d)s\) and try again.  Exception: I failed because "
+                             r"you told me to.", caplog.records[i].msg )
+            assert mat is not None
+            assert int( mat.group(1) ) == i + 1
+            assert mat.group(2) == t
+            assert caplog.records[i].levelname == 'WARNING'
+        mat = re.search( r"Repeated failures beating my head against a wall after (\d\.\d\d)s "
+                         r"and (\d+) tries, giving up.  Last exception: I failed because you told me to.",
+                         caplog.records[4].msg )
+        tsleep = float(mat.group(1))
+        # Expected sleeps : 0.125s + 0.25s + 0.5s + 1.0s = 1.875s  [5 tries]
+        # With fuzz, say it should be ±~10%
+        assert ( tsleep >= 1.8 ) and ( tsleep <= 2.0 )
+        assert tsleep == pytest.approx( t1 - t0, rel=0.05 )
+        assert int( mat.group(2) ) == 5
+        assert caplog.records[4].levelname == 'ERROR'
+        if ex is not None:
+            mat = re.search( r"Failed beating my head against a wall after ([0-9]?\.[0-9]+)s and ([0-9]+) tries.",
+                             str(ex) )
+            assert mat is not None
+            assert float(mat.group(1)) == pytest.approx( tsleep, abs=0.01 )
+            assert int( mat.group(2) ) == 5
+
+    # First, try ultimate failure
+
+    t0 = time.monotonic()
+    try:
+        retry_with_sleep( _failfast, sleepmin=0.1, sleept=0.125, sleepfac=2, sleepmax=1.0, sleepfuzz=0.1,
+                          failmessage="beating my head against a wall", exception_on_fail=True, randseed=42 )
+    except Exception as ex:
+        _check_fail( time.monotonic(), ex )
+
+    # Next, try ultimate failure with a specific return
+    caplog.clear()
+    t0 = time.monotonic()
+    res = retry_with_sleep( _failfast, sleepmin=0.1, sleept=0.125, sleepfac=2, sleepmax=1.0, sleepfuzz=0.1,
+                            failmessage="beating my head against a wall", exception_on_fail=False, randseed=42 )
+    _check_fail( time.monotonic() )
+    assert res is None
+
+    caplog.clear()
+    t0 = time.monotonic()
+    res = retry_with_sleep( _failfast, sleepmin=0.1, sleept=0.125, sleepfac=2, sleepmax=1.0, sleepfuzz=0.1,
+                            failmessage="beating my head against a wall", exception_on_fail=False,
+                            retval_on_fail='omg', randseed=42 )
+    _check_fail( time.monotonic() )
+    assert res == 'omg'
+
+
+    # Next, try success
+    caplog.clear()
+    t0 = time.monotonic()
+    res = retry_with_sleep( _succeed, sleepmin=0.1, sleept=0.125, sleepfac=2, sleepmax=1.0, sleepfuzz=0.1,
+                            failmessage="succeeding", randseed=42 )
+    assert time.monotonic() - t0 < 0.1
+    assert res == 42
+    assert len(caplog.records) == 0
+
+
+    # Try success on the third try (after sleeping 0.125 and 0.25 seconds)
+    caplog.clear()
+    thing = { 'count': 3 }
+    dothething = functools.partial( _failntimes, thing )
+    t0 = time.monotonic()
+    res = retry_with_sleep( dothething, sleepmin=0.1, sleept=0.125, sleepfac=2, sleepmax=1.0, sleepfuzz=0.1,
+                            failmessage="getting the answer", randseed=42 )
+    assert res == 42
+    assert len(caplog.records) == 3
+    for i, t in enumerate( [ '0.12', '0.25' ] ):
+        mat = re.search( r"Failed getting the answer after (\d+) tries, will sleep "
+                         r".* \(nominally (\d.\d\d)s\) and try again.  Exception: "
+                         r"Failed because count=(\d+)",
+                         caplog.records[i].msg )
+        assert mat is not None
+        assert int( mat.group(1) ) == i + 1
+        assert mat.group(2) == t
+        assert int( mat.group(3) ) == 3 - i
+        assert caplog.records[i].levelname == 'WARNING'
+    mat = re.search( r"Succeeded getting the answer after (\d.\d\d)s and (\d+) tries.", caplog.records[2].msg )
+    assert mat is not None
+    assert float( mat.group(1) ) == pytest.approx( 0.375, rel=0.3 )
+    assert int( mat.group(2) ) == 3
+    assert caplog.records[2].levelname == 'INFO'
