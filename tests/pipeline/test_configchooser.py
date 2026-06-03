@@ -1,10 +1,7 @@
-import pytest
-
 from util.config import Config
 from pipeline.configchooser import ConfigChooser
 
 
-@pytest.mark.skip( reason='ConfigChooser is currently broken.' )
 def test_config_chooser():
     try:
         origconfig = Config.get()
@@ -26,7 +23,7 @@ def test_config_chooser():
 
         assert exgalconfig.value( 'configchoice.choice_algorithm' ) is None
         assert exgalconfig.value( 'configchoice.configs' ) is None
-        assert exgalconfig.value( 'extraction.threshold' ) == origconfig.value( 'extraction.threshold' )
+        assert exgalconfig.value( 'extraction.snr_threshold' ) == origconfig.value( 'extraction.snr_threshold' )
         assert exgalconfig.value( 'astrocal.max_catalog_mag' ) == origconfig.value( 'astrocal.max_catalog_mag' )
 
         # Reset config before trying the next thing
@@ -41,8 +38,8 @@ def test_config_chooser():
 
         assert galconfig.value( 'configchoice.choice_algorithm' ) is None
         assert galconfig.value( 'configchoice.configs' ) is None
-        assert galconfig.value( 'extraction.threshold' ) != origconfig.value( 'extraction.threshold' )
-        assert galconfig.value( 'extraction.threshold' ) == 10.0
+        assert galconfig.value( 'extraction.snr_threshold' ) != origconfig.value( 'extraction.snr_threshold' )
+        assert galconfig.value( 'extraction.snr_threshold' ) == 10.0
         assert galconfig.value( 'astrocal.max_catalog_mag' ) != origconfig.value( 'astrocal.max_catalog_mag' )
         assert galconfig.value( 'astrocal.max_catalog_mag' ) == [15., 16., 17.]
 

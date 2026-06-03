@@ -86,8 +86,6 @@ class ConfigChooser:
 
     def __init__( self, **kwargs ):
         self.pars = ParsConfigChooser( **kwargs )
-        if self.pars.choice_algorithm is not None:
-            raise RuntimeError( "ConfigChooser is currently broken." )
 
 
     def run( self, *args ):
@@ -125,7 +123,6 @@ class ConfigChooser:
                 raise RuntimeError( "Pass ConfigChooser.run() (ra, dec), Exposure, or Image" )
 
             if self.pars.choice_algorithm == 'star_density':
-                raise RuntimeError( "ConfigChooser is horribly broken" )
                 self.set_config_based_on_star_density( ra, dec )
             else:
                 raise ValueError( f"Unknown ConfigChooser algorithm: {self.pars.choice_algorithm}" )

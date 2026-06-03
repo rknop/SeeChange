@@ -9,9 +9,11 @@ configchoice:
   choice_algorithm: null
   configs: null
 
-# TODO : Edit this (and default.yaml) appropriately when we address Issue #437.
+pipeline:
+  provenance_tag: current_gal
+
 extraction:
-  threshold: 10.0
+  threshold_snr: 10.0
 
 wcs:
   max_catalog_mag: [15., 16., 17.]
@@ -22,7 +24,7 @@ zp:
   mag_range_catalog: 3.0
 
 detection:
-  threshold: 10.0
+  threshold_snr: 10.0
 
 fakeinjection:
   min_fake_mag: -4.

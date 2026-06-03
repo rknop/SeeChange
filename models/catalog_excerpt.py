@@ -373,7 +373,6 @@ class GaiaDR3DownloadLock(Base, UUIDMixin):
                 conn.execute_nofetch( q )
                 # This will add the row to the table and release the table lock
                 conn.commit()
-                locked_the_row = True
 
             yield True
 

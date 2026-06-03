@@ -390,7 +390,7 @@ flat_bias_builder:
 pipeline:
   save_before_subtraction: true
   save_at_finish: true
-  provenance_tag: current
+  provenance_tag: current_exgal
   inject_fakes: false
 
 # ======================================================================
