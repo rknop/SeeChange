@@ -226,7 +226,7 @@ def download_gaia_dr3( minra, maxra, mindec, maxdec, padding=0.1, minmag=18., ma
                 df = _download_gaia_dr3_custom_server( ralow, rahigh, declow, dechigh, minmag, maxmag )
                 break
             except Exception as ex:
-                SCLogger.debug( f"Exception trying to download ra=({ralow}:{rahigh}), dec=({declow}:{dechigh}), "
+                SCLogger.warning( f"Exception trying to download ra=({ralow}:{rahigh}), dec=({declow}:{dechigh}), "
                                 f"mag=({minmag}:{maxmag}) from custom gaia server: {ex}" )
                 if i < 4:
                     SCLogger.debug( "Sleeping 1s and retrying gaia query" )

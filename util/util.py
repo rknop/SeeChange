@@ -2,6 +2,7 @@ import collections.abc
 import numbers
 import os
 import pathlib
+import time
 from datetime import datetime
 import dateutil.parser
 import uuid
@@ -362,3 +363,45 @@ def patch_image_overlap_limits( patchwid, x, y, imageshape ):
         iy1 = imageshape[0]
 
     return ( (px0, px1, py0, py1), (ix0, ix1, iy0, iy1) )
+
+
+def retry_with_sleep( func, sleepmin=0.1, sleept=0.5, sleepfac=2, sleepfuzz=0.1, sleepmax=32,
+                      failmessage="to do the thing", exception_on_fail=True, retval_on_fail=None ):
+    failedatleastonce = False
+    succeeded = True
+    done = False
+    rng = np.random.default_rng()
+    t0 = time.monotonic()
+    tries = 0
+    while not done:
+        try:
+            tries += 1
+            result = func()
+            done = True
+            succeeded = True
+            t1 = time.monotonic()
+        except Exception as ex:
+            t1 = time.monotonic()
+            failedatleastonce = True
+            nextsleept = sleept * sleepfac
+            if nextsleept > sleepmax:
+                SCLogger.error( f"Repeated failures {failmessage} after {t1-t0:.2f}s and {tries} tries, giving up." )
+                done = True
+            else:
+                actualsleept = sleept + max( sleepmin, rng.normal(sleepfuzz * sleept) )
+                SCLogger.warning( f"Failed {failmessage} after {tries} tries, "
+                                  f"will sleep {actualsleept:.2f}s and try again." )
+                time.sleep( actualsleept )
+                sleept = nextsleept
+                
+    if succeeded = True:
+        if failedatleastonce:
+            SCLogger.info( f"Succeeded {failmessage} after {t1-t0:.2f}s and {tries} tries" )
+        return result
+
+    else:
+        if exception_on_fail:
+            raise RuntimeError( f"Failed {failmessage} after {t1-t0:.2f}s and {tries} tries." )
+        else:
+            return retval_on_fail
+    
