@@ -1,6 +1,8 @@
+import time
 import uuid
 from contextlib import contextmanager
 
+import numpy as np
 import sqlalchemy as sa
 import sqlalchemy.types
 from sqlalchemy import orm
@@ -308,10 +310,18 @@ class GaiaDR3DownloadLock(Base, UUIDMixin):
 
             return q, subdict
 
+        locked_the_row = False
         try:
             with PsycopgConnection() as conn:
-                gotit = False
                 cursor = None
+                minsleep = 0.1
+                sleept = 0.5
+                sleepfac = 2
+                maxsleep = 32
+                sleepfuzz = 0.1
+                rng = np.random.default_rng()
+                t0 = time.monotonic()
+                gotit = False
                 while not gotit:
                     cursor = conn.cursor()
                     cursor.execute( "LOCK TABLE gaiadr3_downloadlock" )
@@ -326,28 +336,36 @@ class GaiaDR3DownloadLock(Base, UUIDMixin):
                         # The row existed, so somebody else is doing this.
                         # Release the lock, wait, try again
                         conn.rollback()
-                        SCLogger.debug( "...waiting for gaiadr3 downloadlock..." )
+                        nextsleept = sleept * sleepfac
+                        if nextsleept > maxsleep:
+                            raise RuntimeError( f"Timed out after {time.monotonic()-t0:.1f}s waiting for "
+                                                f"gaia download lock." )
+                        actual_sleept = max( minsleep, sleept + rng.normal( sleepfuzz * sleept ) )
+                        SCLogger.debug( f"...didn't get gaiadr3 downloadlock, waiting {actual_sleept:.1f}s "
+                                        f"and trying again." )
+                        time.sleep( actual_sleept )
+                        sleept = nextsleept
 
-                # If we get here, we're holding a lock
+                # If we get here, we're holding a lock on the giadownloadlock table
                 q = ( "INSERT INTO gaiadr3_downloadlock(_id,minra,maxra,mindec,maxdec,minmag,maxmag) "
                       "VALUES (%(_id)s,%(minra)s,%(maxra)s,%(mindec)s,%(maxdec)s,%(minmag)s,%(maxmag)s)" )
                 cursor.execute( q, { '_id': uuid.uuid4(),
                                      'minra': minra, 'maxra': maxra,
                                      'mindec': mindec, 'maxdec': maxdec,
                                      'minmag': minmag, 'maxmag': maxmag } )
-                # This will add the row to the table and release the lock
+                # This will add the row to the table and release the table lock
                 conn.commit()
+                locked_the_row = True
 
             yield True
 
         finally:
-            # This is in a "finally" so that if the thing that we
-            #  yielded to gets an exception, this stuff still gets
-            #  executed.
-            with PsycopgConnection() as conn:
-                cursor = conn.cursor()
-                q = "DELETE FROM gaiadr3_downloadlock "
-                conds, subdict = sqlconds( minra, maxra, minmag, maxmag )
-                q += conds
-                cursor.execute( q, subdict )
-                conn.commit()
+            # Release the lock row
+            if locked_the_row:
+                with PsycopgConnection() as conn:
+                    cursor = conn.cursor()
+                    q = "DELETE FROM gaiadr3_downloadlock "
+                    conds, subdict = sqlconds( minra, maxra, minmag, maxmag )
+                    q += conds
+                    cursor.execute( q, subdict )
+                    conn.commit()
