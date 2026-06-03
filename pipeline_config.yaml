@@ -32,13 +32,15 @@ storage:
 #
 # Not in site config because every cluster working on the same survey
 # needs to contact the same database.
+#
+# The values below are what is needed for our tests.
 
 db:
   engine: postgresql+psycopg
   user: postgres
   password: fragile
   password_file: null
-  host: localhost
+  host: postgres
   port: 5432
   database: seechange
   echoqueries: false

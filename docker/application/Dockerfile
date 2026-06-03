@@ -373,7 +373,7 @@ COPY --from=build /astrometry.net/ /astrometry.net/
 COPY --from=included_code_build /seechange/lib /seechange/lib
 
 COPY default_config.yaml /seechange/default_config.yaml
-COPY pipeline_conifg.yaml /seechange/pipeline_config.yaml
+COPY pipeline_config.yaml /seechange/pipeline_config.yaml
 COPY site_config.yaml /seechange/site_config.yaml
 COPY default_config_extragalactic.yaml /seechange/default_config_extragalactic.yaml
 COPY default_config_galactic.yaml /seeconage/default_config_galactic.yaml
@@ -405,7 +405,7 @@ COPY --from=webap_build /webap_code/ /webap_code/
 COPY --from=webap_build /seechange/lib /seechange/lib
 
 COPY default_config.yaml /seechange/default_config.yaml
-COPY pipeline_conifg.yaml /seechange/pipeline_config.yaml
+COPY pipeline_config.yaml /seechange/pipeline_config.yaml
 COPY site_config.yaml /seechange/site_config.yaml
 COPY default_config_extragalactic.yaml /seechange/default_config_extragalactic.yaml
 COPY default_config_galactic.yaml /seeconage/default_config_galactic.yaml
