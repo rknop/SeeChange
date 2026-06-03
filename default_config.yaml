@@ -283,6 +283,8 @@ catalog_gaiadr3:
   fallback_datalab: False
   server_url: https://ls4-gaia-dr3.lbl.gov
   server_timeout_sec: 5.
+  coord_round: 0.005
+  mag_round: 0.1
 
 
 # ======================================================================

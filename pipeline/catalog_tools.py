@@ -356,6 +356,15 @@ def fetch_gaia_dr3_excerpt( image, minstars=50, maxmags=None, magrange=None,
     well without grinding everything to a halt, given that creating
     a new catalog excerpt isn't instant.
 
+    ROUNDING : so that we can reuse catalogs, and doing == on floats is
+    infinitely scary, every coordinate is rounded to to the value
+    specified in config by catalog_gaiadr3.coord_round, and magnitudes
+    are rounded to catalog_gaiadr3.mag_round.
+
+    [Currently, this rounding is only used for locking excerpts in
+    synchronizing multiple processes.  It's not actually used in the
+    definition of the catalogs.]
+
     Parameters
     ----------
       image : Image
