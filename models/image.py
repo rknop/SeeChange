@@ -1,8 +1,10 @@
 import os
 import base64
 import hashlib
+import textwrap
 
 import numpy as np
+from psycopg import sql
 
 import sqlalchemy as sa
 from sqlalchemy import orm
@@ -16,8 +18,6 @@ from sqlalchemy.schema import CheckConstraint
 from astropy.time import Time
 from astropy.wcs import WCS
 from astropy.io import fits
-import astropy.coordinates
-import astropy.units as u
 
 from util.util import parse_dateobs, listify, asUUID
 from util.fits import read_fits_image, save_fits_image_file
@@ -27,6 +27,7 @@ from util.logger import SCLogger
 from models.base import (
     Base,
     SeeChangeBase,
+    PGDB,
     SmartSession,
     PsycopgConnection,
     UUIDMixin,
@@ -567,7 +568,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                 sess.commit()
 
 
-    def set_corners_from_header_wcs( self, wcs=None, setradec=False ):
+    def set_corners_from_header_wcs( self, wcs=None, setradec=False, width=None, height=None ):
         """Update the image's four corners (and, optionally, RA/Dec) from a WCS.
 
         Parameters
@@ -581,6 +582,12 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
            as the things calculated from it (galactic, ecliptic
            coordinates).
 
+        width : int, default data.shape[1]
+           Width (x-size) of the image
+
+        height : int, default data.shape[0]
+           Height (y-size) of the image
+
         """
         if wcs is None:
             wcs = WCS( self._header )
@@ -588,8 +595,6 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         if ( wcs.axis_type_names == ['', ''] ):
             raise ValueError( "Could not find a good WCS" )
 
-        ras = []
-        decs = []
         # Note: this used to prefer raw_data; changed it to prefer
         #  data, because we believe that's what we want to prefer,
         #  but left this note here in case things go haywire.
@@ -597,37 +602,9 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         data = self.data if self.data is not None else self.raw_data
         width = data.shape[1]
         height = data.shape[0]
-        xs = [ 0., width-1., 0., width-1. ]
-        ys = [ 0., height-1., height-1., 0. ]
-        scs = wcs.pixel_to_world( xs, ys )
-        if isinstance( scs[0].ra, astropy.coordinates.Longitude ):
-            ras = [ i.ra.to_value() for i in scs ]
-            decs = [ i.dec.to_value() for i in scs ]
-        else:
-            ras = [ i.ra.value_in(u.deg).value for i in scs ]
-            decs = [ i.dec.value_in(u.deg).value for i in scs ]
-        ras, decs = FourCorners.sort_radec( ras, decs )
-        self.ra_corner_00 = ras[0]
-        self.ra_corner_01 = ras[1]
-        self.ra_corner_10 = ras[2]
-        self.ra_corner_11 = ras[3]
-        self.minra = min( ras )
-        self.maxra = max( ras )
-        self.dec_corner_00 = decs[0]
-        self.dec_corner_01 = decs[1]
-        self.dec_corner_10 = decs[2]
-        self.dec_corner_11 = decs[3]
-        self.mindec = min( decs )
-        self.maxdec = max( decs )
 
-        if setradec:
-            sc = wcs.pixel_to_world( data.shape[1] / 2., data.shape[0] / 2. )
-            self.ra = sc.ra.to(u.deg).value
-            self.dec = sc.dec.to(u.deg).value
-            self.gallat = sc.galactic.b.deg
-            self.gallon = sc.galactic.l.deg
-            self.ecllat = sc.barycentrictrueecliptic.lat.deg
-            self.ecllon = sc.barycentrictrueecliptic.lon.deg
+        FourCorners.set_corners_from_wcs( self, wcs, width, height, setradec=setradec )
+
 
     @classmethod
     def from_exposure(cls, exposure, section_id):
@@ -1603,6 +1580,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             overlapfrac=None,
             provenance_ids=None,
             provenance_ids_are_zp=False,
+            provenance_ids_are_wcs=False,
+            use_good=True,
             type=[1,2,3,4],
             target=None,
             section_id=None,
@@ -1677,13 +1656,28 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             be too.
 
         provenance_ids: str or list of strings
-            Find images with these provenance IDs, unless
-            provenace_ids_are_zp, in which case find images who have
-            ZeroPoint objectds in the database with these provenance
-            IDs.
+            Provenance ids to search on.  By default, it searches on
+            Image provenances; if provenance_ids_are_zp is True, then
+            search for images with zps with this provenance, or if
+            provenance_ds_are_wcs is True, then search for images with
+            wcses with this provenacne.
+
+            If either provenance_ids_are_zp or provenance_ids_are_wcs is
+            True, then position searches are on WCS corners rather than
+            image corners.
 
         provenance_ids_are_zp: bool, default False
             See provenance_ids
+
+        provenance_ids_are_wcs: bool, default False
+            See provenance_ids
+
+        use_good: bool, default True
+            Ignored unelss wcs_provenance_ids is not None, or
+            provenacne_ids_are_zp is True.  If this is True, then look
+            at the ra_good_xx and dec_good_xx fields in the WCS instead
+            of the ra_corner_xx and dec_corner_xx fields in the WCS
+            and/or image.
 
         type: integer or string or list of integers or strings, None
             List of image types to search for; see
@@ -1776,23 +1770,28 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             first max_number returned from the database, ordered as
             specified in order_by.
 
-        # return_zeropoints: bool, default False
-        #     If True, return ZeroPoints of the images in addition to the
-        #     Images.  This requires provenance_ids_are_zp to be True.
-        #     (NOT CURRENTLY SUPPORTED.)
-
         Returns
         -------
-          list of Image # or ( list of Image, list of ZeroPoint )
+          list of Image
 
         """
 
-        # Name of the table we're going to search after position searches are done
+        if provenance_ids_are_zp and provenance_ids_are_wcs:
+            raise ValueError( "Can't give both provenance_ids_are_zp and provenance_ids_are_wcs" )
+
+        if provenance_ids is None:
+            raise ValueError( "Must specify provenance(s) to search" )
+        provenance_ids = listify( provenance_ids, require_string=True )
+
+        # Avoid circular imports
+        from models.world_coordinates import WorldCoordinates
+
+        searchcontaining = False
+        searchoverlapping = False
         searchtable = None
         fcobj = None
 
-        with SmartSession() as sess:
-
+        with PGDB( dictcursor=True ) as pgdb:
             # First: position filter (but not including overlapfrac).  This may involve
             #   calling a FourCorners routine to build a temporary table.
 
@@ -1810,20 +1809,42 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                 if isinstance( dec, str ):
                     dec = parse_dec_dms_to_deg( dec )
 
-                if provenance_ids_are_zp:
-                    Image._find_possibly_containing_temptable(
-                        ra, dec,
-                        session=sess,
-                        prov_id=provenance_ids,
-                        fromclause=( "FROM images i "
-                                     "INNER JOIN source_lists s ON s.image_id=i._id "
-                                     "INNER JOIN world_coordinates w ON w.sources_id=s._id "
-                                     "INNER JOIN zero_points z ON z.wcs_id=w._id " ),
-                        provtable='z'
+                searchcontaining = True
+
+                if provenance_ids_are_zp or provenance_ids_are_wcs:
+                    corner = "good" if use_good else "corner"
+                    limprefix = "good_" if use_good else ""
+
+                    if provenance_ids_are_zp:
+                        WorldCoordinates._find_possibly_containing_temptable(
+                            ra, dec, session=pgdb, prov_id=provenance_ids, corner=corner, limprefix=limprefix,
+                            fromclause=( "FROM world_coordinates i\n"
+                                         "INNER JOIN zero_points z ON z.wcs_id=i.id" ),
+                            provtable='z'
+                        )
+                    else:
+                        WorldCoordinates._find_possibly_containing_temptable(
+                            ra, dec, session=pgdb, prov_id=provenance_ids, corner=corner, limprefix=limprefix )
+
+                    pgdb.execute_nofetch(
+                        sql.SQL( textwrap.dedent(
+                            """\
+                            SELECT i._id,
+                            t.ra_corner_00, t.ra_corner_01, t.ra_corner_10, t.ra_corner_11,
+                            t.dec_corner_00, t.dec_corner_01, t.dec_corner_10, t.dec_corner_11
+                            INTO TEMP TABLE temp_find_image_1
+                            FROM images i
+                            INNER JOIN source_lists s ON i._id=s.image_id
+                            INNER JOIN world_coordiantes w ON s._id=w.sources_id
+                            INNER JOIN temp_find_containing t ON t._id=w._id
+                            """
+                        ) )
                     )
+                    searchtable = "temp_find_image_1"
+
                 else:
-                    Image._find_possibly_containing_temptable( ra, dec, session=sess, prov_id=provenance_ids )
-                searchtable = "temp_find_containing"
+                    Image._find_possibly_containing_temptable( ra, dec, session=pgdb, prov_id=provenance_ids )
+                    searchtable = "temp_find_containing"
 
             elif any( i is not None for i in [ image, minra, maxra, mindec, maxdec ] ):
                 # Filter by rectangle
@@ -1861,20 +1882,42 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                 fcobj.dec_corner_11 = maxdec
                 fcobj.maxdec = maxdec
 
-                if provenance_ids_are_zp:
-                    Image._find_potential_overlapping_temptable(
-                        fcobj,
-                        session=sess,
-                        prov_id=provenance_ids,
-                        fromclause=( "FROM images i "
-                                     "INNER JOIN source_lists s ON s.image_id=i._id "
-                                     "INNER JOIN world_coordinates w ON w.sources_id=s._id "
-                                     "INNER JOIN zero_points z ON z.wcs_id=w._id " ),
-                        provtable='z'
+                searchoverlapping = True
+
+                if provenance_ids_are_zp or provenance_ids_are_wcs:
+                    corner = "good" if use_good else "corner"
+                    limprefix = "good_" if use_good else ""
+
+                    if provenance_ids_are_zp:
+                        WorldCoordinates._find_possibly_overlapping_temptable(
+                            fcobj, session=pgdb, prov_id=provenance_ids, corner=corner, limprefix=limprefix,
+                            fromclause=( "FROM world_coordinates i\n"
+                                         "INNER JOIN zero_points z ON z.wcs_id=i.id" ),
+                            provtable='z'
+                        )
+                    else:
+                        WorldCoordinates._find_possibly_containing_temptable(
+                            fcobj, session=pgdb, prov_id=provenance_ids, corner=corner, limprefix=limprefix )
+
+                    pgdb.execute_nofetch(
+                        sql.SQL( textwrap.dedent(
+                            """\
+                            SELECT i._id,
+                            t.ra_corner_00, t.ra_corner_01, t.ra_corner_10, t.ra_corner_11,
+                            t.dec_corner_00, t.dec_corner_01, t.dec_corner_10, t.dec_corner_11
+                            INTO TEMP TABLE temp_find_image_2
+                            FROM images i
+                            INNER JOIN source_lists s ON i._id=s.image_id
+                            INNER JOIN world_coordiantes w ON s._id=w.sources_id
+                            INNER JOIN temp_find_overlapping t ON t._id=w._id
+                            """
+                        ) )
                     )
+                    searchtable = "temp_find_image_2"
+
                 else:
-                    Image._find_potential_overlapping_temptable( fcobj, session=sess, prov_id=provenance_ids )
-                searchtable = "temp_find_overlapping"
+                    Image._find_potential_overlapping_temptable( fcobj, session=pgdb, prov_id=provenance_ids )
+                    searchtable = "temp_find_overlapping"
             else:
                 if overlapfrac is not None:
                     raise ValueError( "overlapfrac only makes sense with image or min/max ra/dec" )
@@ -1892,20 +1935,27 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             # it's not worth the effort of trying to figure out the
             # syntax.)
 
-            subdict = {}
-            andtxt = "WHERE "
             if searchtable is None:
-                q = "SELECT i.* FROM images i "
+                q = sql.SQL( textwrap.dedent(
+                    """\
+                    SELECT i.* FROM images i
+                    WHERE i.provenance_id=ANY(ARRAY[{provs}])
+                    """
+                ) ).format( provs=sql.SQL(",").join( provenance_ids ) )
             else:
-                q = f"SELECT i.* FROM {searchtable} t INNER JOIN images i ON t._id=i._id "
-                if searchtable == "temp_find_containing":
-                    q += ( "WHERE q3c_poly_query(:ra, :dec, ARRAY[ i.ra_corner_00, i.dec_corner_00, "
-                           "                                       i.ra_corner_01, i.dec_corner_01, "
-                           "                                       i.ra_corner_11, i.dec_corner_11, "
-                           "                                       i.ra_corner_10, i.dec_corner_10 ]) " )
-                    subdict[ 'ra' ] = ra
-                    subdict[ 'dec' ] = dec
-                    andtxt = " AND "
+                # Don't have to filter on provenance because that will have happened
+                #  in the building of the temp table above
+                q = sql.SQL( "SELECT i.* FROM {searchtable} t INNER JOIN images i ON t._id=i._id"
+                            ).format( searchtable=sql.Identifier(searchtable) )
+                if searchcontaining:
+                    q += sql.SQL( textwrap.dedent(
+                        """
+                        WHERE q3c_poly_query({ra}, {dec}, ARRAY[ t.ra_corner_00, t.dec_corner_00,
+                                                                 t.ra_corner_01, t.dec_corner_01,
+                                                                 t.ra_corner_11, t.dec_corner_11,
+                                                                 t.ra_corner_10, t.dec_corner_10 ])
+                        """
+                    ) ).format( ra=ra, dec=dec )
 
             # A few fields need preprocessing before feeding into the code below
             min_dateobs = None if min_dateobs is None else parse_dateobs(min_dateobs, output='mjd')
@@ -1936,73 +1986,47 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                        { 'field': 'zero_point_estimate', 'val': max_zero_point, 'type': 'le' },
                        { 'field': 'bkg_rms_estimate',    'val': min_background, 'type': 'ge' },
                        { 'field': 'bkg_rms_estimate',    'val': max_background, 'type': 'le' } ]
-            paramn = 0
             for field in fields:
                 if field['val'] is not None:
                     val = field['val']
-                    q += f"{andtxt} i.{field['field']} "
+                    q += sql.SQL( "  AND i.{field}" ).format( field=sql.Identifier(field['field']) )
                     if field['type'] == 'list':
-                        q += f" = ANY(:param{paramn})"
                         val = listify( val )
+                        q += sql.SQL( " = ANY(ARRAY[{mess}])\n" ).format( mess=sql.SQL(",").join( val ) )
                     elif field['type'] == 'ge':
-                        q += f" >= :param{paramn}"
+                        q += sql.SQL( " >= {val}\n" ).format( val=val )
                     elif field['type'] == 'le':
-                        q += f" <= :param{paramn}"
+                        q += sql.SQL( " <= {val}\n" ).format( val=val )
                     else:
                         raise RuntimeError( f"Unknown field type {field['type']}; this should never happen." )
-                    subdict[ f"param{paramn}" ] = val
-                    paramn += 1
-                    andtxt = " AND "
 
             # Third: Sort
 
             if order_by == 'earliest':
-                q += " ORDER BY i.mjd "
+                q += sql.SQL( "ORDER BY i.mjd\n" )
             elif order_by == 'latest':
-                q += " ORDER BY i.mjd DESC "
+                q += sql.SQL( "ORDER BY i.mjd DESC\n" )
             elif order_by == 'quality':
-                q += f" ORDER BY i.lim_mag_estimate - ({np.abs(seeing_quality_factor)}*i.fwhm_estimate) DESC "
+                q += sql.SQL( "ORDER BY i.lim_mag_estimate - {qf}*i.fwhm_estimate DESC\n"
+                             ).format( qf=sql.SQL(np.abs(seeing_quality_factor)) )
             elif order_by is not None:
                 raise ValueError(f'Unknown order_by parameter: {order_by}. Use "earliest", "latest" or "quality".')
 
-            # Get the Image records
-            images = sess.scalars( sa.select( Image ).from_statement( sa.text( q ).bindparams( **subdict ) ) ).all()
+            # Get the images
+            rows = pgdb.execute( q )
+            images = [ Image(**r) for r in rows ]
 
             # Should we delete temp tables?  They ought to get dropped automatically when the session closes.
 
         # Fourth: remove things with too small overlap fraction if relevant
 
-        if overlapfrac is not None:
+        if searchoverlapping:
             retimages = []
             for im in images:
                 if FourCorners.get_overlap_frac( fcobj, im ) >= overlapfrac:
                     retimages.append( im )
         else:
-            retimages = list( images )
-
-        # if return_zeropoints:
-        #     if not provenance_ids_are_zp:
-        #         raise ValueError( "return_zeropoints requires provenance_ids_are_zp" )
-        #     import SourceList
-        #     import WorldCoordinates
-        #     import ZeroPooint
-
-        #     with SmartSession() as sess:
-        #         if not isinstance( provenance_ids, list ):
-        #             provenace_ids = list( provenance_ids )
-        #         retzps = ( sess.query( ZeroPoint, Image._id )
-        #                    .join( WorldCoordinates, WorldCoordinates._id=ZeroPoint.wcs_id )
-        #                    .join( SourceList, SourceList._id=WorldCoordinates.sources_id )
-        #                    .join( Image, Image._id=SourceList.image_id )
-        #                    .filter( Image._id.in_( [ i.id for i in retimages ] ) )
-        #                    .filter( ZeroPoint.provenance_id.in_( provenance_ids ) ) ).all()
-        #         if len( retzps ) != len( retimages ):
-        #             raise ValueError( "Didn't find exactly one zeropoint for each found image" )
-        #         retimageids = [ i.id for i in retimages ]
-        #         zpdex = [ retimageids.index(r[1]) for r in retzps ]
-        #         retzps = [ retzps[i] for i in zpdex ]
-
-        #     return retimages, retzps
+            retimages = images
 
         return retimages
 

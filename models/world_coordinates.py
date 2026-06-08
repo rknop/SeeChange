@@ -11,13 +11,14 @@ from astropy.wcs import WCS
 from astropy.io import fits
 from astropy.wcs import utils
 
-from models.base import Base, SmartSession, UUIDMixin, HasBitFlagBadness, FileOnDiskMixin, SeeChangeBase
+from models.base import ( Base, SeeChangeBase, SmartSession,
+                          UUIDMixin, HasBitFlagBadness, FileOnDiskMixin, SpatiallyIndexed, FourCornersWithGood )
 from models.enums_and_bitflags import catalog_match_badness_inverse
 from models.image import Image
 from models.source_list import SourceList
 
 
-class WorldCoordinates(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
+class WorldCoordinates(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness, SpatiallyIndexed, FourCornersWithGood ):
     __tablename__ = 'world_coordinates'
 
     @declared_attr
@@ -26,7 +27,8 @@ class WorldCoordinates(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
             CheckConstraint( sqltext='NOT(md5sum IS NULL AND '
                                '(md5sum_components IS NULL OR array_position(md5sum_components, NULL) IS NOT NULL))',
                                name=f'{cls.__tablename__}_md5sum_check' ),
-            UniqueConstraint('sources_id', 'provenance_id', name='_wcs_source_list_provenance_uc' )
+            UniqueConstraint('sources_id', 'provenance_id', name='_wcs_source_list_provenance_uc' ),
+            sa.Index(f"{cls.__tablename__}_q3c_ang2ipix_idx", sa.func.q3c_ang2ipix(cls.ra, cls.dec)),
         )
 
     sources_id = sa.Column(

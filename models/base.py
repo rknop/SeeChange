@@ -11,12 +11,15 @@ import uuid
 import socket
 import threading
 import logging
+import textwrap
 from uuid import UUID
 from contextlib import contextmanager
 
 import numpy as np
 import shapely
 
+import astropy.wcs
+import astropy.units as u
 from astropy.coordinates import SkyCoord
 
 import psycopg
@@ -401,7 +404,7 @@ class PGDB:
 
         Parameters
         ----------
-          con : psycopg.Connection or PGDB
+          con : psycopg.Connection, psycopg.Cursor, PGDB, or (shudder) sa.orm.session.Session
             If None (the default), will make a new connection, and will
             roll back and close it when done.  If not None, then will
             instead wrap this connection; when close() is called, or
@@ -425,6 +428,7 @@ class PGDB:
         _alwaysexplain = cfg.value( 'db.alwaysexplain' )
         _alwaysanalyze = cfg.value( 'db.alwaysanalyze' )
 
+        made_a_new_one = False
         if con is not None:
             if isinstance( con, PGDB ):
                 self.con = con.con
@@ -434,17 +438,25 @@ class PGDB:
                 self.alwaysanalyze = con.alwaysanalyze
             elif isinstance( con, psycopg.Connection ):
                 self.con = con
-                self.timings = PGDBTimings()
-                self.echoqueries = _echoqueries
-                self.alwaysexplain = _alwaysexplain
-                self.alwaysanalyze = _alwaysanalyze
+                made_a_new_one = True
+            elif isinstance( con, psycopg.Cursor ):
+                self.con = con.connection
+                made_a_new_one = True
+            elif isinstance( con, sa.orm.session.Session ):
+                SCLogger.warning( "You're using a SQLAlchemy Session, still trying to make a PGDB from it" )
+                self.con = con.connection().connection.driver_connection
+                made_a_new_one = True
             else:
-                raise TypeError( f"con must be None, a PGDB, or a psycopg.Connection, not a {type(con)}" )
+                raise TypeError( f"con must be None, a PGDB, a psycopg.Connection, a psycopg.Cursor, or a "
+                                 f"sa.orm.session.Session (shudder), not a {type(con)}" )
             self._con_is_mine = False
         else:
             params = _get_psycopg_params()
             self.con = psycopg.connect( **params )
             self._con_is_mine = True
+            made_a_new_one = True
+
+        if made_a_new_one:
             self.timings = PGDBTimings()
             self.echoqueries = _echoqueries
             self.alwaysexplain = _alwaysexplain
@@ -904,7 +916,7 @@ class SeeChangeBase:
 
         Parameters
         ----------
-          session: SQLAlchemy Session, default None
+          session: PGDB, psycopg.Connect, psycopg.Cursor, sa.orm.session.Session, or None
             Usually you don't want to pass this.
 
           load_defaults: bool, default False
@@ -2193,11 +2205,10 @@ class UUIDMixin:
 
         Returns None if not found.
         """
-        if isinstance( session, psycopg.Connection ):
-            cursor = session.cursor( row_factory=psycopg.rows.dict_row )
+
+        with PGDB( session, dictcursor=True ) as pgdb:
             q = sql.SQL( "SELECT * FROM {table} WHERE _id=%(id)s" ).format( table=sql.Identifier(cls.__tablename__) )
-            cursor.execute( q, { 'id': uuid } )
-            rows = cursor.fetchall()
+            rows = pgdb.execute( q, { 'id': uuid } )
             if len(rows) == 0:
                 return None
             elif len(rows) > 1:
@@ -2205,9 +2216,6 @@ class UUIDMixin:
             else:
                 return cls( **(rows[0]) )
 
-        else:
-            with SmartSession( session ) as sess:
-                return sess.query( cls ).filter( cls._id==uuid ).first()
 
     @classmethod
     def get_batch_by_ids( cls, uuids, session=None, return_dict=False ):
@@ -2366,21 +2374,21 @@ class SpatiallyIndexed:
 class FourCorners:
     """A mixin for tables that have four RA/Dec corners"""
 
-    ra_corner_00 = sa.Column( sa.REAL, nullable=False, index=True,
+    ra_corner_00 = sa.Column( sa.REAL, nullable=False, index=False,
                               doc="RA of the low-RA, low-Dec corner (degrees)" )
-    ra_corner_01 = sa.Column( sa.REAL, nullable=False, index=True,
+    ra_corner_01 = sa.Column( sa.REAL, nullable=False, index=False,
                               doc="RA of the low-RA, high-Dec corner (degrees)" )
-    ra_corner_10 = sa.Column( sa.REAL, nullable=False, index=True,
+    ra_corner_10 = sa.Column( sa.REAL, nullable=False, index=False,
                               doc="RA of the high-RA, low-Dec corner (degrees)" )
-    ra_corner_11 = sa.Column( sa.REAL, nullable=False, index=True,
+    ra_corner_11 = sa.Column( sa.REAL, nullable=False, index=False,
                               doc="RA of the high-RA, high-Dec corner (degrees)" )
-    dec_corner_00 = sa.Column( sa.REAL, nullable=False, index=True,
+    dec_corner_00 = sa.Column( sa.REAL, nullable=False, index=False,
                                doc="Dec of the low-RA, low-Dec corner (degrees)" )
-    dec_corner_01 = sa.Column( sa.REAL, nullable=False, index=True,
+    dec_corner_01 = sa.Column( sa.REAL, nullable=False, index=False,
                                doc="Dec of the low-RA, high-Dec corner (degrees)" )
-    dec_corner_10 = sa.Column( sa.REAL, nullable=False, index=True,
+    dec_corner_10 = sa.Column( sa.REAL, nullable=False, index=False,
                                doc="Dec of the high-RA, low-Dec corner (degrees)" )
-    dec_corner_11 = sa.Column( sa.REAL, nullable=False, index=True,
+    dec_corner_11 = sa.Column( sa.REAL, nullable=False, index=False,
                                doc="Dec of the high-RA, high-Dec corner (degrees)" )
 
     # These next four can be calcualted from the columns above, but are here to speed up
@@ -2393,6 +2401,33 @@ class FourCorners:
     maxra = sa.Column( sa.REAL, nullable=False, index=True, doc="Max RA of image (degrees)" )
     mindec = sa.Column( sa.REAL, nullable=False, index=True, doc="Min Dec of image (degrees)" )
     maxdec = sa.Column( sa.REAL, nullable=False, index=True, doc="Max Dec of image (degrees)" )
+
+
+    @classmethod
+    def _fromclause( cls, fromclause=None ):
+        return ( sql.SQL(fromclause) if fromclause is not None
+                 else ( sql.SQL( "FROM {tab} i" )
+                        .format( tab=sql.Identifier(cls.__tablename__) ) )
+                )
+
+    @classmethod
+    def _provclause( cls, prov_id, provtable=None ):
+        provtable = cls.__tablename__ if provtable is None else provtable
+
+        if isinstance( prov_id, str ):
+            provclause = sql.SQL( "AND {provtable}.provenance_id={prov_id}"
+                                  ).format( provtable=sql.Identifier(provtable),
+                                            prov_id=prov_id )
+        elif isinstance( prov_id, list ):
+            provclause = sql.SQL( "AND {provtable}.provenance_id=ANY(ARRAY[{provs}])"
+                                 ).format( provtable=sql.Identifier(provtable),
+                                           provs=sql.SQL(",").join( sql.SQL("{p}").format(p=p) for p in prov_id ) )
+        elif prov_id is not None:
+            raise TypeError( "prov_id must be string, list, or None" )
+        else:
+            provclause = sql.SQL("")
+
+        return provclause
 
 
     @classmethod
@@ -2446,13 +2481,18 @@ class FourCorners:
 
 
     @classmethod
-    def find_containing_siobj( cls, siobj, session=None ):
+    def find_containing_siobj( cls, siobj, session=None, corner="corner", limprefix="" ):
         """Return all images (or whatever) that contain the given SpatiallyIndexed thing
 
         Parameters
         ----------
           siobj: SpatiallyIndexed
             A single object that is spatially indexed
+
+          session: sa.orm.session.Session, PGDB, psycopg.Connection, psycopg.Cursor, or None
+
+          corner, limprefix: str, default None
+             Used internally
 
         Returns
         -------
@@ -2465,11 +2505,12 @@ class FourCorners:
         # siobj.dec could be set to anything.)
         ra = float( siobj.ra )
         dec = float( siobj.dec )
-        return cls.find_containing( ra, dec, session=session )
+        return cls.find_containing( ra, dec, session=session, corner=corner, limprefix=limprefix )
 
     @classmethod
     def _find_possibly_containing_temptable( cls, ra, dec, session, prov_id=None,
-                                             fromclause=None, provtable='i' ):
+                                             fromclause=None, provtable='i',
+                                             corner="corner", limprefix="" ):
         """Internal.
 
         Looks for all cls objects where ra, dec is between minra:maxra,
@@ -2483,9 +2524,9 @@ class FourCorners:
         Parameters
         ----------
           ra, dec : float
-             Coordinates to search for; deciam degrees.
+             Coordinates to search for; decimal degrees.
 
-          session : Session
+          session : sa.orm.session.Session or PGDB or psycopg.Connection or psycopg.Cursor
              Required here, otherwise the temp table would be useless.
 
           prov_id : str, list of str, or None
@@ -2496,59 +2537,90 @@ class FourCorners:
              Complicated.  Used in Image.find_images.  WARNING.  Misuse
              of this can totally Bobby Tables the database.  Be good.
 
+          corner : str, default "corner"
+             ...used so that subclasses don't have to reimplement this
+             method.  If you misuse this, you can totally Bobby Tables
+             the databse, but if you're calling this function, you have
+             access anyway, so you may as well just "DROP TABLE..."
+             directly.  But, don't expose this to anything outside, and
+             don't use it unless you really know what you're doing.
+
+          limprefix: str, default ""
+             ...used so that subclasses don't have to reimplement this
+             method.  See warnings on corner re: Bobby Tables.
+
           provtable : str, default 'i'
              Complicated.  Used in Image.find_images.  WARNING.  Misuse
              of this can totally Bobby Tables the database.  Be good.
 
         """
-        session.execute( sa.text( "DROP TABLE IF EXISTS temp_find_containing" ) )
+        if not isinstance( session, ( sa.orm.session.Session, psycopg.Connection, psycopg.Cursor, PGDB ) ):
+            raise TypeError( f"session must be a sa.orm.session.Session, psycopg.Connection, psycopg.Cursor, or PGDB, "
+                             f"not a {type(session)}" )
 
         # Shouldn't need this, but just in case somebody gave us a wrapped RA:
         while ( ra < 0 ): ra += 360.
         while ( ra >= 360.): ra -= 360.
 
-        query = ( "SELECT i._id, i.ra_corner_00, i.ra_corner_01, i.ra_corner_10, i.ra_corner_11, "
-                  "       i.dec_corner_00, i.dec_corner_01, i.dec_corner_10, i.dec_corner_11 "
-                  "INTO TEMP TABLE temp_find_containing " )
-        if fromclause is not None:
-            query += fromclause + " "
-        else:
-            query += f"FROM {cls.__tablename__} i "
-        query += ( "WHERE ( "
-                   "  ( i.maxdec >= :dec AND i.mindec <= :dec ) "
-                   "  AND ( "
-                   "    ( (i.maxra > i.minra ) AND "
-                   "      ( maxra >= :ra AND minra <= :ra ) )"
-                   "    OR "
-                   "    ( ( i.maxra < i.minra ) AND "
-                   "      ( ( i.maxra >= :ra OR :ra > 180. ) AND ( i.minra <= :ra OR :ra <= 180. ) ) )"
-                   "  )"
-                   ")"
-                  )
-        subdict = { "ra": ra, "dec": dec }
-        if prov_id is not None:
-            if isinstance( prov_id, str ):
-                query += f" AND {provtable}.provenance_id=:prov"
-                subdict['prov'] = prov_id
-            elif isinstance( prov_id, list ):
-                query += f" AND {provtable}.provenance_id=ANY(:prov)"
-                subdict['prov'] = prov_id
-            else:
-                raise TypeError( "prov_id must be a a str or a list of str" )
+        fromclause = cls._fromclause( fromclause )
+        provclause = cls._provclause( prov_id, provtable )
 
-        session.execute( sa.text( query ), subdict )
+        q = sql.SQL( textwrap.dedent(
+            """\
+            SELECT i._id,
+                   i.ra_{corner}_00 AS ra_corner_00,
+                   i.ra_{corner}_01 AS ra_corner_01,
+                   i.ra_{corner}_10 AS ra_corner_10,
+                   i.ra_{corner}_11 AS ra_corner_11,
+                   i.dec_{corner}_00 AS dec_corner_00,
+                   i.dec_{corner}_01 AS dec_corner_01,
+                   i.dec_{corner}_10 AS dec_corner_10,
+                   i.dec_{corner}_11 AS dec_corner_11
+            INTO TEMP TABLE temp_find_containing
+            {fromclause}
+            WHERE (
+              ( i.{limprefix}maxdec >= {dec} AND i.{limprefix}mindec <= {dec} )
+              AND (
+                ( (i.{limprefix}maxra > i.{limprefix}minra ) AND
+                  ( {limprefix}maxra >= {ra} AND {limprefix}minra <= {ra} ) )
+                OR
+                ( ( i.{limprefix}maxra < i.{limprefix}minra ) AND
+                  ( ( i.{limprefix}maxra >= {ra} OR {ra} > 180. ) AND ( i.{limprefix}minra <= {ra} OR {ra} <= 180. ) ) )
+              )
+              {provclause}
+            )
+            """
+        ) ).format( ra=ra, dec=dec, fromclause=fromclause, provclause=provclause,
+                    corner=sql.SQL(corner), limprefix=sql.SQL(limprefix) )
+
+        with PGDB( session ) as pgdb:
+            pgdb.execute_nofetch( "DROP TABLE IF EXISTS temp_find_containing" )
+            pgdb.execute_nofetch( q )
 
 
     @classmethod
-    def find_containing( cls, ra, dec, prov_id=None, session=None ):
+    def find_containing( cls, ra, dec, corner="corner", limprefix="", prov_id=None, session=None ):
         """Return all objects in this class that contain the given RA and Dec
 
         Parameters
         ----------
           ra, dec: float, decimal degrees
 
+          corner: str, default "corner"
+             ...used so that subclasses don't have to reimplement this
+             method.  If you misuse this, you can totally Bobby Tables
+             the databse, but if you're calling this function, you have
+             access anyway, so you may as well just "DROP TABLE..."
+             directly.  But, don't expose this to anything outside, and
+             don't use it unless you really know what you're doing.
+
+          limperfix: str, default ""
+             ...used by subclasses.  See warnings on corner.
+
           prov_id : str, list of str, or None
              If not None, search for objects with this provenance, or any of these provenances if a list.
+
+          session: sa.orm.session.Session, PGDB, psycopg.Connection, psycopg.Cursor, or None
 
         Returns
         -------
@@ -2570,21 +2642,30 @@ class FourCorners:
         # (which *are* indexed) to greatly reduce the number of things
         # we'll q3c_poly_query.
 
-        with SmartSession( session ) as sess:
-            cls._find_possibly_containing_temptable( ra, dec, sess, prov_id=prov_id )
-            query = sa.text( f"SELECT i.* FROM {cls.__tablename__} i "
-                             f"INNER JOIN temp_find_containing t ON t._id=i._id "
-                             f"WHERE q3c_poly_query( {ra}, {dec}, ARRAY[ t.ra_corner_00, t.dec_corner_00, "
-                             f"                                          t.ra_corner_01, t.dec_corner_01, "
-                             f"                                          t.ra_corner_11, t.dec_corner_11, "
-                             f"                                          t.ra_corner_10, t.dec_corner_10 ])" )
-            objs = sess.scalars( sa.select( cls ).from_statement( query ) ).all()
-            sess.execute( sa.text( "DROP TABLE temp_find_containing" ) )
+        cls._find_possibly_containing_temptable( ra, dec, session, prov_id=prov_id, corner=corner, limprefix=limprefix )
+
+        q = sql.SQL( textwrap.dedent(
+            """
+            SELECT i.* FROM {tab} i
+            INNER JOIN temp_find_containing t ON t._id=i._id
+            WHERE q3c_poly_query( {ra}, {dec}, ARRAY[ t.ra_corner_00, t.dec_corner_00,
+                                                      t.ra_corner_01, t.dec_corner_01,
+                                                      t.ra_corner_11, t.dec_corner_11,
+                                                      t.ra_corner_10, t.dec_corner_10 ])
+            """
+        ) ).format( tab=sql.Identifier(cls.__tablename__), ra=ra, dec=dec )
+
+        with PGDB( session, dictcursor=True ) as pgdb:
+            rows = pgdb.execute( q )
+            objs = [ cls(**r) for r in rows ]
+            pgdb.execute_nofetch( "DROP TABLE temp_find_containing" )
             return objs
+
 
     @classmethod
     def _find_potential_overlapping_temptable( cls, fcobj, session, prov_id=None,
-                                               fromclause=None, provtable='i' ):
+                                               fromclause=None, provtable='i',
+                                               corner="corner", limprefix="" ):
         """Internal.
 
         Given a FourCorners object fcobj, will return all objects of
@@ -2600,8 +2681,8 @@ class FourCorners:
         ----------
           fcobj : FourCorners
 
-          session : Session
-             required here; otherwise, the temp table wouldn't be useful
+          session : sa.orm.session.Session or PGDB or psycopg.Connection or psycopg.Cursor
+             Required here, otherwise the temp table would be useless.
 
           prov_id: str, list of str, or None
              id or ids of the provenance of cls objects to search; if
@@ -2615,59 +2696,70 @@ class FourCorners:
              Complicated.  Used in Image.find_images.  WARNING.  Misuse
              of this can totally Bobby Tables the database.  Be good.
 
+          corner, limprefix : See _find_possibly_containing_temptable ; same thing
+
         """
 
-        session.execute( sa.text( "DROP TABLE IF EXISTS temp_find_overlapping" ) )
+        fromclause = cls._fromclause( fromclause )
+        provclause = cls._provclause( prov_id, provtable )
+
+        if not isinstance( session, ( sa.orm.session.Session, psycopg.Connection, psycopg.Cursor, PGDB ) ):
+            raise TypeError( f"session must be a sa.orm.session.Session, psycopg.Connection, psycopg.Cursor, or PGDB, "
+                             f"not a {type(session)}" )
 
         # All kinds of special cases (everything from the first OR
         # onwards) below to deal with the the case where RA crosses 0
         # TODO : speed tests once we have a big enough database for that
         # to matter to see how much this hurts us.
 
-        query = ( "SELECT i._id, i.ra_corner_00, i.ra_corner_01, i.ra_corner_10, i.ra_corner_11, "
-                  "       i.dec_corner_00, i.dec_corner_01, i.dec_corner_10, i.dec_corner_11 "
-                  "INTO TEMP TABLE temp_find_overlapping " )
-        if fromclause is not None:
-            query += fromclause + " "
-        else:
-            query += f"FROM {cls.__tablename__} i "
-        query += ( "WHERE ( "
-                   "  ( i.maxdec >= :mindec AND i.mindec <= :maxdec ) "
-                   "  AND "
-                   "  ( ( ( i.maxra >= i.minra AND :maxra >= :minra ) AND "
-                   "      i.maxra >= :minra AND i.minra <= :maxra ) "
-                   "    OR "
-                   "    ( i.maxra < i.minra AND :maxra < :minra ) "   # both include RA=0, will overlap in RA
-                   "    OR "
-                   "    ( ( i.maxra < i.minra AND :maxra >= :minra AND :minra <= 180. ) AND "
-                   "      i.maxra >= :minra ) "
-                   "    OR "
-                   "    ( ( i.maxra < i.minra AND :maxra >= :minra AND :minra > 180. ) AND "
-                   "      i.minra <= :maxra ) "
-                   "    OR "
-                   "    ( ( i.maxra >= i.minra AND :maxra < :minra AND i.maxra <= 180. ) AND "
-                   "      i.minra <= :maxra ) "
-                   "    OR "
-                   "    ( ( i.maxra >= i.minra AND :maxra < :minra AND i.maxra > 180. ) AND "
-                  "      i.maxra >= :minra ) "
-                   "  )"
-                   ") " )
-        subdict = { 'minra': fcobj.minra, 'maxra': fcobj.maxra,
-                    'mindec': fcobj.mindec, 'maxdec': fcobj.maxdec }
-        if prov_id is not None:
-            if isinstance( prov_id, str ):
-                query += f" AND {provtable}.provenance_id=:prov"
-                subdict['prov'] = prov_id
-            elif isinstance( prov_id, list ):
-                query += f" AND {provtable}.provenance_id=ANY(:prov)"
-                subdict['prov'] = prov_id
-            else:
-                raise TypeError( "prov_id must be a a str or a list of str" )
+        q = sql.SQL( textwrap.dedent(
+            """
+            SELECT i._id,
+                   i.ra_{corner}_00 AS ra_corner_00,
+                   i.ra_{corner}_01 AS ra_corner_01,
+                   i.ra_{corner}_10 AS ra_corner_10,
+                   i.ra_{corner}_11 AS ra_corner_11,
+                   i.dec_{corner}_00 AS dec_corner_00,
+                   i.dec_{corner}_01 AS dec_corner_01,
+                   i.dec_{corner}_10 AS dec_corner_10,
+                   i.dec_{corner}_11 AS dec_corner_11
+            INTO TEMP TABLE temp_find_overlapping
+            {fromclause}
+            WHERE (
+              ( i.{limprefix}maxdec >= {mindec} AND i.{limprefix}mindec <= {maxdec} )
+              AND
+              ( ( ( i.{limprefix}maxra >= i.{limprefix}minra AND {maxra} >= {minra} ) AND
+                  i.{limprefix}maxra >= {minra} AND i.{limprefix}minra <= {maxra} )
+                OR
+                ( i.{limprefix}maxra < i.{limprefix}minra AND {maxra} < {minra} )
+                OR
+                ( ( i.{limprefix}maxra < i.{limprefix}minra AND {maxra} >= {minra} AND {minra} <= 180. ) AND
+                  i.{limprefix}maxra >= {minra} )
+                OR
+                ( ( i.{limprefix}maxra < i.{limprefix}minra AND {maxra} >= {minra} AND {minra} > 180. ) AND
+                  i.{limprefix}minra <= {maxra} )
+                OR
+                ( ( i.{limprefix}maxra >= i.{limprefix}minra AND {maxra} < {minra} AND i.{limprefix}maxra <= 180. ) AND
+                  i.{limprefix}minra <= {maxra} )
+                OR
+                ( ( i.{limprefix}maxra >= i.{limprefix}minra AND {maxra} < {minra} AND i.{limprefix}maxra > 180. ) AND
+                 i.{limprefix}maxra >= {minra} )
+              )
+              {provclause}
+            )
+            """
+        ) ).format( mindec=fcobj.mindec, maxdec=fcobj.maxdec, minra=fcobj.minra, maxra=fcobj.maxra,
+                    provclause=provclause, fromclause=fromclause,
+                    corner=sql.SQL(corner), limprefix=sql.SQL(limprefix) )
 
-        session.execute( sa.text( query ), subdict )
+        with PGDB( session ) as pgdb:
+            pgdb.execute_nofetch( "DROP TABLE IF EXISTS temp_find_overlapping" )
+            pgdb.execute_nofetch( q )
+
 
     @classmethod
-    def find_potential_overlapping( cls, fcobj, prov_id=None, session=None ):
+    def find_potential_overlapping( cls, fcobj, prov_id=None, session=None,
+                                    corner="corner", limprefix="" ):
         """Return all objects of this class that *might* overlap FourCorners object fcobj.
 
         This will in general be a superset of things that actually do
@@ -2692,24 +2784,29 @@ class FourCorners:
           prov_id: str
              The ide of the provenance of objects in this class to search for
 
-          session: Session
-             (Optional) SA session.
+          corner, limprefix: str
+             Don't use this.  Used internally by subclasses. Passed on
+             to _find_potential_overlapping_temptable.
+
+          session: sa.orm.session.Session, PGDB, psycopg,Connection, or psycopg.Cursor
 
         Returns
         -------
           The result of a sess.scalars(...).all() with members of this class.
 
         """
-        with SmartSession( session ) as sess:
-            cls._find_potential_overlapping_temptable( fcobj, sess, prov_id=prov_id )
-            objs = sess.scalars( sa.select( cls )
-                                 .from_statement( sa.text( "SELECT _id FROM temp_find_overlapping" ) )
-                                ).all()
-            sess.execute( sa.text( "DROP TABLE temp_find_overlapping" ) )
+        with PGDB( session, dictcursor=True ) as pgdb:
+            cls._find_potential_overlapping_temptable( fcobj, pgdb, prov_id=prov_id,
+                                                       corner=corner, limprefix=limprefix )
+            rows = pgdb.execute( sql.SQL( "SELECT i.* FROM {tab} i INNER JOIN temp_find_overlapping t ON i._id=t._id" )
+                                 .format( tab=sql.Identifier(cls.__tablename__) ) )
+            objs = [ cls(**r) for r in rows ]
+            pgdb.execute_nofetch( "DROP TABLE temp_find_overlapping" )
             return objs
 
+
     @classmethod
-    def get_overlap_frac(cls, obj1, obj2):
+    def get_overlap_frac(cls, obj1, obj2, corner="corner", limprefix="" ):
         """Calculate the overlap fraction between two objects that have four corners.
 
         Returns
@@ -2717,16 +2814,26 @@ class FourCorners:
         overlap_frac: float
             The fraction of obj1's area that is covered by the intersection of the objects
 
+        corner: str, default "corner"
+            Used by subclasses
+
+        limprefix: str, default ""
+            Used by subclasses
+
         Assumes that the images are small enough that a simple cos(dec)
         correction for RA is enough that we can assume that the sky is
         flat.  This assumption will break down near the poles.
 
         """
 
-        o1ra = np.array( [ [ obj1.ra_corner_00, obj1.ra_corner_01 ], [ obj1.ra_corner_10, obj1.ra_corner_11 ] ] )
-        o2ra = np.array( [ [ obj2.ra_corner_00, obj2.ra_corner_01 ], [ obj2.ra_corner_10, obj2.ra_corner_11 ] ] )
-        o1dec = np.array( [ [ obj1.dec_corner_00, obj1.dec_corner_01 ], [ obj1.dec_corner_10, obj1.dec_corner_11 ] ] )
-        o2dec = np.array( [ [ obj2.dec_corner_00, obj2.dec_corner_01 ], [ obj2.dec_corner_10, obj2.dec_corner_11 ] ] )
+        o1ra = np.array( [ [ getattr( obj1,  f"ra_{corner}_00" ), getattr( obj1,  f"ra_{corner}_01" ) ],
+                           [ getattr( obj1,  f"ra_{corner}_10" ), getattr( obj1,  f"ra_{corner}_11" ) ] ])
+        o2ra = np.array( [ [ getattr( obj2,  f"ra_{corner}_00" ), getattr( obj2,  f"ra_{corner}_01" ) ],
+                           [ getattr( obj2,  f"ra_{corner}_10" ), getattr( obj2,  f"ra_{corner}_11" ) ] ] )
+        o1dec = np.array( [ [ getattr( obj1,  f"dec_{corner}_00" ), getattr( obj1,  f"dec_{corner}_01" ) ],
+                            [ getattr( obj1,  f"dec_{corner}_10" ), getattr( obj1,  f"dec_{corner}_11" ) ] ] )
+        o2dec = np.array( [ [ getattr( obj2,  f"dec_{corner}_00" ), getattr( obj2,  f"dec_{corner}_01" ) ],
+                            [ getattr( obj2,  f"dec_{corner}_10" ), getattr( obj2,  f"dec_{corner}_11" ) ] ] )
 
         # Have to handle the case of ra spanning 0.  This happens when
         # maxra < minra.  In that case, take all ras > 180 and subtract
@@ -2736,7 +2843,9 @@ class FourCorners:
         # happen.  (If you're using this pipeline with some sort of
         # fisheye all-sky camera, then... well, sorry.  All kinds of things
         # are probably going to break having to do with coordinates.)
-        if ( obj1.maxra < obj1.minra ) or ( obj2.maxra < obj2.minra ):
+        if ( ( getattr( obj1, f"{limprefix}maxra" ) < getattr( obj1, f"{limprefix}minra" ) ) or
+             ( getattr( obj2, f"{limprefix}maxra" ) < getattr( obj2, f"{limprefix}minra" ) )
+            ):
             o1ra[ o1ra > 180. ] -= 360.
             o2ra[ o2ra > 180. ] -= 360.
 
@@ -2770,15 +2879,15 @@ class FourCorners:
         return obj1.intersection( obj2 ).area / obj1.area
 
 
-    def contains( self, ra, dec ):
+    def contains( self, ra, dec, corner="corner", limprefix="" ):
         """Return True if ra, dec is contained within the four corners."""
 
-        corners = np.array( [ [ self.ra_corner_00, self.dec_corner_00 ],
-                              [ self.ra_corner_01, self.dec_corner_01 ],
-                              [ self.ra_corner_11, self.dec_corner_11 ],
-                              [ self.ra_corner_10, self.dec_corner_10 ],
-                              [ self.ra_corner_00, self.dec_corner_00 ] ] )
-        if self.maxra < self.minra:
+        corners = np.array( [ [ getattr( self, f"ra_{corner}_00" ), getattr( self, f"dec_{corner}_00" ) ],
+                              [ getattr( self, f"ra_{corner}_01" ), getattr( self, f"dec_{corner}_01" ) ],
+                              [ getattr( self, f"ra_{corner}_11" ), getattr( self, f"dec_{corner}_11" ) ],
+                              [ getattr( self, f"ra_{corner}_10" ), getattr( self, f"dec_{corner}_10" ) ],
+                              [ getattr( self, f"ra_{corner}_00" ), getattr( self, f"dec_{corner}_00" ) ] ] )
+        if getattr( self, f"{limprefix}maxra" ) < getattr( self, f"{limprefix}minra" ):
             corners[ corners[:,0]>180, 0 ] -= 360.
             if ra > 180.:
                 ra -= 360.
@@ -2786,8 +2895,157 @@ class FourCorners:
         obj = shapely.Polygon( corners )
         return obj.contains( shapely.Point( ra, dec ) )
 
+    def set_corners_from_wcs( self, wcs, width, height, setradec=False ):
+        """Update the object's four corners (and, optionally, RA/Dec) from a WCS.
+
+        Parameters
+        ----------
+        wcs : astropy.wcs.WCS,
+           The WCS to use.  Required.
+
+        width : int
+            Width (x-size) of image.  Required.
+
+        height : int
+            Height (y-size) of image.  Required
+
+        setradec : bool, default False
+           If True, also update the image's ra and dec fields, as well
+           as the things calculated from it (galactic, ecliptic
+           coordinates).
+
+        """
+
+        if not isinstance( wcs, astropy.wcs.WCS ):
+            raise TypeError( f"wcs must be a astropy.wcs.WCS, not a {type(wcs)}" )
+        # Try to detect a bad WCS
+        if ( wcs.axis_type_names == ['', ''] ):
+            raise ValueError( "Don't know how to cope with this WCS" )
+
+        ras = []
+        decs = []
+        xs = [ 0., width-1., 0., width-1. ]
+        ys = [ 0., height-1., height-1., 0. ]
+        scs = wcs.pixel_to_world( xs, ys )
+        if isinstance( scs[0].ra, astropy.coordinates.Longitude ):
+            ras = [ i.ra.to_value() for i in scs ]
+            decs = [ i.dec.to_value() for i in scs ]
+        else:
+            ras = [ i.ra.value_in(u.deg).value for i in scs ]
+            decs = [ i.dec.value_in(u.deg).value for i in scs ]
+        ras, decs = FourCorners.sort_radec( ras, decs )
+        self.ra_corner_00 = ras[0]
+        self.ra_corner_01 = ras[1]
+        self.ra_corner_10 = ras[2]
+        self.ra_corner_11 = ras[3]
+        self.minra = min( ras )
+        self.maxra = max( ras )
+        self.dec_corner_00 = decs[0]
+        self.dec_corner_01 = decs[1]
+        self.dec_corner_10 = decs[2]
+        self.dec_corner_11 = decs[3]
+        self.mindec = min( decs )
+        self.maxdec = max( decs )
+
+        if setradec:
+            sc = wcs.pixel_to_world( width / 2., height / 2. )
+            self.ra = sc.ra.to(u.deg).value
+            self.dec = sc.dec.to(u.deg).value
+            self.gallat = sc.galactic.b.deg
+            self.gallon = sc.galactic.l.deg
+            self.ecllat = sc.barycentrictrueecliptic.lat.deg
+            self.ecllon = sc.barycentrictrueecliptic.lon.deg
+
+
+
+class FourCornersWithGood( FourCorners ):
+    """FourCorners, plus another set of fields indicating what's actually good.
+
+    This is for images where a substantial fraction of the image is
+    masked out, e.g. an image where one of two chips is bad.
+
+    """
+
+    ra_good_00 = sa.Column( sa.REAL, nullable=False, index=False )
+    ra_good_01 = sa.Column( sa.REAL, nullable=False, index=False )
+    ra_good_10 = sa.Column( sa.REAL, nullable=False, index=False )
+    ra_good_11 = sa.Column( sa.REAL, nullable=False, index=False )
+    dec_good_00 = sa.Column( sa.REAL, nullable=False, index=False )
+    dec_good_01 = sa.Column( sa.REAL, nullable=False, index=False )
+    dec_good_10 = sa.Column( sa.REAL, nullable=False, index=False )
+    dec_good_11 = sa.Column( sa.REAL, nullable=False, index=False )
+    good_minra = sa.Column( sa.REAL, nullable=False, index=True )
+    good_maxra = sa.Column( sa.REAL, nullable=False, index=True )
+    good_mindec = sa.Column( sa.REAL, nullable=False, index=True )
+    good_maxdec = sa.Column( sa.REAL, nullable=False, index=True )
+
+
+    @classmethod
+    def find_containing_siobj( cls, siobj, session=None, corner="good", limprefix="good_" ):
+        return FourCorners.find_containing_siobj( cls, siobj, session=session, corner=corner, limprefix=limprefix )
+
+    @classmethod
+    def find_containing( cls, ra, dec, corner="good", limprefix="good_", prov_id=None, session=None ):
+        return FourCorners.find_containing( cls, ra, dec, corner=corner, limprefix=limprefix,
+                                            prov_id=prov_id, session=session )
+
+
+    @classmethod
+    def find_potentialy_overlapping( cls, fcobj, prov_id=None, session=None, corner="good", limprefix="good_" ):
+        return FourCorners.find_potentially_overlapping( cls, fcobj, prov_id=prov_id, session=session,
+                                                         corner=corner, limprefix=limprefix )
+
+    @classmethod
+    def get_overlap_frac( cls, obj1, obj2, corner="good", limprefix="good_" ):
+        return FourCorners.get_overlap_frac( cls, obj1, obj2, corner=corner, limprefix=limprefix )
+
+
+    def contains( self, ra, dec, corner="good", limprefix="good_" ):
+        return FourCorners.contains( self, ra, dec, corner=corner, limprefix=limprefix )
+
+
+    def set_corners_from_wcs( self, wcs, width=None, height=None, setradec=False, mask=None ):
+        """Update four corners"""
+
+        if ( width is None ) or ( height is None ):
+            if mask is None:
+                raise ValueError( "Must give width/height, or mask" )
+            width = width if width is not None else mask.shape[1]
+            height = height if height is not None else mask.shape[0]
+
+        FourCorners.set_corners_from_wcs( self, wcs, width, height, setradec=True )
+
+        if mask is not None:
+            # Figure out what is the outer "bad region" that we want to throw out
+            # or along y to get the xs that have any good pixels
+            xok = np.where( np.any( mask==0, axis=0 ) )[0]
+            xgood0 = np.min( xok )
+            xgood1 = np.max( xok )
+            # or along x to get the ys that have any good pixels
+            yok = np.where( np.any( mask==0, axis=1 ) )[0]
+            ygood0 = np.min( yok )
+            ygood1 = np.max( yok )
+
+            xs = [ xgood0, xgood0, xgood1, xgood1 ]
+            ys = [ ygood0, ygood1, ygood0, ygood1 ]
+            ras, decs = wcs.pixel_to_world_values( xs, ys )
+            ras, decs = FourCorners.sort_radec( ras, decs )
+            self.ra_good_00 = ras[0]
+            self.ra_good_01 = ras[1]
+            self.ra_good_10 = ras[2]
+            self.ra_good_11 = ras[3]
+            self.good_minra = min( ras )
+            self.good_maxra = max( ras )
+            self.dec_good_00 = decs[0]
+            self.dec_good_01 = decs[1]
+            self.dec_good_10 = decs[2]
+            self.dec_good_11 = decs[3]
+            self.good_mindec = min( decs )
+            self.good_maxdec = max( decs )
+
 
 class HasBitFlagBadness:
+
     """A mixin class that adds a bitflag marking why this object is bad. """
     _bitflag = sa.Column(
         sa.BIGINT,

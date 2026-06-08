@@ -60,7 +60,7 @@ class CodeVersion(Base, UUIDMixin):
     #
     #     sometimes when changing certain values here, hardcoded provenances in ptf and decam
     #     fixtures will need to be updated or tests will fail, or at the very least be slower as
-    #     they won't use teh cache right (Check warnings for base path not matching)
+    #     they won't use the cache right (Check warnings for base path not matching)
     #
     #     NOTE: PATCH changes should never result in a change in any data produced, and can be changed without
     #     affecting provenances. MINOR changes will result in some change in the data products, and MAJOR will
@@ -71,7 +71,7 @@ class CodeVersion(Base, UUIDMixin):
         'acquire_exposure': (0,2,0),
         'preprocessing': (0,10,0),
         'extraction': (0,7,0),
-        'astrocal' : (0,3,0),
+        'astrocal' : (0,4,0),
         'photocal' : (0,1,0),
         'subtraction': (0,1,0),
         'detection': (0,2,0),

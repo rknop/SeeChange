@@ -9,7 +9,7 @@ from astropy.wcs import WCS
 from astropy.io import fits
 
 from util.exceptions import BadMatchException
-from models.base import SmartSession, CODE_ROOT
+from models.base import SmartSession, CODE_ROOT, FourCorners
 from models.image import Image
 from models.world_coordinates import WorldCoordinates
 
@@ -87,7 +87,7 @@ def test_solve_wcs_scamp( ztf_gaia_dr3_excerpt, ztf_datastore_uncommitted, astro
 
 
 
-def verify_astrocal( astrometor, origwcs, ds, origmd5 ):
+def verify_astrocal( astrometor, origwcs, ds, origmd5, masked=False ):
     # Has the side effect of running ds.save_and_commit()
 
     assert astrometor.has_recalculated
@@ -105,6 +105,55 @@ def verify_astrocal( astrometor, origwcs, ds, origmd5 ):
         assert not origsc.dec.value == pytest.approx( newsc.dec.value, abs=1./3600. )
         assert origsc.ra.value == pytest.approx( newsc.ra.value, abs=40./3600. )   # cos(dec)...
         assert origsc.dec.value == pytest.approx( newsc.dec.value, abs=40./3600. )
+
+    # Make sure that the four corners are right
+    newras = [ s.ra.value for s in newscs ]
+    newdecs = [ s.dec.value for s in newscs ]
+    newras, newdecs = FourCorners.sort_radec( newras, newdecs )
+    assert ds.wcs.ra_corner_00 == pytest.approx( newras[0], abs=1.0/3600. )
+    assert ds.wcs.ra_corner_01 == pytest.approx( newras[1], abs=1.0/3600. )
+    assert ds.wcs.ra_corner_10 == pytest.approx( newras[2], abs=1.0/3600. )
+    assert ds.wcs.ra_corner_11 == pytest.approx( newras[3], abs=1.0/3600. )
+    assert ds.wcs.dec_corner_00 == pytest.approx( newdecs[0], abs=1.0/3600. )
+    assert ds.wcs.dec_corner_01 == pytest.approx( newdecs[1], abs=1.0/3600. )
+    assert ds.wcs.dec_corner_10 == pytest.approx( newdecs[2], abs=1.0/3600. )
+    assert ds.wcs.dec_corner_11 == pytest.approx( newdecs[3], abs=1.0/3600. )
+    assert ds.wcs.minra == pytest.approx( min( newras ), abs=1.0/3600. )
+    assert ds.wcs.maxra == pytest.approx( max( newras ), abs=1.0/3600. )
+    assert ds.wcs.mindec == pytest.approx( min( newdecs ), abs=1.0/3600. )
+    assert ds.wcs.maxdec == pytest.approx( max( newdecs ), abs=1.0/3600. )
+
+    if masked:
+        mxvals = [ 50, 50, 1800, 1800 ]
+        myvals = [ 300, 3600, 300, 3600 ]
+    else:
+        # The DECam images are masked around the edges anyway
+        mxvals = [ 15, 15, 2032, 2032 ]
+        myvals = [ 15, 4080, 15, 4080 ]
+    mras, mdecs = ds.wcs.wcs.pixel_to_world_values( mxvals, myvals )
+    mras, mdecs = FourCorners.sort_radec( mras, mdecs )
+    assert ds.wcs.ra_good_00 == pytest.approx( mras[0], abs=1.0/3600. )
+    assert ds.wcs.ra_good_01 == pytest.approx( mras[1], abs=1.0/3600. )
+    assert ds.wcs.ra_good_10 == pytest.approx( mras[2], abs=1.0/3600. )
+    assert ds.wcs.ra_good_11 == pytest.approx( mras[3], abs=1.0/3600. )
+    assert ds.wcs.dec_good_00 == pytest.approx( mdecs[0], abs=1.0/3600. )
+    assert ds.wcs.dec_good_01 == pytest.approx( mdecs[1], abs=1.0/3600. )
+    assert ds.wcs.dec_good_10 == pytest.approx( mdecs[2], abs=1.0/3600. )
+    assert ds.wcs.dec_good_11 == pytest.approx( mdecs[3], abs=1.0/3600. )
+    assert ds.wcs.good_minra == pytest.approx( min( mras ), abs=1.0/3600. )
+    assert ds.wcs.good_maxra == pytest.approx( max( mras ), abs=1.0/3600. )
+    assert ds.wcs.good_mindec == pytest.approx( min( mdecs ), abs=1.0/3600. )
+    assert ds.wcs.good_maxdec == pytest.approx( max( mdecs ), abs=1.0/3600. )
+
+    # HACK ALERT
+    # The only place masked=True is used is in test_run_astrometry_net, and
+    #   that's after it's wiped the WorldCoordinates and made new ones with
+    #   masks.  In that case, don't check the FITS header again, we've already
+    #   done it.  Really, this should have a different flag, since logically
+    #   "don't check the header" doesn't conect to "check if the good stuff got
+    #   set right for the flags", but they happen to correlate 1:1.
+    if masked:
+        return
 
     # NOTE -- because of the cache, the image may well have the "astro_cal_done" flag
     #  set even though we're using the decam_datastore_through_bg fixture, which doesn't
@@ -237,6 +286,27 @@ def test_run_astrometry_net( decam_datastore_through_extraction, astrometor ):
     ds = astrometor.run( ds )
 
     verify_astrocal( astrometor, origwcs, ds, origmd5 )
+
+    # Now mask outa  bunch of the image and see if the "good" fields get set right
+    # (This code is in astro_cal.py outside the call to astrometry.net or scamp,
+    # so test do it here.)
+
+    ds.wcs.delete_from_disk_and_database()
+    ds.wcs = None
+    ds.image.flags[:] = 1
+    ds.image.flags[300:3601, 50:1801] = 0
+    ds = astrometor.run( ds )
+    verify_astrocal( astrometor, origwcs, ds, origmd5, masked=True )
+
+    ds.wcs.delete_from_disk_and_database()
+    ds.wcs = None
+    ds.image.flags[:] = 1
+    ds.image.flags[ 300, 575 ] = 0
+    ds.image.flags[ 3600, 1700 ] = 0
+    ds.image.flags[ 400, 50 ] = 0
+    ds.image.flags[ 3500, 1800 ] = 0
+    ds = astrometor.run( ds )
+    verify_astrocal( astrometor, origwcs, ds, origmd5, masked=True )
 
     # TODO : test using astrometry_net_exposure_radec
 

@@ -22,6 +22,7 @@ from util.logger import SCLogger
 import models.base
 from models.base import Base, SmartSession, PsycopgConnection, PGDB, UUIDMixin, FileOnDiskMixin, FourCorners
 from models.image import Image
+from models.world_coordinates import WorldCoordinates
 from models.datafile import DataFile
 from models.object import Object
 
@@ -850,77 +851,232 @@ def test_fourcorners_sort_radec():
 def test_fourcorners_contains():
     dra = 0.75
     ddec = 0.375
+    dragoodplus = dra * 7./8.
+    dragoodminus = dra * 3./4.
+    ddecgoodplus = ddec * 7./8.
+    ddecgoodminus = ddec * 1./2.
     rawcorners = np.array( [ [ -dra/2.,  -dra/2.,   dra/2.,   dra/2. ],
                              [ -ddec/2.,  ddec/2., -ddec/2.,  ddec/2. ] ] )
+    rawgoodcorners = np.array( [ [  -dragoodminus/2., -dragoodminus/2.,    dragoodplus/2.,  dragoodplus/2. ],
+                                 [ -ddecgoodminus/2.,  ddecgoodplus/2., -ddecgoodminus/2., ddecgoodplus/2. ] ] )
     ras = [ 0., 10. ]
     decs = [ 0., -45, 80. ]
-    angles = [ 0., 15., 30., 45. ]
-    # (I drew a rectangle in LibreOffice Draw and rotated it to decide the points and truth values below visually.)
-    offsets = { 0.: { ( 0,    0  ): True,
-                      ( 0.9,  0.9): True,
-                      ( 0.,   0.9): True,
-                      (-0.9,  0.9): True },
-                15.: { ( 0,   0): True,
-                       (-0.8,-0.8): False,
-                       (-0.8, 0.8): True,
-                       (-0.8,-0.4): True,
-                       (-0.8, 0.4): True,
-                       (-0.8, 0. ): True,
-                       ( 0.,  0.9 ) : True,
-                       ( 0., -0.9 ) : True },
-                30.: { ( 0,   0): True,
-                       (-0.8,-0.8): False,
-                       (-0.8, 0.8): True,
-                       (-0.8,-0.4): False,
-                       (-0.8, 0.4): True,
-                       (-0.8, 0. ): True,
-                       ( 0.,  0.9 ) : True,
-                       ( 0., -0.9 ) : True },
-                45.: { ( 0,   0): True,
-                       (-0.8,-0.8): False,
-                       (-0.8, 0.8): True,
-                       (-0.8,-0.4): False,
-                       (-0.8, 0.4): True,
-                       (-0.8, 0. ): False,
-                       ( 0.,  0.9 ) : True,
-                       ( 0., -0.9 ) : True },
+    # See plot_for_test_fourcorners.py ; used that to visually decide True and False below
+    offsets = { 0: { ( 1.1, 0.9 ): ( False, False ),
+                     ( 1.1, 0. ): ( False, False ),
+                     ( 1.1, -0.9 ): ( False, False ),
+                     ( 0.9, 1.1 ): ( False, False ),
+                     ( 0.9, 0.9 ): ( True, False ),
+                     ( 0.9, 0. ): ( True, False ),
+                     ( 0.9, -0.9 ): ( True, False ),
+                     ( 0.725, 0.75 ): ( True, True ),
+                     ( 0.725, 0. ): ( True, True ),
+                     ( 0.725, -0.45 ): ( True, True ),
+                     ( 0.725, -0.625 ): ( True, False ),
+                     ( 0., 1.1 ) : ( False, False ),
+                     ( 0., 0.9 ): ( True, False ),
+                     ( 0., 0.8125 ): ( True, True ),
+                     ( 0., 0. ): ( True, True ),
+                     ( 0., -0.475 ): ( True, True ),
+                     ( 0., -0.525 ): (True, False ),
+                     ( 0., -0.9 ): ( True, False ),
+                     ( 0., -1.1 ): ( False, False ),
+                     ( -0.725, 0.75 ): (True, True ),
+                     ( -0.725, 0. ): ( True, True ),
+                     ( -0.725, -0.45 ): ( True, True ),
+                     ( -0.725, -0.625 ): ( True, False ),
+                     ( -0.9, 0.9 ): ( True, False ),
+                     ( -0.9, 0. ): ( True, False ),
+                     ( -0.9, -0.9 ): ( True, False ),
+                     ( -1.1, 0.9 ): ( False, False ),
+                     ( -1.1, 0. ): ( False, False ),
+                     ( -1.1, -0.9 ): ( False, False )
+                    },
+                15: { ( -1.00625, -0.5 ): ( False, False ),
+                      ( -1.00625, -0.4375 ): ( True, False ),
+                      ( -1.00625, -0.125 ): ( True, False ),
+                      ( -1.00625, 0. ): ( True, False ),
+                      ( -1.00625, 0.9 ): ( False, False ),
+                      ( -0.75, -0.6785 ): ( False, False ),
+                      ( -0.75, -0.59375 ): ( True, False ),
+                      ( -0.75, -0.1875 ): ( True, False ),
+                      ( -0.75, -0.09375 ): ( True, True ),
+                      ( -0.75, 0. ): ( True, True ),
+                      ( -0.75, 0.15625 ): ( True, True ),
+                      ( -0.75, 0.28125 ): ( True, False ),
+                      ( -0.75, 1.375 ): ( True, False ),
+                      ( -0.75, 1.5 ): ( False, False ),
+                      ( 0., -1.0625 ): ( False, False ),
+                      ( 0., -1.015625 ): ( True, False ),
+                      ( 0, -0.5625 ): ( True, False ),
+                      ( 0., -0.5 ): ( True, True ),
+                      ( 0., 0. ): ( True, True ),
+                      ( 0., 0.75 ): ( True, True ),
+                      ( 0., 0.875 ): ( True, True ),
+                      ( 0., 1.015625 ): ( True, False ),
+                      ( 0., 1.0625 ): ( False, False ),
+                      ( 0.75, -1.46875 ): ( False, False ),
+                      ( 0.75, -1.40625 ): ( True, False ),
+                      ( 0.75, -0.9375 ): ( True, False ),
+                      ( 0.75, -0.875 ): ( True, True ),
+                      ( 0.75, 0. ): ( True, True ),
+                      ( 0.75, 0.4375 ): ( True, True ),
+                      ( 0.75, 0.5625 ): ( True, False ),
+                      ( 0.75, 0.65625 ): ( False, False ),
+                      ( 1.00625, -0.9 ): ( False, False ),
+                      ( 1.00625, 0. ): ( True, False ),
+                      ( 1.00625, 0.125 ): ( True, False ),
+                      ( 1.00625, 0.4375 ): ( True, False ),
+                      ( 1.00625, 0.5 ): ( False, False )
+                     },
+                30: { ( -1.09375, 0. ): ( False, False ),
+                      ( -1.09375, 0.0265 ): ( False, False ),
+                      ( -1.09375, 0.125 ): ( True, False ),
+                      ( -1.09375, 0.3125 ): ( False, False ),
+                      ( -0.75, -0.3125 ): ( False, False ),
+                      ( -0.75, -0.25 ): ( True, False ),
+                      ( -0.75, 0. ): ( True, False ),
+                      ( -0.75, 0.25 ): ( True, False ),
+                      ( -0.75, 0.34375 ): ( True, True ),
+                      ( -0.75, 0.4375 ): ( True, False ),
+                      ( -0.75, 1.375 ): ( True, False ),
+                      ( -0.75, 1.4375 ): ( False, False ),
+                      ( 0., -1.1875 ): ( False, False ),
+                      ( 0., -1.125 ): (True, False ),
+                      ( 0, -0.59375 ): ( True, False ),
+                      ( 0, -0.5625 ): ( True, True ),
+                      ( 0., 0. ): ( True, True ),
+                      ( 0., 0.9375 ): ( True, True ),
+                      ( 0., 1.03125 ): ( True, False ),
+                      ( 0., 1.125 ): ( True, False ),
+                      ( 0., 1.1875 ) : ( False, False ),
+                      ( 0.75, -1.4375 ): ( False, False ),
+                      ( 0.75, -1.34375 ): ( True, False ),
+                      ( 0.75, -0.90625 ): ( True, False ),
+                      ( 0.75, -0.40625 ): ( True, True ),
+                      ( 0.75, 0., ): ( True, True ),
+                      ( 0.75, 0.09375 ): ( True, True ),
+                      ( 0.75, 0.1875 ): ( True, False ),
+                      ( 0.75, 0.3125 ): ( False, False ),
+                      ( 1.09375, -0.3125 ): ( False, False ),
+                      ( 1.09375, -0.125 ): ( True, False ),
+                      ( 1.09375, -0.0265 ): ( False, False ),
+                      ( 1.09375, 0. ): ( False, False )
+                     },
+                45: { ( -1.03125, 0. ): ( False, False ),
+                      ( -1.03125, 0.375 ): ( False, False ),
+                      ( -1.03125, 0.6875 ): ( True, False ),
+                      ( -1.03125, 0.875 ): ( False, False ),
+                      ( -0.6875, -0.09375 ): ( False, False ),
+                      ( -0.6875, 0. ): ( True, False ),
+                      ( -0.6875, 0.625 ): ( True, False ),
+                      ( -0.6875, 0.6875 ): ( True, True ),
+                      ( -0.6875, 0.78125 ): ( True, False ),
+                      ( -0.6875, 1.40625 ): ( True, False ),
+                      ( -0.6875, 1.5 ): ( False, False ),
+                      ( 0., -1.4375 ): ( False, False ),
+                      ( 0., -1.375 ): ( True, False ),
+                      ( 0., -0.75 ): ( True, False ),
+                      ( 0., -0.6875 ): ( True, True ),
+                      ( 0., 0. ): ( True, True ),
+                      ( 0., 1.1875 ): (True, True ),
+                      ( 0., 1.3215 ): ( True, False ),
+                      ( 0., 1.4375 ): ( False, False ),
+                      ( 0.875, -1.125 ): ( False, False ),
+                      ( 0.875, -1.03125 ): ( True, False ),
+                      ( 0.875, -0.75 ): ( True, False ),
+                      ( 0.875, -0.625 ): ( True, True ),
+                      ( 0.875, -0.5 ): ( True, False ),
+                      ( 0.875, -0.375 ): ( True, False ),
+                      ( 0.875, -0.28125 ): ( False, False ),
+                      ( 0.875, 0. ): ( False, False ),
+                      ( 1.03125, -0.875 ): ( False, False ),
+                      ( 1.03125, -0.75 ): ( True, False ),
+                      ( 1.03125, -0.625 ): ( False, False ),
+                      ( 1.03125, 0. ): ( False, False )
+                     }
                }
 
     for ra in ras:
         for dec in decs:
-            for angle in angles:
-                rotmat = np.array( [ [  np.cos( angle * np.pi/180. ), np.sin( angle * np.pi/180. ) ],
-                                     [ -np.sin( angle * np.pi/180. ), np.cos( angle * np.pi/180. ) ] ] )
-                corners = np.matmul( rotmat, rawcorners )
-                corners[0, :] /= np.cos( dec * np.pi/180. )
-                corners[0, :] += ra
-                corners[1, :] += dec
-                minra = min( corners[ 0, : ] )
-                maxra = max( corners[ 0, : ] )
-                mindec = min( corners[ 1, : ] )
-                maxdec = max( corners[ 1, : ] )
-                minra = minra if minra > 0 else minra + 360.
-                maxra = maxra if maxra > 0 else maxra
-                corners[ 0, corners[0,:]<0. ] += 360.
-                obj = Image( ra=ra, dec=dec,
-                             ra_corner_00=corners[0][0],
-                             ra_corner_01=corners[0][1],
-                             ra_corner_10=corners[0][2],
-                             ra_corner_11=corners[0][3],
-                             minra=minra, maxra=maxra,
-                             dec_corner_00=corners[1][0],
-                             dec_corner_01=corners[1][1],
-                             dec_corner_10=corners[1][2],
-                             dec_corner_11=corners[1][3],
-                             mindec=mindec, maxdec=maxdec )
-                for offset, included in offsets[angle].items():
-                    checkra = ra + dra/np.cos( dec*np.pi/180 ) * offset[0]/2.
-                    checkra = checkra if checkra > 0. else checkra + 360.
-                    checkdec = dec + ddec * offset[1]/2.
-                    assert obj.contains( checkra, checkdec ) == included
+            for angle in offsets.keys():
+                for which in range(2):
+                    rotmat = np.array( [ [  np.cos( angle * np.pi/180. ), np.sin( angle * np.pi/180. ) ],
+                                         [ -np.sin( angle * np.pi/180. ), np.cos( angle * np.pi/180. ) ] ] )
+                    corners = np.matmul( rotmat, rawcorners )
+                    corners[0, :] /= np.cos( dec * np.pi/180. )
+                    corners[0, :] += ra
+                    corners[1, :] += dec
+                    minra = min( corners[ 0, : ] )
+                    maxra = max( corners[ 0, : ] )
+                    mindec = min( corners[ 1, : ] )
+                    maxdec = max( corners[ 1, : ] )
+                    minra = minra if minra > 0 else minra + 360.
+                    maxra = maxra if maxra > 0 else maxra
+                    corners[ 0, corners[0,:]<0. ] += 360.
+                    obj = Image( ra=ra, dec=dec,
+                                 ra_corner_00=corners[0][0],
+                                 ra_corner_01=corners[0][1],
+                                 ra_corner_10=corners[0][2],
+                                 ra_corner_11=corners[0][3],
+                                 minra=minra, maxra=maxra,
+                                 dec_corner_00=corners[1][0],
+                                 dec_corner_01=corners[1][1],
+                                 dec_corner_10=corners[1][2],
+                                 dec_corner_11=corners[1][3],
+                                 mindec=mindec, maxdec=maxdec )
+                    for i, ( offset, included ) in enumerate( offsets[angle].items() ):
+                        # The i is here so that if a test fails, we can quickly see which element
+                        #   of the array it failed ont
+                        checkra = ra + dra/np.cos( dec*np.pi/180 ) * offset[0]/2.
+                        checkra = checkra if checkra > 0. else checkra + 360.
+                        checkdec = dec + ddec * offset[1]/2.
+                        assert obj.contains( checkra, checkdec ) == included[0]
+
+                    if which == 1:
+                        goodcorners = np.matmul( rotmat, rawgoodcorners )
+                        goodcorners[0, :] /= np.cos( dec * np.pi/180. )
+                        goodcorners[0, :] += ra
+                        goodcorners[1, :] += dec
+                        goodminra = min( goodcorners[ 0, : ] )
+                        goodmaxra = max( goodcorners[ 0, : ] )
+                        goodmindec = min( goodcorners[ 1, : ] )
+                        goodmaxdec = max( goodcorners[ 1, : ] )
+                        goodminra = goodminra if goodminra > 0 else goodminra + 360.
+                        goodmaxra = goodmaxra if goodmaxra > 0 else goodmaxra
+                        goodcorners[ 0, goodcorners[0,:]<0. ] += 360.
+                        wcs = WorldCoordinates( ra=ra, dec=dec,
+                                                ra_corner_00=corners[0][0],
+                                                ra_corner_01=corners[0][1],
+                                                ra_corner_10=corners[0][2],
+                                                ra_corner_11=corners[0][3],
+                                                minra=minra, maxra=maxra,
+                                                dec_corner_00=corners[1][0],
+                                                dec_corner_01=corners[1][1],
+                                                dec_corner_10=corners[1][2],
+                                                dec_corner_11=corners[1][3],
+                                                mindec=mindec, maxdec=maxdec,
+                                                ra_good_00=goodcorners[0][0],
+                                                ra_good_01=goodcorners[0][1],
+                                                ra_good_10=goodcorners[0][2],
+                                                ra_good_11=goodcorners[0][3],
+                                                good_minra=goodminra, good_maxra=goodmaxra,
+                                                dec_good_00=goodcorners[1][0],
+                                                dec_good_01=goodcorners[1][1],
+                                                dec_good_10=goodcorners[1][2],
+                                                dec_good_11=goodcorners[1][3],
+                                                good_mindec=goodmindec, good_maxdec=goodmaxdec )
+                        for i, ( offset, included ) in enumerate( offsets[angle].items() ):
+                            checkra = ra + dra/np.cos( dec*np.pi/180 ) * offset[0]/2.
+                            checkra = checkra if checkra > 0. else checkra + 360.
+                            checkdec = dec + ddec * offset[1]/2.
+                            assert wcs.contains( checkra, checkdec ) == included[1]
+                            assert FourCorners.contains( wcs, checkra, checkdec ) == included[0]
+
 
 
 def test_fourcorners_overlap_frac():
+    # TODO : test the "good" thingies
     dra = 0.75
     ddec = 0.375
     radec1 = [(10., -3.), (10., -45.), (10., -80.), ( 0., 0. ), ( 0., 80 ), ( 359.9, 20. ), ( 0.2, -20 ) ]
