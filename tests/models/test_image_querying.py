@@ -380,7 +380,7 @@ def test_find_images(ptf_reference_image_datastores, ptf_ref,
             WHERE _type IN (1,2,3,4)
               AND provenance_id=ANY(ARRAY[{ids}])
             """
-        ) ).format( ids=sql.SQL( ",".join( provids ) ) ) )[0][0][0]
+        ) ).format( ids=sql.SQL(",").join(provids) ) )[0][0][0]
         rows, _cols = pgdb.execute( "SELECT provenance_id FROM images" )
         all_prov_ids = [ r[0] for r in rows ]
 
@@ -457,14 +457,14 @@ def test_find_images(ptf_reference_image_datastores, ptf_ref,
     assert all(im.target == 'ELAIS-E1' for im in found1)
     assert len(found1) < subtotal
 
-    found1b = Image.find_containing( ra, dec, prov_id=decamwcsprovid )
+    found1b = Image.find_images( ra, dec, provenance_ids=decamwcsprovid )
     assert len(found1b) == 0
-    found1b = Image.find_containing( ra, dec, prov_id=decamwcsprovid, provenance_ids_are_wcs=True )
+    found1b = Image.find_images( ra, dec, provenance_ids=decamwcsprovid, provenance_ids_are_wcs=True )
     assert set( i.id for i in found1b ) == set( i.id for i in found1 )
 
-    found1c = Image.find_containing( ra, dec, prov_id=decamzpprovid )
+    found1c = Image.find_images( ra, dec, provenance_ids=decamzpprovid )
     assert len(found1c) == 0
-    found1c = Image.find_containing( ra, dec, prov_id=decamzpprovid, provenance_ids_are_zps=True )
+    found1c = Image.find_images( ra, dec, provenance_ids=decamzpprovid, provenance_ids_are_zp=True )
     assert set( i.id for i in found1c ) == set( i.id for i in found1 )
 
     # Do the same thing, but *right at* the corner, and then try it using the WCS

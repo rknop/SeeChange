@@ -2642,20 +2642,21 @@ class FourCorners:
         # (which *are* indexed) to greatly reduce the number of things
         # we'll q3c_poly_query.
 
-        cls._find_possibly_containing_temptable( ra, dec, session, prov_id=prov_id, corner=corner, limprefix=limprefix )
-
-        q = sql.SQL( textwrap.dedent(
-            """
-            SELECT i.* FROM {tab} i
-            INNER JOIN temp_find_containing t ON t._id=i._id
-            WHERE q3c_poly_query( {ra}, {dec}, ARRAY[ t.ra_corner_00, t.dec_corner_00,
-                                                      t.ra_corner_01, t.dec_corner_01,
-                                                      t.ra_corner_11, t.dec_corner_11,
-                                                      t.ra_corner_10, t.dec_corner_10 ])
-            """
-        ) ).format( tab=sql.Identifier(cls.__tablename__), ra=ra, dec=dec )
-
         with PGDB( session, dictcursor=True ) as pgdb:
+            cls._find_possibly_containing_temptable( ra, dec, pgdb, prov_id=prov_id,
+                                                     corner=corner, limprefix=limprefix )
+
+            q = sql.SQL( textwrap.dedent(
+                """
+                SELECT i.* FROM {tab} i
+                INNER JOIN temp_find_containing t ON t._id=i._id
+                WHERE q3c_poly_query( {ra}, {dec}, ARRAY[ t.ra_corner_00, t.dec_corner_00,
+                                                          t.ra_corner_01, t.dec_corner_01,
+                                                          t.ra_corner_11, t.dec_corner_11,
+                                                          t.ra_corner_10, t.dec_corner_10 ])
+                """
+            ) ).format( tab=sql.Identifier(cls.__tablename__), ra=ra, dec=dec )
+
             rows = pgdb.execute( q )
             objs = [ cls(**r) for r in rows ]
             pgdb.execute_nofetch( "DROP TABLE temp_find_containing" )

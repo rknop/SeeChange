@@ -1819,7 +1819,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                         WorldCoordinates._find_possibly_containing_temptable(
                             ra, dec, session=pgdb, prov_id=provenance_ids, corner=corner, limprefix=limprefix,
                             fromclause=( "FROM world_coordinates i\n"
-                                         "INNER JOIN zero_points z ON z.wcs_id=i.id" ),
+                                         "INNER JOIN zero_points z ON z.wcs_id=i._id" ),
                             provtable='z'
                         )
                     else:
@@ -1835,7 +1835,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                             INTO TEMP TABLE temp_find_image_1
                             FROM images i
                             INNER JOIN source_lists s ON i._id=s.image_id
-                            INNER JOIN world_coordiantes w ON s._id=w.sources_id
+                            INNER JOIN world_coordinates w ON s._id=w.sources_id
                             INNER JOIN temp_find_containing t ON t._id=w._id
                             """
                         ) )
@@ -1908,7 +1908,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                             INTO TEMP TABLE temp_find_image_2
                             FROM images i
                             INNER JOIN source_lists s ON i._id=s.image_id
-                            INNER JOIN world_coordiantes w ON s._id=w.sources_id
+                            INNER JOIN world_coordinates w ON s._id=w.sources_id
                             INNER JOIN temp_find_overlapping t ON t._id=w._id
                             """
                         ) )
