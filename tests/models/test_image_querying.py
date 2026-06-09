@@ -469,9 +469,9 @@ def test_find_images(ptf_reference_image_datastores, ptf_ref,
 
     # Do the same thing, but *right at* the corner, and then try it using the WCS
     #   corners, which, if we use use_good, should not find it, because the corner
-    #   is masked
-    ra = 6.8247
-    dec = -42.846
+    #   is masked.  (This is pixel 10, 10.)
+    ra = 6.82836
+    dec = -42.85004
     found1p5 = Image.find_containing( ra, dec, prov_id=provids )
     found1p5a = Image.find_images( ra, dec, provenance_ids=provids )
     assert set( i.id for i in found1p5 ) == set( i.id for i in found1p5a )
@@ -489,11 +489,11 @@ def test_find_images(ptf_reference_image_datastores, ptf_ref,
                                    provenance_ids_are_wcs=True )
     assert len(found1p5b) == 0
 
-    found1p5c = Image.find_images( ra, dec, provenacne_ids=[ decamzpprovid, ptfzpprovid ],
+    found1p5c = Image.find_images( ra, dec, provenance_ids=[ decamzpprovid, ptfzpprovid ],
                                     provenance_ids_are_zp=True, use_good=False )
     assert set( i.id for i in found1p5c ) == set ( i.id for i in found1p5 )
     found1p5c = Image.find_images( ra, dec, provenance_ids=[ decamzpprovid, ptfzpprovid ],
-                                   provenance_ids_zer_zp=True )
+                                   provenance_ids_are_zp=True )
     assert len(found1p5c) == 0
 
     # filter by images that contain this point (ELAIS-E1, chip N16)
@@ -516,7 +516,9 @@ def test_find_images(ptf_reference_image_datastores, ptf_ref,
     # find images that overlap
     # TODO, use wcs also, check is_good
     ptfdses = ptf_reference_image_datastores
-    found1 = Image.find_images( image=ptfdses[0].image, provenance_ids=provids )
+    providswref = provids.copy()
+    providswref.append( ptf_ref.image.provenance_id )
+    found1 = Image.find_images( image=ptfdses[0].image, provenance_ids=providswref )
     found1ids = set( f._id for f in found1 )
     assert len(found1) == 6
     assert set( d.image.id for d in ptfdses ).issubset( found1ids )
@@ -526,11 +528,11 @@ def test_find_images(ptf_reference_image_datastores, ptf_ref,
                                 maxra=ptfdses[0].image.maxra,
                                 mindec=ptfdses[0].image.mindec,
                                 maxdec=ptfdses[0].image.maxdec,
-                                provenance_ids=provids )
+                                provenance_ids=providswref )
     found2ids = set( f._id for f in found2 )
     assert found1ids == found2ids
 
-    found3 = Image.find_images( image=ptfdses[0].image, overlapfrac=0.98, provenance_ids=provids )
+    found3 = Image.find_images( image=ptfdses[0].image, overlapfrac=0.98, provenance_ids=providswref )
     found3ids = set( f._id for f in found3 )
     assert found3ids.issubset( found1ids )
     assert all( FourCorners.get_overlap_frac( ptfdses[0].image, f ) >= 0.98 for f in found3 )
@@ -624,7 +626,7 @@ def test_find_images(ptf_reference_image_datastores, ptf_ref,
 
     # filter by zero point
     value = 28.0
-    found1 = Image.find_images(min_zero_point=value, provenacne_ids=provids)
+    found1 = Image.find_images(min_zero_point=value, provenance_ids=provids)
     assert all(im.zero_point_estimate >= value for im in found1)
     assert len(found1) < subtotal
 
@@ -652,11 +654,11 @@ def test_find_images(ptf_reference_image_datastores, ptf_ref,
     # query based on airmass
     value = 1.15
     total_with_airmass = len([im for im in all_images if im.airmass is not None])
-    found1 = Image.find_images(max_airmass=value, provenance_ids=provids)
+    found1 = Image.find_images(max_airmass=value, provenance_ids=all_prov_ids)
     assert all(im.airmass <= value for im in found1)
     assert len(found1) < total_with_airmass
 
-    found2 = Image.find_images(min_airmass=value, provenance_ids=provids)
+    found2 = Image.find_images(min_airmass=value, provenance_ids=all_prov_ids)
     assert all(im.airmass >= value for im in found2)
     assert len(found2) < total_with_airmass
     assert len(found1) + len(found2) == total_with_airmass
@@ -665,7 +667,7 @@ def test_find_images(ptf_reference_image_datastores, ptf_ref,
     # note that we cannot filter by quality, it is not a meaningful number
     # on its own, only as a way to compare images and find which is better.
     # sort all the images by quality and get the best one
-    found = Image.find_images(order_by='quality', provenacne_ids=provids)
+    found = Image.find_images(order_by='quality', provenance_ids=provids)
     best = found[0]
 
     # the best overall quality from all images
@@ -706,7 +708,7 @@ def test_find_images(ptf_reference_image_datastores, ptf_ref,
     dec = 4.5
     background = 5.
 
-    found1 = Image.find_images(ra=ra, dec=dec, max_background=background, provenance_ids=provids)
+    found1 = Image.find_images(ra=ra, dec=dec, max_background=background, provenance_ids=all_prov_ids)
     assert len(found1) == 1
     assert found1[0].instrument == 'PTF'
     assert found1[0].type == 'ComSci'
@@ -716,7 +718,7 @@ def test_find_images(ptf_reference_image_datastores, ptf_ref,
     section_id = 'S2'
     exp_time = 120.0
 
-    found2 = Image.find_images(target=target, section_id=section_id, min_exp_time=exp_time, provenance_ids=provids)
+    found2 = Image.find_images(target=target, section_id=section_id, min_exp_time=exp_time, provenance_ids=all_prov_ids)
     assert len(found2) == 1
     assert found2[0].instrument == 'DECam'
     assert found2[0].type == 'ComSci'
@@ -726,13 +728,13 @@ def test_find_images(ptf_reference_image_datastores, ptf_ref,
     mjd = 55000.0
     instrument = 'PTF'
 
-    found3 = Image.find_images(min_mjd=mjd, instrument=instrument, provenance_ids=provids)
+    found3 = Image.find_images(min_mjd=mjd, instrument=instrument, provenance_ids=all_prov_ids)
     assert len(found3) == 0
 
     # cross filter MJD and sort by quality to get the coadd PTF image
     mjd = 54926.31913
 
-    found4 = Image.find_images(max_mjd=mjd, order_by='quality', provenance_ids=provids)
+    found4 = Image.find_images(max_mjd=mjd, order_by='quality', provenance_ids=all_prov_ids)
     assert len(found4) == 2
     assert found4[0].mjd == found4[1].mjd  # same time, as one is a coadd of the other images
     assert found4[0].instrument == 'PTF'
@@ -742,10 +744,11 @@ def test_find_images(ptf_reference_image_datastores, ptf_ref,
 
     # check that the DECam difference and new image it is based on have the same limiting magnitude and quality
     # (...this check probably really belongs in a test of subtractions!)
-    diff = Image.find_images(instrument='DECam', type=3, provenance_ids=provids)
+    diff = Image.find_images(instrument='DECam', type=3, provenance_ids=all_prov_ids)
     assert len(diff) == 1
     diff = diff[0]
-    new =  Image.find_images(instrument='DECam', type=1, min_mjd=diff.mjd, max_mjd=diff.mjd, provenance_ids=provids)
+    new =  Image.find_images(instrument='DECam', type=1, min_mjd=diff.mjd, max_mjd=diff.mjd,
+                             provenance_ids=all_prov_ids)
     assert len(new) == 1
     new = new[0]
     assert new.id != diff.id

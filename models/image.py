@@ -1652,8 +1652,9 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             doesn't do real overlap fractions of images!  Rather, it
             does the overlap fraction of the NS/EW-aligned bounding
             boxes of images!  See docstring for
-            FourCorners.get_overlap_frac().  If that is fixed, this should
-            be too.
+            FourCorners.get_overlap_frac().  If that is fixed, this
+            should be too.  If you don't specify anything, a default of
+            0.95 will be used.
 
         provenance_ids: str or list of strings
             Provenance ids to search on.  By default, it searches on
@@ -1883,6 +1884,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                 fcobj.maxdec = maxdec
 
                 searchoverlapping = True
+                overlapfrac = overlapfrac if overlapfrac is not None else 0.95
 
                 if provenance_ids_are_zp or provenance_ids_are_wcs:
                     corner = "good" if use_good else "corner"
@@ -2008,7 +2010,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                 q += sql.SQL( "ORDER BY i.mjd DESC\n" )
             elif order_by == 'quality':
                 q += sql.SQL( "ORDER BY i.lim_mag_estimate - {qf}*i.fwhm_estimate DESC\n"
-                             ).format( qf=sql.SQL(np.abs(seeing_quality_factor)) )
+                             ).format( qf=np.abs(seeing_quality_factor) )
             elif order_by is not None:
                 raise ValueError(f'Unknown order_by parameter: {order_by}. Use "earliest", "latest" or "quality".')
 

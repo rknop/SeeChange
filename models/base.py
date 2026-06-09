@@ -2582,7 +2582,7 @@ class FourCorners:
               ( i.{limprefix}maxdec >= {dec} AND i.{limprefix}mindec <= {dec} )
               AND (
                 ( (i.{limprefix}maxra > i.{limprefix}minra ) AND
-                  ( {limprefix}maxra >= {ra} AND {limprefix}minra <= {ra} ) )
+                  ( i.{limprefix}maxra >= {ra} AND i.{limprefix}minra <= {ra} ) )
                 OR
                 ( ( i.{limprefix}maxra < i.{limprefix}minra ) AND
                   ( ( i.{limprefix}maxra >= {ra} OR {ra} > 180. ) AND ( i.{limprefix}minra <= {ra} OR {ra} <= 180. ) ) )
