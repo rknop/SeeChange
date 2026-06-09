@@ -1,14 +1,16 @@
 import datetime
+import textwrap
 import argparse
 
 import numpy as np
 import psycopg
+from psycopg import sql
 
 from pipeline.parameters import Parameters
 from pipeline.coaddition import CoaddPipeline
 from pipeline.data_store import DataStore, ProvenanceTree
 
-from models.base import SmartSession, PsycopgConnection
+from models.base import SmartSession, PsycopgConnection, PGDB
 from models.provenance import Provenance
 from models.reference import Reference
 from models.image import Image
@@ -133,18 +135,21 @@ class ParsRefMaker(Parameters):
             1,
             int,
             ( 'Construct a reference only if there are at least this many images that pass all other criteria '
-              'If corner_distance is not None, then this applies to all test positions on the image unless '
-              'min_only_center is True.' ),
+              'If corner_distance is not None, then this applies to all test positions on the image. '
+              'This *can* be zero if you\'re OK with some spots not having references, but in that case make '
+              'sure that center_min_number is not 0, or things will probably go haywire.' ),
             critical=True,
         )
 
-        self.min_only_center = self.add_par(
-            'min_only_center',
-            False,
-            bool,
-            ( 'If True, then min_number only applies to the center position of the target area.  Otherwise, '
-              'every test position on the image must have at least min_number references for the construction '
-              'not to fail.  Ignored if corner_distance is None.' ),
+        self.center_min_number = self.add_par(
+            'center_min_number',
+            None,
+            ( int, type(None) ),
+            ( 'Like min_number, but specifically for the center of the image.  (Technically, the minimum '
+              'number at the cetner is actually the greater of this and min_number.)  If this is None, then '
+              'min_number is used for the center.  You might want to require more images overlapping '
+              'at the center.  If corner_distance is None, then it probably doesn\'t make sense to '
+              'make this number different from min_number, but whatevs.' ),
             critical=True,
         )
 
@@ -363,7 +368,7 @@ class RefMaker:
 
     # ======================================================================
 
-    def parse_arguments( self, image=None, ra=None, dec=None,
+    def parse_arguments( self, image=None, image_zp_prov_id=None, zp_prov_id=None, ra=None, dec=None,
                              minra=None, maxra=None, mindec=None, maxdec=None,
                              target=None, section_id=None,
                              filter=None ):
@@ -386,8 +391,14 @@ class RefMaker:
 
         Parameters
         ----------
-          image: Image or None
-            Used to get the ra/dec (if pars.corner_distance is None) or min/max ra/dec.
+          image: str or None
+            The filepath or id if the image to use to figure out min/max ra/dec.
+
+          image_zp_prov_id: str or None
+            Ignored if image is not None.  If not None, then will search
+            for a zeropoint of this provenance that goes with iamge, and
+            then will use the WCSes "good" limits to figure out the
+            min/max ra/dec rather than the corners in the image.
 
           ra, dec: float or None
             Position to search.   Only makes sense if pars.corner_distance is None
@@ -407,8 +418,56 @@ class RefMaker:
             If given, only find images whose filter match this filter
 
         """
-        if ( image is not None ) and any( i is not None for i in [ ra, dec, minra, maxra, mindec, maxdec ] ):
-            raise ValueError( "If you pass image to RefMaker.run, you can't pass any coordinates." )
+        if image is not None:
+            if any ( i is not None for i in [ ra, dec, minra, maxra, mindec, maxdec ] ):
+                raise ValueError( "If you pass image to RefMaker.run, you can't pass any coordinates." )
+
+            with PGDB( dict_cursor=True ) as pgdb:
+                rows = pgdb.query( sql.SQL( textwrap.dedent(
+                    """\
+                    SELECT _id, ra, dec, minra, maxra, mindec, maxdec FROM images
+                    WHERE filepath={img} OR _id={img}
+                    """
+                ) ).format( img=image ) )
+                if len(rows) == 0:
+                    raise FileNotFoundError( f"Could not find image {image}" )
+                elif len(rows) > 1:
+                    raise RuntimeError( f"More than one image matched {image}; this should probably not be possible." )
+                imgid = rows[0]['_id']
+                imgra = rows[0]['ra']
+                imgdec = rows[0]['dec']
+                imgminra = rows[0]['minra']
+                imgmaxra = rows[0]['maxra']
+                imgmindec = rows[0]['mindec']
+                imgmaxdec = rows[0]['maxdec']
+
+                if image_zp_prov_id is not None:
+                    rows = pgdb.query( sql.SQL( textwrap.dedent(
+                        """\
+                        SELECT w.good_ramin, w.good_ramax, w.good_decmin, w.good_decmax
+                        FROM world_coordinates w
+                        INNER JOIN zero_points z ON z.wcs_id=w._id
+                                                AND z.provenance_id={zpprov}
+                        INNER JOIN source_lists s ON w.sources_id=s._id
+                        WHERE s.image_id={imageid}
+                        """
+                    ) ).format( zpprov=image_zp_prov_id, imageid=imgid ) )
+                    if len(rows) == 0:
+                        raise RuntimeError( f"Failed to find a zeropoint for image with provenance {image_zp_prov_id}" )
+                    if len(rows) > 1:
+                        raise RuntimeError( "This should never happen." )
+                    imgminra = rows[0]['good_ramin']
+                    imgmaxra = rows[0]['good_ramax']
+                    imgmindec = rows[0]['good_decmin']
+                    imgmaxdec = rows[0]['good_decmax']
+                    if ( imgminra > imgmaxra ):
+                        # Try to deal with the "ra spanning 0" case.
+                        imgra = ( imgminra - 360. + imgmaxra ) / 2.
+                        if imgra < 0:
+                            imgra += 360.
+                    else:
+                        imgra = ( imgminra + imgmaxra )  / 2.
+                    imgdec = ( imgmindec + imgmaxdec ) / 2.
 
         if self.pars.corner_distance is None:
             if any( i is not None for i in [ minra, maxra, mindec, maxdec ] ):
@@ -416,8 +475,8 @@ class RefMaker:
             if image is not None:
                 if ( ra is not None ) or ( dec is not None ):
                     raise ValueError( "For RefMaker corner_distance None, must specify image or ra/dec, not both" )
-                ra = image.ra
-                dec = image.dec
+                ra = imgra
+                dec = imgdec
             else:
                 if ( ra is None ) or ( dec is None ):
                     raise ValueError( "For RefMaker corner_distance None, must provide either image or both ra & dec" )
@@ -428,10 +487,10 @@ class RefMaker:
                 if any( i is not None for i in [ minra, maxra, mindec, maxdec ] ):
                     raise ValueError( "For RefMaker corner_distance not None, must specify image or "
                                       "minra/maxra/mindex/maxdec, not both" )
-                minra = image.minra
-                maxra = image.maxra
-                mindec = image.mindec
-                maxdec = image.maxdec
+                minra = imgminra
+                maxra = imgmaxra
+                mindec = imgmindec
+                maxdec = imgmaxdec
             else:
                 if any ( i is None for i in [ minra, maxra, mindec, maxdec ] ):
                     raise ValueError( "For RefMaker corner_distance not None, must specify image or "
@@ -592,11 +651,12 @@ class RefMaker:
                            f"which is less than the minimum of {self.pars.min_number}" )
             return None
         # match_count[0] is always for the center position
-        if ( self.pars.min_only_center ) and ( match_count[0] < self.pars.min_number ):
+        if ( self.pars.center_min_number is not None ) and ( match_count[0] < self.pars.center_min_number ):
             SCLogger.info( f"RekMaker only found {len(match_count[0])} images overlapping the center of the "
-                           f"desired field, which is less than the minimum of {self.pars.min_number}" )
+                           f"desired field, which is less than the minimum of "
+                           f"{max(self.pars.min_number, self.pars.center_min_number)}" )
             return None
-        elif ( not self.pars.min_only_center ) and any( c < self.pars.min_number for c in match_count ):
+        elif any( c < self.pars.min_number for c in match_count ):
             SCLogger.info( f"RefMaker didn't find enough references at at least one point on the image; "
                            f"match_count={match_count}, min_number={self.pars.min_number}" )
             return None
@@ -679,6 +739,7 @@ def main():
                          help="RA to make a reference for; decimal degrees.  See description above." )
     parser.add_argument( "-i", "--image", type=str, default=None,
                          help="filepath or uuid of image to make a reference for." )
+    parser.add_argument( "-z", "--image-zp-prov-id", type=str, default=None, help="See description above." )
     parser.add_argument( "--minra", type=float, default=None, help="See description above." )
     parser.add_argument( "--maxra", type=float, default=None, help="See description above." )
     parser.add_argument( "--mindec", type=float, default=None, help="See description above." )
@@ -698,6 +759,8 @@ def main():
     # so that we don't do it willy-nilly.)
 
     args = parser.parse_args()
+    refmaker = RefMaker()
+    refmaker.run( **vars(args) )
 
     # TODO : Process arguments that override the config file
 
@@ -718,16 +781,18 @@ def main():
     elif args.ra is not None:
         if args.dec is None:
             raise ValueError( "Must give dec if giving ra" )
-        if any( x is not None for x in [ args.image, args.minra, args.maxra, args.mindec, args.maxdec ] ):
-            raise ValueError( "When specifying ra/dec, cannot specify any of image/minra/maxra/mindec/maxdec" )
+        if any( x is not None for x in [ args.image, args.minra, args.maxra, args.mindec, args.maxdec,
+                                         args.zp_prov_id] ):
+            raise ValueError( "When specifying ra/dec, cannot specify any of image/minra/maxra/mindec/maxdec "
+                              "or zp-prov-id" )
         refmaker = RefMaker()
         refmaker.run( ra=args.ra, dec=args.dec, filter=args.filter )
 
     elif args.minra is not None:
         if any( x is None for x in [ args.maxra, args.mindec, args.maxdec ] ):
             raise ValueError( "Must give all of minra, maxra, mindec, maxdec." )
-        if any( x is not None for x in [ args.image, args.ra, args.dec ] ):
-            raise ValueError( "Cannot give image or ra/dec with minra/maxra/mindec/maxdec" )
+        if any( x is not None for x in [ args.image, args.ra, args.dec, args.zp_prov_id ] ):
+            raise ValueError( "Cannot give image, ra/dec, or zp-prov-id with minra/maxra/mindec/maxdec" )
         refmaker = RefMaker()
         refmaker.run( minra=args.minra, maxra=args.maxra, mindec=args.mindec, maxdec=args.maxdec, filter=args.filter )
 

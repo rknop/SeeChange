@@ -1607,7 +1607,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             order_by=None,
             seeing_quality_factor=3.0,
             max_number=None,
-            # return_zeropoints=False
+            return_zeropoints=False,
+            return_wcs=False
     ):
         """Return a list of images that match criteria.
 
@@ -1771,9 +1772,17 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             first max_number returned from the database, ordered as
             specified in order_by.
 
+        return_zeropoints: bool, default False
+
+        return_wcs: bool, default False
+
         Returns
         -------
-          list of Image
+          One of:
+           * list of Image
+           * ( list of Image, dict of image_id: WorldCoordinates )
+           * ( list of Image, dict of image_id: ZeroPoint )
+           * ( list of Image, dict of image_id: WorldCoordinates, dict of image_id: ZeroPoint )
 
         """
 
@@ -1783,6 +1792,12 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         if provenance_ids is None:
             raise ValueError( "Must specify provenance(s) to search" )
         provenance_ids = listify( provenance_ids, require_string=True )
+
+        if return_zeropoints and ( not provenance_ids_are_zp ):
+            raise ValueError( "return_zeropoints requires provenance_ids_are_zp" )
+
+        if return_wcs and ( not ( provenance_ids_are_zp or provenance_ids_are_wcs ) ):
+            raise ValueError( "return_wcs requires provenance_ids_are_wcs or provenance_ids_are_zp" )
 
         # Avoid circular imports
         from models.world_coordinates import WorldCoordinates
@@ -1937,21 +1952,39 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             # it's not worth the effort of trying to figure out the
             # syntax.)
 
+            pgdb.execute_nofetch( "DROP TABLE IF EXISTS temp_find_images_image_ids" )
             if searchtable is None:
-                q = sql.SQL( textwrap.dedent(
-                    """\
-                    SELECT i.* FROM images i
-                    WHERE i.provenance_id=ANY(ARRAY[{provs}])
-                    """
-                ) ).format( provs=sql.SQL(",").join( provenance_ids ) )
+                q = sql.SQL( "SELECT i.* INTO TEMP TABLE temp_find_images_image_ids FROM images i\n" )
+
+                if provenance_ids_are_wcs or provenance_ids_are_zp:
+                    q += sql.SQL( "INNER JOIN source_lists s ON s.image_id=i._id\n"
+                                  "INNER JOIN world_coordinates w ON w.sources_id=s._id\n" )
+                    if provenance_ids_are_wcs:
+                        subq = sql.SQL( "WHERE w.provenance_id=ANY(ARRAY[{provs}])\n" )
+                    else:
+                        subq = sql.SQL( "INNER JOIN zero_points z ON z.wcs_id=w._id\n"
+                                        "WHERE z.provenance_id=ANY(ARRAY[{provs}])\n" )
+                else:
+                    subq = sql.SQL( "WHERE i.provenance_id=ANY(ARRAY[{provs}])\n" )
+
+                q += subq.format( provs=sql.SQL(",").join( provenance_ids ) )
+
             else:
                 # Don't have to filter on provenance because that will have happened
                 #  in the building of the temp table above
-                q = sql.SQL( "SELECT i.* FROM {searchtable} t INNER JOIN images i ON t._id=i._id"
-                            ).format( searchtable=sql.Identifier(searchtable) )
+                q = sql.SQL( textwrap.dedent(
+                    """\
+                    SELECT i._id
+                    INTO TEMP TABLE temp_find_images_image_ids
+                    FROM {searchtable} t
+                    INNER JOIN images i ON t._id=i._id
+                    """
+                ) ).format( searchtable=sql.Identifier(searchtable) )
                 if searchcontaining:
+                    # Refine the search from the broad overlap in the temp table
+                    #   to a real poly search.
                     q += sql.SQL( textwrap.dedent(
-                        """
+                        """\
                         WHERE q3c_poly_query({ra}, {dec}, ARRAY[ t.ra_corner_00, t.dec_corner_00,
                                                                  t.ra_corner_01, t.dec_corner_01,
                                                                  t.ra_corner_11, t.dec_corner_11,
@@ -2014,23 +2047,120 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             elif order_by is not None:
                 raise ValueError(f'Unknown order_by parameter: {order_by}. Use "earliest", "latest" or "quality".')
 
+            # Run it to identify image ids of interest
+            pgdb.execute_nofetch( q )
+
             # Get the images
-            rows = pgdb.execute( q )
+            rows = pgdb.execute( "SELECT i.* FROM images i "
+                                 "INNER JOIN temp_find_images_image_ids t ON i._id=t._id" )
             images = [ Image(**r) for r in rows ]
 
-            # Should we delete temp tables?  They ought to get dropped automatically when the session closes.
+            # Get the WCSen if necessary
+            if return_wcs:
+                if provenance_ids_are_wcs:
+                    q = sql.SQL( textwrap.dedent(
+                        """\
+                        SELECT s.image_id, w.* FROM world_coordinates w
+                        INNER JOIN source_lists s ON w.sources_id=s._id
+                        INNER JOIN temp_find_images_image_ids t ON s.image_id=t._id
+                        WHERE w.provenance_id=ANY(ARRAY[{provs}])
+                        """
+                    ) ).format( provs=sql.SQL(",").join( provenance_ids ) )
+                elif provenance_ids_are_zp:
+                    q = sql.SQL( textwrap.dedent(
+                        """\
+                        SELECT s.image_id, z.provenance_id AS zpprov, w.* FROM world_coordinates w
+                        INNER JOIN zero_points z ON z.wcs_id=w._id
+                        INNER JOIN source_lists s ON w.sources_id=s._id
+                        INNER JOIN temp_find_images_image_ids t ON s.image_id=t._id
+                        WHERE z.provenance_id=ANY(ARRAY[{provs}])
+                        """
+                    ) ).format( provs=sql.SQL(",").join( provenance_ids ) )
+                rows = pgdb.execute( q )
+                wcsen = {}
+                for row in rows:
+                    # Gonna treat provenance_ids as a rank-ordered list
+                    mustsave = False
+                    if row['image_id'] in wcsen:
+                        mustsave = ( ( provenance_ids_are_zp and
+                                       ( provenance_ids.index( row['zpprov'] )
+                                         < provenance_ids.index( wcsen[row['image_id']]['zpprov'] ) ) )
+                                     or
+                                     ( provenance_ids_are_wcs and
+                                       ( provenance_ids.index( row['provenance_id'] )
+                                         < provenance_ids.index( wcsen[row['image_id']]['provenance_id'] ) ) )
+                                    )
+                    else:
+                        mustsave = True
+
+                    if mustsave:
+                        wcsen[row['image_id']] = row
+                        del wcsen[row['image_id']]['image_id']
+
+                if provenance_ids_are_zp:
+                    for v in wcsen.values():
+                        del v['zpprov']
+
+                # Just in case; avoid circular imports
+                from models.world_coordinates import WorldCoordinates
+                wcsen = { k: WorldCoordinates(**v) for k, v in wcsen.items() }
+
+            if return_zeropoints:
+                q = sql.SQL( textwrap.dedent(
+                    """\
+                    SELECT s.image_id, z.* FROM zero_points z
+                    INNER JOIN world_coordinates w ON z.wcs_id=w._id
+                    INNER JOIN source_lists s ON w.sources_id=s._id
+                    INNER JOIN temp_find_images_image_ids t ON s.image_id=t._id
+                    WHERE z.provenance_id=ANY(ARRAY[{provs}])
+                    """
+                ) ).format( provs=sql.SQL(",").join( provenance_ids ) )
+                rows = pgdb.execute( q )
+                zps = {}
+                for row in rows:
+                    # Again, treat provenance_ids as a rank-ordered list
+                    mustsave = False
+                    if row['image_id'] in zps:
+                        mustsave = ( provenance_ids.index( row['provenance_id'] )
+                                     < provenance_ids.index( zps[row['image_id']]['provenance_id'] ) )
+                    else:
+                        mustsave = True
+
+                    if mustsave:
+                        zps[row['image_id']] = row
+                        del zps[row['image_id']]['image_id']
+
+                # Just in case; avoid circular imports
+                from models.zero_point import ZeroPoint
+                zps = { k: ZeroPoint(**v) for k, v in zps.items() }
+
+        # Should we delete temp tables?  They ought to get dropped automatically when the session closes.
 
         # Fourth: remove things with too small overlap fraction if relevant
 
         if searchoverlapping:
             retimages = []
+            retimgids = set()
             for im in images:
                 if FourCorners.get_overlap_frac( fcobj, im ) >= overlapfrac:
                     retimages.append( im )
+                    retimgids.add( im._id )
+            if return_wcs:
+                wcsen = { k: v for k, v in wcsen.items() if k in retimgids }
+            if return_zeropoints:
+                zps = { k: v for k, v in zps.items() if k in retimgids }
         else:
             retimages = images
 
-        return retimages
+        if return_zeropoints:
+            if return_wcs:
+                return retimages, wcsen, zps
+            else:
+                return retimages, zps
+        elif return_wcs:
+            return retimages, wcsen
+        else:
+            return retimages
 
 
     @staticmethod

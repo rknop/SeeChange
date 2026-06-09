@@ -579,11 +579,11 @@ referencing:
     min_exp_time: null  # only grab images with exposure time above this
     max_exp_time: null  # only grab images with exposure time below this
     min_number: 7  # only create a reference if this many images can be found
+    center_min_number: null  # don't demand more images at the center than anywhere else
     max_number: 30  # do not add more than this number of images to the reference
     corner_distance: 0.8  # see the docs
     overlap_fraction: 0.9
     coadd_overlap_fraction: 0.1
-    min_only_center: False
     seeing_quality_factor: 3.0  # linear coefficient for adding lim_mag and seeing to get the "image quality"
     save_new_refs: true  # should the new references be saved to disk and committed to the database?
 

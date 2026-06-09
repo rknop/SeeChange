@@ -1,9 +1,7 @@
 import pytest
-import textwrap
 
 import numpy as np
 import sqlalchemy as sa
-from psycopg import sql
 
 from astropy.time import Time
 
@@ -371,18 +369,25 @@ def test_find_images(ptf_reference_image_datastores, ptf_ref,
     # Most of the time we're searching both image provenances
     provids = [ ptfimprovid, decamimprovid ]
 
-    with PGDB() as pgdb:
-        total_w_calibs = pgdb.execute( "SELECT COUNT(*) FROM images" )[0][0][0]
-        total = pgdb.execute( "SELECT COUNT(*) FROM images WHERE _type IN (1,2,3,4)" )[0][0][0]
-        subtotal = pgdb.execute( sql.SQL( textwrap.dedent(
-            """\
-            SELECT COUNT(*) FROM images
-            WHERE _type IN (1,2,3,4)
-              AND provenance_id=ANY(ARRAY[{ids}])
-            """
-        ) ).format( ids=sql.SQL(",").join(provids) ) )[0][0][0]
-        rows, _cols = pgdb.execute( "SELECT provenance_id FROM images" )
-        all_prov_ids = [ r[0] for r in rows ]
+    with PGDB( dictcursor=True ) as pgdb:
+        # ...right now taking advantage of the fact that there's
+        #   only a single provenance of anything in the test db
+        rows =pgdb.execute( "SELECT i._id AS imgid, i.provenance_id AS improvid, i._type AS imgtyp,\n"
+                            "       w._id AS wcsid, w.provenance_id AS wcsprovid,\n"
+                            "       z._id AS zpid, z.provenance_id AS zpprovid\n"
+                            "FROM images i\n"
+                            "LEFT JOIN source_lists s ON s.image_id=i._id\n"
+                            "LEFT JOIN world_coordinates w ON w.sources_id=s._id\n"
+                            "LEFT JOIN zero_points z ON z.wcs_id=w._id" )
+        allimgs = { r['imgid']: r for r in rows }
+        all_prov_ids = list( set( v['improvid'] for v in allimgs.values() ) )
+        all_wcs_prov_ids = list( set( v['wcsprovid'] for v in allimgs.values() if v['wcsprovid'] is not None ) )
+        all_zp_prov_ids = list( set( v['zpprovid'] for v in allimgs.values() if v['zpprovid'] is not None ) )
+        total_w_calibs = len( allimgs )
+        sciimages = { k: v for k, v in allimgs.items() if v['imgtyp'] in (1, 2, 3, 4) }
+        total = len( sciimages )
+        subsciimages = { k: v for k, v in allimgs.items() if v['improvid'] in provids }
+        subtotal = len( subsciimages )
 
     # try finding them all
     all_images_w_calibs = Image.find_images( type=None, provenance_ids=all_prov_ids )
@@ -447,6 +452,31 @@ def test_find_images(ptf_reference_image_datastores, ptf_ref,
     assert len(found5) < total
     assert len(found4) + len(found5) == total
 
+    # Check returning wcsen and zps
+    # 3 of the 4 images in found4 have WCSes and ZPs
+    found6, wcs6 = Image.find_images( min_dateobs=t, provenance_ids=all_wcs_prov_ids, provenance_ids_are_wcs=True,
+                                      return_wcs=True )
+    assert set( f.id for f in found6 ).issubset( set( f.id for f in found4 ) )
+    assert len( found6 ) == 3
+    assert all( wcs6[f.id].id == allimgs[f.id]['wcsid'] for f in found6 )
+
+    found7, wcs7 = Image.find_images( min_dateobs=t, provenance_ids=all_zp_prov_ids, provenance_ids_are_zp=True,
+                                      return_wcs=True )
+    # There don't happen to be any images with wcs but no zp
+    assert set( f.id for f in found7 ) == set( f.id for f in found6 )
+    assert all( wcs7[f.id].id == allimgs[f.id]['wcsid'] for f in found7 )
+
+    found8, zp8 = Image.find_images( min_dateobs=t, provenance_ids=all_zp_prov_ids, provenance_ids_are_zp=True,
+                                     return_zeropoints=True )
+    assert set( f.id for f in found8 ) == set( f.id for f in found6 )
+    assert all( zp8[f.id].id == allimgs[f.id]['zpid'] for f in found8 )
+
+    found9, wcs9, zp9 = Image.find_images( min_dateobs=t, provenance_ids=all_zp_prov_ids, provenance_ids_are_zp=True,
+                                           return_wcs=True, return_zeropoints=True )
+    assert set( f.id for f in found9 ) == set( f.id for f in found6 )
+    assert all( wcs9[f.id].id == allimgs[f.id]['wcsid'] for f in found9 )
+    assert all( zp9[f.id].id == allimgs[f.id]['zpid'] for f in found9 )
+
     # filter by images that contain this point (ELAIS-E1, chip S2)
     ra = 7.025
     dec = -42.923
@@ -467,7 +497,7 @@ def test_find_images(ptf_reference_image_datastores, ptf_ref,
     found1c = Image.find_images( ra, dec, provenance_ids=decamzpprovid, provenance_ids_are_zp=True )
     assert set( i.id for i in found1c ) == set( i.id for i in found1 )
 
-    # Do the same thing, but *right at* the corner, and then try it using the WCS
+    # Do a search *right at* the corner of the ELAIS-E1 S2 image, and then try it using the WCS
     #   corners, which, if we use use_good, should not find it, because the corner
     #   is masked.  (This is pixel 10, 10.)
     ra = 6.82836

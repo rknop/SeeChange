@@ -110,7 +110,7 @@ class DECamRefFetcher:
                                           'min_lim_mag': min_depth,
                                           'min_exp_time': min_exptime,
                                           'min_number': min_per_chip,
-                                          'min_only_center': False,
+                                          'center_min_number': None,
                                           'zp_prov_id': str(zpprov.id)
                                          } )
         self.refmaker.setup_provenances()
