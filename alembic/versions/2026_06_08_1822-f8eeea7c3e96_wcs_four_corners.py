@@ -6,6 +6,7 @@ Create Date: 2026-06-08 18:22:59.617683
 
 """
 import textwrap
+import time
 
 from psycopg import sql
 from alembic import op
@@ -15,6 +16,7 @@ from models.base import PGDB, FourCorners
 from models.image import Image
 from models.world_coordinates import WorldCoordinates
 
+from util.logger import SCLogger
 
 # revision identifiers, used by Alembic.
 revision = 'f8eeea7c3e96'
@@ -41,36 +43,36 @@ def upgrade() -> None:
     op.drop_index(op.f('ix_images_ra_corner_01'), table_name='images')
     op.drop_index(op.f('ix_images_ra_corner_10'), table_name='images')
     op.drop_index(op.f('ix_images_ra_corner_11'), table_name='images')
-    op.add_column('world_coordinates', sa.Column('ra', sa.Double(), nullable=False))
-    op.add_column('world_coordinates', sa.Column('dec', sa.Double(), nullable=False))
+    op.add_column('world_coordinates', sa.Column('ra', sa.Double()))
+    op.add_column('world_coordinates', sa.Column('dec', sa.Double()))
     op.add_column('world_coordinates', sa.Column('gallat', sa.Double(), nullable=True))
     op.add_column('world_coordinates', sa.Column('gallon', sa.Double(), nullable=True))
     op.add_column('world_coordinates', sa.Column('ecllat', sa.Double(), nullable=True))
     op.add_column('world_coordinates', sa.Column('ecllon', sa.Double(), nullable=True))
-    op.add_column('world_coordinates', sa.Column('ra_good_00', sa.REAL(), nullable=False))
-    op.add_column('world_coordinates', sa.Column('ra_good_01', sa.REAL(), nullable=False))
-    op.add_column('world_coordinates', sa.Column('ra_good_10', sa.REAL(), nullable=False))
-    op.add_column('world_coordinates', sa.Column('ra_good_11', sa.REAL(), nullable=False))
-    op.add_column('world_coordinates', sa.Column('dec_good_00', sa.REAL(), nullable=False))
-    op.add_column('world_coordinates', sa.Column('dec_good_01', sa.REAL(), nullable=False))
-    op.add_column('world_coordinates', sa.Column('dec_good_10', sa.REAL(), nullable=False))
-    op.add_column('world_coordinates', sa.Column('dec_good_11', sa.REAL(), nullable=False))
-    op.add_column('world_coordinates', sa.Column('good_minra', sa.REAL(), nullable=False))
-    op.add_column('world_coordinates', sa.Column('good_maxra', sa.REAL(), nullable=False))
-    op.add_column('world_coordinates', sa.Column('good_mindec', sa.REAL(), nullable=False))
-    op.add_column('world_coordinates', sa.Column('good_maxdec', sa.REAL(), nullable=False))
-    op.add_column('world_coordinates', sa.Column('ra_corner_00', sa.REAL(), nullable=False))
-    op.add_column('world_coordinates', sa.Column('ra_corner_01', sa.REAL(), nullable=False))
-    op.add_column('world_coordinates', sa.Column('ra_corner_10', sa.REAL(), nullable=False))
-    op.add_column('world_coordinates', sa.Column('ra_corner_11', sa.REAL(), nullable=False))
-    op.add_column('world_coordinates', sa.Column('dec_corner_00', sa.REAL(), nullable=False))
-    op.add_column('world_coordinates', sa.Column('dec_corner_01', sa.REAL(), nullable=False))
-    op.add_column('world_coordinates', sa.Column('dec_corner_10', sa.REAL(), nullable=False))
-    op.add_column('world_coordinates', sa.Column('dec_corner_11', sa.REAL(), nullable=False))
-    op.add_column('world_coordinates', sa.Column('minra', sa.REAL(), nullable=False))
-    op.add_column('world_coordinates', sa.Column('maxra', sa.REAL(), nullable=False))
-    op.add_column('world_coordinates', sa.Column('mindec', sa.REAL(), nullable=False))
-    op.add_column('world_coordinates', sa.Column('maxdec', sa.REAL(), nullable=False))
+    op.add_column('world_coordinates', sa.Column('ra_good_00', sa.REAL()))
+    op.add_column('world_coordinates', sa.Column('ra_good_01', sa.REAL()))
+    op.add_column('world_coordinates', sa.Column('ra_good_10', sa.REAL()))
+    op.add_column('world_coordinates', sa.Column('ra_good_11', sa.REAL()))
+    op.add_column('world_coordinates', sa.Column('dec_good_00', sa.REAL()))
+    op.add_column('world_coordinates', sa.Column('dec_good_01', sa.REAL()))
+    op.add_column('world_coordinates', sa.Column('dec_good_10', sa.REAL()))
+    op.add_column('world_coordinates', sa.Column('dec_good_11', sa.REAL()))
+    op.add_column('world_coordinates', sa.Column('good_minra', sa.REAL()))
+    op.add_column('world_coordinates', sa.Column('good_maxra', sa.REAL()))
+    op.add_column('world_coordinates', sa.Column('good_mindec', sa.REAL()))
+    op.add_column('world_coordinates', sa.Column('good_maxdec', sa.REAL()))
+    op.add_column('world_coordinates', sa.Column('ra_corner_00', sa.REAL()))
+    op.add_column('world_coordinates', sa.Column('ra_corner_01', sa.REAL()))
+    op.add_column('world_coordinates', sa.Column('ra_corner_10', sa.REAL()))
+    op.add_column('world_coordinates', sa.Column('ra_corner_11', sa.REAL()))
+    op.add_column('world_coordinates', sa.Column('dec_corner_00', sa.REAL()))
+    op.add_column('world_coordinates', sa.Column('dec_corner_01', sa.REAL()))
+    op.add_column('world_coordinates', sa.Column('dec_corner_10', sa.REAL()))
+    op.add_column('world_coordinates', sa.Column('dec_corner_11', sa.REAL()))
+    op.add_column('world_coordinates', sa.Column('minra', sa.REAL()))
+    op.add_column('world_coordinates', sa.Column('maxra', sa.REAL()))
+    op.add_column('world_coordinates', sa.Column('mindec', sa.REAL()))
+    op.add_column('world_coordinates', sa.Column('maxdec', sa.REAL()))
     op.create_index(op.f('ix_world_coordinates_ecllat'), 'world_coordinates', ['ecllat'], unique=False)
     op.create_index(op.f('ix_world_coordinates_gallat'), 'world_coordinates', ['gallat'], unique=False)
     op.create_index(op.f('ix_world_coordinates_good_maxdec'), 'world_coordinates', ['good_maxdec'], unique=False)
@@ -89,15 +91,34 @@ def upgrade() -> None:
         rows = pgdb.execute( "SELECT w._id AS wcsid,i._id AS imgid "
                              "FROM world_coordinates w "
                              "INNER JOIN source_lists s ON w.sources_id=s._id "
-                             "INNER JOIN images i ON s.image_id=i._id" )
+                             "INNER JOIN images i ON s.image_id=i._id "
+                             "ORDER BY i.created_at DESC" )
 
-        for r in rows:
-            img = Image.get_by_id( row['imgid'] )
-            mask = img.mask
-            wcs = WorldCoordinates.get_by_id( row['wcsid'] )
+        SCLogger.warning( f"Have to update {len(rows)} wcs rows." )
+        pgdb.echoqueries = False
 
+        times = { 'getimg': 0.,
+                  'getflags': 0.,
+                  'getwcs': 0.,
+                  'setcorners': 0.,
+                  'update': 0 }
+        for ndid, row in enumerate(rows):
+            if ( ndid > 0 ) and ( ndid % 50 == 0):
+                nlsp = '\n        '
+                SCLogger.warning( f"...did {ndid} of {len(rows)}\n"
+                                  f"{nlsp.join(f'{k:>10s}: {v:.3f}' for k, v in times.items())}" )
+                break
+            t0 = time.perf_counter()
+            img = Image.get_by_id( row['imgid'], pgdb )
+            t1 = time.perf_counter()
+            mask = img.flags
+            t2 = time.perf_counter()
+            wcs = WorldCoordinates.get_by_id( row['wcsid'], pgdb )
+            t3 = time.perf_counter()
+            
             wcs.set_corners_from_wcs( wcs.wcs, setradec=True, mask=mask )
-
+            t4 =time.perf_counter()
+            
             q = sql.SQL( textwrap.dedent(
                 """\
                 UPDATE world_coordinates
@@ -106,7 +127,7 @@ def upgrade() -> None:
                     gallat={gallat},
                     gallon={gallon},
                     ecllat={ecllat},
-                    ecllon={ecllon}
+                    ecllon={ecllon},
                     ra_corner_00={ra00},
                     ra_corner_01={ra01},
                     ra_corner_10={ra10},
@@ -128,7 +149,7 @@ def upgrade() -> None:
                     dec_good_10={decgood10},
                     dec_good_11={decgood11},
                     good_minra={good_minra},
-                    good_maxra={good_maxdec},
+                    good_maxra={good_maxra},
                     good_mindec={good_mindec},
                     good_maxdec={good_maxdec}
                 WHERE _id={id}
@@ -165,6 +186,29 @@ def upgrade() -> None:
                         good_maxdec=wcs.good_maxdec,
                         id=wcs._id )
 
+            pgdb.execute_nofetch( q )
+            t5 = time.perf_counter()
+            times['getimg'] += t1 - t0
+            times['getflags'] += t2 - t1
+            times['getwcs'] += t3 - t2
+            times['setcorners'] += t4 - t3
+            times['update'] += t5 - t4
+
+    # I had to remove the "nullable=False" from the column creation above; now
+    #   that they're filled, put them back in.
+
+    import pdb; pdb.set_trace()
+    SCLogger.warning( "Done updating columns, making lots of fields non-nullable" )
+    
+    for col in [ 'ra', 'dec',
+                 'ra_good_00', 'ra_good_01', 'ra_good_10', 'ra_good_11',
+                 'dec_good_00', 'dec_good_01', 'dec_good_10', 'dec_good_11',
+                 'good_minra', 'good_maxra', 'good_mindec', 'good_maxdec',
+                 'ra_corner_00', 'ra_corner_01', 'ra_corner_10', 'ra_corner_11',
+                 'dec_corner_00', 'dec_corner_01', 'dec_corner_10', 'dec_corner_11',
+                 'minra', 'maxra', 'mindec', 'maxdec' ]:
+        op.alter_column( 'world_coordinates', col, nullable=False )
+            
     
 
 def downgrade() -> None:
