@@ -5,9 +5,6 @@ Revises: f83cba8ee519
 Create Date: 2026-06-08 18:22:59.617683
 
 """
-import textwrap
-import time
-
 from psycopg import sql
 from alembic import op
 import sqlalchemy as sa
@@ -15,8 +12,6 @@ import sqlalchemy as sa
 from models.base import PGDB, FourCorners
 from models.image import Image
 from models.world_coordinates import WorldCoordinates
-
-from util.logger import SCLogger
 
 # revision identifiers, used by Alembic.
 revision = 'f8eeea7c3e96'
@@ -86,120 +81,28 @@ def upgrade() -> None:
     op.create_index('world_coordinates_q3c_ang2ipix_idx', 'world_coordinates', [sa.literal_column('q3c_ang2ipix(ra, dec)')], unique=False)
     # ### end Alembic commands ###
 
-    # Run all existing WCSes to get the corners and the good corners
+    # # Run all existing WCSes to get the corners and the good corners
+
+    ### NOT GOING TO DO THIS
+    # This means the migration is technically wrong.
+    # As of this writing, I have one database that needs this, and it will take 10h to
+    #   do the migration (because of all the time reading the flags images!).  So,
+    #   just do it manually in the background, without needing to lock up the entire database.
+
+    # I *do* have to deal with the fact that some columns are supposed to be nullable, so do that.
+    # (I couldn't make them nullable above when I created them, because existing rows in the database
+    # would cause the thing to error out.)
+
     with PGDB( op.get_bind().connection.driver_connection, dictcursor=True ) as pgdb:
-        rows = pgdb.execute( "SELECT w._id AS wcsid,i._id AS imgid "
-                             "FROM world_coordinates w "
-                             "INNER JOIN source_lists s ON w.sources_id=s._id "
-                             "INNER JOIN images i ON s.image_id=i._id "
-                             "ORDER BY i.created_at DESC" )
-
-        SCLogger.warning( f"Have to update {len(rows)} wcs rows." )
-        pgdb.echoqueries = False
-
-        times = { 'getimg': 0.,
-                  'getflags': 0.,
-                  'getwcs': 0.,
-                  'setcorners': 0.,
-                  'update': 0 }
-        for ndid, row in enumerate(rows):
-            if ( ndid > 0 ) and ( ndid % 50 == 0):
-                nlsp = '\n        '
-                SCLogger.warning( f"...did {ndid} of {len(rows)}\n"
-                                  f"{nlsp.join(f'{k:>10s}: {v:.3f}' for k, v in times.items())}" )
-                break
-            t0 = time.perf_counter()
-            img = Image.get_by_id( row['imgid'], pgdb )
-            t1 = time.perf_counter()
-            mask = img.flags
-            t2 = time.perf_counter()
-            wcs = WorldCoordinates.get_by_id( row['wcsid'], pgdb )
-            t3 = time.perf_counter()
-            
-            wcs.set_corners_from_wcs( wcs.wcs, setradec=True, mask=mask )
-            t4 =time.perf_counter()
-            
-            q = sql.SQL( textwrap.dedent(
-                """\
-                UPDATE world_coordinates
-                SET ra={ra},
-                    dec={dec},
-                    gallat={gallat},
-                    gallon={gallon},
-                    ecllat={ecllat},
-                    ecllon={ecllon},
-                    ra_corner_00={ra00},
-                    ra_corner_01={ra01},
-                    ra_corner_10={ra10},
-                    ra_corner_11={ra11},
-                    dec_corner_00={dec00},
-                    dec_corner_01={dec01},
-                    dec_corner_10={dec10},
-                    dec_corner_11={dec11},
-                    minra={minra},
-                    maxra={maxra},
-                    mindec={mindec},
-                    maxdec={maxdec},
-                    ra_good_00={ragood00},
-                    ra_good_01={ragood01},
-                    ra_good_10={ragood10},
-                    ra_good_11={ragood11},
-                    dec_good_00={decgood00},
-                    dec_good_01={decgood01},
-                    dec_good_10={decgood10},
-                    dec_good_11={decgood11},
-                    good_minra={good_minra},
-                    good_maxra={good_maxra},
-                    good_mindec={good_mindec},
-                    good_maxdec={good_maxdec}
-                WHERE _id={id}
-                """
-            ) ).format( ra=wcs.ra,
-                        dec=wcs.dec,
-                        gallat=wcs.gallat,
-                        gallon=wcs.gallon,
-                        ecllat=wcs.ecllat,
-                        ecllon=wcs.ecllon,
-                        ra00=wcs.ra_corner_00,
-                        ra01=wcs.ra_corner_01,
-                        ra10=wcs.ra_corner_10,
-                        ra11=wcs.ra_corner_11,
-                        dec00=wcs.dec_corner_00,
-                        dec01=wcs.dec_corner_01,
-                        dec10=wcs.dec_corner_10,
-                        dec11=wcs.dec_corner_11,
-                        minra=wcs.minra,
-                        maxra=wcs.maxra,
-                        mindec=wcs.mindec,
-                        maxdec=wcs.maxdec,
-                        ragood00=wcs.ra_good_00,
-                        ragood01=wcs.ra_good_01,
-                        ragood10=wcs.ra_good_10,
-                        ragood11=wcs.ra_good_11,
-                        decgood00=wcs.dec_good_00,
-                        decgood01=wcs.dec_good_01,
-                        decgood10=wcs.dec_good_10,
-                        decgood11=wcs.dec_good_11,
-                        good_minra=wcs.good_minra,
-                        good_maxra=wcs.good_maxra,
-                        good_mindec=wcs.good_mindec,
-                        good_maxdec=wcs.good_maxdec,
-                        id=wcs._id )
-
-            pgdb.execute_nofetch( q )
-            t5 = time.perf_counter()
-            times['getimg'] += t1 - t0
-            times['getflags'] += t2 - t1
-            times['getwcs'] += t3 - t2
-            times['setcorners'] += t4 - t3
-            times['update'] += t5 - t4
-
-    # I had to remove the "nullable=False" from the column creation above; now
-    #   that they're filled, put them back in.
-
-    import pdb; pdb.set_trace()
-    SCLogger.warning( "Done updating columns, making lots of fields non-nullable" )
-    
+        for col in [ 'ra', 'dec',
+                     'ra_good_00', 'ra_good_01', 'ra_good_10', 'ra_good_11',
+                     'dec_good_00', 'dec_good_01', 'dec_good_10', 'dec_good_11',
+                     'good_minra', 'good_maxra', 'good_mindec', 'good_maxdec',
+                     'ra_corner_00', 'ra_corner_01', 'ra_corner_10', 'ra_corner_11',
+                     'dec_corner_00', 'dec_corner_01', 'dec_corner_10', 'dec_corner_11',
+                     'minra', 'maxra', 'mindec', 'maxdec' ]:
+            pgdb.execute_nofetch( sql.SQL( "UPDATE world_coordinates SET {col}=-999." )
+                                  .format( col=sql.Identifier(col) ) )
     for col in [ 'ra', 'dec',
                  'ra_good_00', 'ra_good_01', 'ra_good_10', 'ra_good_11',
                  'dec_good_00', 'dec_good_01', 'dec_good_10', 'dec_good_11',
@@ -208,8 +111,116 @@ def upgrade() -> None:
                  'dec_corner_00', 'dec_corner_01', 'dec_corner_10', 'dec_corner_11',
                  'minra', 'maxra', 'mindec', 'maxdec' ]:
         op.alter_column( 'world_coordinates', col, nullable=False )
-            
-    
+
+
+    # with PGDB( op.get_bind().connection.driver_connection, dictcursor=True ) as pgdb:
+    #     rows = pgdb.execute( "SELECT w._id AS wcsid,i._id AS imgid "
+    #                          "FROM world_coordinates w "
+    #                          "INNER JOIN source_lists s ON w.sources_id=s._id "
+    #                          "INNER JOIN images i ON s.image_id=i._id "
+    #                          "ORDER BY i.created_at DESC" )
+
+    #     SCLogger.warning( f"Have to update {len(rows)} wcs rows." )
+    #     pgdb.echoqueries = False
+
+    #     times = { 'getimg': 0.,
+    #               'getflags': 0.,
+    #               'getwcs': 0.,
+    #               'setcorners': 0.,
+    #               'update': 0 }
+    #     for ndid, row in enumerate(rows):
+    #         if ( ndid > 0 ) and ( ndid % 50 == 0):
+    #             nlsp = '\n        '
+    #             SCLogger.warning( f"...did {ndid} of {len(rows)}\n"
+    #                               f"{nlsp.join(f'{k:>10s}: {v:.3f}' for k, v in times.items())}" )
+    #             break
+    #         t0 = time.perf_counter()
+    #         img = Image.get_by_id( row['imgid'], pgdb )
+    #         t1 = time.perf_counter()
+    #         mask = img.flags
+    #         t2 = time.perf_counter()
+    #         wcs = WorldCoordinates.get_by_id( row['wcsid'], pgdb )
+    #         t3 = time.perf_counter()
+
+    #         wcs.set_corners_from_wcs( wcs.wcs, setradec=True, mask=mask )
+    #         t4 =time.perf_counter()
+
+    #         q = sql.SQL( textwrap.dedent(
+    #             """\
+    #             UPDATE world_coordinates
+    #             SET ra={ra},
+    #                 dec={dec},
+    #                 gallat={gallat},
+    #                 gallon={gallon},
+    #                 ecllat={ecllat},
+    #                 ecllon={ecllon},
+    #                 ra_corner_00={ra00},
+    #                 ra_corner_01={ra01},
+    #                 ra_corner_10={ra10},
+    #                 ra_corner_11={ra11},
+    #                 dec_corner_00={dec00},
+    #                 dec_corner_01={dec01},
+    #                 dec_corner_10={dec10},
+    #                 dec_corner_11={dec11},
+    #                 minra={minra},
+    #                 maxra={maxra},
+    #                 mindec={mindec},
+    #                 maxdec={maxdec},
+    #                 ra_good_00={ragood00},
+    #                 ra_good_01={ragood01},
+    #                 ra_good_10={ragood10},
+    #                 ra_good_11={ragood11},
+    #                 dec_good_00={decgood00},
+    #                 dec_good_01={decgood01},
+    #                 dec_good_10={decgood10},
+    #                 dec_good_11={decgood11},
+    #                 good_minra={good_minra},
+    #                 good_maxra={good_maxra},
+    #                 good_mindec={good_mindec},
+    #                 good_maxdec={good_maxdec}
+    #             WHERE _id={id}
+    #             """
+    #         ) ).format( ra=wcs.ra,
+    #                     dec=wcs.dec,
+    #                     gallat=wcs.gallat,
+    #                     gallon=wcs.gallon,
+    #                     ecllat=wcs.ecllat,
+    #                     ecllon=wcs.ecllon,
+    #                     ra00=wcs.ra_corner_00,
+    #                     ra01=wcs.ra_corner_01,
+    #                     ra10=wcs.ra_corner_10,
+    #                     ra11=wcs.ra_corner_11,
+    #                     dec00=wcs.dec_corner_00,
+    #                     dec01=wcs.dec_corner_01,
+    #                     dec10=wcs.dec_corner_10,
+    #                     dec11=wcs.dec_corner_11,
+    #                     minra=wcs.minra,
+    #                     maxra=wcs.maxra,
+    #                     mindec=wcs.mindec,
+    #                     maxdec=wcs.maxdec,
+    #                     ragood00=wcs.ra_good_00,
+    #                     ragood01=wcs.ra_good_01,
+    #                     ragood10=wcs.ra_good_10,
+    #                     ragood11=wcs.ra_good_11,
+    #                     decgood00=wcs.dec_good_00,
+    #                     decgood01=wcs.dec_good_01,
+    #                     decgood10=wcs.dec_good_10,
+    #                     decgood11=wcs.dec_good_11,
+    #                     good_minra=wcs.good_minra,
+    #                     good_maxra=wcs.good_maxra,
+    #                     good_mindec=wcs.good_mindec,
+    #                     good_maxdec=wcs.good_maxdec,
+    #                     id=wcs._id )
+
+    #         pgdb.execute_nofetch( q )
+    #         t5 = time.perf_counter()
+    #         times['getimg'] += t1 - t0
+    #         times['getflags'] += t2 - t1
+    #         times['getwcs'] += t3 - t2
+    #         times['setcorners'] += t4 - t3
+    #         times['update'] += t5 - t4
+
+
 
 def downgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###

@@ -2042,7 +2042,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             elif order_by == 'latest':
                 q += sql.SQL( "ORDER BY i.mjd DESC\n" )
             elif order_by == 'quality':
-                q += sql.SQL( "ORDER BY i.lim_mag_estimate - {qf}*i.fwhm_estimate DESC\n"
+                q += sql.SQL( "ORDER BY i.lim_mag_estimate - {qf}*i.fwhm_estimate DESC NULLS LAST\n"
                              ).format( qf=np.abs(seeing_quality_factor) )
             elif order_by is not None:
                 raise ValueError(f'Unknown order_by parameter: {order_by}. Use "earliest", "latest" or "quality".')

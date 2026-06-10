@@ -373,6 +373,7 @@ def test_find_images(ptf_reference_image_datastores, ptf_ref,
         # ...right now taking advantage of the fact that there's
         #   only a single provenance of anything in the test db
         rows =pgdb.execute( "SELECT i._id AS imgid, i.provenance_id AS improvid, i._type AS imgtyp,\n"
+                            "       i.lim_mag_estimate, i.zero_point_estimate,\n"
                             "       w._id AS wcsid, w.provenance_id AS wcsprovid,\n"
                             "       z._id AS zpid, z.provenance_id AS zpprovid\n"
                             "FROM images i\n"
@@ -388,6 +389,8 @@ def test_find_images(ptf_reference_image_datastores, ptf_ref,
         total = len( sciimages )
         subsciimages = { k: v for k, v in allimgs.items() if v['improvid'] in provids }
         subtotal = len( subsciimages )
+        haszpesttotal = sum( 1 for v in allimgs.values() if v['zero_point_estimate'] is not None )
+        haslimmagtotal = sum( 1 for v in allimgs.values() if v['lim_mag_estimate'] is not None )
 
     # try finding them all
     all_images_w_calibs = Image.find_images( type=None, provenance_ids=all_prov_ids )
@@ -625,19 +628,19 @@ def test_find_images(ptf_reference_image_datastores, ptf_ref,
     assert len(found3) == 0  # we will never have exactly that number
 
     # filter by limiting magnitude
-    value = 21.0
-    found1 = Image.find_images(min_lim_mag=value, provenance_ids=provids)
+    value = 21
+    found1 = Image.find_images(min_lim_mag=value, provenance_ids=all_prov_ids)
     assert all(im.instrument == 'DECam' for im in found1)
     assert all(im.lim_mag_estimate >= value for im in found1)
-    assert len(found1) < subtotal
+    assert len(found1) < haslimmagtotal
 
-    found2 = Image.find_images(max_lim_mag=value, provenance_ids=provids)
+    found2 = Image.find_images(max_lim_mag=value, provenance_ids=all_prov_ids)
     assert all(im.instrument == 'PTF' for im in found2)
     assert all(im.lim_mag_estimate <= value for im in found2)
-    assert len(found2) < subtotal
-    assert len(found1) + len(found2) == subtotal
+    assert len(found2) < haslimmagtotal
+    assert len(found1) + len(found2) == haslimmagtotal
 
-    found3 = Image.find_images(min_lim_mag=value, max_lim_mag=value, provenance_ids=provids)
+    found3 = Image.find_images(min_lim_mag=value, max_lim_mag=value, provenance_ids=all_prov_ids)
     assert len(found3) == 0
 
     # filter by background
@@ -656,16 +659,16 @@ def test_find_images(ptf_reference_image_datastores, ptf_ref,
 
     # filter by zero point
     value = 28.0
-    found1 = Image.find_images(min_zero_point=value, provenance_ids=provids)
+    found1 = Image.find_images(min_zero_point=value, provenance_ids=all_prov_ids)
     assert all(im.zero_point_estimate >= value for im in found1)
-    assert len(found1) < subtotal
+    assert len(found1) < haszpesttotal
 
-    found2 = Image.find_images(max_zero_point=value, provenance_ids=provids)
+    found2 = Image.find_images(max_zero_point=value, provenance_ids=all_prov_ids)
     assert all(im.zero_point_estimate <= value for im in found2)
-    assert len(found2) < subtotal
-    assert len(found1) + len(found2) == subtotal
+    assert len(found2) < haszpesttotal
+    assert len(found1) + len(found2) == haszpesttotal
 
-    found3 = Image.find_images(min_zero_point=value, max_zero_point=value, provenance_ids=provids)
+    found3 = Image.find_images(min_zero_point=value, max_zero_point=value, provenance_ids=all_prov_ids)
     assert len(found3) == 0
 
     # filter by exposure time
@@ -701,7 +704,7 @@ def test_find_images(ptf_reference_image_datastores, ptf_ref,
     best = found[0]
 
     # the best overall quality from all images
-    assert im_qual(best) == max([im_qual(im) for im in found])
+    assert im_qual(best) == max([im_qual(im) for im in found if im.lim_mag_estimate is not None])
 
     # get the two best images from the PTF instrument (exp_time chooses the single images only)
     found1 = Image.find_images(max_exp_time=60, order_by='quality', provenance_ids=provids)[:2]
