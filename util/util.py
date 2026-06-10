@@ -3,7 +3,7 @@ import numbers
 import os
 import pathlib
 import time
-from datetime import datetime
+from datetime import datetime, date
 import dateutil.parser
 import uuid
 import json
@@ -40,6 +40,8 @@ class NumpyAndUUIDJsonEncoder(json.JSONEncoder):
         if isinstance(obj, uuid.UUID):
             return str(obj)
         if isinstance(obj, datetime ):
+            return obj.isoformat()
+        if isinstance(obj, date ):
             return obj.isoformat()
         return json.JSONEncoder.default(self, obj)
 
@@ -155,6 +157,8 @@ def parse_dateobs(dateobs=None, output='datetime'):
             dateobs = Time( dateutil.parser.parse( dateobs ) )
     elif isinstance(dateobs, datetime):
         dateobs = Time(dateobs)
+    elif isinstance(dateobs, date):
+        dateobs = Time( datetime.combine( dateobs, datetime.min.time() ) )
     else:
         raise ValueError(f'Cannot parse dateobs of type {type(dateobs)}')
 

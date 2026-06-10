@@ -1906,10 +1906,10 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                     limprefix = "good_" if use_good else ""
 
                     if provenance_ids_are_zp:
-                        WorldCoordinates._find_possibly_overlapping_temptable(
+                        WorldCoordinates._find_potential_overlapping_temptable(
                             fcobj, session=pgdb, prov_id=provenance_ids, corner=corner, limprefix=limprefix,
                             fromclause=( "FROM world_coordinates i\n"
-                                         "INNER JOIN zero_points z ON z.wcs_id=i.id" ),
+                                         "INNER JOIN zero_points z ON z.wcs_id=i._id" ),
                             provtable='z'
                         )
                     else:

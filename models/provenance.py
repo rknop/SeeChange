@@ -82,7 +82,7 @@ class CodeVersion(Base, UUIDMixin):
         'fakeinjection' : (0,1,0),
 
         # Other processes of associated pipelines
-        'referencing' : (0,1,0),
+        'referencing' : (0,2,0),
         'coaddition' : (0,1,0),
         'positioning': (0,1,0),
         'flat_bias_builder': (0,5,0),

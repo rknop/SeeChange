@@ -1,16 +1,17 @@
+import io
 import datetime
 import textwrap
 import argparse
 
 import numpy as np
-import psycopg
 from psycopg import sql
 
 from pipeline.parameters import Parameters
 from pipeline.coaddition import CoaddPipeline
 from pipeline.data_store import DataStore, ProvenanceTree
 
-from models.base import SmartSession, PsycopgConnection, PGDB
+from models.base import SmartSession, PGDB
+from models.enums_and_bitflags import ImageTypeConverter
 from models.provenance import Provenance
 from models.reference import Reference
 from models.image import Image
@@ -45,7 +46,7 @@ class ParsRefMaker(Parameters):
         self.start_time = self.add_par(
             'start_time',
             None,
-            (None, str, float, datetime.datetime),
+            (None, str, float, datetime.datetime, datetime.date),
             'Only use images taken after this time (inclusive). '
             'Time format can be MJD float, ISOT string, or datetime object. '
             'If None, will not limit the start time. ',
@@ -55,7 +56,7 @@ class ParsRefMaker(Parameters):
         self.end_time = self.add_par(
             'end_time',
             None,
-            (None, str, float, datetime.datetime),
+            (None, str, float, datetime.datetime, datetime.date),
             'Only use images taken before this time (inclusive). '
             'Time format can be MJD float, ISOT string, or datetime object. '
             'If None, will not limit the end time. ',
@@ -340,13 +341,11 @@ class RefMaker:
             # make sure the ref_prov is in the database
             self.ref_prov.insert_if_needed( session=dbsession )
 
-        with PsycopgConnection() as conn:
-            cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
+        with PGDB( dictcursor=True ) as pgdb:
             # Lock the refset table so we don't have a race condition
-            cursor.execute( "LOCK TABLE refsets" )
+            pgdb.execute_nofetch( "LOCK TABLE refsets" )
             # Check to see if the refset already exists
-            cursor.execute( "SELECT * FROM refsets WHERE name=%(name)s", { 'name': self.pars.name } )
-            rows = cursor.fetchall()
+            rows = pgdb.execute( "SELECT * FROM refsets WHERE name=%(name)s", { 'name': self.pars.name } )
             if len(rows) > 0:
                 # refset already exists, make sure the provenance is right
                 if rows[0]['provenance_id'] != self.ref_prov.id:
@@ -359,11 +358,11 @@ class RefMaker:
                 # refset doesn't exist, make it
                 self.refset = RefSet( name=self.pars.name, description=self.pars.description,
                                       provenance_id=self.ref_prov.id )
-                cursor.execute( "INSERT INTO refsets(_id,name,description,provenance_id) "
-                                "VALUES (%(id)s,%(name)s,%(desc)s,%(prov)s)",
-                                { 'id': self.refset.id, 'name': self.refset.name,
-                                  'desc': self.refset.description, 'prov': self.refset.provenance_id } )
-                conn.commit()
+                pgdb.execute_nofetch( "INSERT INTO refsets(_id,name,description,provenance_id) "
+                                      "VALUES (%(id)s,%(name)s,%(desc)s,%(prov)s)",
+                                      { 'id': self.refset.id, 'name': self.refset.name,
+                                        'desc': self.refset.description, 'prov': self.refset.provenance_id } )
+                pgdb.commit()
 
 
     # ======================================================================
@@ -392,7 +391,10 @@ class RefMaker:
         Parameters
         ----------
           image: str or None
-            The filepath or id if the image to use to figure out min/max ra/dec.
+            The id of the image, or a substring of the filepath of the
+            image.  If the substring is not unique (i.e. there are
+            multiple images with this substring), an exception will be
+            raised.
 
           image_zp_prov_id: str or None
             Ignored if image is not None.  If not None, then will search
@@ -422,17 +424,17 @@ class RefMaker:
             if any ( i is not None for i in [ ra, dec, minra, maxra, mindec, maxdec ] ):
                 raise ValueError( "If you pass image to RefMaker.run, you can't pass any coordinates." )
 
-            with PGDB( dict_cursor=True ) as pgdb:
-                rows = pgdb.query( sql.SQL( textwrap.dedent(
+            with PGDB( dictcursor=True ) as pgdb:
+                rows = pgdb.execute( sql.SQL( textwrap.dedent(
                     """\
                     SELECT _id, ra, dec, minra, maxra, mindec, maxdec FROM images
-                    WHERE filepath={img} OR _id={img}
+                    WHERE filepath LIKE {perimg} OR _id::text={img}
                     """
-                ) ).format( img=image ) )
+                ) ).format( img=str(image), perimg=f'%%{image}%%' ) )
                 if len(rows) == 0:
                     raise FileNotFoundError( f"Could not find image {image}" )
                 elif len(rows) > 1:
-                    raise RuntimeError( f"More than one image matched {image}; this should probably not be possible." )
+                    raise RuntimeError( f"More than one image matched {image}; be more specific." )
                 imgid = rows[0]['_id']
                 imgra = rows[0]['ra']
                 imgdec = rows[0]['dec']
@@ -592,7 +594,7 @@ class RefMaker:
 
     # ======================================================================
 
-    def run(self, *args, do_not_build=False, **kwargs ):
+    def run(self, *args, do_not_build=False, identify_even_if_not_building=False, **kwargs ):
         """Look to see if there is an existing reference that matches the specs; if not, optionally build one.
 
         See parse_arguments for function call parameters.  The remaining
@@ -637,7 +639,7 @@ class RefMaker:
             raise RuntimeError( f'Found multiple references with the same provenance '
                                 f'{self.ref_prov.id} and location!' )
 
-        if do_not_build:
+        if do_not_build and ( not identify_even_if_not_building ):
             return None
 
         ############### no reference found, need to build one! ################
@@ -706,6 +708,17 @@ class RefMaker:
                 )
             dses.append( ds )
 
+        nlsp = '\n        '
+        if self.do_not_build:
+            # If we get here, it's because identify_even_if_not_building is True, which means
+            #   the user probably wants to see the list, so log this as info rather than debug.
+            SCLogger.info( f"Images that would have been combined for the reference:\n"
+                           f"{nlsp.join( d.image.filepath for d in dses )}" )
+            return None
+        else:
+            SCLogger.debug( f"Combining images to make ref:\n"
+                            f"{nlsp.join( d.image.filepath for d in dses )}" )
+
         self.coadd_pipeline.make_provenance_tree( dses )
         coadd_ds = self.coadd_pipeline.run( dses )
 
@@ -745,6 +758,16 @@ def main():
     parser.add_argument( "--mindec", type=float, default=None, help="See description above." )
     parser.add_argument( "--maxdec", type=float, default=None, help="See description above." )
     parser.add_argument( "-f", "--filter", type=str, required=True, help="Filter name." )
+    parser.add_argument( "-n", "--no-build", default=False, action="store_true",
+                         help="Don't build a reference if one isn't found" )
+    parser.add_argument( "-l", "--list-images", default=False, action="store_true",
+                         help=( "List the images that are combined into the ref.  If --no-build is True, "
+                                "list the images that would have been combined into the ref even if a "
+                                "ref is not built." ) )
+
+    # TODO : add arugments that let us override what's in the config file?  Or just rely on config file?
+    # (Probably we want this, so we can do one-offs, but put in warnings or require a --override-config
+    # so that we don't do it willy-nilly.)
     # parser.add_argument( "-n", "--name", required=True, help="Name of refset" )
     # parser.add_argument( "-d", "--description", default="",
     #                      help="Description of refset.  Only used if the refset is newly created." )
@@ -754,50 +777,69 @@ def main():
     # parser.add_argument( "-e", "--end-time", type=str, default=None,
     #                      help=( "YYYY-MM-DDTHH:MM:SS (may omit THH:MM:SS).  Only use images taken "
     #                             "before this time (inclusive)" ) )
-    # TODO : add arugments that let us override what's in the config file?  Or just rely on config file?
-    # (Probably we want this, so we can do one-offs, but put in warnings or require a --override-config
-    # so that we don't do it willy-nilly.)
 
     args = parser.parse_args()
+    kwargs = vars(args).copy()
+    kwargs['do_not_build'] = kwargs['no_build']
+    kwargs['identify_even_if_not_building'] = kwargs['list_images']
+    del kwargs['no_build']
+    del kwargs['list_images']
+
     refmaker = RefMaker()
-    refmaker.run( **vars(args) )
 
-    # TODO : Process arguments that override the config file
+    # TODO : Process arguments that override the config file.  (See TODO above.)
 
-    if args.image is not None:
-        if any( x is not None for x in [ args.ra, args.dec, args.minra, args.maxra, args.mindec, args.maxdec ] ):
-            raise ValueError( "Cannot specify image and any of ra/dec/minra/maxra/mindec/maxdec" )
+    ref = refmaker.run( **kwargs )
 
-        with SmartSession() as session:
-            img = Image.get_by_id( args.image, session=session )
-            if img is None:
-                img = session.query( Image ).filter( filepath=args.image ).first()
-        if img is None:
-            raise RuntimeError( f"Cound not find image {args.image}" )
-        # TODO : pass arguments that override config arguments
-        refmaker = RefMaker()
-        refmaker.run( image=img, filter=args.filter )
-
-    elif args.ra is not None:
-        if args.dec is None:
-            raise ValueError( "Must give dec if giving ra" )
-        if any( x is not None for x in [ args.image, args.minra, args.maxra, args.mindec, args.maxdec,
-                                         args.zp_prov_id] ):
-            raise ValueError( "When specifying ra/dec, cannot specify any of image/minra/maxra/mindec/maxdec "
-                              "or zp-prov-id" )
-        refmaker = RefMaker()
-        refmaker.run( ra=args.ra, dec=args.dec, filter=args.filter )
-
-    elif args.minra is not None:
-        if any( x is None for x in [ args.maxra, args.mindec, args.maxdec ] ):
-            raise ValueError( "Must give all of minra, maxra, mindec, maxdec." )
-        if any( x is not None for x in [ args.image, args.ra, args.dec, args.zp_prov_id ] ):
-            raise ValueError( "Cannot give image, ra/dec, or zp-prov-id with minra/maxra/mindec/maxdec" )
-        refmaker = RefMaker()
-        refmaker.run( minra=args.minra, maxra=args.maxra, mindec=args.mindec, maxdec=args.maxdec, filter=args.filter )
+    if ref is None:
+        SCLogger.warning( "No ref built or returned." )
 
     else:
-        raise ValueError( "Must give one of --image, (--ra and --dec), or (--minra, --maxra, --mindec, and --maxdec)" )
+        with PGDB( dictcursor=True ) as pgdb:
+            q = sql.SQL( textwrap.dedent(
+                """\
+                SELECT i.filepath, i.filter, i.section_id, i._type, b.noise, p.fwhm_pixels, z.zp
+                       ARRAY_AGG(subim.filepath) AS compimages
+                FROM refs r
+                INNER JOIN zero_points z ON r.zp_id=z._id
+                INNER JOIN world_coordinates w ON z.wcs_id=w._id
+                INNER JOIN source_lists s ON w.sources_id=s._id
+                INNER JOIN backgrounds b ON b.sources_id=s._id
+                INNER JOIN psfs p ON p.sources_id=s._id
+                INNER JOIN images i ON s.image_id=i._id
+                INNER JOIN coadd_components comp ON comp.coadd_image_id=i._id
+                INNER JOIN zero_points compz ON compz._id=comp.zp_id
+                INNER JOIN world_coordinates compw ON compw._id=compz.wcs_id
+                INNER JOIN source_lists comps ON comps._id=compw.sources_id
+                INNER JOIN images subim ON subim._id=comps.images_id
+                WHERE r._id={refid} AND z.provenance_id={zpprov}
+                GROUP BY i.filepath, i.filter, i.section_id, i._type, b.noise, p.fwhm_pixels, z.zp
+                """
+            ) ).format( refid=ref.id, zpprov=refmaker.coadd_zp_prov.id )
+            rows = pgdb.execute( q )
+
+        if len( rows ) != 1:
+            import pdb; pdb.set_trace()
+            raise RuntimeError( "This should not happen." )
+        row = rows[0]
+
+        # Signal = 10^(zp-m)/2.5 * 0.9375 [ where 0.9375 is the fraction of a Gaussian in a 1FWHM radius ]
+        # Noise = sqrt( π * fhwm² * noise² )
+        # So m = zp - 2.5 * log10( S/N * √π * fwhm * noise / 0.9375 )
+        limag = row['zp'] - 2.5 * np.log10( 5. * np.sqrt(np.pi) * row['fwhm_pixels'] * row['noise'] / 0.9375 )
+
+        strio = io.StringiO()
+        strio.write( f"Combined reference: {row['filepath']}\n" )
+        strio.write( f"      section={row['section_id']}, filter={row['filter']}, zp={row['zp']:.2f}, "
+                     f"skyσ={row['noise']:.1f}, fwhm={row['fwhm_pixels']:.2f} pix\n" )
+        strio.write( f"      5σ limiting magnitude is, maybe, {limag:.2f}\n" )
+        nlsp = '\n        '
+        strio.write( f"      Combined {len(row['compimages'])} images:\n{nlsp.join(row['compimages'])}" )
+        SCLogger.info( strio.getvalue() )
+
+        typ = ImageTypeConverter.to_string( row['_type'] )
+        if typ != 'ComSci':
+            SCLogger.warning( f"Coadd image has type {typ}, expected ComSci." )
 
 
 # ======================================================================
