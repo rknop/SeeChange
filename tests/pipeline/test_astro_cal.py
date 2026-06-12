@@ -109,7 +109,7 @@ def verify_astrocal( astrometor, origwcs, ds, origmd5, masked=False ):
     # Make sure that the four corners are right
     newras = [ s.ra.value for s in newscs ]
     newdecs = [ s.dec.value for s in newscs ]
-    newras, newdecs = FourCorners.sort_radec( newras, newdecs )
+    newras, newdecs, minra, maxra, mindec, maxdec = FourCorners.sort_radec( newras, newdecs )
     assert ds.wcs.ra_corner_00 == pytest.approx( newras[0], abs=1.0/3600. )
     assert ds.wcs.ra_corner_01 == pytest.approx( newras[1], abs=1.0/3600. )
     assert ds.wcs.ra_corner_10 == pytest.approx( newras[2], abs=1.0/3600. )
@@ -118,10 +118,10 @@ def verify_astrocal( astrometor, origwcs, ds, origmd5, masked=False ):
     assert ds.wcs.dec_corner_01 == pytest.approx( newdecs[1], abs=1.0/3600. )
     assert ds.wcs.dec_corner_10 == pytest.approx( newdecs[2], abs=1.0/3600. )
     assert ds.wcs.dec_corner_11 == pytest.approx( newdecs[3], abs=1.0/3600. )
-    assert ds.wcs.minra == pytest.approx( min( newras ), abs=1.0/3600. )
-    assert ds.wcs.maxra == pytest.approx( max( newras ), abs=1.0/3600. )
-    assert ds.wcs.mindec == pytest.approx( min( newdecs ), abs=1.0/3600. )
-    assert ds.wcs.maxdec == pytest.approx( max( newdecs ), abs=1.0/3600. )
+    assert ds.wcs.minra == pytest.approx( minra, abs=1.0/3600. )
+    assert ds.wcs.maxra == pytest.approx( maxra, abs=1.0/3600. )
+    assert ds.wcs.mindec == pytest.approx( mindec, abs=1.0/3600. )
+    assert ds.wcs.maxdec == pytest.approx( maxdec, abs=1.0/3600. )
 
     if masked:
         mxvals = [ 50, 50, 1800, 1800 ]
@@ -131,7 +131,7 @@ def verify_astrocal( astrometor, origwcs, ds, origmd5, masked=False ):
         mxvals = [ 15, 15, 2032, 2032 ]
         myvals = [ 15, 4080, 15, 4080 ]
     mras, mdecs = ds.wcs.wcs.pixel_to_world_values( mxvals, myvals )
-    mras, mdecs = FourCorners.sort_radec( mras, mdecs )
+    mras, mdecs, mminra, mmindec, mmaxra, mmaxdec = FourCorners.sort_radec( mras, mdecs )
     assert ds.wcs.ra_good_00 == pytest.approx( mras[0], abs=1.0/3600. )
     assert ds.wcs.ra_good_01 == pytest.approx( mras[1], abs=1.0/3600. )
     assert ds.wcs.ra_good_10 == pytest.approx( mras[2], abs=1.0/3600. )
@@ -140,10 +140,10 @@ def verify_astrocal( astrometor, origwcs, ds, origmd5, masked=False ):
     assert ds.wcs.dec_good_01 == pytest.approx( mdecs[1], abs=1.0/3600. )
     assert ds.wcs.dec_good_10 == pytest.approx( mdecs[2], abs=1.0/3600. )
     assert ds.wcs.dec_good_11 == pytest.approx( mdecs[3], abs=1.0/3600. )
-    assert ds.wcs.good_minra == pytest.approx( min( mras ), abs=1.0/3600. )
-    assert ds.wcs.good_maxra == pytest.approx( max( mras ), abs=1.0/3600. )
-    assert ds.wcs.good_mindec == pytest.approx( min( mdecs ), abs=1.0/3600. )
-    assert ds.wcs.good_maxdec == pytest.approx( max( mdecs ), abs=1.0/3600. )
+    assert ds.wcs.good_minra == pytest.approx( mminra, abs=1.0/3600. )
+    assert ds.wcs.good_maxra == pytest.approx( mmaxra, abs=1.0/3600. )
+    assert ds.wcs.good_mindec == pytest.approx( mmindec, abs=1.0/3600. )
+    assert ds.wcs.good_maxdec == pytest.approx( mmaxdec, abs=1.0/3600. )
 
     # HACK ALERT
     # The only place masked=True is used is in test_run_astrometry_net, and

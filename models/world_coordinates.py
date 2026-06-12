@@ -1,7 +1,10 @@
-import pathlib
-import numpy as np
 import os
+import textwrap
+import pathlib
 
+import numpy as np
+
+from psycopg import sql
 import sqlalchemy as sa
 from sqlalchemy import orm
 from sqlalchemy.schema import CheckConstraint, UniqueConstraint
@@ -11,11 +14,13 @@ from astropy.wcs import WCS
 from astropy.io import fits
 from astropy.wcs import utils
 
-from models.base import ( Base, SeeChangeBase, SmartSession,
+from models.base import ( Base, SeeChangeBase, SmartSession, PGDB,
                           UUIDMixin, HasBitFlagBadness, FileOnDiskMixin, SpatiallyIndexed, FourCornersWithGood )
 from models.enums_and_bitflags import catalog_match_badness_inverse
 from models.image import Image
 from models.source_list import SourceList
+from improc.tools import strip_wcs_keywords
+from util.logger import SCLogger
 
 
 class WorldCoordinates(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness, SpatiallyIndexed, FourCornersWithGood ):
@@ -165,6 +170,49 @@ class WorldCoordinates(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness, Spat
         with open( txtpath ) as ifp:
             headertxt = ifp.read()
             self.wcs = WCS( fits.Header.fromstring( headertxt , sep='\\n' ))
+
+
+    def export_image( self, ofpath, image=None, which='image', pgdb=None, overwrite=False ):
+        """Write the FITS image with the header having this WCS.
+
+        If you don't pass image, then it only works if everything is
+        already saved to the database.
+
+        """
+
+        if image is None:
+            with PGDB( pgdb, dictcursor=True ) as pgdb:
+                q = sql.SQL( textwrap.dedent(
+                    """\
+                    SELECT i.* FROM images i
+                    INNER JOIN source_lists s ON s.image_id=i._id
+                    INNER JOIN world_coordinates w ON w.sources_id=s._id
+                    WHERE w._id={me}
+                    """
+                ) ).format( me=self.id )
+                rows = pgdb.execute( q )
+                if len(rows) > 1:
+                    raise RuntimeError( "This should never happen." )
+                elif len(rows) == 0:
+                    SCLogger.warning( "Could not find image for wcs; maybe it's not yet saved to the database." )
+                    return None
+
+            image = Image( **(rows[0]) )
+
+        data = ( image.data if which == 'image'
+                 else image.flags if which == 'flags'
+                 else image.weight if which == 'weight'
+                 else None )
+        if data is None:
+            SCLogger.error( f"Couldn't find array {which} for image {image.filepath}" )
+            return None
+
+        hdr = fits.Header( image.header )
+        strip_wcs_keywords( hdr )
+        hdr.extend( self.wcs.to_header( relax=True ) )
+
+        fits.writeto( ofpath, data, hdr, overwrite=overwrite )
+
 
     def free(self):
         """Free loaded world coordinates memory.

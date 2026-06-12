@@ -1,4 +1,5 @@
 import pathlib
+import re
 import time
 import random
 import shutil
@@ -6,13 +7,15 @@ import subprocess
 
 import numpy as np
 from numpy.fft import fft2, ifft2, fftshift
+from psycopg import sql
 
 import sep
 
-from models.base import SmartSession, FileOnDiskMixin
+from models.base import SmartSession, PGDB, FileOnDiskMixin
 from models.enums_and_bitflags import BitFlagConverter
 from models.provenance import Provenance, CodeVersion
 from models.image import Image
+from models.world_coordinates import WorldCoordinates
 
 from pipeline.parameters import Parameters
 from pipeline.data_store import DataStore
@@ -56,8 +59,34 @@ class ParsCoadd(Parameters):
             'alignment_index',
             'last',
             str,
-            ( 'How to choose the index of image to align to.  Can be "first", "last", "other", or an integer; '
-              '"other" is currently only supported by coadd method swarp' ),
+            ( 'How to choose the index of image to align to.  Can be "first", "last", "other", "absolute", '
+              'or an integer; "absolute" and "other" are currently only supported by coadd method swarp' ),
+            critical=True
+        )
+
+        self.alignment_zp = self.add_par(
+            'alignment_zp',
+            None,
+            ( float, type(None) ),
+            ( 'Zeropoint to scale images to before swarping them together in the swarp method.  If '
+              'None, the zeropoint will be taken from the target datastore.  Needed if alignment_index '
+              'is absolute.' ),
+            critical=True
+        )
+
+        self.absolute_width = self.add_par(
+            'absolute_width',
+            2048,
+            int,
+            ( 'Only used if alignment_index is absolute.  What is the width of the output image?' ),
+            critical=True
+        )
+
+        self.absolute_height = self.add_par(
+            'absolute_height',
+            2048,
+            int,
+            ( 'Only used if alignment_index is absolute.  What is the height of the output image?' ),
             critical=True
         )
 
@@ -65,7 +94,7 @@ class ParsCoadd(Parameters):
             'inpainting',
             {},
             dict,
-            'Inpainting parameters. ',
+            'Inpainting parameters; currently inpainting is only supprted by method zogy.',
             critical=True
         )
 
@@ -85,6 +114,42 @@ class ParsCoadd(Parameters):
             ( 'Multiplicative factor for the PSF FWHM (in pixels) to use for dilating the flag maps. '
               '(Currently only used by zogy.)' ),
             critical=True,
+        )
+
+        self.how_set_fields = self.add_par(
+            'how_set_fields',
+            'fallback-majority',
+            str,
+            ( "How to set the section_id, instrument, telescope, project, target, and filter fields in the "
+              "Image object for the coadded image.  Options include: first : use the values from the first "
+              "image that went into the sum.  last : use the values from the last image that went into the sum. "
+              "majority : use the most common value of the images that went into the sum; in the case of a tie, "
+              "choose the one that showed up first (in mjd order).  constant : use the constant from "
+              "how_set_fields_constant.  Additionally, foreach of these, there is also 'fallback-<option>'.  "
+              "In that case, if *all* of the input images have the same value in the header, "
+              "that value will be used, and only if the value is not unanimous will the thing be chosen from "
+              "what is specified here.  Also see how_set_fields_override." ),
+            critical=True
+        )
+
+        self.how_set_fields_constant = self.add_par(
+            'how_set_fields_constant',
+            'unknown',
+            str,
+            "See help on how_set_fields",
+            critical=True
+        )
+
+        self.how_set_fields_override = self.add_par(
+            'how_set_fields_override',
+            { 'filter': [ 'fallback-constant', '[[mix]]' ],
+              'project': [ 'fallback-constant', '[[mix]]' ]
+             },
+            dict,
+            ( "For specific fields, override the settings in how_set_fields and how_set_fields_constant. "
+              "The key of the dictionary is the field, the value is a 2-element list with the override "
+              "values fo rhow_set_fields and how_set_fields_constant." ),
+            critical=True
         )
 
         self.cleanup_alignment = self.add_par(
@@ -500,7 +565,8 @@ class Coadder:
 
     def _coadd_swarp( self,
                       data_store_list,
-                      alignment_target_datastore,
+                      alignment_target_datastore=None,
+                      alignment_wcs=None,
                       try_to_reduce_memory_usage=True,
                       leave_behind_temp_files=False ):
         """Perform alignment and coadding using a single call to swarp.
@@ -511,11 +577,19 @@ class Coadder:
              Data stores holding the images to be coadded.  Each must
              have products through zeropoint.
 
-          alignment_target_datastore: DataStore
+          alignment_target_datastore: DataStore or None
              Data store holding the image to which the images in
              data_store_list will be aligned before they are coadded.
              This may be (but does not have to be) one of the members of
              data_store_list.
+
+          alignment_wcs: astropy.wcs.WCS or None
+             May not be specified with alignment_target_datastore.  Align
+             to this wcs.  This changes how _coadd_swarp operates.  Normally,
+             with alignment_target_datastore, it will stack the WCSes, but
+             will use the source lists to make a new WCS.  If you pass
+             alignment_wcs, it's assumed to be perfect, and images to be
+             coadded will be added to it.
 
           try_to_reduce_memory_usage: bool, default True
              Call each datastore's free() method after we're done with
@@ -561,9 +635,17 @@ class Coadder:
             sumwts = []
 
             # Write out an output header file using the correct target wcs
-            hdr = targds.image.header.copy()
-            improc.tools.strip_wcs_keywords( hdr )
-            hdr.update( targds.wcs.wcs.to_header( relax=True ) )
+            if alignment_wcs is not None:
+                hdr = alignment_wcs.to_header( relax=True )
+                hdr['NAXIS1'] = self.pars.absolute_width
+                hdr['NAXIS2'] = self.pars.absolute_height
+            else:
+                if targds is None:
+                    raise RuntimeError( "Need either an alignment_wcs or an alignment_target_datastore" )
+                hdr = targds.image.header.copy()
+                improc.tools.strip_wcs_keywords( hdr )
+                hdr.update( targds.wcs.wcs.to_header( relax=True ) )
+
             hdr.tofile( tmpdir / 'coadd.head' )
 
             # Write out a bunch of temporary images that are the source images with an
@@ -574,22 +656,33 @@ class Coadder:
                 # wtdex = ds.image.components.index( 'weight' )
                 # fldex = ds.image.components.index( 'flags' )
 
-                # Get a wcs for the source image using target image's source list as the RA/Dec catalog
-                dswcs = self.aligner.get_swarp_fodder_wcs( targds.image, targds.sources, targds.wcs, targds.zp,
-                                                           ds.sources )
+                if alignment_wcs is not None:
+                    hdr = ds.image.header
+                    improc.tools.strip_wcs_keywords( hdr )
+                    hdr.update( ds.wcs.wcs.to_header( relax=True ) )
 
-                # Need to write out a temporary image whose header has this new wcs
-                hdr = ds.image.header.copy()
-                improc.tools.strip_wcs_keywords( hdr )
-                hdr.update( dswcs.to_header( relax=True ) )
+                else:
+                    # Get a wcs for the source image using target image's source list as the RA/Dec catalog.
+                    # If the WCSes in both are very good, this won't do much, but this should be a better
+                    #   WCS for image alignment than using Gaia as an intermediary.  See docstring
+                    #   for get_swarp_fodder_wcs
+                    SCLogger.debug( f"Trying to use SCAMP to align {targds.image.filepath} to {ds.image.filepath}" )
+                    dswcs = self.aligner.get_swarp_fodder_wcs( targds.image, targds.sources, targds.wcs, targds.zp,
+                                                               ds.sources )
+
+                    # Need to write out a temporary image whose header has this new wcs
+                    hdr = ds.image.header.copy()
+                    improc.tools.strip_wcs_keywords( hdr )
+                    hdr.update( dswcs.to_header( relax=True ) )
 
                 # Background subtract
                 data = ds.bg.subtract_me( ds.image.data )
 
                 # Scale to the target's zeropoint.  This is ultimately arbitrary,
                 #  but we want all the images scaled the same way for the sum
-                data *= 10 ** ( ( targds.zp.zp - ds.zp.zp ) / 2.5 )
-                wtdata = ds.image.weight * 10 ** ( ( ds.zp.zp - targds.zp.zp ) / 1.25 )
+                zp = self.pars.alignment_zp if self.pars.alignment_zp is not None else targds.zp.zp
+                data *= 10 ** ( ( zp - ds.zp.zp ) / 2.5 )
+                wtdata = ds.image.weight * 10 ** ( ( ds.zp.zp - zp ) / 1.25 )
                 # Make sure weight is 0 for all bad pixels
                 # (This is what swarp expects.)
                 wtdata[ ds.image.flags != 0 ] = 0.
@@ -606,7 +699,7 @@ class Coadder:
                     hdr = None
                     ds.free()
 
-            if try_to_reduce_memory_usage:
+            if try_to_reduce_memory_usage and ( targds is not None ):
                 targds.free()
 
             # Use swarp to coadd all the source images, aligning with the target image.
@@ -663,8 +756,8 @@ class Coadder:
             res = subprocess.run( command, capture_output=True, timeout=self.pars.swarp_timeout )
             t1 = time.perf_counter()
             SCLogger.debug( f"Swarp to sum {len(sumimgs)} images took {t1-t0:.2f} seconds" )
-            SCLogger.debug( f"Swarp stdout:\n{res.stdout}" )
-            SCLogger.debug( f"Swarp stderr:\n{res.stderr}" )
+            # SCLogger.debug( f"Swarp stdout:\n{res.stdout}" )
+            # SCLogger.debug( f"Swarp stderr:\n{res.stderr}" )
             if res.returncode != 0:
                 raise SubprocessFailure( res )
 
@@ -787,7 +880,7 @@ class Coadder:
 
 
     def run( self, data_store_list, aligned_datastores=None, coadd_provenance=None,
-             alignment_target_datastore=None ):
+             alignment_target_datastore=None, alignment_wcs=None ):
         """Run coaddition on the given list of images, and return the coadded image.
 
         The images should have at least a set of SourceList and WorldCoordinates loaded, so they can be aligned.
@@ -820,6 +913,13 @@ class Coadder:
             with the 'swarp' coaddition method.  For any other value
             of self.pars.alignment_index, this must be None.
 
+        alignment_wcs: astropy.wcs.WCS or None
+           If self.pars.alignment_index is 'absolute', then this needs to
+           be a WCS of the Platonic image to which we want to align all the
+           other images.  This is only supported (currently) with the 'swarp'
+           coaddition method.  For any other value of self.pars.alignment_index,
+           this must be None.
+
         coadd_provenance: Provenance (optional)
             (for efficiency)
 
@@ -844,12 +944,20 @@ class Coadder:
         elif self.pars['alignment_index'] == 'other':
             if alignment_target_datastore is None:
                 raise ValueError( "alignment_index 'other' requires alignment_target_datastore" )
+            if alignment_wcs is not None:
+                raise ValueError( "Can't pass alignment_wcs with alignment_index 'other'" )
+            index = -1
+        elif self.pars['alignment_index'] == 'absolute':
+            if alignment_wcs is None:
+                raise ValueError( "alignment_index 'absolute' requires alignment_wcs" )
+            if alignment_target_datastore is not None:
+                raise ValueError( "Can't pass alignment_target_datastore with alignment_index 'absolute'" )
             index = -1
         else:
             try:
                 index = int( self.pars['alignment_index'] )
             except Exception:
-                raise ValueError( f"alignment_index must be 'first', 'last', 'other', or an integer, not "
+                raise ValueError( f"alignment_index must be 'first', 'last', 'other', 'absolute', or an integer, not "
                                   f"\"{self.pars['alignment_index']}\"" )
             if ( index < 0 ) or ( index >= len( data_store_list ) ):
                 raise ValueError( f"alignment_index {index} is outside of the range [0,{len(data_store_list)-1}]" )
@@ -867,20 +975,25 @@ class Coadder:
 
             if index >= 0:
                 alignment_target_datastore = data_store_list[ index ]
-            outhdr, outim, outwt, outfl = self._coadd_swarp( data_store_list, alignment_target_datastore )
+            SCLogger.info( "Coadder coadding with swarp..." )
+            outhdr, outim, outwt, outfl = self._coadd_swarp( data_store_list,
+                                                             alignment_target_datastore=alignment_target_datastore,
+                                                             alignment_wcs=alignment_wcs )
+            SCLogger.info( "...Coadder done coadding with swarp." )
 
         else:
             # Other methods require alignment first
             if index < 0:
-                raise ValueError( "Only alignment method swarp supports alignment_index=other" )
+                raise ValueError( "Only alignment method swarp supports alignment_index=other and absolute" )
 
             if aligned_datastores is not None:
-                SCLogger.debug( "Coadder using passed aligned datastores" )
+                SCLogger.info( "Coadder using passed aligned datastores" )
                 aligned_datastores = [ aligned_datastores[i] for i in dexen ]
                 self.aligned_datastores = aligned_datastores
             else:
-                SCLogger.debug( "Coadder aligning all images" )
+                SCLogger.info( "Coadder aligning all images..." )
                 self.run_alignment( data_store_list, index )
+                SCLogger.info( "...Coaddinger done aligning all images." )
 
             # actually coadd
 
@@ -890,20 +1003,33 @@ class Coadder:
             aligned_zps = [ d.zp for d in self.aligned_datastores ]
 
             if self.pars.method == 'naive':
-                SCLogger.debug( "Coadder doing naive addition" )
+                SCLogger.info( "Coadder doing naive addition..." )
                 outim, outwt, outfl = self._coadd_naive( aligned_images )
+                SCLogger.info( "...Coadder done doing naive addition." )
             elif self.pars.method == 'zogy':
-                SCLogger.debug( "Coadder doing zogy addition" )
+                SCLogger.info( "Coadder doing zogy addition..." )
                 outim, outwt, outfl, outpsf, outscore = self._coadd_zogy( aligned_images,
                                                                           aligned_bgs,
                                                                           aligned_psfs,
                                                                           aligned_zps )
+                SCLogger.info( "...Coadder done doing zogy addition." )
             else:
                 raise ValueError(f'Unknown coaddition method: {self.pars.method}. Use "naive", "swarp", or "zogy".')
 
+        if alignment_wcs is None:
+            ra_corners = None
+            dec_corners = None
+        else:
+            xs = [ 0., self.pars.absolute_width - 1., 0., self.pars.absolute_width - 1. ]
+            ys = [ 0., 0., self.pars.absolute_height - 1., self.pars.absolute_height - 1. ]
+            ra_corners, dec_corners = alignment_wcs.pixel_to_world_values( xs, ys )
+
         output = Image.from_image_zps( [ d.zp for d in data_store_list ],
                                        index=index if index>=0 else 0,
-                                       alignment_target=None if index>=0 else alignment_target_datastore.image
+                                       alignment_target=( alignment_target_datastore.image
+                                                          if alignment_target_datastore is not None
+                                                          else None ),
+                                       ra_corners=ra_corners, dec_corners=dec_corners
                                       )
         output.provenance_id = coadd_provenance.id
         output.is_coadd = True
@@ -912,6 +1038,51 @@ class Coadder:
         output.flags = outfl
         if 'outhdr' in locals():
             output.header = outhdr
+
+        # Have to set some fields that might have been left blank by from_image_zps
+        howsetparse = re.compile( r'^(fallback-)?(.*)$' )
+        for field in [ 'section_id', 'instrument', 'telescope', 'project', 'target', 'filter' ]:
+            if field in self.pars.how_set_fields_override:
+                how_set_field = self.pars.how_set_fields_override[field][0]
+                how_set_field_constant = self.pars.how_set_fields_override[field][1]
+            else:
+                how_set_field = self.pars.how_set_fields
+                how_set_field_constant = self.pars.how_set_fields_constant
+
+            mat = howsetparse.search( how_set_field )
+            if mat is None:
+                raise ValueError( f'Failed to parse how_set_field "{how_set_field}"')
+            if ( mat.group(1) == '' ) or ( getattr( output, field ) is None ):
+                method = mat.group(2)
+
+                if method == 'first':
+                    setattr( output, field, getattr( data_store_list[0].image, field ) )
+                elif method == 'last':
+                    setattr( output, field, getattr( data_store_list[-1].image, field ) )
+                elif method == 'constant':
+                    if how_set_field_constant is None:
+                        raise RuntimeError( f"You have None for how_set_field_constant for field {field}; "
+                                            f"this may mean you didn't configure something else right "
+                                            f"to only find images to coadd that had a consistent value for "
+                                            f"this field." )
+                    setattr( output, field, how_set_field_constant )
+                elif method == 'majority':
+                    vals = set( getattr( ds.image, field ) for ds in data_store_list )
+                    vals = { k: sum( 1 if getattr( ds.image, field )==k else 0 for ds in data_store_list )
+                             for k in vals }
+                    maxn = max( vals.values() )
+                    options = [ k for k, v in vals.items() if v == maxn ]
+                    if len( options ) == 1:
+                        setattr( output, field, options[0] )
+                    else:
+                        for ds in data_store_list:
+                            val = getattr( ds.image, field )
+                            if val in options:
+                                setattr( output, field, val )
+                                break
+                else:
+                    raise ValueError( f"Unknown value for how_set_field for field {field}: {how_set_field}" )
+
 
         # Issue #350 -- where to put these?  Look at how subtraction or other things use them!!!
         # (See also comment in test_coaddition.py::test_coaddition_pipeline_outputs)
@@ -930,10 +1101,6 @@ class Coadder:
 class ParsCoaddPipeline(Parameters):
     def __init__(self, **kwargs):
         super().__init__()
-
-        self.date_range = self.add_par(
-            'date_range', 7.0, float, 'Number of days before end date to set start date, if start date is not given. '
-        )
 
         self._enforce_no_new_attrs = True  # lock against new parameters
 
@@ -981,7 +1148,8 @@ class CoaddPipeline:
         self.datastore = None  # use this datastore to save the coadd image and all the products
 
 
-    def run( self, data_store_list, aligned_datastores=None ):
+    def run( self, data_store_list, prov_tree=None,aligned_datastores=None,
+             alignment_target_datastore=None, alignment_wcs=None ):
         """Run the CoaddPipeline
 
         Parameters
@@ -992,6 +1160,12 @@ class CoaddPipeline:
             databse should hold enough information that sources, bg,
             psf, wcs, and zp will all return something.
 
+         prov_tree: ProvenanceTree, default None
+            The provenance tree for the pipeline.  This is dangerous,
+            you have to make sure you've done it right.  (I *think* we
+            do it right in ref_maker.py.)  Should have keys
+            starting_point, extraction, astrocal, photocal.
+        
          aligned_datastores: list of DataStore (optional)
             Usually you don't want to give this.  If you don't, all
             images will be aligned according to the parameters.  This is
@@ -1010,6 +1184,8 @@ class CoaddPipeline:
 
         """
 
+        SCLogger.info( "CoaddPipeline starting." )
+
         if ( ( not isinstance( data_store_list, list ) ) or
              ( not all( [ isinstance( d, DataStore ) for d in data_store_list ] ) )
             ):
@@ -1019,7 +1195,10 @@ class CoaddPipeline:
         # We need to make the provenance tree *before* assigning the image
         #   to the DataStore, so that it won't look the image's provenance
         #   and do the wrong thing.
-        self.make_provenance_tree( data_store_list )
+        if prov_tree is not None:
+            self.datastore.prov_tree = prov_tree
+        else:
+            self.make_provenance_tree( data_store_list, absolute_alignment_wcs=(alignment_wcs is not None) )
 
         # check if this exact coadd image already exists in the DB
         with SmartSession() as dbsession:
@@ -1034,7 +1213,10 @@ class CoaddPipeline:
             # the self.aligned_datastores is None unless you explicitly pass in the pre-aligned images to save time
             self.datastore.image = self.coadder.run( data_store_list,
                                                      aligned_datastores=aligned_datastores,
+                                                     alignment_target_datastore=alignment_target_datastore,
+                                                     alignment_wcs=alignment_wcs,
                                                      coadd_provenance=self.datastore.prov_tree['starting_point'] )
+
             self.aligned_datastores = self.coadder.aligned_datastores
 
 
@@ -1042,21 +1224,64 @@ class CoaddPipeline:
 
         # TODO: add the warnings/exception capturing, runtime/memory tracking (and Report making) as in top_level.py
 
+        SCLogger.info( "CoaddPipeline getting source list for coadded image" )
         self.datastore = self.extractor.run(self.datastore)
         if self.datastore.sources is None:
             raise RuntimeError( "CoaddPipeline failed to extract sources from coadded image." )
-        self.datastore = self.astrometor.run(self.datastore)
-        if self.datastore.wcs is None:
-            raise RuntimeError( "CoaddPipline failed to solve for WCS of coadded image." )
+
+        if alignment_wcs is not None:
+            SCLogger.info( "CoaddPipeline using the manually specified wcs for the coadded image" )
+            # First make sure it doesn't already exist!
+            with PGDB( dictcursor=True ) as pgdb:
+                q = sql.SQL( "SELECT * FROM world_coordinates WHERE provenance_id={prov} AND sources_id={srcid}"
+                            ).format( prov=self.datastore.prov_tree['astrocal'].id,
+                                      srcid=self.datastore.sources.id )
+                rows = pgdb.execute( q )
+            if len(rows) > 1:
+                raise RuntimeError( "This should never happen." )
+            elif len(rows) == 1:
+                self.datastore.wcs = WorldCoordinates( **(rows[0]) )
+                if not self.datastore.image.astro_cal_done:
+                    SCLogger.error( "I am surprised." )
+                    import pdb; pdb.set_trace()
+            else:
+                self.datastore.wcs = WorldCoordinates( sources_id=self.datastore.sources.id,
+                                                       provenance_id=self.datastore.prov_tree['astrocal'].id )
+                self.datastore.wcs.wcs = alignment_wcs
+                self.datastore.wcs.set_corners_from_wcs( alignment_wcs, setradec=True,
+                                                         width=self.coadder.pars.absolute_width,
+                                                         height=self.coadder.pars.absolute_height,
+                                                         mask=self.datastore.image.flags )
+                self.datastore.image.set_corners_from_wcs( alignment_wcs, setradec=True,
+                                                           width=self.coadder.pars.absolute_width,
+                                                           height=self.coadder.pars.absolute_height )
+                self.datastore.image.astro_cal_done = True
+        else:
+            SCLogger.info( "CoaddPipeline doing astrometric calibration on the coadded image." )
+            self.datastore = self.astrometor.run(self.datastore)
+            if self.datastore.wcs is None:
+                raise RuntimeError( "CoaddPipline failed to solve for WCS of coadded image." )
+
+        SCLogger.info( "CoaddPipeline doing phtometry calibration on the coadded image." )
         self.datastore = self.photometor.run(self.datastore)
         if self.datastore.zp is None:
             raise RuntimeError( "CoaddPipeline failed to solve for zeropoint of coadded image." )
 
 
+        SCLogger.info( "CoaddPipeline done." )
         return self.datastore
 
-    def make_provenance_tree( self, data_store_list, upstream_provs=None, code_version_id=None ):
+    def make_provenance_tree( self, data_store_list, absolute_alignment_wcs=False,
+                              upstream_provs=None, code_version_id=None, remake=False ):
         """Make a provenance tree in self.datastore for all coadded data products."""
+
+        if self.datastore.prov_tree is not None:
+            if remake:
+                self.datastore.prov_tree = None
+                SCLogger.warning( "coadd datastore had a provenance tree, but remake was True, so wiping it out" )
+            else:
+                SCLogger.debug( "coadd datastore already had a provenance tree, using it." )
+                return
 
         # NOTE I'm not handling the "test_parameter" thing here, may need to.
         # (But see Issue #408)
@@ -1072,6 +1297,15 @@ class CoaddPipeline:
         parses = { 'extraction': self.extractor.pars.get_critical_pars(),
                    'astrocal': self.astrometor.pars.get_critical_pars(),
                    'photocal': self.photometor.pars.get_critical_pars() }
+
+        if absolute_alignment_wcs:
+            # In this case, astrocal has no upstreams.  But, also, we need to
+            #   add extraction as an upstream of photocal, because it no
+            #   longer gets there second-order through astrocal.
+            upstream_steps['astrocal'] = []
+            parses['astrocal'] = { 'solution_method': 'manually_specified' }
+            upstream_steps['photocal'].append( 'extraction' )
+
         self.datastore.make_prov_tree( parses, steps, upstream_steps=upstream_steps, starting_point=coadd_prov )
 
         return self.datastore.prov_tree

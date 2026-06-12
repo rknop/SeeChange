@@ -442,7 +442,8 @@ class PGDB:
                 self.con = con.connection
                 made_a_new_one = True
             elif isinstance( con, sa.orm.session.Session ):
-                SCLogger.warning( "You're using a SQLAlchemy Session, still trying to make a PGDB from it" )
+                SCLogger.warning( "You're using a SQLAlchemy Session, still trying "
+                                  "to make a PGDB from it (Issue #516)" )
                 self.con = con.connection().connection.driver_connection
                 made_a_new_one = True
             else:
@@ -2442,27 +2443,32 @@ class FourCorners:
 
         Returns
         -------
-          Two new lists (ra, dec) sorted so they're in the order:
-          (lowRA,lowDec), (lowRA,highDec), (highRA,lowDec), (highRA,highDec)
+          racorners, deccorners, minra, maxra, mindec, maxdec
+
+            racorners and deccorners are lists, sorted so that they're in the order:
+              (lowRA,lowDec), (lowRA,highDec), (highRA,lowDec), (highRA,highDec)
+
+            min/maxra is the min/max of all the RAs, trying to properly deal with ra spanning 0
+            min/maxdec is the min/max of all the decs
 
         """
 
         if len(ras) != 4:
             raise ValueError(f'ras must be a list/array with exactly four elements. Got {ras}')
             raise ValueError(f'decs must be a list/array with exactly four elements. Got {decs}')
+        if any( ( r < 0. ) or ( r >= 360. ) for r in ras ):
+            raise ValueError( f"ras must be in the range [0,360); got {ras}" )
+        if any( ( d < -90. ) or ( d > 90. ) for d in decs ):
+            raise ValueError( f"decs must be in the range [-90, 90]; got {decs}" )
 
         raorder = list( range(4) )
         raorder.sort( key=lambda i: ras[i] )
 
-        # Try to detect an RA that spans 0.
+        # Try to detect an RA that spans 0.  Assume that no FourCorners is ever going to span more than 180° in RA
         if ras[raorder[3]] - ras[raorder[0]] > 180.:
-            newras = []
-            for ra in ras:
-                if ra > 180.:
-                    newras.append( ra - 360. )
-                else:
-                    newras.append( ra )
-            raorder.sort( key=lambda i: newras[i] )
+            # Deal with this by just subtracting 360 from RAS between 180 and 360 and then fixing it later
+            ras = [ r - 360. if r > 180. else r for r in ras ]
+            raorder.sort( key=lambda i: ras[i] )
 
         # Of two lowest ras, of those, pick the one with the lower dec;
         #   that's lowRA,lowDec; the other one is lowRA, highDec
@@ -2475,8 +2481,38 @@ class FourCorners:
         dex10 = raorder[2] if decs[raorder[2]] < decs[raorder[3]] else raorder[3]
         dex11 = raorder[3] if decs[raorder[2]] < decs[raorder[3]] else raorder[2]
 
+        # Min/max
+
+        minra = min( ras )
+        maxra = max( ras )
+        mindec = min( decs )
+        maxdec = max( decs )
+
+        # Fix the ra-crossing-0 detection stuff we did above
+
+        minra = minra + 360. if minra < 0. else minra
+        maxra = maxra + 360. if maxra < 0. else maxra
+        ras = [ r + 360. if r < 0. else r for r in ras ]
+
         return ( [  ras[dex00],  ras[dex01],  ras[dex10],  ras[dex11] ],
-                 [ decs[dex00], decs[dex01], decs[dex10], decs[dex11] ] )
+                 [ decs[dex00], decs[dex01], decs[dex10], decs[dex11] ],
+                 minra, maxra, mindec, maxdec )
+
+
+    def set_corners_minmax( self, ras, decs ):
+        ras, decs, minra, maxra, mindec, maxdec = FourCorners.sort_radec( ras, decs )
+        self.ra_corner_00 = ras[0]
+        self.ra_corner_01 = ras[1]
+        self.ra_corner_10 = ras[2]
+        self.ra_corner_11 = ras[3]
+        self.dec_corner_00 = decs[0]
+        self.dec_corner_01 = decs[1]
+        self.dec_corner_10 = decs[2]
+        self.dec_corner_11 = decs[3]
+        self.minra = minra
+        self.maxra = maxra
+        self.mindec = mindec
+        self.maxdec = maxdec
 
 
     @classmethod
@@ -2933,19 +2969,7 @@ class FourCorners:
         else:
             ras = [ i.ra.value_in(u.deg).value for i in scs ]
             decs = [ i.dec.value_in(u.deg).value for i in scs ]
-        ras, decs = FourCorners.sort_radec( ras, decs )
-        self.ra_corner_00 = ras[0]
-        self.ra_corner_01 = ras[1]
-        self.ra_corner_10 = ras[2]
-        self.ra_corner_11 = ras[3]
-        self.minra = min( ras )
-        self.maxra = max( ras )
-        self.dec_corner_00 = decs[0]
-        self.dec_corner_01 = decs[1]
-        self.dec_corner_10 = decs[2]
-        self.dec_corner_11 = decs[3]
-        self.mindec = min( decs )
-        self.maxdec = max( decs )
+        self.set_corners_minmax( ras, decs )
 
         if setradec:
             sc = wcs.pixel_to_world( width / 2., height / 2. )
@@ -3004,6 +3028,24 @@ class FourCornersWithGood( FourCorners ):
         return FourCorners.contains( self, ra, dec, corner=corner, limprefix=limprefix )
 
 
+    def set_corners_minmax( self, ras, decs, goodras=None, gooddecs=None ):
+        FourCorners.set_corners_minmax( self, ras, decs )
+        if goodras is not None:
+            ras, decs, minra, maxra, mindec, maxdec = FourCorners.sort_radec( goodras, gooddecs )
+            self.ra_good_00 = ras[0]
+            self.ra_good_01 = ras[1]
+            self.ra_good_10 = ras[2]
+            self.ra_good_11 = ras[3]
+            self.good_minra = minra
+            self.good_maxra = maxra
+            self.dec_good_00 = decs[0]
+            self.dec_good_01 = decs[1]
+            self.dec_good_10 = decs[2]
+            self.dec_good_11 = decs[3]
+            self.good_mindec = mindec
+            self.good_maxdec = maxdec
+
+
     def set_corners_from_wcs( self, wcs, width=None, height=None, setradec=False, mask=None ):
         """Update four corners"""
 
@@ -3013,7 +3055,9 @@ class FourCornersWithGood( FourCorners ):
             width = width if width is not None else mask.shape[1]
             height = height if height is not None else mask.shape[0]
 
-        FourCorners.set_corners_from_wcs( self, wcs, width, height, setradec=True )
+        xs = [ 0., width-1., 0., width-1. ]
+        ys = [ 0., 0., height-1., height-1. ]
+        ras, decs = wcs.pixel_to_world_values( xs, ys )
 
         if mask is not None:
             # Figure out what is the outer "bad region" that we want to throw out
@@ -3028,20 +3072,23 @@ class FourCornersWithGood( FourCorners ):
 
             xs = [ xgood0, xgood0, xgood1, xgood1 ]
             ys = [ ygood0, ygood1, ygood0, ygood1 ]
-            ras, decs = wcs.pixel_to_world_values( xs, ys )
-            ras, decs = FourCorners.sort_radec( ras, decs )
-            self.ra_good_00 = ras[0]
-            self.ra_good_01 = ras[1]
-            self.ra_good_10 = ras[2]
-            self.ra_good_11 = ras[3]
-            self.good_minra = min( ras )
-            self.good_maxra = max( ras )
-            self.dec_good_00 = decs[0]
-            self.dec_good_01 = decs[1]
-            self.dec_good_10 = decs[2]
-            self.dec_good_11 = decs[3]
-            self.good_mindec = min( decs )
-            self.good_maxdec = max( decs )
+            goodras, gooddecs = wcs.pixel_to_world_values( xs, ys )
+        else:
+            goodras = None
+            gooddecs = None
+
+        self.set_corners_minmax( ras, decs, goodras, gooddecs )
+
+        if setradec:
+            # So... do we want it at the center of the whole image, or the center of the
+            #   good part?  Let's do whole image.  Answer not obvious.
+            sc = wcs.pixel_to_world( width / 2., height / 2. )
+            self.ra = sc.ra.to(u.deg).value
+            self.dec = sc.dec.to(u.deg).value
+            self.gallat = sc.galactic.b.deg
+            self.gallon = sc.galactic.l.deg
+            self.ecllat = sc.barycentrictrueecliptic.lat.deg
+            self.ecllon = sc.barycentrictrueecliptic.lon.deg
 
 
 class HasBitFlagBadness:

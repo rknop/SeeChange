@@ -174,11 +174,7 @@ def test_gaia_dr3_excerpt_ra_span_zero():
         dec = 0.
         ras = [ 359.79, 359.81, 0.19, 0.21 ]
         decs = [ -0.19, 0.21, -0.21, 0.19 ]
-        ras, decs = FourCorners.sort_radec( ras, decs )
-        minra = min( ras )
-        maxra = max( ras )
-        mindec = min( decs )
-        maxdec = max( decs )
+        ras, decs, minra, maxra, mindec, maxdec = FourCorners.sort_radec( ras, decs )
         img = Image( ra=ra, dec=dec,
                      ra_corner_00=ras[0],
                      ra_corner_01=ras[1],

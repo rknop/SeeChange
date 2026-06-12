@@ -109,7 +109,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         sa.ForeignKey('images._id', ondelete="RESTRICT", name="images_coadd_alignment_target_fkey" ),
         nullable=True,
         index=True,
-        doc=( "ID of the image that was the alignment target for this coadd image." )
+        doc=( "ID of the image that was the alignment target for this coadd image, if appropriate." )
     )
 
     def _load_coadd_component_zp_ids( self, session=None ):
@@ -832,7 +832,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         return new
 
     @classmethod
-    def from_image_zps(cls, zps, index=0, images=None, alignment_target=None, set_is_coadd=True):
+    def from_image_zps(cls, zps, index=0, images=None, alignment_target=None,
+                       ra_corners=None, dec_corners=None, set_is_coadd=True):
         """Create a new Image object from a list of other ZeroPoint objects
 
         This is the first step in making a coadd image.  You will be
@@ -861,7 +862,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             The image index in the (mjd sorted) list of upstream images
             that is used to set several attributes of the output image.
             If alignment_target is None, this includes coordinate
-            information (ra, dec, minra, maxdec, etc.).
+            information (ra, dec, minra, maxdec, etc.) unless ra_corners
+            and dec_corners are given.
 
         images: list of Image or None
             A list of Image objects.  If you pass this, it must have the
@@ -877,6 +879,12 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             will be taken from this image's header.  Use this when you want
             the alignment target of the coadded images to be an image
             that isn't one of the images you're coadding.
+
+        ra_corners, dec_corners : array of Float or None
+            If these aren't None, then totally ignore alignment_target.
+            This means that the image didn't *have* an alignment target,
+            but was aligned to a manually created WCS covering this
+            rectangle on the sky.
 
         set_is_coadd: bool, default True
             Set the is_coadd field of the new image.  This is usually
@@ -894,34 +902,34 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         if len(zps) < 1:
             raise ValueError("Must provide at least one image to combine.")
 
+        if ( ra_corners is not None ) or ( dec_corners is not None ):
+            if ( ra_corners is None ) or ( dec_corners is None ):
+                raise ValueError( "If you give ra_corners or dec_corners, you must give both" )
+            if alignment_target is not None:
+                raise ValueError( "Can't pass an alignment_target when you ra_corners and dec_corners" )
+
         if images is not None:
             if len(images) != len(zps):
                 raise ValueError( "If you pass images, it must match the length of zps" )
         else:
-            # I couldn't figure out how to write this query in SA.
-            # (I mean, I thought I did, but SA kept telling me it
-            # couldn't figure out how to SQLize it. The supposed advantages
-            # of an ORM seem very thin when constructing a query with the ORM
-            # is just as byzantine, if not more so, than writing it in SQL.)
-            with PsycopgConnection() as conn:
-                cursor = conn.cursor()
-                cursor.execute( "SELECT i._id,z._id "
-                                "FROM images i "
-                                "INNER JOIN source_lists s ON s.image_id=i._id "
-                                "INNER JOIN world_coordinates w ON w.sources_id=s._id "
-                                "INNER JOIN zero_points z ON z.wcs_id=w._id "
-                                "WHERE z._id=ANY(%(zpids)s)",
-                                { 'zpids': [ z.id for z in zps ] } )
-                rows = cursor.fetchall()
-            # ...and now we use SA to get the Image objects.  Not very
-            # efficient, we've made two connections.  But, oh well.
+            q = sql.SQL( textwrap.dedent(
+                """\
+                SELECT i.*,z._id AS zpid
+                FROM images i
+                INNER JOIN source_lists s ON s.image_id=i._id
+                INNER JOIN world_coordinates w ON w.sources_id=s._id
+                INNER JOIN zero_points z ON z.wcs_id=w._id
+                WHERE z._id=ANY(ARRAY[{zpids}])
+                """
+            ) ) .format( zpids=sql.SQL(",").join( z.id for z in zps ) )
+            with PGDB( dictcursor=True ) as conn:
+                rows = conn.execute( q )
             imzpdict = {}
-            with SmartSession() as sess:
-                for row in rows:
-                    imzpdict[asUUID(row[1])] = Image.get_by_id( row[0], session=sess )
-            if len(imzpdict) != len(zps):
-                raise RuntimeError( "Failed to get all the images for the zeropoints!" )
-            images = [ imzpdict[z.id] for z in zps ]
+            for row in rows:
+                zpid = row['zpid']
+                del row['zpid']
+                imzpdict[ asUUID(zpid) ] = Image( **row )
+            images = list( imzpdict.values() )
 
         # sort component images by mjd:
         dexen = list( range( len(zps) ) )
@@ -943,30 +951,36 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         #   control this.
         upstream_ids = [ z.id for z in zps ]
 
-        if alignment_target is None:
-            alignment_target = images[index]
-
         output = Image( nofile=True, is_coadd=set_is_coadd )
 
         fail_if_not_consistent_attributes = ['filter']
         copy_if_consistent_attributes = ['section_id', 'instrument', 'telescope', 'project', 'target', 'filter']
-
-        copy_target_attributes = ['gallon', 'gallat', 'ecllon', 'ecllat', 'target']
-        for att in ['ra', 'dec']:
-            copy_target_attributes.append(att)
-            for corner in ['00', '01', '10', '11']:
-                copy_target_attributes.append(f'{att}_corner_{corner}')
-            copy_target_attributes.append( f'min{att}' )
-            copy_target_attributes.append( f'max{att}' )
 
         for att in fail_if_not_consistent_attributes:
             if len(set([getattr(image, att) for image in images])) > 1:
                 raise ValueError(f"Cannot combine images with different {att} values: "
                                  f"{[getattr(image, att) for image in images]}")
 
-        # Copy target image position information
-        for att in copy_target_attributes:
-            setattr(output, att, getattr(alignment_target, att))
+        if ra_corners is not None:
+            output.set_corners_minmax( ra_corners, dec_corners )
+            if ( output.maxra < output.minra ):
+                output.ra = ( output.maxra + output.minra - 360. ) / 2.
+                output.ra = output.ra + 360. if output.ra < 0. else output.ra
+            output.dec = ( output.maxdec + output.mindec ) / 2.
+            output.calculate_coordinates()
+        else:
+            # Copy target image position information
+            if alignment_target is None:
+                alignment_target = images[index]
+            copy_target_attributes = ['gallon', 'gallat', 'ecllon', 'ecllat', 'target']
+            for att in ['ra', 'dec']:
+                copy_target_attributes.append(att)
+                for corner in ['00', '01', '10', '11']:
+                    copy_target_attributes.append(f'{att}_corner_{corner}')
+                copy_target_attributes.append( f'min{att}' )
+                copy_target_attributes.append( f'max{att}' )
+            for att in copy_target_attributes:
+                setattr(output, att, getattr(alignment_target, att))
 
         # only copy if attribute is consistent across upstreams, otherwise leave as None
         for att in copy_if_consistent_attributes:
@@ -979,7 +993,9 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         # start MJD and end MJD
         output.mjd = images[0].mjd
         output.end_mjd = max([image.end_mjd for image in images])  # exposure ends are not necessarily sorted
+                                                                   # ...but that only matters in pathological cases
 
+        # ...not obvious this is the right thing to do
         output.info = images[index].info
         # TODO? : this next one is woeful.  Coordinates should be updated
         #   to come from the alignment target image, but lots of
@@ -998,7 +1014,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             output.type = 'Com' + base_type
 
         output._coadd_component_zp_ids = upstream_ids
-        output.coadd_alignment_target = alignment_target.id
+        output.coadd_alignment_target = alignment_target.id if alignment_target is not None else None
 
         output._upstream_bitflag = 0
         for z in zps:

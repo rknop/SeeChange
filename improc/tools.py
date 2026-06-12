@@ -460,14 +460,13 @@ def strip_wcs_keywords( hdr ):
 
     """
 
-    basematch = re.compile( r"^C(RVAL|RPIX|UNIT|DELT|TYPE)[12]$" )
-    cdmatch = re.compile( r"^CD[12]_[12]$" )
-    sipmatch = re.compile( r"^[AB]P?_(ORDER|(\d+)_(\d+))$" )
-    tpvmatch = re.compile( r"^P[CV]\d+_\d+$" )
-
+    searches = [ re.compile( r'^(CD|PC|PS|PV|CO)\d+_\d+.?$' ),
+                 re.compile( r'^(CTYPE|CUNIT|CRPIX|CRVAL|CDELT|CROTA|CRDER|CSYER|PROJP)\d+.?$' ),
+                 re.compile( r'^(WCSAXES|WCSNAME|LATPOL|LONPOLE|IMWCS).?$' ),
+                 re.compile( r'^[AB]P?_(ORDER|\d+_\d+).?$' ) ]
     tonuke = set()
     for kw in hdr.keys():
-        if ( basematch.search(kw) or cdmatch.search(kw) or sipmatch.search(kw) or tpvmatch.search(kw) ):
+        if any( s.search(kw) is not None for s in searches ):
             tonuke.add( kw )
 
     for kw in tonuke:

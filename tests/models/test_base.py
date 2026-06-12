@@ -823,29 +823,45 @@ def test_fileondisk_save_multifile_noarchive( diskfile ):
 def test_fourcorners_sort_radec():
     ras = [ 0, 1, 0, 1 ]
     decs = [ 1, 1, 0, 0 ]
-    ras, decs = FourCorners.sort_radec( ras, decs )
+    ras, decs, minra, maxra, mindec, maxdec = FourCorners.sort_radec( ras, decs )
     assert ras ==  [ 0, 0, 1, 1 ]
     assert decs == [ 0, 1, 0, 1 ]
+    assert minra == 0
+    assert maxra == 1
+    assert mindec == 0
+    assert maxdec == 1
 
-    # Rotate 30 degrees
-    ras =  [  1.366, -1.366,  0.366, -0.366 ]
+    # Rotate 30 degrees.  (Also offset from 0 so we don't have negative RA. )
+    ras =  [  3.366,  0.634,  2.366,  1.634 ]
     decs = [  0.366, -0.366, -1.366,  1.366 ]
-    ras, decs = FourCorners.sort_radec( ras, decs )
-    assert ras ==  [ -1.366, -0.366,  0.366, 1.366 ]
+    ras, decs, minra, maxra, mindec, maxdec = FourCorners.sort_radec( ras, decs )
+    assert ras ==  [  0.634,  1.634,  2.366, 3.366 ]
     assert decs == [ -0.366,  1.366, -1.366, 0.366 ]
+    assert minra == 0.634
+    assert maxra == 3.366
+    assert mindec == -1.366
+    assert maxdec == 1.366
 
     # Make sure ra/dec spanning 0 works right
     ras = [ 0.19, 0.21, 359.79, 359.81 ]
     decs = [ -0.21, 0.19, -0.19, 0.21 ]
-    ras, decs = FourCorners.sort_radec( ras, decs )
+    ras, decs, minra, maxra, mindec, maxdec = FourCorners.sort_radec( ras, decs )
     assert ras == [ 359.79, 359.81, 0.19, 0.21 ]
     assert decs == [ -0.19, 0.21, -0.21, 0.19 ]
+    assert minra == 359.79
+    assert maxra == 0.21
+    assert mindec == -0.21
+    assert maxdec == 0.21
 
     ras = [ 0.39, 0.41, 359.99, 0.01 ]
     decs = [ -0.21, 0.19, -0.19, 0.21 ]
-    ras, decs = FourCorners.sort_radec( ras, decs )
+    ras, decs, minra, maxra, mindec, maxdec = FourCorners.sort_radec( ras, decs )
     assert ras == [ 359.99, 0.01, 0.39, 0.41 ]
     assert decs == [ -0.19, 0.21, -0.21, 0.19 ]
+    assert minra == 359.99
+    assert maxra == 0.41
+    assert mindec == -0.21
+    assert maxdec == 0.21
 
 
 def test_fourcorners_contains():
@@ -1091,7 +1107,12 @@ def test_fourcorners_overlap_frac():
         maxra = maxra if maxra < 360. else maxra - 360.
         mindec = dec - ddec / 2.
         maxdec = dec + ddec / 2.
-        ras, decs = FourCorners.sort_radec( [ minra, minra, maxra, maxra ], [ mindec, maxdec, mindec, maxdec ] )
+        ( ras, decs, ret_minra, ret_maxra, ret_mindec, ret_maxdec
+          ) = FourCorners.sort_radec( [ minra, minra, maxra, maxra ], [ mindec, maxdec, mindec, maxdec ] )
+        assert ret_minra == minra
+        assert ret_maxra == maxra
+        assert ret_mindec == mindec
+        assert ret_maxdec == maxdec
         i1 = Image( ra=ra, dec=dec,
                     ra_corner_00=ras[0],
                     ra_corner_01=ras[1],
@@ -1135,7 +1156,12 @@ def test_fourcorners_overlap_frac():
             maxra = maxra if maxra < 360. else maxra - 360.
             mindec= dec2 - ddec / 2.
             maxdec = dec2 + ddec / 2.
-            ras, decs = FourCorners.sort_radec( [ minra, minra, maxra, maxra ], [ mindec, maxdec, mindec, maxdec ] )
+            ( ras, decs, ret_minra, ret_maxra, ret_mindec, ret_maxdec
+             ) = FourCorners.sort_radec( [ minra, minra, maxra, maxra ], [ mindec, maxdec, mindec, maxdec ] )
+            assert ret_minra == minra
+            assert ret_maxra == maxra
+            assert ret_mindec == mindec
+            assert ret_maxdec == maxdec
             i2 = Image( ra=ra2, dec=dec2,
                         ra_corner_00=ras[0],
                         ra_corner_01=ras[1],

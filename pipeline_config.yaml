@@ -514,8 +514,7 @@ fakeinjection:
 
 
 coaddition:
-  pipeline:
-    date_range: 7.0
+  pipeline: {}
   coaddition:
     method: zogy
     noise_estimator: sep

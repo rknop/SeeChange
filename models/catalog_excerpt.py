@@ -361,7 +361,7 @@ class GaiaDR3DownloadLock(Base, UUIDMixin):
                         sleept = nextsleept
 
                 # If we get here, we're holding a lock on the giadownloadlock table
-                SCLogger.debug( "Locking gaia catalog row: {minra},{maxra},{mindec},{maxdec},{minmag},{maxmag}" )
+                SCLogger.debug( f"Locking gaia catalog row: {minra},{maxra},{mindec},{maxdec},{minmag},{maxmag}" )
                 lockid = uuid.uuid4()
                 q = sql.SQL( textwrap.dedent (
                     """
