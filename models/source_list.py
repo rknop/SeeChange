@@ -3,6 +3,7 @@ import os
 import numpy as np
 import pandas as pd
 
+from psycopg import sql
 import sqlalchemy as sa
 from sqlalchemy import orm
 from sqlalchemy.ext.hybrid import hybrid_property
@@ -13,7 +14,7 @@ from sqlalchemy.dialects.postgresql import ARRAY
 import astropy.table
 import matplotlib.pyplot as plt
 
-from models.base import Base, SmartSession, UUIDMixin, FileOnDiskMixin, SeeChangeBase, HasBitFlagBadness
+from models.base import Base, UUIDMixin, FileOnDiskMixin, SeeChangeBase, HasBitFlagBadness, PGDB
 from models.image import Image
 from models.enums_and_bitflags import (
     SourceListFormatConverter,
@@ -948,19 +949,17 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
                         _circle( ofp, x, y, radius, color, width )
 
 
-    def get_upstreams(self, session=None):
-        """Get the image that was used to make this source list. """
-        with SmartSession(session) as session:
-            return session.scalars(sa.select(Image).where(Image._id == self.image_id)).all()
+    def get_upstream_ids(self, pgdb=None):
+        """Get the id of the image that was used to make this source list. """
+        return [ ( Image, self.image_id ) ]
 
-    def get_downstreams(self, session=None):
-        """Get all the data products that are made using this source list.
+    def get_downstream_ids(self, pgdb=None):
+        """Get ids of all the data products that are made using this source list.
 
         Only gets immediate downstreams; does not recurse.  (As per the
         docstring in SeeChangeBase.get_downstreams.)
 
-        Returns a list of objects (potentially including Background,
-        PSF, WorldCoordinates, and Cutouts objects).
+        Will include Background, PSF, WorldCorodiantes, and Cutouts
 
         """
 
@@ -971,24 +970,13 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         from models.cutouts import Cutouts
 
         output = []
-        with SmartSession( session ) as sess:
-
-            # PSF (there will only be one)
-            psf = sess.query( PSF ).filter( PSF.sources_id==self.id ).first()
-            if psf is not None:
-                output.append( psf )
-
-            # Backgrounds
-            bkgs = sess.query( Background ).filter( Background.sources_id==self.id ).all()
-            output.extend( list(bkgs) )
-
-            # World Coordinates
-            wcses = sess.query( WorldCoordinates ).filter( WorldCoordinates.sources_id==self.id ).all()
-            output.extend( list(wcses) )
-
-            # Cutouts (will only happen if this is a subtraction)
-            cos = sess.query( Cutouts ).filter( Cutouts.sources_id==self.id ).all()
-            output.extend( list(cos))
+        with PGDB( pgdb ) as pgdb:
+            for model in [ Background, PSF, WorldCoordinates, Cutouts ]:
+                q = sql.SQL( "SELECT _id FROM {tab} WHERE sources_id={me}"
+                            ).format( tab=sql.Identifier( model.__tablename__ ),
+                                      me=self.id )
+                rows = pgdb.execute( q )
+                output.extend( [ ( model, row[0] ) for row in rows ] )
 
         return output
 

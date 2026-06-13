@@ -1165,7 +1165,7 @@ class CoaddPipeline:
             you have to make sure you've done it right.  (I *think* we
             do it right in ref_maker.py.)  Should have keys
             starting_point, extraction, astrocal, photocal.
-        
+
          aligned_datastores: list of DataStore (optional)
             Usually you don't want to give this.  If you don't, all
             images will be aligned according to the parameters.  This is
@@ -1243,7 +1243,7 @@ class CoaddPipeline:
                 self.datastore.wcs = WorldCoordinates( **(rows[0]) )
                 if not self.datastore.image.astro_cal_done:
                     SCLogger.error( "I am surprised." )
-                    import pdb; pdb.set_trace()
+                    raise RuntimeError( "...got a WorldCoordinates, but image.astro_cal_done is False...!" )
             else:
                 self.datastore.wcs = WorldCoordinates( sources_id=self.datastore.sources.id,
                                                        provenance_id=self.datastore.prov_tree['astrocal'].id )

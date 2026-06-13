@@ -570,11 +570,17 @@ referencing:
     min_airmass: null  # only grab images with airmass above this
     max_airmass: null  # only grab images with airmass below this
     min_background: null  # only grab images with background rms above this
+    min_background_by_filter: {}
     max_background: null  # only grab images with background rms below this
+    max_background_by_filter: {}
     min_seeing: null  # only grab images with seeing above this
+    min_seeing_by_filter: {}
     max_seeing: null  # only grab images with seeing below this
+    max_seeing_by_filter: {}
     min_lim_mag: null  # only grab images with limiting magnitude above this
+    min_lim_mag_by_filter: {}
     max_lim_mag: null  # only grab images with limiting magnitude below this
+    max_lim_mag_by_filter: {}
     min_exp_time: null  # only grab images with exposure time above this
     max_exp_time: null  # only grab images with exposure time below this
     min_number: 7  # only create a reference if this many images can be found

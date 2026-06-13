@@ -2,12 +2,13 @@ import io
 import json
 import base64
 import hashlib
+import textwrap
 import uuid
 
+from psycopg import sql
 import sqlalchemy as sa
 import sqlalchemy.orm as orm
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.schema import UniqueConstraint
 import psycopg
@@ -15,7 +16,7 @@ import psycopg
 from util.util import NumpyAndUUIDJsonEncoder, asUUID
 from util.logger import SCLogger
 
-from models.base import Base, UUIDMixin, SeeChangeBase, SmartSession, PsycopgConnection
+from models.base import Base, UUIDMixin, SeeChangeBase, SmartSession, PsycopgConnection, PGDB
 
 
 
@@ -82,7 +83,7 @@ class CodeVersion(Base, UUIDMixin):
         'fakeinjection' : (0,1,0),
 
         # Other processes of associated pipelines
-        'referencing' : (0,5,0),
+        'referencing' : (0,7,0),
         'coaddition' : (0,6,0),
         'positioning': (0,1,0),
         'flat_bias_builder': (0,5,0),
@@ -292,12 +293,15 @@ class Provenance(Base):
             unless you really know what you're doing!!!), then you may
             need to set this to True.  In that case, you must either have
             passed an _id argument to the constructor, or you must be sure
-            to call update_id() yourself.
+            to call update_id() yourself.  Setting this to True has other
+            side effects that are needed internally, and you really shouldn't
+            be using this unless you really know what you're doing.
 
         _id: string, default None
             You usually do NOT want to send this, you want to let
-            provenacne automatically set it.  Only use this if you
-            really know what you're doing.
+            provenance automatically set it.  Has other side effects
+            that are used internally. Only use this if you really know
+            what you're doing.
 
         """
         SeeChangeBase.__init__(self)
@@ -325,14 +329,18 @@ class Provenance(Base):
             self.code_version_id = cv.id
 
         self.parameters = kwargs.get('parameters', {})
-        upstreams = kwargs.get('upstreams', [])
+        upstreams = kwargs.get('upstreams', None)
         if upstreams is None:
-            self._upstreams = []
+            if dont_update_id:
+                self._upstreams = None
+            else:
+                self._upstreams = []
         elif not isinstance(upstreams, list):
             self._upstreams = [upstreams]
         else:
             self._upstreams = upstreams
-        self._upstreams.sort( key=lambda x: x.id )
+        if self._upstreams is not None:
+            self._upstreams.sort( key=lambda x: x.id )
 
         self.is_bad = kwargs.get('is_bad', False)
         self.bad_comment = kwargs.get('bad_comment', None)
@@ -528,34 +536,61 @@ class Provenance(Base):
 
         Parameters
         ----------
-          session : SQLAlchmey sesion or None
+          session : PGDB, psycpog.Connection, psycopg.Cursor, or SQLAlchmey sesion, or None
             Usually you don't want to use this.
 
         """
 
-        with SmartSession( session ) as sess:
-            try:
-                SeeChangeBase.insert( self, sess )
+        with PGDB( session ) as pgdb:
+            # Lock the table so we don't have a disaster of two different processes inserting
+            #  the provenance and the upstreams all at the same time.
+            pgdb.execute_nofetch( "LOCK TABLE provenances" )
+            rows, _cols = pgdb.execute( sql.SQL( "SELECT * FROM provenances WHERE _id={me}" ).format( me=self.id ) )
+            if len(rows) > 0:
+                pgdb.rollback()
+                if len(rows) > 1:
+                    raise RuntimeError( "This should never happen." )
+                if not _exists_ok:
+                    raise RuntimeError( f"Provenance {self.id} already exists in the database." )
+                # Should we verity that it's actually the same?  If we trust the hashing that goes
+                #   into the id, that shouldn't be necessary
+                return
 
-                # Should be safe to go ahead and insert into the association table
-                # If the provenance already existed, we will have raised an exceptipn.
-                # If not, somebody else who might try to insert this provenance
-                # will get an exception on the insert() statement above, and so won't
-                # try the following association table inserts.
+            SCLogger.debug( f"Adding provenance {self.id} to database" )
+            SeeChangeBase.insert( self, pgdb, nocommit=True )
+            upstreams = self._upstreams if self._upstreams is not None else self.get_upstreams( pgdb=pgdb )
+            if len(upstreams) > 0:
+                SCLogger.debug( f"Inserting upstreams of {self.id}: {[p.id for p in upstreams]}" )
+                for upstream in upstreams:
+                    q = sql.SQL( "INSERT INTO provenance_upstreams(upstream_id, downstream_id) "
+                                 "VALUES ({upstream},{me})" ).format( upstream=upstream.id, me=self.id )
+                    pgdb.execute( q )
 
-                upstreams = self._upstreams if self._upstreams is not None else self.get_upstreams( session=sess )
-                if len(upstreams) > 0:
-                    SCLogger.debug( f"Inserting upstreams of {self.id}: {[p.id for p in upstreams]}" )
-                    for upstream in upstreams:
-                        sess.execute( sa.text( "INSERT INTO provenance_upstreams(upstream_id,downstream_id) "
-                                               "VALUES (:upstream,:me)" ),
-                                      { 'me': self.id, 'upstream': upstream.id } )
-                    sess.commit()
-            except IntegrityError as ex:
-                if _exists_ok and ( 'duplicate key value violates unique constraint "provenances_pkey"' in str(ex) ):
-                    sess.rollback()
-                else:
-                    raise
+            pgdb.commit()
+
+        # with SmartSession( session ) as sess:
+        #     try:
+        #         SeeChangeBase.insert( self, sess )
+
+        #         # Should be safe to go ahead and insert into the association table
+        #         # If the provenance already existed, we will have raised an exceptipn.
+        #         # If not, somebody else who might try to insert this provenance
+        #         # will get an exception on the insert() statement above, and so won't
+        #         # try the following association table inserts.
+
+        #         upstreams = self._upstreams if self._upstreams is not None else self.get_upstreams( session=sess )
+        #         if len(upstreams) > 0:
+        #             SCLogger.debug( f"Inserting upstreams of {self.id}: {[p.id for p in upstreams]}" )
+        #             for upstream in upstreams:
+        #                 sess.execute( sa.text( "INSERT INTO provenance_upstreams(upstream_id,downstream_id) "
+        #                                        "VALUES (:upstream,:me)" ),
+        #                               { 'me': self.id, 'upstream': upstream.id } )
+        #             sess.commit()
+        #     except IntegrityError as ex:
+        #         if _exists_ok and ( 'duplicate key value violates unique constraint "provenances_pkey"' in str(ex) ):
+        #             sess.rollback()
+        #         else:
+        #             raise
 
 
     def insert_if_needed( self, session=None ):
@@ -571,25 +606,52 @@ class Provenance(Base):
         self.insert( session=session, _exists_ok=True )
 
 
-    def get_upstreams( self, session=None ):
-        with SmartSession( session ) as sess:
-            upstreams = ( sess.query( Provenance )
-                          .join( provenance_self_association_table,
-                                 provenance_self_association_table.c.upstream_id==Provenance._id )
-                          .where( provenance_self_association_table.c.downstream_id==self.id )
-                          .order_by( Provenance._id )
-                         ).all()
-            return upstreams
+    def get_upstreams( self, pgdb=None ):
+        with PGDB( pgdb, dictcursor=True ) as pgdb:
+            q = sql.SQL( textwrap.dedent(
+                """\
+                SELECT p.* FROM provenances p
+                INNER JOIN provenance_upstreams pu ON p._id=pu.upstream_id
+                WHERE pu.downstream_id={me}
+                ORDER BY p._id
+                """
+            ) ).format( me=self.id )
+            rows = pgdb.execute( q )
+            return [ Provenance(dont_update_id=True, **row) for row in rows ]
 
-    def get_downstreams( self, session=None ):
-        with SmartSession( session ) as sess:
-            downstreams = ( sess.query( Provenance )
-                            .join( provenance_self_association_table,
-                                   provenance_self_association_table.c.downstream_id==Provenance._id )
-                            .where( provenance_self_association_table.c.upstream_id==self.id )
-                            .order_by( Provenance._id )
-                           ).all()
-        return downstreams
+    def get_downstreams( self, pgdb=None ):
+        with PGDB( pgdb, dictcursor=True ) as pgdb:
+            q = sql.SQL( textwrap.dedent(
+                """\
+                SELECT p.* FROM provenances p
+                INNER JOIN provenance_upstreams pu ON p._id=pu.downstream_id
+                WHERE pu.upstream_id={me}
+                ORDER BY p._id
+                """
+            ) ).format( me=self.id )
+            rows = pgdb.execute( q )
+            return [ Provenance(dont_update_id=True, **row) for row in rows ]
+
+
+    # def get_upstreams( self, session=None ):
+    #     with SmartSession( session ) as sess:
+    #         upstreams = ( sess.query( Provenance )
+    #                       .join( provenance_self_association_table,
+    #                              provenance_self_association_table.c.upstream_id==Provenance._id )
+    #                       .where( provenance_self_association_table.c.downstream_id==self.id )
+    #                       .order_by( Provenance._id )
+    #                      ).all()
+    #         return upstreams
+
+    # def get_downstreams( self, session=None ):
+    #     with SmartSession( session ) as sess:
+    #         downstreams = ( sess.query( Provenance )
+    #                         .join( provenance_self_association_table,
+    #                                provenance_self_association_table.c.downstream_id==Provenance._id )
+    #                         .where( provenance_self_association_table.c.upstream_id==self.id )
+    #                         .order_by( Provenance._id )
+    #                        ).all()
+    #     return downstreams
 
 
 class ProvenanceTagExistsError(Exception):

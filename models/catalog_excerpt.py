@@ -173,7 +173,7 @@ class CatalogExcerpt(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCor
         self._hdr = None
         self._data = None
 
-    def get_downstreams( self, session=None ):
+    def get_downstream_ids( self, pgdb=None ):
         """CatalogExcerpt has no downstreams """
         return []
 

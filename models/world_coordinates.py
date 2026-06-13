@@ -223,13 +223,14 @@ class WorldCoordinates(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness, Spat
         """
         self._wcs = None
 
-    def get_upstreams(self, session=None):
-        """Get the source list that was used to make this wcs."""
-        with SmartSession(session) as session:
-            return session.scalars( sa.select(SourceList).where( SourceList._id==self.sources_id ) ).all()
+    def get_upstream_ids(self, pgdb=None):
+        """"Get the id of the source list that was used to make this wcs."""
+        return [ ( SourceList, self.sources_id ) ]
 
-    def get_downstreams(self, session=None):
-        """Get immediate downstreams of this wcs, which are zeropoints."""
+    def get_downstream_ids(self, pgdb=None):
+        """Get ids of zeropoints downstream of this wcs."""
         from models.zero_point import ZeroPoint
-        with SmartSession(session) as session:
-            return session.scalars( sa.select(ZeroPoint).where( ZeroPoint.wcs_id==self._id ) ).all()
+        with PGDB() as pgdb:
+            rows = pgdb.execute( sql.SQL( "SELECT _id FROM zero_points WHERE wcs_id={wcs}" )
+                                 .format( wcs=self.id ) )
+            return [ ( ZeroPoint, row[0] ) for row in rows ]

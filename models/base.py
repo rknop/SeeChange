@@ -834,7 +834,7 @@ class SeeChangeBase:
 
         Parameters
         ----------
-          session: SQLALchemy Session, or psycopg.Connection, or None
+          session: PGDB, psycopg.Connection, psycogp.Cursor, or sqlalchemy Session, or None
             Usually you do not want to pass this; it's mostly for other
             upsert etc. methods that cascade to this.
 
@@ -843,7 +843,7 @@ class SeeChangeBase:
             actually commit the database.  Do this if you want the
             insert to be inside a transaction you've started on session.
             It doesn't make sense to set nocommit=True unless you've
-            passed either a Session or a psycopg connection.
+            passed something in session.
 
         """
 
@@ -867,31 +867,20 @@ class SeeChangeBase:
         #  with objects attached, or not attached, to sessions.
         #
         # (Even better, unless a sa Session is passed, bypass sqlalchemy
-        # altogether.)
+        # altogether by just usgin PGDB.)
 
         cols, values = self._get_cols_and_vals_for_insert()
-        notmod = [ c for c in cols if c != 'modified' ]
+        subdict = { c: v for c,v in zip( cols, values ) if c != 'modified' }
 
-        if ( session is not None ) and ( isinstance( session, sa.orm.session.Session ) ):
-            q = f'INSERT INTO {self.__tablename__}({",".join(notmod)}) VALUES (:{",:".join(notmod)}) '
-            subdict = { c: v for c, v in zip( cols, values ) if c != 'modified' }
-            with SmartSession( session ) as sess:
-                sess.execute( sa.text( q ), subdict )
-                if not nocommit:
-                    sess.commit()
-            return
-
-        if ( session is not None ) and ( not isinstance( session, psycopg.Connection ) ):
-            raise TypeError( f"session must be a sa Session or psycopg.Connection or None, "
-                             f"not a {type(session)}" )
-
-        q = f'INSERT INTO {self.__tablename__}({",".join(notmod)}) VALUES (%({")s,%(".join(notmod)})s) '
-        subdict = { c: v for c, v in zip( cols, values ) if c != 'modified' }
-        with PsycopgConnection( session ) as conn:
-            cursor = conn.cursor()
-            cursor.execute( q, subdict )
+        with PGDB( session ) as pgdb:
+            q = sql.SQL( "INSERT INTO {tab}({fields}) VALUES ({vals})"
+                        ).format( tab=sql.Identifier(self.__tablename__),
+                                  fields=sql.SQL(",").join( sql.Identifier(c) for c in subdict.keys() ),
+                                  vals=sql.SQL(",").join( sql.SQL(f'%({c})s') for c in subdict.keys() )
+                                 )
+            pgdb.execute_nofetch( q, subdict )
             if not nocommit:
-                conn.commit()
+                pgdb.commit()
 
 
     def upsert( self, session=None, load_defaults=False ):
@@ -899,8 +888,6 @@ class SeeChangeBase:
 
         Will *not* update self's fields with server default values!
         Re-get the database row if you want that.
-
-        Will not attach the object to session if you pass it.
 
         Will assign the object an id if it doesn't alrady have one (in self.id).
 
@@ -947,17 +934,26 @@ class SeeChangeBase:
 
         _ = self.id   # Make sure that self._id is generated
         cols, values = self._get_cols_and_vals_for_insert()
-        notmod = [ c for c in cols if c != 'modified' ]
-        q = ( f'INSERT INTO {self.__tablename__}({",".join(notmod)}) VALUES (:{",:".join(notmod)}) '
-              f'ON CONFLICT (_id) DO UPDATE SET '
-              f'{",".join( [ f"{c}=:{c}" for c in cols if c!="id" ] )} ')
-        subdict = { c: v for c, v in zip( cols, values ) }
-        with SmartSession( session ) as sess:
-            sess.execute( sa.text( q ), subdict )
-            sess.commit()
+        subdict = { c: v for c, v in zip( cols, values ) if c != 'modiifed' }
+
+        q = sql.SQL( textwrap.dedent(
+            """\
+            INSERT INTO {tab}({fields})
+            VALUES ({vals})
+            ON CONFLICT( _id) DO UPDATE SET {conflict}
+            """
+        ) ).format( tab=sql.Identifier(self.__tablename__),
+                    fields=sql.SQL(",").join( sql.Identifier(c) for c in subdict.keys() ),
+                    vals=sql.SQL(",").join( sql.SQL(f'%({c})s') for c in subdict.keys() ),
+                    conflict=sql.SQL(",").join( sql.SQL(f"{{c}}=%({c})s").format( c=sql.Identifier(c) )
+                                                for c in subdict.keys() if c != '_id' )
+                   )
+        with PGDB( session ) as pgdb:
+            pgdb.execute_nofetch( q, subdict )
+            pgdb.commit()
 
             if load_defaults:
-                dbobj = self.__class__.get_by_id( self.id, session=sess )
+                dbobj = self.__class__.get_by_id( self.id, pgdb=pgdb )
                 for col in sa.inspect( self.__class__ ).c:
                     if ( ( col.name == 'modified' ) or
                          ( ( col.server_default is not None ) and ( getattr( self, col.name ) is None ) )
@@ -988,21 +984,30 @@ class SeeChangeBase:
         if not all( [ isinstance( o, cls ) for o in objects ] ):
             raise TypeError( f"{cls.__name__}.upsert_list: passed objects weren't all of this class!" )
 
-        with SmartSession( session ) as sess:
+        with PGDB( session ) as pgdb:
             for obj in objects:
                 _ = obj.id                 #  Make sure _id is generated
                 cols, values = obj._get_cols_and_vals_for_insert()
-                notmod = [ c for c in cols if c != 'modified' ]
-                q = ( f'INSERT INTO {cls.__tablename__}({",".join(notmod)}) VALUES (:{",:".join(notmod)}) '
-                      f'ON CONFLICT (_id) DO UPDATE SET '
-                      f'{",".join( [ f"{c}=:{c}" for c in cols if c!="id" ] )} ')
-                subdict = { c: v for c, v in zip( cols, values ) }
-                sess.execute( sa.text( q ), subdict )
-            sess.commit()
+                subdict = { c: v for c, v in zip( cols, values ) if c != 'modified' }
+
+                q = sql.SQL( textwrap.dedent(
+                    """\
+                    INSERT INTO {tab}({fields})
+                    VALUES ({vals})
+                    ON CONFLICT(_id) DO UPDATE SET {conflict}
+                    """
+                ) ).format( tab=sql.Identifier(cls.__tablename__),
+                            fields=sql.SQL(",").join( sql.Identifier(c) for c in subdict.keys() ),
+                            vals=sql.SQL(",").join( sql.SQL(f'%({c})s') for c in subdict.keys() ),
+                            confict=sql.SQL(",").join( sql.SQL(f"{{c}}=%({c})s").format( c=sql.Identifier(c) )
+                                                       for c in subdict.keys() if c != '_id' )
+                           )
+                pgdb.execute_nofetch( q, subdict )
+            pgdb.commit()
 
             if load_defaults:
                 for obj in objects:
-                    dbobj = obj.__class__.get_by_id( obj.id, session=sess )
+                    dbobj = obj.__class__.get_by_id( obj.id, pgdb=pgdb )
                     for col in sa.inspect( obj.__class__).c:
                         if ( ( col.name == 'modified' ) or
                              ( ( col.server_default is not None ) and ( getattr( obj, col.name ) is None ) )
@@ -1010,7 +1015,7 @@ class SeeChangeBase:
                             setattr( obj, col.name, getattr( dbobj, col.name ) )
 
 
-    def _delete_from_database( self ):
+    def _delete_from_database( self, pgdb ):
         """Remove the object from the database.  Don't call this, call delete_from_disk_and_database.
 
         This does not remove any associated files (if this is a
@@ -1025,43 +1030,82 @@ class SeeChangeBase:
 
         """
 
-        with SmartSession() as session:
-            session.execute( sa.text( f"DELETE FROM {self.__tablename__} WHERE _id=:id" ), { 'id': self.id } )
-            session.commit()
+        with PGDB( pgdb ) as pgdb:
+            pgdb.execute_nofetch( sql.SQL( "DELETE FROM {tab} WHERE _id={myid}" )
+                                  .format( tab=sql.Identifier(self.__class__.__tablename__),
+                                           myid=self.id ) )
+
+            pgdb.commit()
 
         # Look how much easier this is when you don't have to spend a whole bunch of time
         #  deciding if the object needs to be merged, expunged, etc. to a session
 
 
+    def get_upstream_ids(self, pgdb=None):
+        """Get a list of tuples of (type, id) for all direct upstreams of this object (non-recursive)."""
+        raise NotImplementedError( f'get_upstream_ids not implemented for this {self.__class__.__name__}' )
+
     def get_upstreams(self, session=None):
         """Get all data products that were directly used to create this object (non-recursive)."""
-        raise NotImplementedError( f'get_upstreams not implemented for this {self.__class__.__name__}' )
+        upstreams = []
+        with PGDB( session, dictcursor=True ) as pgdb:
+            upstream_info = self.get_upstream_ids( pgdb)
+            for cls, upid in upstream_info:
+                q = sql.SQL( "SELECT * FROM {tab} WHERE _id={objid}" ).format( tab=sql.Identifier(cls.__tablename__),
+                                                                               objid=upid )
+                rows = pgdb.fetchall( q )
+                if len(rows) != 1:
+                    raise RuntimeError( "This should never happen." )
+                upstreams.append( cls( **(rows[0]) ) )
+        return upstreams
+
+    def get_downstream_ids(self, pgdb=None):
+        """Get a list of tuples of (type, id) for all direct downstreams of this object (non-recursive)."""
+        raise NotImplementedError( f'get_downstream_ids not implemented for this {self.__class__.__name__}' )
 
     def get_downstreams(self, session=None):
         """Get all data products that were created directly from this object (non-recursive)."""
-        raise NotImplementedError( f'get_downstreams not implemented for {self.__class__.__name__}' )
-
+        downstreams = []
+        with PGDB( session, dictcursor=True ) as pgdb:
+            downstream_info = self.get_downstream_ids( pgdb )
+            for cls, dwnid in downstream_info:
+                q = sql.SQL( "SELECT * FROM {tab} WHERE _id={objid}" ).format( tab=sql.Identifier(cls.__tablename__),
+                                                                               objid=dwnid )
+                rows = pgdb.fetchall( q )
+                if len(rows) != 1:
+                    raise RuntimeError( "This should never happen." )
+                downstreams.append( cls( **(rows[0]) ) )
+        return downstreams
 
     def delete_everything_in_provtag( self, tag, models=[], remove_folders=True,
                                       remove_downstreams=True, archive=True ):
         raise NotImplementedError( "In progress" )
-        with PsycopgConnection() as dbcon:
-            cursor = dbcon.cursor( row_factory=psycopg.rows.dict_row )
-            cursor.execute( "SELECT provenance_id FROM provenance_tags WHERE tag=%(tag)s", { 'tag': tag } )
-            rows = cursor.fetchall()
-            chopping_block = [ r['provenance_id'] for r in rows ]
-            cursor.execute( "SELECT provenance_id, tag FROM provenance_tags WHERE tag!=%(tag)s AND "
-                            "provenance_id=ANY(%(ids))", { 'tag': tag, 'ids': chopping_block } )
-            rows = cursor.fetchall()
-            chopping_block = set( chopping_block )
+        with PGDB( dictcursor=True ) as pgdb:
+            # Find all the provenances associated with this provence tag
+            rows = pgdb.execute( sql.SQL( "SELECT provenance_id FROM provenance_tags WHERE tag={tag}" )
+                                 .format( tag=tag ) )
+            chopping_block = set( r['provenance_id'] for r in rows )
+
+            # Remove any provenances that are in another provenance tag
+            q = sql.SQL( textwrap.dedent(
+                """\
+                SELECT provenacne_id, tag FROM provenance_tags
+                WHERE tag!={tag}
+                AND provenance_id=ANY(ARRAY[{provids}])
+                """
+            ) ).format( tag=tag, provids=sql.SQL(",").join( chopping_block ) )
+            rows = pgdb.execute( q )
             for row in rows:
                 SCLogger.warning( f"Not deleting things from provenance {row['provenance_id']} because "
                                   f"it also exists in tag {row['tag']}" )
                 chopping_block.remove( row['provenance_id'] )
 
-        with SmartSession() as session:
+            # OMG delete
             for model in models:
-                objs = session.query( model ).filter( model.provenance_id.in_( chopping_block ) ).all()
+                rows = pgdb.execute( sql.SQL( "SELECT * FROM {tab} WHERE provenance_id=ANY(ARRAY[{provids}])" )
+                                     .format( tab=sql.Identifier(model.__tablenme__),
+                                              provids=sql.SQL(",").join(chopping_block) ) )
+                objs = [ model(**row) for row in rows ]
                 SCLogger.warning( f"Deleteing {len(objs)} rows from {model.__tablename__}, plus associated "
                                   f"data, plus (probably) all downstreams." )
                 for i, obj in enumerate(objs):
@@ -1074,7 +1118,7 @@ class SeeChangeBase:
 
 
 
-    def delete_from_disk_and_database( self, remove_folders=True, remove_downstreams=True, archive=True ):
+    def delete_from_disk_and_database( self, remove_folders=True, remove_downstreams=True, archive=True, pgdb=None ):
         """Delete any data from disk, archive and the database.
 
         Use this to clean up an entry from all locations, as relevant
@@ -1123,7 +1167,7 @@ class SeeChangeBase:
                 for d in downstreams:
                     if hasattr( d, 'delete_from_disk_and_database' ):
                         d.delete_from_disk_and_database( remove_folders=remove_folders, archive=archive,
-                                                         remove_downstreams=True )
+                                                         remove_downstreams=True, pgdb=pgdb )
 
         # Remove files from archive
 
@@ -1151,7 +1195,7 @@ class SeeChangeBase:
 
         # Finally, after everything is cleaned up, remove the database record
 
-        self._delete_from_database()
+        self._delete_from_database( pgdb=pgdb )
 
 
     def to_dict(self):
@@ -2200,13 +2244,27 @@ class UUIDMixin:
         self._id = asUUID( val )
 
     @classmethod
-    def get_by_id( cls, uuid, session=None ):
+    def get_by_id( cls, uuid, session=None, pgdb=None ):
         """Get an object of the current class that matches the given uuid.
 
         Returns None if not found.
+
+        Parameters
+        ----------
+          uuid : UUID
+            The id of the object you want
+
+          session, pgdb: PGDB, psycopg.Connection, psycopg.Cursor, or sqlalchmey session
+            Will use pgdb if it's not None, else session.  If both are None,
+            makes and closes a new connection to the database.
+
+        Returns
+        -------
+          object of type cls
+
         """
 
-        with PGDB( session, dictcursor=True ) as pgdb:
+        with PGDB( (pgdb if pgdb is not None else session), dictcursor=True ) as pgdb:
             q = sql.SQL( "SELECT * FROM {table} WHERE _id=%(id)s" ).format( table=sql.Identifier(cls.__tablename__) )
             rows = pgdb.execute( q, { 'id': uuid } )
             if len(rows) == 0:
@@ -2218,25 +2276,65 @@ class UUIDMixin:
 
 
     @classmethod
-    def get_batch_by_ids( cls, uuids, session=None, return_dict=False ):
+    def get_batch_by_ids( cls, uuids, session=None, pgdb=None, return_dict=False ):
         """Get objects whose ids are in the list uuids.
 
         Parameters
         ----------
-          uuids: list of UUID
+          uuids: UUID or list of UUID
             The object IDs whose corresponding objects you want.
 
-          session: SQLAlchmey session or None
+          session, pgdb: PGDB, psycopg.Connection, psycopg.Cursor, or sqlalchemy session
+            Will use pgdb if it's not None, else session.  If both are None,
+            makes and closes a new connection to the database.
 
           return_dict: bool, default False
             If False, just return a list of objects.  If True, return a
             dict of { id: object }.
 
+        Returns
+        -------
+          either list of cls, or dict of { UUID: cls }
+
         """
 
-        with SmartSession( session ) as sess:
-            objs = sess.query( cls ).filter( cls._id.in_( uuids ) ).all()
-        return { o.id: o for o in objs } if return_dict else objs
+        uuids = listify( uuids )
+        with PGDB( (pgdb if pgdb is not None else session), dictcursor=True ) as pgdb:
+            q = sql.SQL( "SELECT * FROM {tab} WHERE _id=ANY(ARRAY[{ids}])"
+                        ).format( cls=sql.Identifier( cls.__tablename__ ),
+                                  ids=sql.SQL(",").join(uuids) )
+            rows = pgdb.execute( q )
+
+        if return_dict:
+            return { r['_id']: cls(**r) for r in rows }
+        else:
+            return [ cls(**r) for r in rows ]
+
+
+    @classmethod
+    def get_by_field_value( cls, field, values, pgdb=None ):
+        """Get a list of objects of a class whose field have a certain value or are in a list of values.
+
+        Parameters
+        ----------
+          field : str
+            The name of the field as defined in the database (so, use _id, not id, etc.).
+
+          values : *
+            Either a sequence of values to match, or a single value to match.
+
+          pgdb : PGDB, psycopg.Connection, psycopg.Cursor, sqlalchemy session, or None
+            Use this database connection; if None, makes and closes a new one.
+
+        """
+
+        values = listify( values )
+        with PGDB( pgdb, dictcursor=True ) as pgdb:
+            rows = pgdb.execute( sql.SQL( "SELECT * FROM {tab} WHERE {field}=ANY(ARRAY[{vals}])" )
+                                 .format( tab=sql.Identifier(cls.__tablename__),
+                                          field=sql.Identifier(field),
+                                          vals=sql.SQL(",").join(values) ) )
+        return [ cls(**r) for r in rows ]
 
 
 
@@ -2292,15 +2390,20 @@ class SpatiallyIndexed:
           radius : float, default 1.0
             Radius in arcseconds of cone search
 
-          session : Session or None
+          session : PGDB, psycopg.Connection, psycopg.Cursor, or Session
 
         Returns
         -------
           list of Object
 
         """
-        with SmartSession( session ) as sess:
-            return sess.query( cls ).filter( func.q3c_radial_query( cls.ra, cls.dec, ra, dec, radius / 3600. ) ).all()
+
+        with PGDB( session, dictcursor=True ) as pgdb:
+            q = sql.SQL( "SELECT * FROM {tab} WHERE q3c_radial_query( ra, dec, {ra}, {dec}, {rad} )" )
+            q = q.format( tab=sql.Identifier(cls.__tablename__), ra=ra, dec=dec, rad=radius/3600. )
+            rows = pgdb.execute( q )
+
+        return [ cls(**row) for row in rows ]
 
 
     @hybrid_method
@@ -3187,10 +3290,12 @@ class HasBitFlagBadness:
         if value is not None:
             self._bitflag = value
         if commit and ( self.id is not None ):
-            with SmartSession() as sess:
-                sess.execute( sa.text( f"UPDATE {self.__tablename__} SET _bitflag=:bad WHERE _id=:id" ),
-                              { "bad": self._bitflag, "id": self.id } )
-                sess.commit()
+            with PGDB() as pgdb:
+                q = sql.SQL( "UPDATE {tab} SET _bitflag={bad} WHERE _id={objid}" )
+                q = q.format( tab=sql.Identifier(self.__tablename__), bad=self._bitflag, objid=self.id )
+                pgdb.execute( q )
+                pgdb.commit()
+
 
     def set_badness( self, value=None, commit=True ):
         """Set the badness for this image using a comma separated string.
@@ -3254,7 +3359,7 @@ class HasBitFlagBadness:
         self._bitflag = 0
         self._upstream_bitflag = 0
 
-    def update_downstream_badness(self, session=None, commit=True, objbank=None):
+    def update_downstream_badness(self, session=None, commit=True, _objbank=None):
         """Send a recursive command to update all downstream objects that have bitflags.
 
         Since this function is called recursively, it always updates the
@@ -3262,77 +3367,75 @@ class HasBitFlagBadness:
         object's immediate upstreams, before calling the same function on all
         downstream objects.
 
-        Note that this function will session.merge() this object and all its
-        recursive downstreams (to update the changes in bitflag) and will
-        commit the new changes on its own (unless given commit=False)
-        but only at the end of the recursion.
-
         If session=None and commit=False an exception is raised.
 
         Parameters
         ----------
-        session: sqlalchemy session
+        session: PGDB, psycopg.Connection, psycopg.Cursor, or sqlalchemy Session (default None)
             The session to use for the update. If None, will open a new session,
             which will also close at the end of the call. In that case, must
-            provide a commit=True to commit the changes.
+            provide commit=True to commit the changes,
 
         commit: bool (default True)
             Whether to commit the changes to the database.
 
-        objbank: dict
+        _objbank: dict
             Don't pass this, it's only used internally.
 
         """
 
-        if objbank is None:
-            objbank = {}
+        if ( session is None ) and ( not commit ):
+            raise ValueError( "Must either pass a session, or set commit to True." )
 
-        with SmartSession(session) as session:
-            # Before the database refactor, this was done with
-            # SQLAlchemy, and worked.  Afterwards, even though in this
-            # one place I tried to keep them all in one session, it
-            # didn't work.  What was happening was that when an object,
-            # merged into the session, was changed here, that same
-            # object (i.e. same memory location) was *not* being pulled
-            # out from the queries in image.get_upstreams(), even though
-            # session was passed on to get_upstreams().  So, things
-            # weren't propagating right.  Something about session
-            # querying and merging wasn't working right.  (WHAT?
-            # Confusion with SQLAlchemy merging?  Never!)
-            #
-            # So, rather than fully trusting the mysteriousness of
-            # sqlalchemy sessions, use an object bank that we pass
-            # recursively, to make sure that every time we want to refer
-            # an object of a given id, we refer to the same object in
-            # memory.  That way, we can be sure that changes we make
-            # during the recursion will stick.  (We're still trusting SA
-            # that when we commit, because we merged all of those
-            # objects, the changes to them will get sent in to the
-            # databse.  Fingers crossed.  merge is always scary.)
+        # Keep an object bank so we don't have to keep regetting stuff from the database in recursive calls.
+        # (...though would that happne?  Not sure, would have to think about the possible upstream/downstream
+        # trees.)  (Pretty sure it could happen.  Consider, for instance, a reference that has more than one
+        # downstream subtraction.  It's possible that more than one of those subtractions will share the
+        # same upstream new zp, if the subtraction provenance was changed.  In that case, object_bank
+        # saves us from grabbing the upstream zeropoints repeatedly.)
+        if _objbank is None:
+            _objbank = {}
 
-            if self.id not in objbank.keys():
-                merged_self = session.merge(self)
-                objbank[ merged_self.id ] = merged_self
-            merged_self = objbank[ self.id ]
+        with PGDB(session) as pgdb:
+            if self.id not in _objbank.keys():
+                _objbank[ self.id ] = self
+            elif self is not _objbank[ self.id ]:
+                raise RuntimeError( "This should never happen" )
 
-            new_bitflag = 0  # start from scratch, in case some upstreams have lost badness
-            for upstream in merged_self.get_upstreams( session=session ):
-                if upstream.id in objbank.keys():
-                    upstream = objbank[ upstream.id ]
+            # Start from scratch; we're updating recursively, and it's possible
+            #  some bits will have been cleared, so just bitwise anding with the
+            #  existing might be the wrong thing.
+            new_bitflag = 0
+
+            for upstream_model, upstream_id in self.get_upstream_ids( pgdb=pgdb ):
+                if upstream_id in _objbank.keys():
+                    upstream = _objbank[ upstream_id ]
+                else:
+                    upstream = upstream_model.get_by_id( upstream_id, pgdb=pgdb )
+                    _objbank[ upstream_id ] = upstream
                 if hasattr(upstream, '_bitflag'):
                     new_bitflag |= upstream.bitflag
 
-            if hasattr(merged_self, '_upstream_bitflag'):
-                merged_self._upstream_bitflag = new_bitflag
-                self._upstream_bitflag = merged_self._upstream_bitflag
+            if hasattr( self, '_upstream_bitflag' ):
+                self._upstream_bitflag = new_bitflag
+                pgdb.execute( sql.SQL( "UPDATE {tab} SET _upstream_bitflag={val} WHERE _id={me}" )
+                              .format( tab=sql.Identifier(self.__tablename__),
+                                       val=self._upstream_bitflag,
+                                       me=self.id ) )
 
             # recursively do this for all downstream objects
-            for downstream in merged_self.get_downstreams(session=session):
-                if hasattr(downstream, 'update_downstream_badness') and callable(downstream.update_downstream_badness):
-                    downstream.update_downstream_badness(session=session, commit=False, objbank=objbank)
+            for downstream_model, downstream_id in self.get_downstream_ids( pgdb=pgdb ):
+                if ( hasattr( downstream_model, 'update_downstream_badness' ) and
+                     callable( downstream_model.update_downstream_badness )
+                    ):
+                    if downstream_id not in _objbank:
+                        _objbank[ downstream_id ] = downstream_model.get_by_id( downstream_id, pgdb=pgdb )
+                    _objbank[ downstream_id ].update_downstream_badness( session=pgdb, commit=False, _objbank=_objbank )
+
 
             if commit:
-                session.commit()
+                pgdb.commit()
+
 
     def _get_inverse_badness(self):
         """Get a dict with the allowed values of badness that can be assigned to this object

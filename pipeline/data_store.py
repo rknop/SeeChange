@@ -1,11 +1,13 @@
 import io
 import datetime
+import pytz
 import pathlib
 import uuid
 # import traceback
 
 import sqlalchemy as sa
 import psycopg
+import astropy.time
 
 from util.util import listify, asUUID, env_as_bool
 from util.logger import SCLogger
@@ -1788,10 +1790,24 @@ class DataStore:
                   ):
                 self.reference = None
 
+            elif ( ( self.reference.validty_start is not None ) and
+                   ( pytz.utc.localize( astropy.time.Time(self.image.mjd, format='mjd').datetime )
+                     < self.reference.validity_start )
+                  ):
+                self.reference = None
+
+            elif ( ( self.reference.validity_end is not None ) and
+                   ( pytz.utc.localize( astropy.time.Time(self.image.mjd, format='mjd').datetime )
+                     > self.reference.validity_end )
+                  ):
+                self.reference = None
+
             elif ( min_overlap is not None ) and ( min_overlap > 0 ):
+                # Make sure this one is last since it has an if inside it!
                 ovfrac = FourCorners.get_overlap_frac(image, self.reference.image)
                 if ovfrac < min_overlap:
                     self.reference = None
+
 
             # if we have survived this long without losing the reference, can return it here:
             if self.reference is not None:

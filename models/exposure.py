@@ -1,6 +1,7 @@
 import pathlib
 from collections import defaultdict
 
+from psycopg import sql
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB, ARRAY
 from sqlalchemy.schema import CheckConstraint
@@ -16,6 +17,7 @@ from util.fits import read_fits_image
 from util.radec import parse_ra_hms_to_deg, parse_dec_dms_to_deg
 
 from models.base import (
+    PGDB,
     Base,
     SeeChangeBase,
     UUIDMixin,
@@ -898,15 +900,15 @@ class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBad
         """
         return False
 
-    def get_upstreams(self, session=None):
+    def get_upstream_ids(self, pgdb=None):
         """An exposure does not have any upstreams. """
         return []
 
-    def get_downstreams(self, session=None):
+    def get_downstream_ids(self, pgdb=None):
         """An exposure has only Image objects as direct downstreams. """
         from models.image import Image
 
-        with SmartSession(session) as session:
-            images = session.scalars(sa.select(Image).where(Image.exposure_id == self.id)).all()
-
-        return images
+        with PGDB( pgdb ) as pgdb:
+            q = sql.SQL( "SELECT _id FROM images WHERE exposure_id={me}" ).format( me=self.id )
+            rows = pgdb.execute( q )
+            return [ ( Image, row[0] ) for row in rows ]

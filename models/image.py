@@ -1517,8 +1517,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                 setattr( self, f'_{prop}', None )
 
 
-    def get_upstreams(self, session=None):
-        """Get the immediate upstreams of this image.
+    def get_upstream_ids(self, pgdb=None):
+        """Get the ids immediate upstreams of this image.
 
         This may include an exposure (for most images), zeropoints (if
         this is subtraction or coadd image), and/or a reference (if this
@@ -1526,7 +1526,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
 
         Returns
         -------
-        upstreams: list of objects
+        upstreams: list of [ ( class, id ) ]
             The upstream Exposure, ZeroPoint, and Reference objects that
             were used to create this image.  For most images, it will be
             (at most) a single Exposure.  For coadds, it will be a bunch
@@ -1536,42 +1536,34 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         """
 
         # Avoid circular imports
-        from models.zero_point import ZeroPoint, image_coadd_component_table
-        from models.reference import Reference, image_subtraction_components as isc
+        from models.zero_point import ZeroPoint
+        from models.reference import Reference
 
-        upstreams = []
-        with SmartSession(session) as session:
-            # Load the exposure if there is one
-            if self.exposure_id is not None:
-                upstreams.append( session.query( Exposure ).filter( self.exposure_id == Exposure._id ).first() )
+        if self.exposure_id is None:
+            upstreams = []
+        else:
+            upstreams = [ ( Exposure, self.exposure_id ) ]
 
-            if ( not self.is_coadd ) and ( not self.is_sub ):
-                # We're done!  That wasn't so bad.
-                return upstreams
-
+        with PGDB( pgdb ) as pgdb:
             if self.is_sub:
                 if self.is_coadd:
                     raise ValueError( f"Databse corruption, image {self.id} is both a sub and a coadd!!!!!" )
-                # Zeropoint
-                upstreams.append( session.query( ZeroPoint )
-                                  .join( isc, isc.c.new_zp_id==ZeroPoint._id )
-                                  .filter( isc.c.image_id==self.id ).first() )
-                # Reference
-                upstreams.append( session.query( Reference )
-                                  .join( isc, isc.c.ref_id==Reference._id )
-                                  .filter( isc.c.image_id==self.id ).first() )
+                q = sql.SQL( "SELECT new_zp_id, ref_id FROM image_subtraction_components WHERE image_id={me}"
+                             ).format( me=self.id )
+                rows = pgdb.execute( q )
+                upstreams.extend( [ ( ZeroPoint, row[0] ) for row in rows ] )
+                upstreams.extend( [ ( Reference, row[1] ) for row in rows ] )
 
-            if self.is_coadd:
-                # Zeropoints
-                upstreams.extend( list( session.query( ZeroPoint )
-                                        .join( image_coadd_component_table,
-                                               image_coadd_component_table.c.coadd_image_id==self.id )
-                                        .filter( image_coadd_component_table.c.zp_id==ZeroPoint._id ).all() ) )
+            elif self.is_coadd:
+                q = sql.SQL( "SELECT zp_id FROM image_coadd_component WHERE image_id={me}" ).format( me=self.id )
+                rows = pgdb.execute( q )
+                upstreams.extend( [ ( ZeroPoint, row[0] ) for row in rows ] )
 
         return upstreams
 
-    def get_downstreams(self, session=None):
-        """Get all the data products that were created based on this image.
+
+    def get_downstream_ids(self, pgdb=None):
+        """Get ids all the data products that were created based on this image.
 
         This will just be SourceLists.
 
@@ -1580,8 +1572,10 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         # avoids circular import
         from models.source_list import SourceList
 
-        with SmartSession(session) as session:
-            return session.query( SourceList ).filter( SourceList.image_id==self.id ).all()
+        with PGDB( pgdb ) as pgdb:
+            q = sql.SQL( "SELECT _id FROM source_lists WHERE image_id={me}" ).foramt( me=self.id )
+            rows = pgdb.execute( q )
+            return [ ( SourceList, row[0] ) for row in rows ]
 
 
     @staticmethod

@@ -775,13 +775,11 @@ class PSF(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
                                               )
 
 
-    def get_upstreams( self, session=None ):
-        """Get the source list that is associated with this PSF."""
-        with SmartSession(session) as session:
-            return [ SourceList.get_by_id( self.sources_id, session=session ) ]
+    def get_upstream_ids( self, pgdb=None ):
+        """Get the id of the source list that is associated with this PSF."""
+        return [ ( SourceList, self.sources_id ) ]
 
-
-    def get_downstreams( self, session=None ):
+    def get_downstream_ids( self, pgdb=None ):
         """PSF has no downstreams.
 
         (It has no provenance.  There is 1:1 between SourceList and PSF,

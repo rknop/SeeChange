@@ -466,12 +466,11 @@ class Background(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         return newbg
 
 
-    def get_upstreams(self, session=None):
-        """Get the source list that was used to make this background"""
-        with SmartSession(session) as session:
-            return session.scalars( sa.select(SourceList).where( SourceList._id == self.sources_id ) ).all()
+    def get_upstream_ids( self, pgdb=None ):
+        """Get the source list id that was used to make this background"""
+        return [ ( SourceList, self.sources_id ) ]
 
-    def get_downstreams(self, session=None):
+    def get_downstream_ids( self, pgdb=None ):
         """Background has no downstreams."""
         return []
 

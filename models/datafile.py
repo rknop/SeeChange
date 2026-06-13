@@ -42,7 +42,7 @@ class DataFile( Base, UUIDMixin, FileOnDiskMixin ):
         Base.init_on_load( self )
         FileOnDiskMixin.init_on_load( self )
 
-    def get_downstreams( self, session=None ):
+    def get_downstream_ids( self, pgdb=None ):
         # DataFile has no downstreams
         return []
 

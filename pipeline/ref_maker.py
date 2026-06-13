@@ -1,10 +1,12 @@
 import io
 import datetime
+import pytz
 import textwrap
 import argparse
 
 import numpy as np
 from psycopg import sql
+import astropy.time
 import astropy.wcs
 
 from pipeline.parameters import Parameters
@@ -73,6 +75,64 @@ class ParsRefMaker(Parameters):
             critical=True,
         )
 
+        self.fiducial_start_delta_days = self.add_par(
+            'fiducial_start_delta_days',
+            None,
+            (None, float),
+            ( 'If given a fiducial time (e.g. an image), then define a time period that is this many days '
+              'away from that fiducial time in which to search for images to combine into a reference.  Can '
+              'be negative.  None=no limit.' ),
+            critical=True
+        )
+
+        self.fiducial_end_delta_days = self.add_par(
+            'fiducial_end_delta_days',
+            None,
+            (None, float),
+            ( 'Like fiducial_start_delta_days, but defines the end of the time period in which to search for '
+              'images to combine into a reference.  None=no limit.' ),
+            critical=True
+        )
+
+        self.delta_days_validity_start = self.add_par(
+            'delta_days_validity_start',
+            None,
+            (None, float),
+            ( "When defining a reference, set the starting valid date this many days away from the times "
+              "of the images combined into the reference.  If negative, this is how many days before the mjd "
+              "of the first image that was combined into the reference; if positive, days after th emjd of the "
+              "last image that was combined into the reference.  Please don't make it 0. " ),
+            critical=True
+        )
+
+        self.delta_days_validity_end = self.add_par(
+            'delta_days_validity_end',
+            None,
+            (None, float),
+            ( 'Like delta_days_validity_start, but for the end of the reference validity period.' ),
+            critical=True
+        )
+
+        self.validity_start = self.add_par(
+            'vaidity_start_date',
+            None,
+            (None, datetime),
+            ( "When creating a reference, set its validity_start to this time.  If both this parameter "
+              "and validity_start_delta_days are non-None, this one takes precedence." ),
+            critical=True
+        )
+
+        self.validity_end = self.add_par(
+            'validity_end',
+            None,
+            (None, datetime),
+            ( "When creating a reference, set its validity_end to this time.  If both this parameter "
+              "and validity_end_delta_days are non-None, this one takes precedence.  If through these or "
+              "the *delta* parameters you end up with validity_end < validity_start, then your reference "
+              "will never be used, and you should probably re-evaluate your choices for the parameters." ),
+            critical=True
+        )
+
         self.corner_distance = self.add_par(
             'corner_distance',
             0.8,
@@ -136,6 +196,12 @@ class ParsRefMaker(Parameters):
             for min_max in ['min', 'max']:
                 self.add_limit_parameter(name, min_max)
 
+        self.__filter_based_image_query_pars__ = [ 'background', 'seeing', 'lim_mag' ]
+        for name in self.__filter_based_image_query_pars__:
+            for min_max in ['min', 'max']:
+                self.add_filter_based_limit_parameter(name, min_max)
+
+        # Because magnitudes are weird, update the docstrings
         self.__docstrings__['min_lim_mag'] = ('Only use images with lim_mag larger (fainter) than this. '
                                               'If None, will not limit the minimal lim_mag. ')
         self.__docstrings__['max_lim_mag'] = ('Only use images with lim_mag smaller (brighter) than this. '
@@ -228,6 +294,25 @@ class ParsRefMaker(Parameters):
                 f'Only use images with {name} {compare} than this value. '
                 f'If None, will not limit the {min_max}imal {name}.',
                 critical=True,
+            )
+        )
+
+
+    def add_filter_based_limit_parameter( self, name, min_max='min' ):
+        if min_max not in ['min', 'max']:
+            raise ValueError('min_max must be either "min" or "max"')
+        compare = 'larger' if min_max == 'min' else 'smaller'
+        setattr(
+            self,
+            f'{min_max}_{name}_by_filter',
+            self.add_par(
+                f'{min_max}_{name}_by_filter',
+                {},
+                dict,
+                ( f"A dictionary of filter to {name} limits; only use images of each filter "
+                  f"with {name} {compare} than this value.  If the image is of a filter that's "
+                  f"not in this dictionary, will use {min_max}_{name} instead." ),
+                critical=True
             )
         )
 
@@ -431,8 +516,7 @@ class RefMaker:
 
     def parse_arguments( self, image=None, image_zp_prov_id=None, zp_prov_id=None, ra=None, dec=None,
                              minra=None, maxra=None, mindec=None, maxdec=None,
-                             target=None, section_id=None,
-                             filter=None ):
+                             target=None, section_id=None, mjd=None, filter=None ):
         """Parse arguments for the RefMaker.
 
         There are three modes in which RefMaker can operate:
@@ -481,6 +565,11 @@ class RefMaker:
           filter: string or None
             If given, only find images whose filter match this filter
 
+          mjd: float or None
+            Find references suitable for an image at this mjd.  If None,
+            and image is not None, will pull the mjd from teh database
+            record for the image.
+
         """
 
         self.image = image
@@ -491,7 +580,7 @@ class RefMaker:
             with PGDB( dictcursor=True ) as pgdb:
                 rows = pgdb.execute( sql.SQL( textwrap.dedent(
                     """\
-                    SELECT _id, ra, dec, minra, maxra, mindec, maxdec FROM images
+                    SELECT _id, mjd, ra, dec, minra, maxra, mindec, maxdec FROM images
                     WHERE filepath LIKE {perimg} OR _id::text={img}
                     """
                 ) ).format( img=str(image), perimg=f'%%{image}%%' ) )
@@ -500,6 +589,7 @@ class RefMaker:
                 elif len(rows) > 1:
                     raise RuntimeError( f"More than one image matched {image}; be more specific." )
                 imgid = rows[0]['_id']
+                mjd = rows[0]['mjd'] if mjd is None else mjd
                 imgra = rows[0]['ra']
                 imgdec = rows[0]['dec']
                 imgminra = rows[0]['minra']
@@ -563,6 +653,7 @@ class RefMaker:
                     raise ValueError( "For RefMaker corner_distance not None, must specify image or "
                                       "all of minra/maxra/mindec/maxdec" )
 
+        self.mjd = mjd
         self.minra = minra
         self.maxra = maxra
         self.mindec = mindec
@@ -630,7 +721,11 @@ class RefMaker:
                                     [ ctrra + 0.,  ctrdec + ddec ],
                                     [ ctrra + dra, ctrdec + ddec ] ] )
             match_count = [ 0 ] * 9
-            match_pos_images = [ [] ] * 9
+            # PYTHON VIOLATES PRINCIPLE OF LEAST SURPRISE
+            # This next line doesn't make a list of 9 empty lists.
+            # No, it makes a list of 9 references to the SAME empty list.
+            # match_pos_images = [ [] ] * 9
+            match_pos_images = [ [] for i in range(len(match_count)) ]
             kwargs = { 'minra': self.minra, 'maxra': self.maxra, 'mindec': self.mindec, 'maxdec': self.maxdec,
                        'overlapfrac': self.pars.coadd_overlap_fraction }
 
@@ -642,11 +737,20 @@ class RefMaker:
         kwargs['min_mjd'] = ( None if self.pars.start_time is None
                               else parse_dateobs( self.pars.start_time, output='mjd' ) )
         kwargs['max_mjd'] = None if self.pars.end_time is None else parse_dateobs( self.pars.end_time, output='mjd' )
-        kwargs['max_seeing'] = self.pars.max_seeing
-        kwargs['min_lim_mag'] = self.pars.min_lim_mag
-        kwargs['min_exp_time'] = self.pars.min_exp_time
+
+        for kw in self.pars.__filter_based_image_query_pars__:
+            for min_max in [ 'min', 'max' ]:
+                limitdict = getattr( self.pars, f'{min_max}_{kw}_by_filter' )
+                if self.filter in limitdict:
+                    kwargs[f'{min_max}_{kw}'] = limitdict[ self.filter ]
+                else:
+                    kwargs[f'{min_max}_{kw}'] = getattr( self.pars, f'{min_max}_{kw}' )
+
+        for kw in self.pars.__image_query_pars__:
+            for min_max in [ 'min', 'max' ]:
+                kwargs[f'{min_max}_{kw}'] = getattr( self.pars, f'{min_max}_{kw}' )
+
         kwargs['return_wcs'] = True
-        # TODO : airmass, background
 
         possible, possible_wcs = Image.find_images( **kwargs )
 
@@ -700,6 +804,7 @@ class RefMaker:
             section_id=self.section_id,
             filter=self.filter,
             provenance_ids=self.ref_prov.id,
+            for_image_mjd=self.mjd
         )
 
         refs, _ = refsandimgs
@@ -848,8 +953,22 @@ class RefMaker:
                   'CRPIX2': self.coadd_pipeline.coadder.pars.absolute_height / 2.,
                   'CRVAL1': ra,
                   'CRVAL2': dec,
-                  'CDELT1': -self.pars.absolute_pixel_scale / 3600.,
-                  'CDELT2': self.pars.absolute_pixel_scale / 3600.,
+                  # 'CDELT1': -self.pars.absolute_pixel_scale / 3600.,
+                  # 'CDELT2': self.pars.absolute_pixel_scale / 3600.,
+                  # ...things came out weird.  WCS was stretched by ~1.7%,
+                  #   which perhaps coincidentally was the roughly the relative difference between the absolute pixel
+                  #   scale I specified and the pixel scale of the images I combined.
+                  # Try instead setting the CDELTs to 1 and putting the scale in a PC matrix.
+                  # ...which seemed to work better.  I don't understand what's going on.
+                  #    Either there is some subtlety in spherical trig that I'm missing
+                  #    with the WCS definition (likely), or swarp is doing something wrong.
+                  #    when I give it non-1 CDELT and no PC matrix.
+                  'CDELT1': 1.0,
+                  'CDELT2': 1.0,
+                  'PC1_1': -self.pars.absolute_pixel_scale / 3600.,
+                  'PC1_2': 0.,
+                  'PC2_1': 0.,
+                  'PC2_2': self.pars.absolute_pixel_scale / 3600.,
                   'CTYPE1': "RA---TAN",
                   'CTYPE2': "DEC--TAN",
                   'CUNIT1': 'deg',
@@ -858,10 +977,31 @@ class RefMaker:
         coadd_ds = self.coadd_pipeline.run( dses, prov_tree=self.coadd_provs,
                                             alignment_target_datastore=alignment_target_datastore,
                                             alignment_wcs=alignment_wcs )
+        t0 = None
+        if self.pars.validity_start is not None:
+            t0 = self.pars.validity_start
+            if t0.tzinfo is None:
+                t0 = pytz.utc.localize( t0 )
+        elif self.pars.delta_days_validity_start is not None:
+            dt = self.pars.delta_days_validity_start
+            t0 = pytz.utc.localize( astropy.time.Time( dses[0 if dt < 0 else -1].image.mjd, format='mjd' ).datetime )
+            t0 += datetime.timedelta( days=dt )
+
+        t1 = None
+        if self.pars.validity_end is not None:
+            t1 = self.pars.validity_end
+            if t1.tzinfo is None:
+                t1 = pytz.utc.localize( t1 )
+        elif self.pars.delta_days_validity_end is not None:
+            dt = self.pars.delta_days_pars.validity_end
+            t1 = pytz.utc.localize( astropy.time.Time( dses[0 if dt < 0 else -1].image.mjd, format='mjd' ).datetime )
+            t1 += datetime.timedelta( days=dt )
 
         ref = Reference(
             zp_id = coadd_ds.zp.id,
-            provenance_id = self.ref_prov.id
+            provenance_id = self.ref_prov.id,
+            validity_start=t0,
+            validity_end=t1
         )
 
         if self.pars.save_new_refs:
@@ -956,7 +1096,6 @@ def main():
             rows = pgdb.execute( q )
 
         if len( rows ) != 1:
-            import pdb; pdb.set_trace()
             raise RuntimeError( "This should not happen." )
         row = rows[0]
 

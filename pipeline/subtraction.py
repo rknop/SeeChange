@@ -106,9 +106,11 @@ class Subtractor:
         self.pars = ParsSubtractor(**kwargs)
         inpainter = Inpainter(**self.pars.inpainting)
         self.pars.inpainting = inpainter.pars.get_critical_pars()  # add Inpainter defaults into this dictionary
+        self.parameters_to_initialize_inpaiting = inpainter.pars.to_dict()
         del inpainter
         aligner = ImageAligner(**self.pars.alignment)
         self.pars.alignment = aligner.pars.get_critical_pars()  # add ImageAligner defaults into this dictionary
+        self.parameters_to_initialize_alignment = aligner.pars.to_dict()
 
         # this is useful for tests, where we can know if
         # the object did any work or just loaded from DB or datastore
@@ -231,7 +233,7 @@ class Subtractor:
         ref_image_flux_zp = 10 ** (0.4 * ref_zp.zp)
         # TODO: consider adding an estimate for the astrometric uncertainty dx, dy
 
-        inpainter = Inpainter(**self.pars.inpainting)
+        inpainter = Inpainter(**self.parameters_to_initialize_inpainting)
         new_image_data = inpainter.run(new_image_data, new_image.flags, new_image.weight)
         del inpainter
 
@@ -635,7 +637,7 @@ class Subtractor:
                 else:
                     # Align the images
                     to_index = self.pars.alignment_index
-                    aligner = ImageAligner(**self.pars.alignment)
+                    aligner = ImageAligner(**self.parameters_to_initialize_alignment)
                     if to_index == 'ref':
                         # In *lots* of places the code makes the assumption that we align the ref to the new.
                         # If we ever want to be able to align the new to the ref, we have to go all the way
@@ -665,6 +667,7 @@ class Subtractor:
                         ds.aligned_wcs = ds.ref_wcs
 
                     elif to_index == 'new':
+                        import pdb; pdb.set_trace()
                         SCLogger.debug( "Aligning ref to new" )
 
                         for needed in [ ds.ref_image, ds.ref_sources, ds.ref_bg, ds.ref_wcs, ds.ref_zp,

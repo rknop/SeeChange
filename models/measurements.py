@@ -1,5 +1,6 @@
 import numpy as np
 
+from psycopg import sql
 import sqlalchemy as sa
 from sqlalchemy import orm
 from sqlalchemy.schema import UniqueConstraint
@@ -11,7 +12,8 @@ from models.base import ( Base,
                           UUIDMixin,
                           SpatiallyIndexed,
                           HasBitFlagBadness,
-                          SmartSession )
+                          SmartSession,
+                          PGDB )
 from models.cutouts import Cutouts
 from models.image import Image
 from models.source_list import SourceList
@@ -78,30 +80,29 @@ class MeasurementSet( Base, UUIDMixin, HasBitFlagBadness ):
         self._measurements = None
 
 
-    def get_upstreams( self, session=None ):
-        """Return the upstreams of this MeasurementSet object.
+    def get_upstream_ids( self, pgdb=None ):
+        """Return the id of the Cutouts that these measurements are from."""
+        return [ ( Cutouts, self.cutouts_id ) ]
 
-        Will be the Cutouts that these measurements are from.
 
-        """
-        with SmartSession( session ) as session:
-            return session.scalars( sa.Select( Cutouts ).where( Cutouts._id == self.cutouts_id ) ).all()
-
-    def get_downstreams( self, session=None ):
-        """Return the downstreams of this MeasurementSet object.
+    def get_downstream_ids( self, pgdb=None ):
+        """Return the ids of the downstreams of this MeasurementSet object.
 
         Includes any DeepScore objects, plus all Measurements that are
         members of this set.
 
         """
         from models.deepscore import DeepScoreSet
-        with SmartSession( session ) as session:
-            downstreams = list( session.scalars( sa.Select( DeepScoreSet )
-                                                 .where( DeepScoreSet.measurementset_id == self.id )
-                                                ).all() )
-            downstreams.extend( list( session.scalars( sa.Select( Measurements )
-                                                       .where( Measurements.measurementset_id == self.id )
-                                                      ).all() ) )
+
+        with PGDB( pgdb ) as pgdb:
+            q = sql.SQL( "SELECT _id FROM deepscore_sets WHERE measurementset_id={me}" ).format( me=self.id )
+            rows = pgdb.execute( q )
+            downstreams = [ ( DeepScoreSet, row[0] ) for row in rows ]
+
+            q = sql.SQL( "SELECT _id FROM measurements WHERE measurementset_id={me}" ).format( me=self.id )
+            rows = pgdb.execute( q )
+            downstreams.exend( [ ( Measurements, row[0] ) for row in rows ] )
+
         return downstreams
 
 
@@ -617,19 +618,14 @@ class Measurements(Base, UUIDMixin, SpatiallyIndexed, HasBitFlagBadness):
     def _get_inverse_badness(self):
         return measurements_badness_inverse
 
-    def get_upstreams( self, session=None ):
+    def get_upstream_ids( self, pgdb=None ):
         """Return the upstreams of this Measurements object.
 
         Will be the MeasurementSet that this Measurements is a member of.
         """
+        return [ ( MeasurementSet, self.measurementset_id ) ]
 
-        with SmartSession( session ) as session:
-            return session.scalars( sa.Select( MeasurementSet )
-                                    .where( MeasurementSet._id == self.measurementset_id )
-                                   ).all()
-
-
-    def get_downstreams( self, session=None ):
+    def get_downstream_ids( self, pgdb=None ):
         """Measurements has no downstreams."""
         return []
 

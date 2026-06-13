@@ -505,6 +505,8 @@ class Report(Base, UUIDMixin):
 
         return ', '.join(formatted_warnings)
 
-    def get_downstreams( self, session=None ):
+    # ...upstreams are complicated for reports, so punt.
+
+    def get_downstream_ids( self, pgdb=None ):
         """Reports have no downstreams."""
         return []
