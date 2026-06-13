@@ -999,8 +999,8 @@ class SeeChangeBase:
                 ) ).format( tab=sql.Identifier(cls.__tablename__),
                             fields=sql.SQL(",").join( sql.Identifier(c) for c in subdict.keys() ),
                             vals=sql.SQL(",").join( sql.SQL(f'%({c})s') for c in subdict.keys() ),
-                            confict=sql.SQL(",").join( sql.SQL(f"{{c}}=%({c})s").format( c=sql.Identifier(c) )
-                                                       for c in subdict.keys() if c != '_id' )
+                            conflict=sql.SQL(",").join( sql.SQL(f"{{c}}=%({c})s").format( c=sql.Identifier(c) )
+                                                        for c in subdict.keys() if c != '_id' )
                            )
                 pgdb.execute_nofetch( q, subdict )
             pgdb.commit()
@@ -1071,7 +1071,7 @@ class SeeChangeBase:
             for cls, dwnid in downstream_info:
                 q = sql.SQL( "SELECT * FROM {tab} WHERE _id={objid}" ).format( tab=sql.Identifier(cls.__tablename__),
                                                                                objid=dwnid )
-                rows = pgdb.fetchall( q )
+                rows = pgdb.execute( q )
                 if len(rows) != 1:
                     raise RuntimeError( "This should never happen." )
                 downstreams.append( cls( **(rows[0]) ) )

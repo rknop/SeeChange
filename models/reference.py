@@ -199,7 +199,7 @@ class Reference(Base, UUIDMixin, HasBitFlagBadness):
         """Get ids of downstreams of this Reference.  That is all subtraction images that use this as a reference."""
         with PGDB( pgdb ) as pgdb:
             q = sql.SQL( "SELECT image_id FROM image_subtraction_components WHERE ref_id={me}" ).format( me=self.id )
-            rows = pgdb.execute( q )
+            rows, _cols = pgdb.execute( q )
             return ( [ ( Image, row[0] ) for row in rows ] )
 
 

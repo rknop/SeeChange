@@ -106,7 +106,7 @@ class Subtractor:
         self.pars = ParsSubtractor(**kwargs)
         inpainter = Inpainter(**self.pars.inpainting)
         self.pars.inpainting = inpainter.pars.get_critical_pars()  # add Inpainter defaults into this dictionary
-        self.parameters_to_initialize_inpaiting = inpainter.pars.to_dict()
+        self.parameters_to_initialize_inpainting = inpainter.pars.to_dict()
         del inpainter
         aligner = ImageAligner(**self.pars.alignment)
         self.pars.alignment = aligner.pars.get_critical_pars()  # add ImageAligner defaults into this dictionary

@@ -975,7 +975,7 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
                 q = sql.SQL( "SELECT _id FROM {tab} WHERE sources_id={me}"
                             ).format( tab=sql.Identifier( model.__tablename__ ),
                                       me=self.id )
-                rows = pgdb.execute( q )
+                rows, _cols = pgdb.execute( q )
                 output.extend( [ ( model, row[0] ) for row in rows ] )
 
         return output

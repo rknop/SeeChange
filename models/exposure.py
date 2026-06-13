@@ -910,5 +910,5 @@ class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBad
 
         with PGDB( pgdb ) as pgdb:
             q = sql.SQL( "SELECT _id FROM images WHERE exposure_id={me}" ).format( me=self.id )
-            rows = pgdb.execute( q )
+            rows, _cols = pgdb.execute( q )
             return [ ( Image, row[0] ) for row in rows ]

@@ -443,5 +443,5 @@ class Cutouts(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
 
         with PGDB( pgdb ) as pgdb:
             q = sql.SQL( "SELECT _id FROM measurement_sets WHERE cutouts_id={me}" ).format( me=self.id )
-            rows = pgdb.execute( q )
+            rows, _cols = pgdb.execute( q )
             return [ ( MeasurementSet, row[0] ) for row in rows ]

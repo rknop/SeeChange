@@ -1574,7 +1574,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
 
         with PGDB( pgdb ) as pgdb:
             q = sql.SQL( "SELECT _id FROM source_lists WHERE image_id={me}" ).foramt( me=self.id )
-            rows = pgdb.execute( q )
+            rows, _cols = pgdb.execute( q )
             return [ ( SourceList, row[0] ) for row in rows ]
 
 

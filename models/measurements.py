@@ -96,12 +96,12 @@ class MeasurementSet( Base, UUIDMixin, HasBitFlagBadness ):
 
         with PGDB( pgdb ) as pgdb:
             q = sql.SQL( "SELECT _id FROM deepscore_sets WHERE measurementset_id={me}" ).format( me=self.id )
-            rows = pgdb.execute( q )
+            rows, _cols = pgdb.execute( q )
             downstreams = [ ( DeepScoreSet, row[0] ) for row in rows ]
 
             q = sql.SQL( "SELECT _id FROM measurements WHERE measurementset_id={me}" ).format( me=self.id )
-            rows = pgdb.execute( q )
-            downstreams.exend( [ ( Measurements, row[0] ) for row in rows ] )
+            rows, _cols = pgdb.execute( q )
+            downstreams.extend( [ ( Measurements, row[0] ) for row in rows ] )
 
         return downstreams
 

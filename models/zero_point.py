@@ -150,15 +150,15 @@ class ZeroPoint(Base, UUIDMixin, HasBitFlagBadness):
         downstreams = []
         with PGDB( pgdb ) as pgdb:
             q = sql.SQL( "SELECT coadd_image_id FROM image_coadd_component WHERE zp_id={me}" ).format( me=self.id )
-            rows = pgdb.execute( q )
+            rows, _cols = pgdb.execute( q )
             downstreams.extend( [ ( Image, row[0] ) for row in rows ] )
 
             q = sql.SQL( "SELECT image_id FROM image_subtraction_components WHERE zp_id={me}" ).format( me=self.id )
-            rows = pgdb.execute( q )
+            rows, _cols = pgdb.execute( q )
             downstreams.extend( [ ( Image, row[0] ) for row in rows ] )
 
             q = sql.SQL( "SELECT _id FROM refs WHERE zp_id={me}" ).format( me=self.id )
-            rows = pgdb.execute( q )
+            rows, _cols = pgdb.execute( q )
             downstreams.extend( [ ( Reference, row[0] ) for row in rows ] )
 
         return downstreams

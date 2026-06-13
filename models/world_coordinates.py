@@ -231,6 +231,6 @@ class WorldCoordinates(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness, Spat
         """Get ids of zeropoints downstream of this wcs."""
         from models.zero_point import ZeroPoint
         with PGDB() as pgdb:
-            rows = pgdb.execute( sql.SQL( "SELECT _id FROM zero_points WHERE wcs_id={wcs}" )
+            rows, _cols = pgdb.execute( sql.SQL( "SELECT _id FROM zero_points WHERE wcs_id={wcs}" )
                                  .format( wcs=self.id ) )
             return [ ( ZeroPoint, row[0] ) for row in rows ]

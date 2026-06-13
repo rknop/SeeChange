@@ -134,11 +134,11 @@ class DeepScoreSet( Base, UUIDMixin, HasBitFlagBadness ):
         from models.fakeset import FakeAnalysis
         with PGDB( pgdb ) as pgdb:
             q = sql.SQL( "SELECT _id FROM fake_analysis WHERE orig_deepscore_set_id={me}" ).format( me=self.id )
-            rows = pgdb.execute( q )
+            rows, _cols = pgdb.execute( q )
             downstreams = [ ( FakeAnalysis, row[0] ) for row in rows ]
 
             q = sql.SQL( "SELECT _id FROM deepscores WHERE deepscoreset_id={me}" ).format( me=self.id )
-            rows = pgdb.execute( q )
+            rows, _cols = pgdb.execute( q )
             downstreams.extend( [ ( DeepScore,row[0] ) for row in rows ] )
 
         return downstreams
