@@ -183,8 +183,8 @@ class ImageAligner:
 
         return warpedim
 
-    def get_swarp_fodder_wcs( self, source_image, source_sources, source_wcs, source_zp, target_sources,
-                               fall_back_wcs=None ):
+    def get_swarp_fodder_wcs( self, source_image, source_sources, source_wcs, source_zp,
+                              target_image, target_sources, target_wcs, fall_back_wcs=None ):
         """Get a WCS for an image-to-image alignment.
 
         Get a WCS for target_sources that uses source_sources as a
@@ -203,10 +203,10 @@ class ImageAligner:
         Parameters
         ----------
           source_image : Image
-             The image that we will eventually want to align to target_image.
+             The image we are going to eventually want to align to target_image.
 
           source_sources : SourceList
-             A SourceList from source_image.
+             A SourceList from the source_image.
 
           source_wcs : WorldCoordinates
              A WorldCoordinates from source_image.
@@ -214,13 +214,21 @@ class ImageAligner:
           source_zp : ZeroPoint
              A ZeroPoint from source_image.
 
+          target_image: Image
+             The image we are going to want to align source_image to.
+
           target_sources: SourceList
-             A SourceList from target_image.  target_image isn't
-             actually a parameter of this method, because it's not
-             needed, but it's the image to which source_image is going
-             to be aligned.  If it seems perverse that we're returning a
-             new WCS for target_image and not source_image, see the
-             massive comment in the _align_swarp method.
+             A SourceList from target_image.  If it seems perverse that
+             we're returning a new WCS for target_image and not
+             source_image, see the massive comment in the _align_swarp
+             method.
+
+          target_wcs: SourceList
+            A WorldCoordinates from target_image.  Although this is what
+            we're trying to find (only one that is designed for the best
+            possible alignment with the source image, not one that's
+            aligned to an external catalog), have this in hopes that
+            scamp will use it to get started.
 
           fall_back_wcs : WorldCoordinates or None
              If not None, and the scamp fails (e.g. because the two
@@ -270,9 +278,15 @@ class ImageAligner:
             # Convert from numpy convention to FITS convention and write
             # out LDAC files for scamp to chew on.
             datatab = SourceList._convert_to_sextractor_for_saving( datatab )
+            source_header = source_image.header.copy()
+            improc.tools.strip_wcs_keywords( source_header )
+            source_header.extend( source_wcs.wcs.to_header(relax=True) )
+            ldac.save_table_as_ldac( datatab, tmpimagecat, imghdr=source_header, overwrite=True )
             targetdat = astropy.table.Table( SourceList._convert_to_sextractor_for_saving( target_sources.data ) )
-            ldac.save_table_as_ldac( datatab, tmpimagecat, imghdr=source_sources.info, overwrite=True )
-            ldac.save_table_as_ldac( targetdat, tmptargetcat, imghdr=target_sources.info, overwrite=True )
+            target_header = target_image.header.copy()
+            improc.tools.strip_wcs_keywords( target_header )
+            target_header.extend( target_wcs.wcs.to_header(relax=True) )
+            ldac.save_table_as_ldac( targetdat, tmptargetcat, imghdr=target_header, overwrite=True )
 
             # Scamp it up
             try:
@@ -300,8 +314,8 @@ class ImageAligner:
             tmptargetcat.unlink( missing_ok=True )
 
     def _align_swarp( self, source_image, source_sources, source_bg, source_psf, source_wcs, source_zp,
-                      target_image, target_sources, warped_prov, warped_sources_prov ):
-        """Use scamp and swarp to align image to target.
+                      target_image, target_sources, target_wcs, warped_prov, warped_sources_prov ):
+        """Use scamp and swarp to align source_image to target_image.
 
         Parameters
         ---------
@@ -344,6 +358,8 @@ class ImageAligner:
             x/y values here for its solution; see massive comment in the
             bdy of the function.)  Assumed to be in sextrfits format.
 
+          target_wcs: WorldCorrdinates
+            WorldCoordiantes for target image.
 
           warped_prov: Provenance
             The provenance to assign to the warped image
@@ -424,7 +440,7 @@ class ImageAligner:
         try:
 
             swarp_fodder_wcs = self.get_swarp_fodder_wcs( source_image, source_sources, source_wcs, source_zp,
-                                                          target_sources )
+                                                          target_image, target_sources, target_wcs )
 
             # Write out the .head file that swarp will use to figure out what to do
             hdr = swarp_fodder_wcs.to_header( relax=True )
@@ -674,7 +690,7 @@ class ImageAligner:
     # TODO : pass a DataStore for source and target instead of all these parameters
     def run( self,
              source_image, source_sources, source_bg, source_psf, source_wcs, source_zp,
-             target_image, target_sources ):
+             target_image, target_sources, target_wcs ):
         """Warp source image so that it is aligned with target image.
 
         If the source_image and target_image are the same, will just create
@@ -705,6 +721,9 @@ class ImageAligner:
 
           target_sources: SourceList
              corresponding to target_image
+
+          target_wcs: WorldCoordiantes
+             corresponding to target_sources
 
         Returns
         -------
@@ -786,6 +805,7 @@ class ImageAligner:
                                                                source_zp,
                                                                target_image,
                                                                target_sources,
+                                                               target_wcs,
                                                                warped_prov,
                                                                warped_sources_prov )
             else:

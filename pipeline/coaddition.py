@@ -668,7 +668,7 @@ class Coadder:
                     #   for get_swarp_fodder_wcs
                     SCLogger.debug( f"Trying to use SCAMP to align {targds.image.filepath} to {ds.image.filepath}" )
                     dswcs = self.aligner.get_swarp_fodder_wcs( targds.image, targds.sources, targds.wcs, targds.zp,
-                                                               ds.sources )
+                                                               ds.image, ds.sources, ds.wcs )
 
                     # Need to write out a temporary image whose header has this new wcs
                     hdr = ds.image.header.copy()
@@ -811,7 +811,8 @@ class Coadder:
         for ds in data_store_list:
             wrpim, wrpsrc, wrpbg, wrppsf = aligner.run( ds.image, ds.sources, ds.bg, ds.psf, ds.wcs, ds.zp,
                                                         data_store_list[index].image,
-                                                        data_store_list[index].sources )
+                                                        data_store_list[index].sources,
+                                                        data_store_list[index].wcs )
             alds = DataStore( wrpim )
             alds.sources = wrpsrc
             alds.sources.image_id= alds.image.id

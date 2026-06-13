@@ -74,7 +74,7 @@ class CodeVersion(Base, UUIDMixin):
         'extraction': (0,7,0),
         'astrocal' : (0,4,0),
         'photocal' : (0,1,0),
-        'subtraction': (0,1,0),
+        'subtraction': (0,3,0),
         'detection': (0,2,0),
         'cutting': (0,1,0),
         'measuring': (0,1,0),
@@ -83,8 +83,8 @@ class CodeVersion(Base, UUIDMixin):
         'fakeinjection' : (0,1,0),
 
         # Other processes of associated pipelines
-        'referencing' : (0,7,0),
-        'coaddition' : (0,6,0),
+        'referencing' : (0,8,0),
+        'coaddition' : (0,8,0),
         'positioning': (0,1,0),
         'flat_bias_builder': (0,5,0),
 
@@ -93,7 +93,7 @@ class CodeVersion(Base, UUIDMixin):
         #   then probably the subtraction, and maybe the coadd,
         #   version should chagne too, as changes in these processes
         #   will affect both subtraction and coadd.
-        'alignment' : (0,1,0),
+        'alignment' : (0,3,0),
         'inpainting' : (0,1,0),
 
         # These are processes for downloading stuff

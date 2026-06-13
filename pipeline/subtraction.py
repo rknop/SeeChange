@@ -612,7 +612,8 @@ class Subtractor:
                                          f'{ds.inputs_str}')
 
                     SCLogger.debug( f"Making new subtraction from image {image.id} path {image.filepath} , "
-                                    f"reference {ds.ref_image.id} path {ds.ref_image.filepath}" )
+                                    f"reference {ds.reference.id} refimage {ds.ref_image.id} "
+                                    f"path {ds.ref_image.filepath}" )
                     sub_image = Image.from_ref_and_new(ds.reference, zp)
                     sub_image.is_sub = True
                     sub_image.provenance_id = prov.id
@@ -653,7 +654,7 @@ class Subtractor:
 
                         ( aligned_image, aligned_sources,
                           aligned_bg, aligned_psf ) = aligner.run( ds.image, ds.sources, ds.bg, ds.psf, ds.wcs, ds.zp,
-                                                                   ds.ref_image, ds.ref_sources )
+                                                                   ds.ref_image, ds.ref_sources, ds.ref_wcs )
                         ds.aligned_new_image = aligned_image
                         ds.aligned_new_sources = aligned_sources
                         ds.aligned_new_bg = aligned_bg
@@ -667,7 +668,6 @@ class Subtractor:
                         ds.aligned_wcs = ds.ref_wcs
 
                     elif to_index == 'new':
-                        import pdb; pdb.set_trace()
                         SCLogger.debug( "Aligning ref to new" )
 
                         for needed in [ ds.ref_image, ds.ref_sources, ds.ref_bg, ds.ref_wcs, ds.ref_zp,
@@ -679,7 +679,7 @@ class Subtractor:
                         ( aligned_image, aligned_sources,
                           aligned_bg, aligned_psf ) = aligner.run( ds.ref_image, ds.ref_sources, ds.ref_bg,
                                                                    ds.ref_psf, ds.ref_wcs, ds.ref_zp,
-                                                                   ds.image, ds.sources )
+                                                                   ds.image, ds.sources, ds.wcs )
                         ds.aligned_new_image = ds.image
                         ds.aligned_new_sources = ds.get_sources()
                         ds.aligned_new_bg = ds.get_background()

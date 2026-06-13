@@ -108,6 +108,7 @@ def solve_wcs_scamp( sources, catalog, crossid_radius=2.,
                         '-ASTREFCAT_NAME', catfile,
                         '-MATCH', 'Y',
                         '-MATCH_NMAX', str( max_nmatch ),
+                        '-MATCH_FLIPPED', 'Y',
                         '-SOLVE_PHOTOM', 'N',
                         '-CHECKPLOT_DEV', 'NULL',
                         '-CHECKPLOT_TYPE', 'NONE',
@@ -126,6 +127,7 @@ def solve_wcs_scamp( sources, catalog, crossid_radius=2.,
             #   it's not going to succeed with other parameters.  This is maybe too strong of
             #   an assumption, but it will often be true, and when it is, catching the exception
             #   and retrying turns this into a multi-minute timewaster.
+            SCLogger.debug( f"Running scamp with command: {command}" )
             res = subprocess.run( command, capture_output=True, timeout=timeout )
             t1 = time.perf_counter()
             SCLogger.debug( f"Scamp with {len(sources)} sources and {len(cat)} catalog stars "
