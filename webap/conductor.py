@@ -5,6 +5,7 @@ import json
 import datetime
 import pytz
 import traceback
+import textwrap
 
 import psycopg
 import psycopg.types.json
@@ -13,7 +14,7 @@ from psycopg import sql
 import flask
 
 from util.util import asUUID
-from models.base import SmartSession, PsycopgConnection
+from models.base import SmartSession, PsycopgConnection, PGDB
 from models.enums_and_bitflags import KnownExposureStateConverter, ImageTypeConverter
 from models.knownexposure import PipelineWorker
 from models.instrument import Instrument
@@ -401,93 +402,177 @@ class GetKnownExposures( ConductorBaseView ):
                                               "minexptime": None,
                                               "state": None,
                                               "maxclaimtime": None,
-                                              "exposure_provtag": None,
+                                              "provtag": None,
+                                              "types": None
                                              } )
         args['minmjd'] = float( args['minmjd'] ) if args['minmjd'] is not None else None
         args['maxmjd'] = float( args['maxmjd'] ) if args['maxmjd'] is not None else None
 
-        with PsycopgConnection() as conn:
-            cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
-            q = "SELECT ke.*,e.filepath,e._id AS matched_exposure_id FROM knownexposures ke\n"
-            _and = "WHERE"
-            subdict = {}
 
-            if args['exposure_provtag'] is not None:
-                q += ( "LEFT JOIN (\n"
-                       "  SELECT exp._id, exp.filepath, exp.origin_identifier FROM exposures exp\n"
-                       "  INNER JOIN provenance_tags pt ON exp.provenance_id=pt.provenance_id\n"
-                       "         AND pt.tag=%(provtag)s\n"
-                       ") e ON ke.identifier=e.origin_identifier\n"
-                      )
-                subdict['provtag'] = args['exposure_provtag']
-            else:
-                q += ( "LEFT JOIN exposures e ON ke.exposure_id=e._id\n" )
+        if args['provtag'] is None:
+            q = sql.SQL( textwrap.dedent(
+                """\
+                SELECT ke.*,
+                       NULL as matched_exposure_id,
+                       NULL as exp_filename,
+                       NULL as nimg,
+                       NULL as nsrc,
+                       NULL as nwcs,
+                       NULL as nzp,
+                       NULL as nsub,
+                       NULL as ngooddets,
+                       NULL as ndets
+                FROM knownexposures ke
+                """
+            ) )
 
-            if args['minmjd'] is not None:
-                q += f"{_and} ke.mjd >= %(minmjd)s\n"
-                subdict['minmjd'] = float( args['minmjd'] )
-                _and = "AND"
-            if args['maxmjd'] is not None:
-                q += f"{_and} ke.mjd <= %(maxmjd)s\n"
-                subdict['maxmjd'] = float( args['maxmjd'] )
-                _and = "AND"
-            if args['instrument'] is not None:
-                q += f"{_and} ke.instrument = %(instr)s\n"
-                subdict['instr'] = args['instrument']
-                _and = "AND"
-            if args['target'] is not None:
-                q += f"{_and} ke.target = %(target)s\n"
-                subdict['target'] = args['target']
-                _and = "AND"
-            if args['project'] is not None:
-                q += f"{_and} ke.project = %(project)s\n"
-                subdict['project'] = args['project']
-                _and = "AND"
-            if args['minexptime'] is not None:
-                q += f"{_and} ke.exp_time >= %(minexp)s\n"
-                subdict['minexp'] = float( args['minexptime'] )
-                _and = "AND"
-            if args['state'] is not None:
-                q += f"{_and} ke._state=ANY(%(state)s)\n"
-                subdict['state'] = [ KnownExposureStateConverter.to_int( s ) for s in args['state'].split(",") ]
-                _and = "AND"
-            if args['maxclaimtime'] is not None:
-                claimtime = datetime.datetime.fromisoformat( args['maxclaimtime'] )
-                if claimtime.tzinfo is None:
-                    claimtime = pytz.utc.localize( claimtime )
-                q += f"{_and} ke.claim_time <= %(maxclaimtime)s\n"
-                subdict['maxclaimtime'] = claimtime
-                _and = "AND"
-            if 'types' in args:
-                types = args['types'].split(",")
-                if "all" not in [ t.lower() for t in types ]:
-                    types = [ ImageTypeConverter.to_int( t ) for t in types ]
-                    q += f"{_and} ke._type=ANY(%(types)s)\n"
-                    subdict['types'] = types
-                    _and = "AND"
-            q += "ORDER BY ke.mjd\n"
+        else:
+            # Check this out
+            q = sql.SQL( textwrap.dedent(
+                """\
+                SELECT ke.*,
+                       e._id AS matched_exposure_id,
+                       substring( e.filepath FROM '/?([^/]+)$' ) AS exp_filename,
+                       SUM( CASE WHEN i._id IS NULL THEN 0 ELSE 1 END ) AS nimg,
+                       SUM( nsrc ) AS nsrc, SUM( nwcs ) AS nwcs, SUM( nzp ) AS nzp, SUM( nsub ) AS nsub,
+                       SUM( ngooddets ) AS ngooddets, SUM( ndets ) AS ndets
+                FROM knownexposures ke
+                LEFT JOIN (
+                   SELECT DISTINCT ON(e._id) e._id, e.filepath, e.origin_identifier FROM exposures e
+                   INNER JOIN provenance_tags t ON e.provenance_id=t.provenance_id
+                                               AND t.tag={provtag}
+                ) e ON e.origin_identifier=ke.identifier
+                LEFT JOIN (
+                   SELECT i._id, i.exposure_id,
+                          SUM( CASE WHEN s._id IS NULL THEN 0 ELSE 1 END ) as nsrc,
+                          SUM( nwcs ) AS nwcs, SUM( nzp ) AS nzp, SUM( nsub ) AS nsub,
+                          SUM( ngooddets ) AS ngooddets, SUM( ndets ) AS ndets
+                   FROM (
+                     SELECT DISTINCT ON (i._id) i._id, i.exposure_id
+                     FROM images i
+                     INNER JOIN provenance_tags t ON i.provenance_id=t.provenance_id AND t.tag={provtag}
+                   ) i
+                   LEFT JOIN (
+                      SELECT s._id, s.image_id,
+                             SUM( CASE WHEN w._id IS NULL THEN 0 ELSE 1 END ) as nwcs,
+                             SUM( nzp ) AS nzp, SUM( nsub ) AS nsub,
+                             SUM( ngooddets ) AS ngooddets,
+                             SUM( ndets ) AS ndets
+                      FROM (
+                        SELECT DISTINCT ON (s._id) s._id, s.image_id
+                        FROM source_lists s
+                        INNER JOIN provenance_tags t ON s.provenance_id=t.provenance_id AND t.tag={provtag}
+                      ) s
+                      LEFT JOIN (
+                         SELECT w._id, w.sources_id,
+                                SUM( CASE WHEN z._id IS NULL THEN 0 ELSE 1 END ) as nzp,
+                                SUM( nsub ) as nsub, SUM( ngooddets ) AS ngooddets, SUM( ndets ) AS ndets
+                         FROM (
+                           SELECT DISTINCT ON (w._id) w._id, w.sources_id
+                           FROM world_coordinates w
+                           INNER JOIN provenance_tags t ON w.provenance_id=t.provenance_id AND t.tag={provtag}
+                         ) w
+                         LEFT JOIN (
+                            SELECT DISTINCT ON (z._id ) z._id, z.wcs_id,
+                                   SUM( CASE WHEN sub._id IS NULL THEN 0 ELSE 1 END ) as nsub,
+                                   SUM( sub.ngooddets ) AS ngooddets, SUM( sub.ndets ) as ndets
+                            FROM zero_points z
+                            INNER JOIN provenance_tags t ON z.provenance_id=t.provenance_id AND t.tag={provtag}
+                            LEFT JOIN (
+                               SELECT DISTINCT ON (sub._id) sub._id, isc.new_zp_id,
+                                      SUM( CASE WHEN mset.msetid IS NULL THEN 0 ELSE ngooddets END ) AS ngooddets,
+                                      SUM( CASE WHEN mset.msetid IS NULL THEN 0 ELSE ndets END ) AS ndets
+                               FROM images sub
+                               INNER JOIN provenance_tags t ON sub.provenance_id=t.provenance_id AND t.tag={provtag}
+                               INNER JOIN image_subtraction_components isc ON isc.image_id=sub._id
+                               LEFT JOIN (
+                                  SELECT DISTINCT ON(mset._id) s.image_id AS subid, mset._id AS msetid,
+                                                               COUNT( m._id ) AS ndets,
+                                                               SUM( CASE WHEN m.is_bad THEN 0 ELSE 1 END ) as ngooddets
+                                  FROM source_lists s
+                                  INNER JOIN cutouts c ON c.sources_id=s._id
+                                  INNER JOIN measurement_sets mset ON mset.cutouts_id=c._id
+                                  INNER JOIN provenance_tags t ON mset.provenance_id=t.provenance_id AND t.tag={provtag}
+                                  INNER JOIN measurements m ON m.measurementset_id=mset._id
+                                  GROUP BY s.image_id, mset._id
+                              ) mset ON mset.subid=sub._id
+                              GROUP BY sub._id, isc.new_zp_id
+                           ) sub ON sub.new_zp_id=z._id
+                           GROUP BY z._id, z.wcs_id
+                         ) z ON z.wcs_id=w._id
+                         GROUP BY w._id, w.sources_id
+                      ) w ON w.sources_id=s._id
+                      GROUP BY s._id, s.image_id
+                   ) s ON s.image_id=i._id
+                   GROUP BY i._id, i.exposure_id
+                ) i ON i.exposure_id=e._id
+                """
+            ) ).format( provtag=args['provtag'] )
 
-            flask.current_app.logger.debug( f"Sending query:\n{q}\nsubdict: {subdict}" )
-            cursor.execute( q, subdict )
-            rows = cursor.fetchall()
+        _and = sql.SQL( "WHERE" )
+
+        for minarg in [ 'mjd', 'exptime' ]:
+            if args[f'min{minarg}'] is not None:
+                q += sql.SQL( "{_and} ke.{field} >= {val}\n"
+                             ).format( _and=_and, field=sql.Identifier(minarg), val=args[f'min{minarg}'] )
+                _and = sql.SQL( "  AND" )
+        for eqarg in [ 'instrument', 'target', 'project' ]:
+            if args[eqarg] is not None:
+                q += sql.SQL( "{_and} ke.{field} = {val}\n"
+                              ).format( _and=_and, field=sql.Identifier(eqarg), val=args[eqarg] )
+                _and = sql.SQL( "  AND" )
+
+        if args['maxmjd'] is not None:
+            q += sql.sql( "{_and} ke.mjd <= {maxmjd}\n" ).format( _and=_and, maxmjd=float(args['maxmjd']) )
+            _and = sql.SQL( "  AND" )
+        if args['maxclaimtime'] is not None:
+            claimtime = datetime.datetime.fromisoformat( args['maxclaimtime'] )
+            if claimtime.tzinfo is None:
+                claimtime = pytz.utc.localize( claimtime )
+            q += sql.SQL( "{_and} ke.claim_time <= {t}\n" ).format( _and=_and, t=claimtime )
+            _and = sql.SQL( "  AND" )
+        if args['state'] is not None:
+            q += sql.SQL( "{_and} ke._state=ANY(ARRAY[{state}])\n"
+                         ).format( _and=_and,
+                                   state=sql.SQL(",").join(
+                                       KnownExposureStateConverter.to_int( s ) for s in args['state'].split(",") )
+                                  )
+            _and = sql.SQL( "  AND" )
+        if args['types'] is not None:
+            types = args['types'].split(",")
+            if "all" not in [ t.lower() for t in types ]:
+                types = [ ImageTypeConverter.to_int( t ) for t in types ]
+                q += sql.SQL( "{_and} ke._type=ANY(ARRAY[{types}])\n"
+                             ).format( _and=_and,
+                                       types=sql.SQL(",").join( types ) )
+                _and = "AND"
+
+        if args['provtag'] is not None:
+            q += sql.SQL( "GROUP BY ke._id, e._id, e.filepath\n" )
+        q += sql.SQL( "ORDER BY ke.mjd" )
+
+        flask.current_app.logger.debug( f"Sending query:\n{q.as_string()}" )
+        with PGDB( dictcursor=True ) as pgdb:
+            rows = pgdb.execute( q )
+
+        # OMGTOOMUCH
+        # import io
+        # import pprint
+        # strio = io.StringIO()
+        # pprint.pp( rows, stream=strio )
+        # flask.current_app.logger.debug( f"Return from query:\n{strio.getvalue()}" )
+        # OMGTOOMUCH
 
         retval = { 'status': 'ok',
                    'knownexposures': rows }
         # Add the "id" field that's the same as "_id" for convenience,
         #   make the filter the short name, convert "_state" to a string
-        #   in "state", "_type" to a string in "type", and strip off all
-        #   but the filename of the filepath.  Also, replace
-        #   exposure_id with matched_exposure_id.
+        #   in "state", "_type" to a string in "type".
         for ke in retval['knownexposures']:
             ke['id'] = ke['_id']
-            ke['knownexposure_table_exposure_id'] = ke['exposure_id']
-            ke['exposure_id'] = ke['matched_exposure_id']
-            del ke['matched_exposure_id']
-            ke['filter'] = Instrument.get_instrument_instance( ke['instrument'] ).get_short_filter_name( ke['filter'] )
             ke['state'] = KnownExposureStateConverter.to_string( ke['_state'] )
             ke['type'] = ImageTypeConverter.to_string( ke['_type'] )
-            if ke['filepath'] is not None:
-                ke['filepath'] = pathlib.Path( ke['filepath'] ).name
+            ke['filter'] = Instrument.get_instrument_instance( ke['instrument'] ).get_short_filter_name( ke['filter'] )
         # We didn't search by filter because we want to make sure we're letting the user
         #   specify short filter names.  Filter by filter now.
         if args['filter'] is not None:

@@ -416,7 +416,7 @@ seechange.Conductor = class
         let p = rkWebUtil.elemaker( "p", this.knownexpdiv,
                                     { "text": "Loading known exposures...",
                                       "classes": [ "warning", "bold", "italic" ] } );
-        let url = "conductor/getknownexposures/exposure_provtag=";
+        let url = "conductor/getknownexposures/provtag=";
         url += encodeURIComponent( this.context.provtag_wid.value );
 
         if ( this.knownexp_mintwid.value.trim().length > 0 ) {
@@ -563,11 +563,11 @@ seechange.Conductor = class
             self.known_exposure_state_tds[ ke.id ] = td;
             td = rkWebUtil.elemaker( "td", tr, { "text": ke.instrument } );
             td = rkWebUtil.elemaker( "td", tr, { "text": ke.identifier } );
-            td = rkWebUtil.elemaker( "td", tr, { "text": parseFloat( ke.mjd ).toFixed( 5 ) } );
+            td = rkWebUtil.elemaker( "td", tr, { "text": parseFloat( ke.mjd ).toFixed( 3 ) } );
             td = rkWebUtil.elemaker( "td", tr, { "text": ke.type } );
             td = rkWebUtil.elemaker( "td", tr, { "text": ke.target } );
-            td = rkWebUtil.elemaker( "td", tr, { "text": parseFloat( ke.ra ).toFixed( 5 ) } );
-            td = rkWebUtil.elemaker( "td", tr, { "text": parseFloat( ke.dec ).toFixed( 5 ) } );
+            td = rkWebUtil.elemaker( "td", tr, { "text": parseFloat( ke.ra ).toFixed( 3 ) } );
+            td = rkWebUtil.elemaker( "td", tr, { "text": parseFloat( ke.dec ).toFixed( 3 ) } );
             td = rkWebUtil.elemaker( "td", tr, { "text": parseFloat( ke.gallat ).toFixed( 1 ) } );
             td = rkWebUtil.elemaker( "td", tr, { "text": ke.filter } );
             td = rkWebUtil.elemaker( "td", tr, { "text": parseFloat( ke.exp_time ).toFixed( 1 ) } );
@@ -583,10 +583,10 @@ seechange.Conductor = class
                                      { "text": ( ke.release_time == null ) ?
                                        "" : rkWebUtil.dateUTCFormat(rkWebUtil.parseDateAsUTC(ke.release_time)) } );
             td = rkWebUtil.elemaker( "td", tr );
-            if ( ke.exposure_id != null ) {
+            if ( ke.exp_filename != null ) {
                 let a = rkWebUtil.elemaker( "a", td,
                                             { 'classes': [ "link" ],
-                                              'text': ke.filepath,
+                                              'text': ke.exp_filename,
                                               'click': (e) => {
                                                   self.context.frontpagetabs.selectTab("exposuresearch");
                                                   let el = self.context.exposuresearch.exposurelist;
@@ -595,15 +595,21 @@ seechange.Conductor = class
                                               }
                                             } );
             }
+            td = rkWebUtil.elemaker( "td", tr, { "text": ( ke.nimg == null ) ? 0 : ke.nimg } );
+            td = rkWebUtil.elemaker( "td", tr, { "text": ( ke.nsrc == null ) ? 0 : ke.nsrc } );
+            td = rkWebUtil.elemaker( "td", tr, { "text": ( ke.nwcs == null ) ? 0 : ke.nwcs } );
+            td = rkWebUtil.elemaker( "td", tr, { "text": ( ke.nzp == null ) ? 0 : ke.nzp } );
+            td = rkWebUtil.elemaker( "td", tr, { "text": ( ke.nsub == null ) ? 0 : ke.nsub } );
+            td = rkWebUtil.elemaker( "td", tr, { "text": ( ke.ndets == null ) ? 0 : ke.ndets } );
             self.known_exposure_rows[ ke.id ] = tr;
             return tr;
         }
 
         let fields = [ '', 'state', 'instrument', 'identifier', 'mjd', 'type', 'target', 'ra', 'dec', 'gallat',
                        'filter', 'exp_time', 'project', 'cluster_id', 'claim_time', 'release_time',
-                       'exposure_id' ];
+                       'exp_filename', 'nimg', 'nsrc', 'nwcs', 'nzp', 'nsub', 'ndets' ]
         let nosortfields = [ '', 'state' ];
-        let fieldmap = { 'instrument': 'instrument',
+        let fieldmap = { 'instrument': 'instr',
                          'identifier': 'identifier',
                          'mjd': 'mjd',
                          'type': 'type',
@@ -611,13 +617,19 @@ seechange.Conductor = class
                          'ra': 'ra',
                          'dec': 'dec',
                          'gallat': 'b',
-                         'filter': 'filter',
-                         'exp_time': 'exp_time',
+                         'filter': 'band',
+                         'exp_time': 'texp',
                          'project': 'project',
                          'cluster_id': 'cluster',
                          'claim_time': 'claim_time',
                          'release_time': 'release_time',
-                         'exposure_id': 'exposure'
+                         'exp_filename': 'exposure',
+                         'nimg': 'nmig',
+                         'nsrc': 'nsrc',
+                         'nwcs': 'nwcs',
+                         'nzp': 'nzp',
+                         'nsub': 'nsub',
+                         'ndets': 'ndet'
                        };
         let tab = new rkWebUtil.SortableTable( this.known_exposures, fields, rowrenderer,
                                                { 'hdrs': fieldmap,

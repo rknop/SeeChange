@@ -43,15 +43,20 @@ seechange.Exposure = class
         this.context = context;
         this.parentdiv = parentdiv;
         this.id = data.exposure._id;
-        this.name = data.exposure.filepath;
+        this.filepath = data.exposure.filepath;
+        this.filename = data.exposure.filename;
         this.mjd = data.exposure.mjd;
+        this.exp_time = data.exposure.exp_time;
         this.airmass = data.exposure.airmass;
         this.filter = data.exposure.filter;
-        this.seeingavg = data.exposure.seeingavg;
-        this.limmagavg = data.exposure.limmagavg;
+        this.filer_array = data.exposure.filter_array;
+        this.ra = data.exposure.ra;
+        this.dec = data.exposure.dec;
+        this.gallat = data.exposure.galat;
         this.target = data.exposure.target;
         this.project = data.exposure.project;
-        this.exp_time = data.exposure.exp_time;
+        this.origin_identifier = data.exposure.origin_identifier;
+
         this.data = data;
         this.div = null;
         this.tabs = null;
@@ -124,47 +129,54 @@ seechange.Exposure = class
         h2 = rkWebUtil.elemaker( "h2", this.div, { "text": "Exposure " + this.name } );
 
 
-
-
         ul = rkWebUtil.elemaker( "ul", this.div );
         li = rkWebUtil.elemaker( "li", ul );
         li.innerHTML = "<b>provenance tag:</b> " + this.data.provenancetag;
         li = rkWebUtil.elemaker( "li", ul );
-        li.innerHTML = "<b>project:</b> " + this.project;
+        li.innerHTML = "<b>filepath:</b> " + this.data.exposure.filepath;
         li = rkWebUtil.elemaker( "li", ul );
-        li.innerHTML = "<b>target:</b> " + this.target;
+        li.innerHTML = "<b>instrument:</b> " + this.data.exposure.instrument;
         li = rkWebUtil.elemaker( "li", ul );
-        li.innerHTML = "<b>mjd:</b> " + this.mjd
+        li.innerHTML = "<b>project:</b> " + this.data.exposure.project;
         li = rkWebUtil.elemaker( "li", ul );
-        li.innerHTML = "<b>filter:</b> " + this.filter;
+        li.innerHTML = "<b>target:</b> " + this.data.exposure.target;
         li = rkWebUtil.elemaker( "li", ul );
-        li.innerHTML = "<b>t_exp (s):</b> " + this.exp_time;
+        li.innerHTML = "<b>(ra, dec):</b> " + ( parseFloat(this.data.exposure.ra).toFixed(4).toString() + ", " +
+                                                parseFloat(this.data.exposure.dec).toFixed(4).toString() );
         li = rkWebUtil.elemaker( "li", ul );
-        li.innerHTML = "<b>airmass:</b> " + this.airmass;
+        li.innerHTML = "<b>b:</b> " + this.data.gallat;
         li = rkWebUtil.elemaker( "li", ul );
-        li.innerHTML = "<b>avg. seeing (¨):</b> " + seechange.nullorfixed( this.seeingavg, 2 );
+        li.innerHTML = "<b>mjd:</b> " + this.data.exposure.mjd
         li = rkWebUtil.elemaker( "li", ul );
-        li.innerHTML = "<b>avg. 5σ lim mag:</b> " + seechange.nullorfixed( this.limmagavg, 2 );
+        li.innerHTML = "<b>filter:</b> " + this.data.exposure.filter;
+        li = rkWebUtil.elemaker( "li", ul );
+        li.innerHTML = "<b>filter_array:</b> " + this.data.exposure.filter_array;
+        li = rkWebUtil.elemaker( "li", ul );
+        li.innerHTML = "<b>t_exp (s):</b> " + this.data.exposure.exp_time;
+        li = rkWebUtil.elemaker( "li", ul );
+        li.innerHTML = "<b>airmass:</b> " + this.data.exposure.airmass;
+        li = rkWebUtil.elemaker( "li", ul );
 
         this.tabs = new rkWebUtil.Tabbed( this.div );
-
 
         this.imagesdiv = rkWebUtil.elemaker( "div", null, { 'id': 'exposureimagesdiv' } );
 
         let totncutouts = 0;
-        let totnsources = 0;
-        for ( let i in this.data['id'] ) {
-            totncutouts += this.data['numsources'][i];
-            totnsources += this.data['nummeasurements'][i];
+        let totngoodmeas = 0;
+        let totnmeas = 0;
+        let nsubs = 0;
+        for ( let imgrow of this.data.images ) {
+            if ( imgrow.has_sub ) nsubs +=1 ;
+            totncutouts += imgrow['ncutout'];
+            totngoodmeas += imgrow['ngoodmeas'];
+            totnmeas += imgrow['nmeas'];
         }
 
-        let numsubs = 0;
-        for ( let sid of this.data.subid ) if ( sid != null ) numsubs += 1;
         p = rkWebUtil.elemaker( "p", this.imagesdiv,
-                                { "text": ( "Exposure has " + this.data.id.length + " images and " + numsubs +
-                                            " completed subtractions" ) } )
+                                { "text": ( "Exposure has " + this.data.images.length + " images and " +
+                                            nsubs + " completed subtractions" ) } )
         p = rkWebUtil.elemaker( "p", this.imagesdiv,
-                                { "text": ( totnsources.toString() + " out of " +
+                                { "text": ( totnmeas.toString() + " (" + totngoodmeas.toString() + " good) out of " +
                                             totncutouts.toString() + " detections pass preliminary cuts " +
                                             "(i.e. are \"sources\")." ) } );
 
@@ -187,37 +199,35 @@ seechange.Exposure = class
 
         let fade = 1;
         let countdown = 4;
-        for ( let i in this.data['id'] ) {
+        for ( let imgrow of this.data.images ) {
             countdown -= 1;
             if ( countdown <= 0 ) {
                 countdown = 3;
                 fade = 1 - fade;
             }
             tr = rkWebUtil.elemaker( "tr", table, { "classes": [ fade ? "bgfade" : "bgwhite" ] } );
-            td = rkWebUtil.elemaker( "td", tr, { "text": this.data['name'][i],
+            td = rkWebUtil.elemaker( "td", tr, { "text": imgrow.filename,
                                                  "classes": [ "link" ],
                                                  "click": function() {
-                                                     self.update_image_details( self.data.section_id[i] );
+                                                     self.update_image_details( imgrow );
                                                      self.tabs.selectTab( "Image Details" );
                                                  }
                                                } );
-            td = rkWebUtil.elemaker( "td", tr, { "text": this.data['section_id'][i] } );
-            td = rkWebUtil.elemaker( "td", tr, { "text": seechange.nullorfixed( this.data["ra"][i], 4 ) } );
-            td = rkWebUtil.elemaker( "td", tr, { "text": seechange.nullorfixed( this.data["dec"][i], 4 ) } );
-            td = rkWebUtil.elemaker( "td", tr, { "text": seechange.nullorfixed( this.data["gallat"][i], 1 ) } );
-            td = rkWebUtil.elemaker( "td", tr, { "text": seechange.nullorfixed( this.data["fwhm_estimate"][i], 2 ) } );
-            td = rkWebUtil.elemaker( "td", tr,
-                                     { "text": seechange.nullorfixed( this.data["zero_point_estimate"][i], 2 ) } );
-            td = rkWebUtil.elemaker( "td", tr, { "text":
-                                                 seechange.nullorfixed( this.data["lim_mag_estimate"][i], 1 ) } );
-            td = rkWebUtil.elemaker( "td", tr, { "text": this.data["numsources"][i],
+            td = rkWebUtil.elemaker( "td", tr, { "text": imgrow.section_id } );
+            td = rkWebUtil.elemaker( "td", tr, { "text": seechange.nullorfixed( imgrow.ra, 4 ) } );
+            td = rkWebUtil.elemaker( "td", tr, { "text": seechange.nullorfixed( imgrow.dec, 4 ) } );
+            td = rkWebUtil.elemaker( "td", tr, { "text": seechange.nullorfixed( imgrow.gallat, 1 ) } );
+            td = rkWebUtil.elemaker( "td", tr, { "text": seechange.nullorfixed( imgrow.fwhm_estimate, 2 ) } );
+            td = rkWebUtil.elemaker( "td", tr, { "text": seechange.nullorfixed( imgrow.zero_point_estimate, 2 ) } );
+            td = rkWebUtil.elemaker( "td", tr, { "text": seechange.nullorfixed( imgrow.lim_mag_estimate, 1 ) } );
+            td = rkWebUtil.elemaker( "td", tr, { "text": imgrow.ncutout,
                                                  "classes": [ "link" ],
-                                                 "click": function() { self.update_cutouts( i, true );
+                                                 "click": function() { self.update_cutouts( imgrow, true );
                                                                        self.tabs.selectTab( "Cutouts" ); }
                                                } );
-            td = rkWebUtil.elemaker( "td", tr, { "text": this.data["nummeasurements"][i],
+            td = rkWebUtil.elemaker( "td", tr, { "text": imgrow.nmeas,
                                                  "classes": [ "link" ],
-                                                 "click": function() { self.update_cutouts( i, false );
+                                                 "click": function() { self.update_cutouts( imgrow, false );
                                                                        self.tabs.selectTab( "Cutouts" ); }
                                                } );
 
@@ -225,9 +235,10 @@ seechange.Exposure = class
             tiptext = "";
             let laststep = "(none)";
             for ( let j of Object.keys( seechange.Exposure.process_steps ) ) {
-                if ( this.data["progress_steps_bitflag"][i] & ( 2**j ) ) {
+                if ( imgrow.report.progress_steps_bitflag & ( 2**j ) ) {
                     tiptext += seechange.Exposure.process_steps[j] + " done<br>";
-                    laststep = seechange.Exposure.process_steps[j];
+                    if ( seechange.Exposure.process_steps[j] != 'finalize' )
+                        laststep = seechange.Exposure.process_steps[j];
                 } else {
                     tiptext += "(" + seechange.Exposure.process_steps[j] + " not done)<br>";
                 }
@@ -240,7 +251,7 @@ seechange.Exposure = class
             td = rkWebUtil.elemaker( "td", tr );
             tiptext = "Products created:";
             for ( let j of Object.keys( seechange.Exposure.pipeline_products ) ) {
-                if ( this.data["products_exist_bitflag"][i] & ( 2**j ) )
+                if ( imgrow.report.products_exist_bitflag & ( 2**j ) )
                     tiptext += "<br>" + seechange.Exposure.pipeline_products[j];
             }
             span = rkWebUtil.elemaker( "span", td, { "classes": [ "tooltipsource" ],
@@ -248,25 +259,25 @@ seechange.Exposure = class
             ttspan = rkWebUtil.elemaker( "span", span, { "classes": [ "tooltiptext" ] } );
             ttspan.innerHTML = tiptext;
 
-            // Really I should be doing some HTML sanitization here on error message and, below, warnings....
+            // // Really I should be doing some HTML sanitization here on error message and, below, warnings....
 
             td = rkWebUtil.elemaker( "td", tr );
-            if ( this.data["error_step"][i] != null ) {
+            if ( imgrow.report.error_step != null ) {
                 span = rkWebUtil.elemaker( "span", td, { "classes": [ "tooltipsource" ],
                                                          "text": "error" } );
-                tiptext = ( this.data["error_type"][i] + " error in step " +
-                            seechange.Exposure.process_steps[this.data["error_step"][i]] +
-                            " (" + this.data["error_message"][i].replaceAll( "\n", "<br>") + ")" );
+                tiptext = ( imgrow.report.errorr_type + " error in step " +
+                            seechange.Exposure.process_steps[imgrow.report.error_step] +
+                            " (" + imgrow.report.error_step.replaceAll( "\n", "<br>") + ")" );
                 ttspan = rkWebUtil.elemaker( "span", span, { "classes": [ "tooltiptext" ] } );
                 ttspan.innerHTML = tiptext;
             }
 
             td = rkWebUtil.elemaker( "td", tr );
-            if ( ( this.data["warnings"][i] != null ) && ( this.data["warnings"][i].length > 0 ) ) {
+            if ( ( imgrow.report.warnings != null ) && ( imgrow.report.warnings > 0 ) ) {
                 span = rkWebUtil.elemaker( "span", td, { "classes": [ "tooltipsource" ],
                                                          "text": "warnings" } );
                 ttspan = rkWebUtil.elemaker( "span", span, { "classes": [ "tooltiptext" ] } );
-                ttspan.innerHTML = this.data["warnings"][i].replaceAll( "\n", "<br>" );
+                ttspan.innerHTML = imgrow.report.warnings.replaceAll( "\n", "<br>" );
             }
         }
 
