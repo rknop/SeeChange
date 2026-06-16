@@ -644,6 +644,7 @@ class Pipeline:
 
                 # Special case handling for do_not_load
                 do_not_load = self.pars.do_not_load
+                start_step = None
                 if do_not_load and ( self.pars.start_step is not None ):
                     if self.pars.start_step not in process_objects.keys():
                         raise ValueError( f"Unknown start step {self.pars.start_step}, "
@@ -655,6 +656,7 @@ class Pipeline:
                     if alldone:
                         break
 
+                    # Special case handling for do_not_load
                     if start_step is not None:
                         if step == start_step:
                             do_not_load = True

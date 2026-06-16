@@ -3124,7 +3124,7 @@ class FourCornersWithGood( FourCorners ):
 
     @classmethod
     def get_overlap_frac( cls, obj1, obj2, corner="good", limprefix="good_" ):
-        return FourCorners.get_overlap_frac( cls, obj1, obj2, corner=corner, limprefix=limprefix )
+        return FourCorners.get_overlap_frac( obj1, obj2, corner=corner, limprefix=limprefix )
 
 
     def contains( self, ra, dec, corner="good", limprefix="good_" ):
