@@ -137,6 +137,15 @@ class ParsPipeline(Parameters):
         )
 
 
+        self.start_step = self.add_par(
+            'start_step',
+            None,
+            ( None, str ),
+            ( "Only make sense in combination with do_not_load.  If do_not_load is True, "
+              "then for steps before this step, actually do load." ),
+            critical=False
+        )
+
         self.provenance_tag = self.add_par(
             'provenance_tag',
             'current',
@@ -563,6 +572,10 @@ class Pipeline:
             if self.pars.do_not_load and ( not self.pars.do_not_save ):
                 raise RuntimeError( "Setting do_not_load also requires setting do_not_save." )
 
+            if ( self.pars.start_step is not None ) and ( not self.pars.do_not_load ):
+                SCLogger.warning( f"do_not_load is False, but start_step is {self.pars.start_step}; "
+                                  f"ignoring start_step" )
+
             ds = self.setup_datastore(*args, **kwargs)
             stepstodo = self._get_stepstodo()
             SCLogger.debug( f"Pipeline going to do steps: {stepstodo}" )
@@ -629,9 +642,23 @@ class Pipeline:
                     SCLogger.info( f'Nothing to do for image of type {ds.image.type}' )
                     alldone = True
 
+                # Special case handling for do_not_load
+                do_not_load = self.pars.do_not_load
+                if do_not_load and ( self.pars.start_step is not None ):
+                    if self.pars.start_step not in process_objects.keys():
+                        raise ValueError( f"Unknown start step {self.pars.start_step}, "
+                                          f"known steps are {process_objects.keys()}" )
+                    start_step = self.pars.start_step
+                    do_not_load = False
+
                 for stepi, (step, procobj) in enumerate( process_objects.items() ):
                     if alldone:
                         break
+
+                    if start_step is not None:
+                        if step == start_step:
+                            do_not_load = True
+                            start_step = None
 
                     if step in stepstodo:
                         # Don't do alerting if do_not_save is True
@@ -640,7 +667,7 @@ class Pipeline:
                             continue
 
                         SCLogger.info( f'Pipeline starting {step}' )
-                        ds = procobj.run( ds, do_not_load=self.pars.do_not_load )
+                        ds = procobj.run( ds, do_not_load=do_not_load )
                         ds.update_report( step )
 
                         if step == 'preprocessing':

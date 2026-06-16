@@ -25,7 +25,8 @@ from pipeline.configchooser import ConfigChooser
 class ExposureProcessor:
     def __init__( self, instrument, identifier, numprocs, cluster_id,
                   node_id, machine_name=None, onlychips=None,
-                  through_step=None, ignore_known_exposures=False, nosave=False, do_not_load=False,
+                  through_step=None, ignore_known_exposures=False,
+                  nosave=False, do_not_load=False, start_step=None,
                   provtag=False, worker_log_level=logging.WARNING ):
         """A class that processes all images in a single exposure, potentially using multiprocessing.
 
@@ -105,6 +106,7 @@ class ExposureProcessor:
         self.ignore_known_exposures = ignore_known_exposures
         self.nosave = nosave
         self.do_not_load = do_not_load
+        self.start_step = start_step
         self.worker_log_level = worker_log_level
         self.provtag = provtag
 
@@ -352,6 +354,8 @@ class ExposureProcessor:
                 pipelineargs['do_not_save'] = True
             if self.do_not_load:
                 pipelineargs['do_not_load'] = True
+            if self.start_step is not None:
+                pipelineargs['start_step'] = self.start_step
             if self.provtag is not False:
                 pipelineargs['provenance_tag'] = self.provtag
             if ( self.through_step is not None ) and ( self.through_step != 'exposure' ):
@@ -555,6 +559,9 @@ to start it.
                          help=( "Always rerun everything, don't load existing products from the database. "
                                 "You will get an exception if you don't also pass --do-not-save. "
                                 "For testing/debugging purposes." ) )
+    parser.add_argument( '--start-step', default=None,
+                         help=( "Ignored if do-not-load is not given.  If do-not-load is not given, "
+                                "only start with do-not-load at this step." ) )
     parser.add_argument( '--do-not-save', default=False, action='store_true',
                          help=( "Set to run the pipeline but not save anything.  (Well, provenances "
                                 "might get saved, unsure.)  For testing/debugging purposes." ) )
@@ -574,6 +581,7 @@ to start it.
                'ignore_known_exposures': args.ignore_known_exposures,
                'nosave': args.do_not_save,
                'do_not_load': args.do_not_load,
+               'start_step': args.start_step,
                'worker_log_level': args.worker_log_level }
     if 'provtag' in vars( args ):
         kwargs['provtag'] = None if args.provtag == "None" else args.provtag
