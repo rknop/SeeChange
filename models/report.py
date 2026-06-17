@@ -233,6 +233,8 @@ class Report(Base, UUIDMixin):
     def query_for_reports( cls, prov_tag=None, section_id=None, fields=None ):
         """Return a SQL query to find reports.
 
+        --> Queries with this in it are in fact too slow.  This needs to be revisited.
+
         Returns a query that, when passed, will find all of the most
         recent reports for each section_id for a given exposure where
         all of the process provenance ids in that report match the

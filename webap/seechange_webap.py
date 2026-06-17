@@ -267,15 +267,15 @@ class Exposures( BaseView ):
             if ( data['projects'] is not None ) or ( t0 is not None ) or ( t1 is not None ):
                 _and = sql.SQL( "WHERE" )
                 if data['projects'] is not None:
-                    q += sql.SQL( "{_and}e.project=ANY(ARRAY[{projects}]))\n"
+                    q += sql.SQL( "{_and} e.project=ANY(ARRAY[{projects}]))\n"
                                  ).format( _and=_and, projects=sql.SQL(",".join(data['projects'])) )
                     _and = sql.SQL ("  AND" )
                 if t0 is not None:
-                    q += sql.SQL( "{_and}e.mjd >= {t0}\n" ).format( _and=_and, t0=t0 )
-                    _and = 'AND '
+                    q += sql.SQL( "{_and} e.mjd >= {t0}\n" ).format( _and=_and, t0=t0 )
+                    _and = sql.SQL( "  AND" )
                 if t1 is not None:
-                    q += sql.SQL( "{_and}e.mjd <= %(t1)s\n" ).format( _and=_and, t1=t1 )
-                    _and = 'AND '
+                    q += sql.SQL( "{_and} e.mjd <= {t1}\n" ).format( _and=_and, t1=t1 )
+                    _and = sql.SQL( "  AND" )
             app.logger.debug( "Exposures getting images and counts of measurements" )
             pgdb.execute_nofetch( q )
 
@@ -367,8 +367,8 @@ class Exposures( BaseView ):
                 airmass.append( row['airmass'] )
                 target.append( row['target'] )
                 project.append( row['project'] )
-                app.logger.debug( f"filter={row['_filter']} type {row['_filter']}; "
-                                  f"filter_array={row['filter_array']} type {row['filter_array']}" )
+                # app.logger.debug( f"filter={row['_filter']} type {row['_filter']}; "
+                #                   f"filter_array={row['filter_array']} type {row['filter_array']}" )
                 imgtype.append( ImageTypeConverter.to_string( row['_type'] ) )
                 filtername.append( row['_filter'] )
                 exp_time.append( row['exp_time'] )
@@ -538,14 +538,6 @@ class ExposureImages( BaseView ):
                         imagerow['report']['warnings'] = ( report['warnings'] +
                                                            '\n***|***|***\n' +
                                                            imagerow['report']['warnings'] )
-                    if ( ( imagerow['report']['exceptions'] is not None ) and
-                         ( len(imagerow['report']['exceptions']) > 0 ) and
-                         ( report['exceptions'] is not None ) and
-                         ( len(report['exceptions']) > 0 )
-                        ):
-                        imagerow['report']['exceptions'] = ( report['exceptions'] +
-                                                             '\n***|***|***\n' +
-                                                             imagerow['report']['exceptions'] )
                     imagerow['report']['process_memory'].update( report['process_memory'] )
                     imagerow['report']['process_runtime'].update( report['process_runtime'] )
                     imagerow['report']['progress_steps_bitflag'] &= report['progress_steps_bitflag']
@@ -1036,7 +1028,7 @@ cfg = Config.get()
 
 app = flask.Flask( __name__, instance_relative_config=True )
 
-_formatter = logging.Formatter( '[%(asctime)s - %(levelname)s] - %(message)s', datefmt='%Y-%m-%d %H:%M:%s' )
+_formatter = logging.Formatter( '[%(asctime)s - %(levelname)s] - %(message)s', datefmt='%Y-%m-%d %H:%M:%S' )
 flask.logging.default_handler.setFormatter( _formatter )
 
 # app.logger.setLevel( logging.INFO )
