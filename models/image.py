@@ -1547,16 +1547,16 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         with PGDB( pgdb ) as pgdb:
             if self.is_sub:
                 if self.is_coadd:
-                    raise ValueError( f"Databse corruption, image {self.id} is both a sub and a coadd!!!!!" )
+                    raise ValueError( f"Database corruption, image {self.id} is both a sub and a coadd!!!!!" )
                 q = sql.SQL( "SELECT new_zp_id, ref_id FROM image_subtraction_components WHERE image_id={me}"
                              ).format( me=self.id )
-                rows = pgdb.execute( q )
+                rows, _cols = pgdb.execute( q )
                 upstreams.extend( [ ( ZeroPoint, row[0] ) for row in rows ] )
                 upstreams.extend( [ ( Reference, row[1] ) for row in rows ] )
 
             elif self.is_coadd:
-                q = sql.SQL( "SELECT zp_id FROM image_coadd_component WHERE image_id={me}" ).format( me=self.id )
-                rows = pgdb.execute( q )
+                q = sql.SQL( "SELECT zp_id FROM image_coadd_component WHERE coadd_image_id={me}" ).format( me=self.id )
+                rows, _cols = pgdb.execute( q )
                 upstreams.extend( [ ( ZeroPoint, row[0] ) for row in rows ] )
 
         return upstreams

@@ -14,9 +14,8 @@ def test_strip_wcs_keywords():
         'NAXIS2': 2048,
         'AKW': 0,
         'A_1': 1,
-        'PV1_1A': 3,
         'APb1_2': 4,
-        'CDELT0': 5
+        'CDELTa': 5
     }
     loses = {
         'CRVAL1': 180.,
@@ -27,6 +26,8 @@ def test_strip_wcs_keywords():
         'CUNIT2': 'deg',
         'CTYPE1': 'something',
         'CTYPE2': 'something',
+        'CDELT1': 0.1,
+        'CDELT2': -0.1,
         'CD1_1': 1.,
         'CD1_2': 0.,
         'CD2_1': 0.,
@@ -39,6 +40,7 @@ def test_strip_wcs_keywords():
         'AP_ORDER': 3,
         'B_ORDER': 3,
         'BP_ORDER': 3,
+        'PV1_1A': 3,
     }
     for i in range(0,2):
         for j in range(0,7):

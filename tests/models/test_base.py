@@ -14,8 +14,7 @@ import time
 import numpy as np
 
 import sqlalchemy as sa
-from sqlalchemy.exc import IntegrityError
-from psycopg.errors import UniqueViolation
+from psycopg.errors import UniqueViolation, NotNullViolation
 
 import util.config as config
 from util.logger import SCLogger
@@ -91,7 +90,8 @@ def test_insert( provenance_base ):
         df = DataFile( _id=curid, filepath="foo", md5sum=uuid.uuid4(), provenance_id=provenance_base.id )
 
         # Make sure we get an error if we don't pass the right kind of thing
-        with pytest.raises( TypeError, match="session must be a sa Session or psycopg.Connection or None" ):
+        with pytest.raises( TypeError, match=( r"con must be None, a PGDB, a psycopg.Connection, a psycopg.Cursor, "
+                                               r"or a sa.orm.session.Session \(shudder\), not a <class 'int'>" ) ):
             df.insert( 2 )
 
         # Make sure we can insert
@@ -188,7 +188,7 @@ def test_upsert( provenance_base ):
 
         # Make sure the database yells at us if a required column is missing
 
-        with pytest.raises( IntegrityError, match='null value in column "instrument".*violates not-null' ):
+        with pytest.raises( NotNullViolation, match='null value in column "instrument".*violates not-null' ):
             image.upsert()
 
         # == Make sure we can insert a thing == a

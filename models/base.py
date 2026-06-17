@@ -934,7 +934,13 @@ class SeeChangeBase:
 
         _ = self.id   # Make sure that self._id is generated
         cols, values = self._get_cols_and_vals_for_insert()
-        subdict = { c: v for c, v in zip( cols, values ) if c != 'modiifed' }
+        subdict = { c: v for c, v in zip( cols, values ) }
+        subdict['modified'] = datetime.datetime.now( tz=datetime.UTC )
+        basicdict = subdict.copy()
+        del basicdict['modified']
+        conflictdict = subdict.copy()
+        if '_id' in conflictdict:
+            del conflictdict['_id']
 
         q = sql.SQL( textwrap.dedent(
             """\
@@ -943,10 +949,10 @@ class SeeChangeBase:
             ON CONFLICT( _id) DO UPDATE SET {conflict}
             """
         ) ).format( tab=sql.Identifier(self.__tablename__),
-                    fields=sql.SQL(",").join( sql.Identifier(c) for c in subdict.keys() ),
-                    vals=sql.SQL(",").join( sql.SQL(f'%({c})s') for c in subdict.keys() ),
+                    fields=sql.SQL(",").join( sql.Identifier(c) for c in basicdict.keys() ),
+                    vals=sql.SQL(",").join( sql.SQL(f'%({c})s') for c in basicdict.keys() ),
                     conflict=sql.SQL(",").join( sql.SQL(f"{{c}}=%({c})s").format( c=sql.Identifier(c) )
-                                                for c in subdict.keys() if c != '_id' )
+                                                for c in conflictdict )
                    )
         with PGDB( session ) as pgdb:
             pgdb.execute_nofetch( q, subdict )
@@ -988,7 +994,13 @@ class SeeChangeBase:
             for obj in objects:
                 _ = obj.id                 #  Make sure _id is generated
                 cols, values = obj._get_cols_and_vals_for_insert()
-                subdict = { c: v for c, v in zip( cols, values ) if c != 'modified' }
+                subdict = { c: v for c, v in zip( cols, values ) }
+                subdict['modified'] = datetime.datetime.now( tz=datetime.UTC )
+                basicdict = subdict.copy()
+                del basicdict['modified']
+                conflictdict = subdict.copy()
+                if '_id' in conflictdict:
+                    del conflictdict['_id']
 
                 q = sql.SQL( textwrap.dedent(
                     """\
@@ -997,10 +1009,10 @@ class SeeChangeBase:
                     ON CONFLICT(_id) DO UPDATE SET {conflict}
                     """
                 ) ).format( tab=sql.Identifier(cls.__tablename__),
-                            fields=sql.SQL(",").join( sql.Identifier(c) for c in subdict.keys() ),
-                            vals=sql.SQL(",").join( sql.SQL(f'%({c})s') for c in subdict.keys() ),
+                            fields=sql.SQL(",").join( sql.Identifier(c) for c in basicdict.keys() ),
+                            vals=sql.SQL(",").join( sql.SQL(f'%({c})s') for c in basicdict.keys() ),
                             conflict=sql.SQL(",").join( sql.SQL(f"{{c}}=%({c})s").format( c=sql.Identifier(c) )
-                                                        for c in subdict.keys() if c != '_id' )
+                                                        for c in conflictdict.keys() )
                            )
                 pgdb.execute_nofetch( q, subdict )
             pgdb.commit()
@@ -1053,7 +1065,7 @@ class SeeChangeBase:
             for cls, upid in upstream_info:
                 q = sql.SQL( "SELECT * FROM {tab} WHERE _id={objid}" ).format( tab=sql.Identifier(cls.__tablename__),
                                                                                objid=upid )
-                rows = pgdb.fetchall( q )
+                rows = pgdb.execute( q )
                 if len(rows) != 1:
                     raise RuntimeError( "This should never happen." )
                 upstreams.append( cls( **(rows[0]) ) )
@@ -2301,7 +2313,7 @@ class UUIDMixin:
         uuids = listify( uuids )
         with PGDB( (pgdb if pgdb is not None else session), dictcursor=True ) as pgdb:
             q = sql.SQL( "SELECT * FROM {tab} WHERE _id=ANY(ARRAY[{ids}])"
-                        ).format( cls=sql.Identifier( cls.__tablename__ ),
+                        ).format( tab=sql.Identifier( cls.__tablename__ ),
                                   ids=sql.SQL(",").join(uuids) )
             rows = pgdb.execute( q )
 
