@@ -248,6 +248,9 @@ class ImageAligner:
         tmpname = ''.join( random.choices( 'abcdefghijklmnopqrstuvwzyz', k=10 ) )
         tmpimagecat = tmppath / f'{tmpname}_image.sources.fits'
         tmptargetcat = tmppath / f'{tmpname}_target.sources.fits'
+        # A debugging output DS9 region file with residuals
+        # residfile = tmppath / f'{tmpname}_resid.reg'
+        residfile = None
 
         try:
             # For everything to work as in the massive comment below in
@@ -300,6 +303,7 @@ class ImageAligner:
                     min_frac_matched=self.pars.min_frac_matched,
                     min_matched=self.pars.min_matched,
                     max_arcsec_residual=self.pars.max_arcsec_residual,
+                    residfile=residfile,
                     timeout=self.pars.scamp_timeout,
                 )
             except ( BadMatchException, subprocess.TimeoutExpired ) as ex:
@@ -312,6 +316,8 @@ class ImageAligner:
         finally:
             tmpimagecat.unlink( missing_ok=True )
             tmptargetcat.unlink( missing_ok=True )
+            if residfile is not None:
+                residfile.unlink( missing_ok=True )
 
     def _align_swarp( self, source_image, source_sources, source_bg, source_psf, source_wcs, source_zp,
                       target_image, target_sources, target_wcs, warped_prov, warped_sources_prov ):

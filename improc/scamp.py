@@ -4,6 +4,7 @@ import time
 import io
 import subprocess
 
+import numpy as np
 import astropy.io
 from astropy.wcs import WCS
 
@@ -14,9 +15,10 @@ from util.exceptions import SubprocessFailure, BadMatchException
 
 
 def solve_wcs_scamp( sources, catalog, crossid_radius=2.,
-                      max_sources_to_use=2000, min_frac_matched=0.1,
-                      min_matched=10, max_arcsec_residual=0.15,
-                      magkey='MAG', magerrkey='MAGERR', timeout=60 ):
+                     max_sources_to_use=2000, min_frac_matched=0.1,
+                     min_matched=10, max_arcsec_residual=0.15,
+                     magkey='MAG', magerrkey='MAGERR', timeout=60,
+                     mergedcat=None, fullcat=None, residfile=None ):
     """Solve for the WCS of image with sourcelist sources, based on catalog.
 
     If scamp does not succeed, will raise a SubprocessFailure
@@ -122,6 +124,13 @@ def solve_wcs_scamp( sources, catalog, crossid_radius=2.,
                         '-ASTREFMAGERR_KEY', magerrkey
                        ]
 
+            if mergedcat is not None:
+                command.extend( [ '-MERGEDOUTCAT_TYPE', 'FITS_LDAC',
+                                  '-MERGEDOUTCAT_NAME', str( mergedcat ) ] )
+            if fullcat is not None:
+                command.extend( [ '-FULLOUTCAT_TYPE', 'FITS_LDAC',
+                                  '-FULLOUTCAT_NAME', str( fullcat ) ] )
+
             t0 = time.perf_counter()
             # Don't catch the timeout exception; assume that if it times out first time around,
             #   it's not going to succeed with other parameters.  This is maybe too strong of
@@ -131,7 +140,7 @@ def solve_wcs_scamp( sources, catalog, crossid_radius=2.,
             res = subprocess.run( command, capture_output=True, timeout=timeout )
             t1 = time.perf_counter()
             SCLogger.debug( f"Scamp with {len(sources)} sources and {len(cat)} catalog stars "
-                           f"(with match_nmax={max_nmatch}) took {t1-t0:.2f} seconds" )
+                            f"(with match_nmax={max_nmatch}) took {t1-t0:.2f} seconds" )
 
             if res.returncode != 0:
                 raise SubprocessFailure( res )
@@ -157,12 +166,6 @@ def solve_wcs_scamp( sources, catalog, crossid_radius=2.,
                     SCLogger.info( infostr )
                 break
 
-        if not success:
-            SCLogger.warning( f"Last scamp command: {res.args}\n"
-                             f"-------------\nScamp stderr:\n{res.stderr.decode('utf-8')}\n"
-                             f"-------------\nScamp stdout:\n{res.stdout.decode('utf-8')}\n" )
-            raise BadMatchException( infostr )
-
         SCLogger.debug( infostr )
 
         # Create a WCS object based on the information
@@ -176,6 +179,42 @@ def solve_wcs_scamp( sources, catalog, crossid_radius=2.,
         strio = io.StringIO( hdrtext )
         hdr = astropy.io.fits.Header.fromfile( strio, sep='\n', padding=False, endcard=False )
         wcs = WCS( hdr )
+
+        if residfile is not None:
+            # Despite scamp's "full" output catalog, I haven't figured
+            #   out a way to know what scamp actually matched.  So, do it
+            #   manually.
+            # Write out a DS9 regionfile, magnifying the offsets by 50x
+            #   so they have a hope of being seen.
+            arrowfac = 50
+            # NOTE : the ldac tables should have FITS coordinates (1-offset)
+            # Astropy wcs returns numpy coordinates (0-offset).
+            # Hence the +=1 below (because the DS9 region file needs FITS coordinates)
+            srchdr, srctab = ldac.get_table_from_ldac( sourcefile )
+            cathdr, cattab = ldac.get_table_from_ldac( catfile )
+            x, y = wcs.world_to_pixel_values( cattab['X_WORLD'], cattab['Y_WORLD'] )
+            x += 1.
+            y += 1.
+            with open( residfile, "w") as ofp:
+                for row in range( len(srctab) ):
+                    deltax = x - srctab['X_IMAGE'].data[row]
+                    deltay = y - srctab['Y_IMAGE'].data[row]
+                    delta = np.sqrt( deltax**2 + deltay**2 )
+                    # Declare things within a two pixels to be the same
+                    wsame = np.where( delta < 2. )[0]
+                    for w in wsame:
+                        x0 = srctab['X_IMAGE'].data[row]
+                        y0 = srctab['Y_IMAGE'].data[row]
+                        x1 = x0 + deltax[w] * arrowfac
+                        y1 = y0 + deltay[w] * arrowfac
+                        ofp.write( f"image;circle({x0},{y0},2. # color=blue width=2\n" )
+                        ofp.write( f"image;line({x0},{y0},{x1},{y1}) # color=red width=2 line= 0 1\n" )
+
+        if not success:
+            SCLogger.warning( f"Last scamp command: {res.args}\n"
+                              f"-------------\nScamp stderr:\n{res.stderr.decode('utf-8')}\n"
+                              f"-------------\nScamp stdout:\n{res.stdout.decode('utf-8')}\n" )
+            raise BadMatchException( infostr )
 
         return wcs
 

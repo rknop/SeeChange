@@ -1804,6 +1804,7 @@ class DataStore:
 
             elif ( min_overlap is not None ) and ( min_overlap > 0 ):
                 # Make sure this one is last since it has an if inside it!
+                SCLogger.warning( "I think this next line of code needs to be rethought given good sections!" )
                 ovfrac = FourCorners.get_overlap_frac(image, self.reference.image)
                 if ovfrac < min_overlap:
                     self.reference = None
@@ -1856,6 +1857,7 @@ class DataStore:
             # For image search, Reference.get_references() will
             #  already have filtered by min_overlap if relevant.
             if search_by != 'image':
+                SCLogger.warning( "I think this next line needs to be rethought given 'good' sections" )
                 if ( ( min_overlap is not None ) and
                      ( min_overlap > 0 ) and
                      ( FourCorners.get_overlap_frac( image, imgs[0] ) < min_overlap )
@@ -1868,6 +1870,7 @@ class DataStore:
             # Multiple references found; deal with it.
 
             # Sort references by overlap fraction descending
+            SCLogger.warning( "I think this next line needs to be rethought given 'good' sections" )
             ovfrac = [ FourCorners.get_overlap_frac( image, i ) for i in imgs ]
             sortdex = list( range( len(refs) ) )
             sortdex.sort( key=lambda x: -ovfrac[x] )

@@ -598,9 +598,9 @@ class RefMaker:
                 imgmaxdec = rows[0]['maxdec']
 
                 if image_zp_prov_id is not None:
-                    rows = pgdb.query( sql.SQL( textwrap.dedent(
+                    rows = pgdb.execute( sql.SQL( textwrap.dedent(
                         """\
-                        SELECT w.good_ramin, w.good_ramax, w.good_decmin, w.good_decmax
+                        SELECT w.good_minra, w.good_maxra, w.good_mindec, w.good_maxdec
                         FROM world_coordinates w
                         INNER JOIN zero_points z ON z.wcs_id=w._id
                                                 AND z.provenance_id={zpprov}
@@ -613,10 +613,10 @@ class RefMaker:
                                             f"with provenance {image_zp_prov_id}" )
                     if len(rows) > 1:
                         raise RuntimeError( "This should never happen." )
-                    imgminra = rows[0]['good_ramin']
-                    imgmaxra = rows[0]['good_ramax']
-                    imgmindec = rows[0]['good_decmin']
-                    imgmaxdec = rows[0]['good_decmax']
+                    imgminra = rows[0]['good_minra']
+                    imgmaxra = rows[0]['good_maxra']
+                    imgmindec = rows[0]['good_mindec']
+                    imgmaxdec = rows[0]['good_maxdec']
                     if ( imgminra > imgmaxra ):
                         # Try to deal with the "ra spanning 0" case.
                         imgra = ( imgminra - 360. + imgmaxra ) / 2.
@@ -663,6 +663,7 @@ class RefMaker:
         self.target = target
         self.section_id = section_id
         self.filter = filter
+
 
     # ======================================================================
 
@@ -769,6 +770,61 @@ class RefMaker:
         return existing, match_pos, match_count, match_pos_images
 
 
+    def choose_reference_images_to_coadd( self, *args, _do_not_parse_arguments=False, **kwargs ):
+        ( images, match_pos, match_count, match_pos_images
+          ) = self.identify_reference_images_to_coadd( *args,
+                                                       _do_not_parse_arguments=_do_not_parse_arguments,
+                                                       **kwargs )
+
+        # Make sure we got enough
+        nrequired = [ self.pars.min_number ] * len( match_pos )
+        if self.pars.center_min_number is not None:
+            # match_count[0] is always for the center position
+            nrequired[0] = max( self.pars.min_number, self.pars.center_min_number )
+
+        if len(images) < self.pars.min_number:
+            SCLogger.info( f"RefMaker only found {len(images)} images overlapping the desired field, "
+                           f"which is less than the minimum of {self.pars.min_number}" )
+            return None, match_pos, match_count
+        if any( n < minn for n, minn in zip( match_count, nrequired ) ):
+            SCLogger.info( f"RefMaker didn't find enough references at at least one point on the image; "
+                           f"match_count={match_count}, min_number={self.pars.min_number} "
+                           f"({nrequired[0]} at center)." )
+            return None, match_pos, match_count
+
+        # If there were *too many* images, then we have to start trimming them out
+        if ( self.pars.max_number is not None ) and any( n > self.pars.max_number for n in match_count ):
+            SCLogger.debug( f"More images than max_number ({self.pars.max_number}) at some positions, trimming." )
+            # Sort images by quality factor
+            images = sorted( images, key=lambda x: ( x.lim_mag_estimate -
+                                                     self.pars.seeing_quality_factor * x.fwhm_estimate ) )
+            # Go from the lowest quality to highest quality images, and remove them if they're not needed
+            imdex = 0
+            nyank = 0
+            while any( n > self.pars.max_number for n in match_count ) and ( imdex < len(images) ):
+                # Find out of this image is an excess at any position, AND if we can remove
+                #   it without dropping another position below the min.
+                if ( any( ( ( images[imdex].id in mpi ) and ( n > self.pars.max_number ) )
+                          for n, mpi in zip( match_count, match_pos_images )
+                         )
+                     and
+                     all( ( ( images[imdex].id not in mpi ) or ( n > minn ) )
+                          for mpi, n, minn in zip( match_pos_images, match_count, nrequired )
+                         )
+                    ):
+                    for i, mpi in enumerate( match_pos_images ):
+                        if images[imdex].id in mpi:
+                            mpi.remove( images[imdex].id )
+                            match_count[ i ] -= 1
+                    del images[imdex]
+                    nyank += 1
+                else:
+                    imdex += 1
+            SCLogger.debug( f"Removed {nyank} of {len(images)+nyank} images." )
+
+        return images, match_pos, match_count
+
+
     # ======================================================================
 
     def run(self, *args, do_not_build=False, identify_even_if_not_building=False, **kwargs ):
@@ -821,54 +877,9 @@ class RefMaker:
 
         ############### no reference found, need to build one! ################
 
-        ( images, match_pos, match_count, match_pos_images
-          ) = self.identify_reference_images_to_coadd( _do_not_parse_arguments=True )
-
-        # Make sure we got enough
-        nrequired = [ self.pars.min_number ] * len( match_pos )
-        if self.pars.center_min_number is not None:
-            # match_count[0] is always for the center position
-            nrequired[0] = max( self.pars.min_number, self.pars.center_min_number )
-
-        if len(images) < self.pars.min_number:
-            SCLogger.info( f"RefMaker only found {len(images)} images overlapping the desired field, "
-                           f"which is less than the minimum of {self.pars.min_number}" )
+        images, match_pos, match_count = self.choose_reference_images_to_coadd( _do_not_parse_arguments=True )
+        if images is None:
             return None
-        if any( n < minn for n, minn in zip( match_count, nrequired ) ):
-            SCLogger.info( f"RefMaker didn't find enough references at at least one point on the image; "
-                           f"match_count={match_count}, min_number={self.pars.min_number} "
-                           f"({nrequired[0]} at center)." )
-            return None
-
-        # If there were *too many* images, then we have to start trimming them out
-        if ( self.pars.max_number is not None ) and any( n > self.pars.max_number for n in match_count ):
-            SCLogger.debug( f"More images than max_number ({self.pars.max_number}) at some positions, trimming." )
-            # Sort images by quality factor
-            images = sorted( images, key=lambda x: ( x.lim_mag_estimate -
-                                                     self.pars.seeing_quality_factor * x.fwhm_estimate ) )
-            # Go from the lowest quality to highest quality images, and remove them if they're not needed
-            imdex = 0
-            nyank = 0
-            while any( n > self.pars.max_number for n in match_count ) and ( imdex < len(images) ):
-                # Find out of this image is an excess at any position, AND if we can remove
-                #   it without dropping another position below the min.
-                if ( any( ( ( images[imdex].id in mpi ) and ( n > self.pars.max_number ) )
-                          for n, mpi in zip( match_count, match_pos_images )
-                         )
-                     and
-                     all( ( ( images[imdex].id not in mpi ) or ( n > minn ) )
-                          for mpi, n, minn in zip( match_pos_images, match_count, nrequired )
-                         )
-                    ):
-                    for i, mpi in enumerate( match_pos_images ):
-                        if images[imdex].id in mpi:
-                            mpi.remove( images[imdex].id )
-                            match_count[ i ] -= 1
-                    del images[imdex]
-                    nyank += 1
-                else:
-                    imdex += 1
-            SCLogger.debug( f"Removed {nyank} of {len(images)+nyank} images." )
 
         # Sort the images and create data stores for all of them
         # Have to pull out all the zeropoint upstream provenances
