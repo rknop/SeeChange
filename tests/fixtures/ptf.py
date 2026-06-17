@@ -476,14 +476,16 @@ def ptf_ref(
     utag = base64.b32encode(utag.digest()).decode().lower()
     utag = f'u-{utag[:6]}'
 
-    cache_base_name = f'187/PTF_20090405_073932_11_R_ComSci_{refmaker.coadd_im_prov.id[:6]}_{utag}'
+    import pdb; pdb.set_trace()
+    refmaker.coadd_provs = pipe.make_provenance_tree( ptf_reference_image_datastores )
+    cache_base_name = f'187/PTF_20090405_073932_11_R_ComSci_{refmaker.coadd_provs["starting_point"].id[:6]}_{utag}'
 
     extensions = [
         '',
-        f'.sources_{refmaker.coadd_ex_prov.id[:6]}.fits',
-        f'.psf_{refmaker.coadd_ex_prov.id[:6]}',
-        f'.bg_{refmaker.coadd_ex_prov.id[:6]}.h5',
-        f'.wcs_{refmaker.coadd_wcs_prov.id[:6]}.txt',
+        f'.sources_{refmaker.coadd_provs["extraction"].id[:6]}.fits',
+        f'.psf_{refmaker.coadd_provs["extraction"].id[:6]}',
+        f'.bg_{refmaker.coadd_provs["extraction"].id[:6]}.h5',
+        f'.wcs_{refmaker.coadd_provs["astrocal"].id[:6]}.txt',
         '.zp'
     ]
     filenames = [os.path.join(ptf_cache_dir, cache_base_name) + f'{ext}.json' for ext in extensions]
@@ -512,15 +514,19 @@ def ptf_ref(
             coadd_datastore = DataStore( coadd_image )
 
             coadd_datastore.sources = copy_from_cache(
-                SourceList, ptf_cache_dir, cache_base_name + f'.sources_{refmaker.coadd_ex_prov.id[:6]}.fits'
+                SourceList, ptf_cache_dir,
+                cache_base_name + f'.sources_{refmaker.coadd_provs["extraction"].id[:6]}.fits'
             )
-            coadd_datastore.psf = copy_from_cache( PSFExPSF, ptf_cache_dir,
-                                                   cache_base_name + f'.psf_{refmaker.coadd_ex_prov.id[:6]}' )
-            coadd_datastore.bg = copy_from_cache( Background, ptf_cache_dir,
-                                                  cache_base_name + f'.bg_{refmaker.coadd_ex_prov.id[:6]}.h5',
-                                                  add_to_dict={ 'image_shape': coadd_datastore.image.data.shape } )
-            coadd_datastore.wcs = copy_from_cache( WorldCoordinates, ptf_cache_dir,
-                                                   cache_base_name + f'.wcs_{refmaker.coadd_wcs_prov.id[:6]}.txt' )
+            coadd_datastore.psf = copy_from_cache(
+                PSFExPSF, ptf_cache_dir,
+                cache_base_name + f'.psf_{refmaker.coadd_provs["extraction"].id[:6]}' )
+            coadd_datastore.bg = copy_from_cache(
+                Background, ptf_cache_dir,
+                cache_base_name + f'.bg_{refmaker.coadd_provs["extraction"].id[:6]}.h5',
+                add_to_dict={ 'image_shape': coadd_datastore.image.data.shape } )
+            coadd_datastore.wcs = copy_from_cache(
+                WorldCoordinates, ptf_cache_dir,
+                cache_base_name + f'.wcs_{refmaker.coadd_provs["astrocal"].id[:6]}.txt' )
             coadd_datastore.zp = copy_from_cache( ZeroPoint, ptf_cache_dir, cache_base_name + '.zp' )
 
             # Make sure it's all in the database

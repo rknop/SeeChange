@@ -394,6 +394,7 @@ class Detector:
             try:
                 ds = DataStore.from_args( *args, **kwargs )
                 self.pars.subconfig_update( ds )
+                self.make_backgrounder()
                 if  self.backgrounder.pars.method != 'zero':
                     raise ValueError( "Running detection on a subtraction requires backgrounding.method=zero" )
 

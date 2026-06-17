@@ -1282,7 +1282,7 @@ class CoaddPipeline:
                 SCLogger.warning( "coadd datastore had a provenance tree, but remake was True, so wiping it out" )
             else:
                 SCLogger.debug( "coadd datastore already had a provenance tree, using it." )
-                return
+                return self.datastore.prov_tree
 
         # NOTE I'm not handling the "test_parameter" thing here, may need to.
         # (But see Issue #408)

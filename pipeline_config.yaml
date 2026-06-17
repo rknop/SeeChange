@@ -412,6 +412,9 @@ subtraction:
 # See pipline/subtraction.py for parameter definitions
 
 detection:
+  # subtraction to be out here as well as inside the subconfigs
+  #   because of a quirk in detection.py
+  subtraction: true
   subconfigs:
     choice_algorithm: star_density
     choice_params:
@@ -420,9 +423,26 @@ detection:
     default_subconfig: extragalactic
     subconfigs:
       extragalactic:
-        subtraction: true
         method: filter
+        measure_psf: false
+        psf_method: psfex
+        psf_params: { }
+        apers: [ 1.0, 2.0, 3.0, 5.0 ]
+        inf_aper_num: -1
+        best_aper_num: 0
+        aperunit: fvwm
+        separation_fwhms: 1.0
+        initial_threshold: 1.5
+        sextr_threshold: 1.5
         snr_threshold: 5.0
+        subtraction: true
+        sextractor_back_type: MANUAL
+        sextractor_back_value: 0.
+        sextractor_back_size: null
+        sextractor_back_filtersize: null
+        backgrounding:
+          format: scalar
+          method: zero
       galactic:
         snr_threshold: 10.0
 
@@ -653,14 +673,6 @@ referencing:
       method: swarp
     extraction:  # override the coaddition/regular pipeline config, when extracting for the coadd images
       measure_psf: true
-#      threshold: 3.0
-#      method: sextractor
-#    backgrounding: # override the regular background estimation parameters and the coadd extraction parameters
-#      format: map
-#      method: sep
-#      poly_order: 1
-#      sep_box_size: 128
-#      sep_filt_size: 3
 #    astrocal:  # override the regular astrometric calibration parameters and the coadd extraction parameters
 #      cross_match_catalog: gaia_dr3
 #      solution_method: scamp

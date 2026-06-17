@@ -66,7 +66,7 @@ class DeepScoreSet( Base, UUIDMixin, HasBitFlagBadness ):
             with PGDB() as pgdb:
                 q = sql.SQL( textwrap.dedent(
                     """\
-                    SEELCT * FROM deepscore
+                    SELECT * FROM deepscore
                     WHERE deepscoreset_id={me}
                     ORDER BY index_in_sources
                     """

@@ -363,9 +363,6 @@ class RefMaker:
         # provenance, because coadd is no longer an upstream of the
         # referencing.
 
-        if len(kwargs) > 0:
-            raise ValueError(f'Unknown parameters given to RefMaker: {kwargs.keys()}')
-
         # now read the config file
         config = Config.get()
 
@@ -387,7 +384,12 @@ class RefMaker:
         self.coadd_pipeline = CoaddPipeline( **coadd_dict )
 
         maker_dict = config.value('referencing.maker')
-        maker_dict.update( **kwargs )
+        if 'maker' in kwargs:
+            maker_dict.update( kwargs.pop( 'maker', {} ) )
+
+        if len(kwargs) > 0:
+            raise ValueError(f'Unknown parameters given to RefMaker: {kwargs.keys()}')
+
         # Include the full coaddition pipeline config, *not* just what was modified for ref_maker,
         #   in the paremeters for ref_maker.  Reason: coadd is not an upstream of ref_maker,
         #   so if that stuff changes, we need it here to make the ref_make provenance change.

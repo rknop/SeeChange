@@ -1790,7 +1790,7 @@ class DataStore:
                   ):
                 self.reference = None
 
-            elif ( ( self.reference.validty_start is not None ) and
+            elif ( ( self.reference.validity_start is not None ) and
                    ( pytz.utc.localize( astropy.time.Time(self.image.mjd, format='mjd').datetime )
                      < self.reference.validity_start )
                   ):

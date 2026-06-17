@@ -1,4 +1,3 @@
-import pathlib
 from collections import defaultdict
 
 from psycopg import sql
@@ -433,10 +432,12 @@ class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBad
 
 
         # instrument_obj is lazy loaded when first getting it
-        if current_file is None:
-            current_file = pathlib.Path( FileOnDiskMixin.local_path ) / self.filepath
-        if self.instrument_object is not None:
+        if self.instrument_object is None:
+            raise RuntimeError( "I don't know how to cope." )
+        if current_file is not None:
             self.use_instrument_to_read_header_data( fromfile=current_file )
+        else:
+            self.use_instrument_to_read_header_data()
 
         # Allow passed keywords to override what's detected from the header
         self.set_attributes_from_dict( kwargs )
