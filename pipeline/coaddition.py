@@ -1284,8 +1284,6 @@ class CoaddPipeline:
                 SCLogger.debug( "coadd datastore already had a provenance tree, using it." )
                 return self.datastore.prov_tree
 
-        # NOTE I'm not handling the "test_parameter" thing here, may need to.
-        # (But see Issue #408)
         coadd_prov, _code_version = self.coadder.get_coadd_prov( data_store_list, upstream_provs=upstream_provs,
                                                                  code_version_id=code_version_id )
         coadd_prov.insert_if_needed()

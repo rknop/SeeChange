@@ -306,14 +306,11 @@ def test_coaddition_run(coadder, ptf_reference_image_datastores, ptf_aligned_ima
     refim0 = ptf_reference_image_datastores[0].image
     refimlast = ptf_reference_image_datastores[-1].image
 
-    # first make sure the "naive" coadd method works
-    coadder.pars.test_parameter = uuid.uuid4().hex
     coadder.pars.method = 'naive'
 
     ref_image = coadder.run( ptf_reference_image_datastores, aligned_datastores=ptf_aligned_image_datastores )
 
     # now check that ZOGY works and verify the output
-    coadder.pars.test_parameter = uuid.uuid4().hex
     coadder.pars.method = 'zogy'
 
     ref_image = coadder.run( ptf_reference_image_datastores, aligned_datastores=ptf_aligned_image_datastores )
@@ -478,7 +475,6 @@ def test_coadded_reference(ptf_ref, ptf_reference_image_datastores):
     assert len( improv.upstreams ) == 1
     assert improv.upstreams[0].id == ptf_reference_image_datastores[0].zp.provenance_id
     assert ref_prov.process == 'referencing'
-    assert ref_prov.parameters['test_parameter'] == 'test_value'
 
 
 def test_coadd_partial_overlap_swarp( decam_four_offset_refs, decam_four_refs_alignment_target ):

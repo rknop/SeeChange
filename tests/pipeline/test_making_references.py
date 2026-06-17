@@ -23,19 +23,6 @@ from models.refset import RefSet
 from util.util import env_as_bool, asUUID
 
 
-def add_test_parameters(maker):
-    """Utility function to add "test_parameter" to all the underlying objects. """
-    for name in ['preprocessor', 'extractor', 'backgrounder', 'astrometor', 'photometor', 'coadder']:
-        for pipe in ['coadd_pipeline']:
-            obj = getattr(getattr(maker, pipe), name, None)
-            if obj is not None:
-                obj.pars._enforce_no_new_attrs = False
-                obj.pars.test_parameter = obj.pars.add_par(
-                    'test_parameter', 'test_value', str, 'A parameter showing this is part of a test', critical=True,
-                )
-                obj.pars._enforce_no_new_attrs = True
-
-
 def test_finding_references( provenance_base, provenance_extra ):
     refstodel = set()
     imgstodel = set()
@@ -749,8 +736,6 @@ def test_making_references( ptf_reference_image_datastores ):
             }
         )
         refsetstodel.add( maker.pars.name )
-        add_test_parameters(maker)  # make sure we have a test parameter on everything
-        maker.coadd_pipeline.coadder.pars.test_parameter = uuid.uuid4().hex  # do not load an existing image
 
         t0 = time.perf_counter()
         ref = maker.run(ra=188, dec=4.5, filter='R')

@@ -361,18 +361,7 @@ def decam_datastore(
         decam_default_calibrators,  # not used directly, but makes sure this is pre-fetched from cache
         decam_reference,
 ):
-    """Provide a datastore with all the products based on the DECam exposure
-
-    To use this data store in a test where new data is to be generated,
-    simply change the pipeline object's "test_parameter" value to a unique
-    new value, so the provenance will not match and the data will be regenerated.
-
-    EXAMPLE
-    -------
-    extractor.pars.test_parameter = uuid.uuid().hex
-    extractor.run(datastore)
-    assert extractor.has_recalculated is True
-    """
+    """Provide a datastore with all the products based on the DECam exposure."""
     ds = datastore_factory(
         decam_exposure,
         'S2',

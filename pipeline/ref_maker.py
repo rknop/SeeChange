@@ -454,7 +454,6 @@ class RefMaker:
             code_version_id=code_version.id,
             parameters=pars,
             upstreams=[],
-            is_testing='test_parameter' in pars,
         )
         self.ref_prov.insert_if_needed()
 

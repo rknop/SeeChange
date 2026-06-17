@@ -31,6 +31,7 @@ from improc.alignment import ImageAligner
 
 from pipeline.data_store import DataStore
 from pipeline.coaddition import Coadder
+from pipeline.ref_maker import RefMaker
 
 from util.retrydownload import retry_download
 from util.logger import SCLogger
@@ -453,7 +454,6 @@ def ptf_aligned_image_datastores(request, ptf_reference_image_datastores, ptf_ca
 # the fixture too.
 @pytest.fixture
 def ptf_ref(
-        refmaker_factory,
         ptf_reference_image_datastores,
         ptf_aligned_image_datastores,
         ptf_cache_dir,
@@ -461,8 +461,13 @@ def ptf_ref(
 ):
     SCLogger.debug( f"Making ptf_ref from {[i.image.filepath for i in ptf_reference_image_datastores]}" )
     SCLogger.debug( f"zp ids are { [ i.zp.id for i in ptf_reference_image_datastores ] } " )
-    refmaker = refmaker_factory('test_ref_ptf', 'PTF', ptf_reference_image_datastores[0].zp.provenance_id,
-                                provtag='ptf_ref')
+    if not all( i.zp.provenance_id == ptf_reference_image_datastores[0].zp.provenance_id
+                for i in ptf_reference_image_datastores ):
+        raise RuntimeError( "Fundamental assumptions about the nature of the Universe have been violated." )
+    refmaker = RefMaker( maker={ 'name': 'test_ptf_ref',
+                                 'instrument': 'PTF',
+                                 'zp_prov_id': ptf_reference_image_datastores[0].zp.provenance_id } )
+    import pdb; pdb.set_trace()
     refmaker.setup_provenances()
     pipe = refmaker.coadd_pipeline
 
@@ -476,8 +481,6 @@ def ptf_ref(
     utag = base64.b32encode(utag.digest()).decode().lower()
     utag = f'u-{utag[:6]}'
 
-    import pdb; pdb.set_trace()
-    refmaker.coadd_provs = pipe.make_provenance_tree( ptf_reference_image_datastores )
     cache_base_name = f'187/PTF_20090405_073932_11_R_ComSci_{refmaker.coadd_provs["starting_point"].id[:6]}_{utag}'
 
     extensions = [
@@ -534,7 +537,9 @@ def ptf_ref(
 
     if must_run_coadd:
         SCLogger.debug( "Running coadd for ptf_ref" )
-        coadd_datastore = pipe.run( ptf_reference_image_datastores, aligned_datastores=ptf_aligned_image_datastores )
+        coadd_datastore = pipe.run( ptf_reference_image_datastores,
+                                    aligned_datastores=ptf_aligned_image_datastores,
+                                    prov_tree=pipe.datastore.prov_tree )
         coadd_datastore.save_and_commit()
 
         # Check that the filename came out what we expected above
@@ -559,7 +564,7 @@ def ptf_ref(
     )
     ref.insert()
 
-    # Since we didn't actually run the RefMaker we got from refmaker_factory, we may still need
+    # Since we didn't actually run the RefMaker we made, just the coadd pipelinedirectly, we may still need
     #   to create the reference set and tag the reference we built.
     # (Not bothering with locking here because we know our tests are single-threaded.)
     must_delete_refset = False

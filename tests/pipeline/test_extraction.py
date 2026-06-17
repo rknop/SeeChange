@@ -5,7 +5,6 @@ import pytest
 import io
 import os
 import re
-import uuid
 import pathlib
 import shutil
 import random
@@ -28,7 +27,6 @@ def test_sep_find_sources_in_small_image(decam_small_image, extractor, blocking_
     det.pars.method = 'sep'
     det.pars.subtraction = False
     det.pars.snr_threshold = 3.0
-    det.pars.test_parameter = uuid.uuid4().hex
     sources, _, _, _ = det.extract_sources(decam_small_image, None)
 
     assert sources.num_sources == 46
@@ -78,7 +76,6 @@ def test_sep_save_source_list(decam_small_image, provenance_base, extractor):
     extractor.pars.method = 'sep'
     extractor.pars.subtraction = False
     extractor.pars.snr_threshold = 3.0
-    extractor.pars.test_parameter = uuid.uuid4().hex
     sources, _, _, _ = extractor.extract_sources(decam_small_image, None)
     prov = Provenance(
         process='extraction',
@@ -140,7 +137,6 @@ def test_sextractor_extract_once( decam_datastore_through_preprocessing, extract
                 #   the background map that sextractor produces.)
                 extractor.pars.backgrounding = { 'format': 'scalar', 'method': 'zero' }
                 extractor.pars.sextractor_back_type = 'AUTO'
-                extractor.pars.test_parameter = uuid.uuid4().hex
                 bg = None
             elif test_trials == 1:
                 # Now do a run of sextractor where we've subtracted the background ahead of time

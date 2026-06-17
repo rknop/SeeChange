@@ -1,6 +1,5 @@
 import io
 import time
-import uuid
 
 import sqlalchemy as sa
 
@@ -91,8 +90,6 @@ def test_measure_runtime_memory(decam_exposure, decam_reference, pipeline_for_te
     p.pars.save_before_subtraction = True
     p.pars.save_before_alerting = False
     p.pars.save_at_finish = False
-    # make sure we get a random new provenance, not reuse any of the existing data
-    p.preprocessor.pars.test_parameter = uuid.uuid4().hex
 
     try:
         t0 = time.perf_counter()

@@ -1,6 +1,5 @@
 import pytest
 import pathlib
-import uuid
 
 import numpy as np
 from astropy.io import fits
@@ -18,7 +17,6 @@ def test_preprocessing(
     # The decam_default_calibrators fixture is included so that
     # _get_default_calibrators won't be called as a side effect of calls
     # to Preprocessor.run().  (To avoid committing.)
-    preprocessor.pars.test_parameter = uuid.uuid4().hex  # make a new Provenance for this temporary image
     preprocessor.pars.purge_raw_data = False
     ds = DataStore( decam_exposure, 'S3' )
     ds.make_prov_tree( { 'preprocessing': preprocessor.pars.get_critical_pars() }, ['preprocessing']  )

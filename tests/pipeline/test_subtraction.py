@@ -1,5 +1,4 @@
 import pytest
-import uuid
 
 import numpy as np
 from scipy import ndimage
@@ -21,7 +20,6 @@ def test_subtraction_data_products( ptf_ref, ptf_supernova_image_datastores ):
     subtractor = ds1._pipeline.subtractor
 
     # run the subtraction like you'd do in the real pipeline (calls get_reference and get_sub_image internally)
-    subtractor.pars.test_parameter = uuid.uuid4().hex
     subtractor.pars.method = 'naive'
     subtractor.pars.refset = 'test_refset_ptf'
     assert subtractor.pars['alignment_index'] == 'new'  # make sure alignment is configured to new, not latest image
@@ -56,7 +54,6 @@ def test_subtraction_ptf_zogy(ptf_ref, ptf_supernova_image_datastores):
     subtractor = ds1._pipeline.subtractor
 
     # run the subtraction like you'd do in the real pipeline (calls get_reference and get_sub_image internally)
-    subtractor.pars.test_parameter = uuid.uuid4().hex
     subtractor.pars.method = 'zogy'  # this is the default, but it might not always be
     subtractor.pars.refset = 'test_refset_ptf'
     assert subtractor.pars['alignment_index'] == 'new'  # make sure alignment is configured to new, not latest image

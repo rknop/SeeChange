@@ -1,7 +1,6 @@
 import os
 import pytest
 import pathlib
-import uuid
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -75,7 +74,6 @@ def test_decam_photo_cal( decam_datastore_through_wcs, blocking_plots ):
 
     # Verify that it will rerun if a parameter is changed
     ds.zp = None
-    photometor.pars.test_parameter = uuid.uuid4().hex
     ds._provtag = None
     ds.edit_prov_tree( 'photocal', params_dict=photometor.pars.get_critical_pars() )
     photometor.run(ds)

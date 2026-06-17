@@ -38,10 +38,6 @@ from improc.bitmask_tools import make_saturated_flag
 def datastore_factory(data_dir, pipeline_factory, request, test_config):
     """Provide a function that returns a datastore with all the products based on the given exposure and section ID.
 
-    To use this data store in a test where new data is to be generated,
-    simply change the pipeline object's "test_parameter" value to a unique
-    new value, so the provenance will not match and the data will be regenerated.
-
     If "save_original_image" is True, then a copy of the image before
     going through source extraction, WCS, etc. will be saved alongside
     the image, with ".image.fits.original" appended to the filename;
@@ -53,12 +49,6 @@ def datastore_factory(data_dir, pipeline_factory, request, test_config):
 
     (...this whole thing is a sort of more verbose implementation of
     pipeline/top_level.py...)
-
-    EXAMPLE
-    -------
-    extractor.pars.test_parameter = uuid.uuid().hex
-    extractor.run(datastore)
-    assert extractor.has_recalculated is True
 
     """
     def make_datastore(
