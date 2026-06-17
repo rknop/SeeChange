@@ -1,8 +1,13 @@
+import pathlib
 import copy
 import random
 import warnings
 
+import pyarrow.parquet
+import healpy
+
 from util.logger import SCLogger
+from util.radec import ra_cross_zero_avgra
 
 # parameters that are propagated from one Parameters object
 # to the next when adding embedded objects.
@@ -22,6 +27,7 @@ class Parameters:
     - add_alias() to add an alias for a parameter.
     - overwrite() the parameters from a dictionary.
     - augment() takes parameters from a dictionary and updates (instead of overriding dict/set parameters).
+    - subconfig_update() [ see it's own docstring ]
     - to_dict() converts the non-private parameters to a dictionary.
     - copy() makes a deep copy of this object.
     - compare() checks if the parameters of two objects are the same.
@@ -433,6 +439,7 @@ class Parameters:
                 if not ignore_addons and "has no attribute" in str(e):
                     raise e
 
+
     def augment(self, dictionary, ignore_addons=False):
         """Update parameters from a dictionary.
 
@@ -468,7 +475,177 @@ class Parameters:
                     if not ignore_addons and "has no attribute" in str(e):
                         raise e
 
+
+    def subconfig_update( self, ds ):
+        """Modify the parameters based on the contents of DataStore ds.
+
+        For this to work, there must be a "subconfigs" paramameter, which is a
+        dictionary that has (at least) keys "choice_algorithm" and
+        "subconfigs".  choice_algorithm is string, and subconfigs is a dict of
+        dicts.  The keys of subconfigs are strings that might be returned by
+        the function that choice_algorithm specifies.  The values of
+        subconfigs are dictionaries with replacement parametrs for any/all of
+        the other parameters defined in this Parmeters object.
+
+        Optionally, the subconfigs parameter can also have keys
+        "choice_params" and "default_subconfig".  choice_params are passed as
+        **kwargs to the function that choice_algorithm specifies.  See below
+        for "default_subconifg".
+
+        Optinally, there can also be a "subconfigs_noncritical" parameter,
+        with keys "choice_params" (optional) and "subconfigs" (required).
+        choice_params here is merged with choiceparams from subconfigs (with
+        subconfigs taking priority in the case of the same key showing up in
+        both); you would put things like directories and other system-specific
+        stuff in the choice_params here, saving choice_params in subconfigs
+        for things that would actually change the answer.
+
+        A function, indicated by choice_algorithm, will be called, being
+        passed ds and **choice_params.  It will return a string, call it
+        chosen_subconfig.
+
+        A replacement dictionary will be built by looking in
+        subconfigs['subconfigs'].  It starts with {}.  If
+        subconfigs['default_subconfig'] exists, it updates with
+        subconfigs['subconfigs'][subconfigs['default_subconfig']].  It then
+        updates with subconfigs['subconfigs'][chosen_subconfig].
+
+        Finally, that replacment dictionary is passed to self.override().
+
+        By convention, the parmeter subconfigs should have critical=True and
+        the parameter subconfigs_noncritical should have critical=False.  You
+        probably also want to make all parameters that will be modified by
+        subconfig_update to be critical=False at the top level.  That way, you
+        will get the same provenance regardless of which subconfig
+        subconfig_udpate chooses.
+
+        """
+
+        if not hasattr( self, 'subconfigs' ):
+            raise ValueError( f"subconfig_update requires {self.__class__.__name__} "
+                              f"to have parameter subconfigs" )
+
+        if ( not isinstance( self.subconfigs, dict ) ) or ( 'choice_algorithm' not in self.subconfigs ):
+            raise ValueError( f"{self.__class__.__name__} parameter subconfigs must have choice_algorithm" )
+
+        if self.subconfigs['choice_algorithm'] is None:
+            return
+
+        if 'subconfigs' not in self.subconfigs:
+            raise ValueError( f"{self.__class__.__name__} parameter subconfigs must have subconfigs if "
+                              f"choice_algorithm is not None." )
+
+        if hasattr( self, 'subconfigs_noncritical' ):
+            if not isinstance( self.subconfigs_noncritical, dict ):
+                raise TypeError( f"If {self.__class__.__name__} has subconfigs_noncritical, it must be a dict." )
+            if not set( self.subconfigs_noncritical ).issubset( { 'choice_params', 'subconfigs' } ):
+                raise ValueError( f"{self.__class__.__name__} parameter subconfigs_noncritical can only have keys "
+                                  f"choice_params and subconfigs" )
+
+        newconfig = {}
+        if 'default_subconfig' in self.subconfigs:
+            if self.subconfigs['default_subconfig'] not in self.subconfigs['subconfigs']:
+                raise ValueError( f"{self.__class__.__name__} default_subconfig "
+                                  f"{self.subconfigs['default_subconfig']} is not in "
+                                  f"subconfigs: {self.subconfigs['subconfigs'].keys()}" )
+            newconfig.update( self.subconfigs['subconfigs'][ self.subconfigs['default_subconfig'] ] )
+
+        choice_params = {}
+        if ( hasattr( self, 'subconfigs_noncritical' ) and ( 'choice_params' in self.subconfigs_noncritical ) ):
+            choice_params.update( self.subconfigs_noncritical['choice_params'] )
+        if 'choice_params' in self.subconfigs:
+            choice_params.update( self.subconfigs['choice_params'] )
+
+        if self.subconfigs['choice_algorithm'] == 'star_density':
+            subconfigtag = self.get_tag_for_star_density( ds, **choice_params )
+        else:
+            raise ValueError( f"Unknown config choice algorithm {self.subconfigs['choice_algorithm']}" )
+
+        if subconfigtag not in self.subconfigs['subconfigs']:
+            raise ValueError( f"Tried to set subconfig {subconfigtag}, but it's not present in "
+                              f"subconfigs['subconfigs'] for {self.__class__.__name__}" )
+
+        newconfig.update( self.subconfigs['subconfigs'][subconfigtag] )
+
+        if ( ( hasattr( self, 'subconfigs_noncritical' ) ) and
+             ( subconfigtag in self.subconfigs_noncritical['subconfigs'] )
+            ):
+            newconfig.update( self.subconfigs_noncritical['subconfigs'][subconfigtag] )
+
+        self.override( newconfig )
+
+
+    @classmethod
+    def get_tag_for_star_density( cls, ds,
+                                  config_dir=None,
+                                  gaia_density_catalog="share/gaia_density/gaia_healpix_density.pq",
+                                  star_mag_cutoff=20,
+                                  star_density_cutoff=1e5
+                                 ):
+        """The function called by subconfig_update for choice_algorithn 'star_density'.
+
+        Parametrs
+        ---------
+        ds : DataStore
+
+        config_dir : str or Path
+           The root directory where parquet catalogs with star densities are found.  Defaults to
+           CODE_ROOT.
+
+        gaia_density_catalog : str, default "share/gaia_density/gaia_healpix_density.pq"
+
+        star_mag_cutoff: int, default 20
+          Consider the density of stars at this magnitude and brighter.  This is actually the name
+          of a column in the gaia_density_catalog, so only specific magnitudes will work.
+
+        star_density_cutoff: float, default 1e5
+          This many stars in a healpix(32,nest=True) healpix is consider "a lot".  More than this,
+          the field is considered galactic, less than this, the field is considered extragalactic.
+
+        Returns
+        -------
+        'galactic' or 'extragalactic'
+
+        """
+        # Avoid circular import (which may not be necsesary here, but might be in the future; as a
+        #  general principle, parameters should probably not globally import anything other than
+        #  standard stuff and util.* stuff.)
+        import models.base
+        config_dir = models.base.CODE_ROOT if config_dir is None else config_dir
+        tablefile = pathlib.Path( config_dir ) / gaia_density_catalog
+
+        if ds.wcs is not None:
+            ra0 = ra_cross_zero_avgra( ds.wcs.good_minra, ds.wcs.good_maxra )
+            dec0 = ( ds.wcs.good_mindec + ds.wcs.good_maxdec ) / 2.
+
+        elif ds.image is not None:
+            ra0 = ds.image.ra
+            dec0 = ds.image.dec
+
+        elif ds.exposure is not None:
+            ra0 = ds.exposure.ra
+            dec0 = ds.exposure.dec
+
+        else:
+            raise RuntimeError( "Couldn't find a WorldCoordinates, Image, or Exposure in passed DataStore." )
+
+        densitytab = pyarrow.parquet.read_table( tablefile ).to_pandas()
+        if str(star_mag_cutoff) not in densitytab.columns:
+            raise ValueError( f"Don't have star densities for magnitude limit {star_mag_cutoff}" )
+
+        hp = healpy.ang2pix( 32, ra0, dec0, nest=True, lonlat=True )
+        row = densitytab[ densitytab['healpix32'] == hp ]
+        if len(row) == 0:
+            raise ValueError( f"Failed to find healpix {hp} in gaia density table" )
+        if len(row) > 1:
+            raise ValueError( f"Healpix {hp} shows up in gaia density table more than once; this shouldn't happen." )
+
+        dens = row[ str(star_mag_cutoff) ].values[ 0 ]
+        return 'galactic' if dens > star_density_cutoff else 'extragalactic'
+
+
     def get_critical_pars(self):
+
         """Get a dictionary of the critical parameters.
 
         Returns

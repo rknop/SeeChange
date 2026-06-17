@@ -32,9 +32,16 @@ pipeline:
 #  (These used to be the defaults, so some test results
 #   depend on them.)
 extraction:
-  backgrounding:
-    box_size: 128
-    filt_size: 3
+  subconfigs:
+    subconfigs:
+      extragalactic:
+        backgrounding:
+          box_size: 128
+          filt_size: 3
+      galactic:
+        initial_threshold: 5.0
+        sextr_threshold: 5.0
+        snr_threshold: 10.0
 
 subtraction:
   method: zogy
@@ -49,15 +56,27 @@ scoring:
   algorithm: RBbot-quiet-shadow-131-cut0.55
 
 fakeinjection:
-  min_fake_mag: -2.
-  max_fake_mag: 1.
-  mag_rel_limmag: true
-  num_fakes: 100
-  mag_prob_ratio: 1.
-  random_seed: 0.
-  hostless_frac: 0.25
-  host_minmag: -3.
-  host_maxmag: 0.5
-  host_distscale: 1.
-  random_seed: 42
-  
+  subconfigs:
+    choice_algorithm: star_density
+    choice_params:
+      star_mag_cutoff: 20
+      star_density_cutoff: 1.0e+5
+    default_subconifg: extrgalactic
+    subconfigs:
+      extragalactic:
+        min_fake_mag: -2.
+        max_fake_mag: 1.
+        mag_rel_limmag: true
+        num_fakes: 100
+        mag_prob_ratio: 1.
+        hostless_frac: 0.25
+        host_minmag: -3.
+        host_maxmag: 0.5
+        host_distscale: 1.
+        random_seed: 42
+      galactic:
+        min_fake_mag: -4.
+        num_fakes: 400
+        hostless_frac: 0.
+        host_maxmag: 1.
+        host_distcale: 0.

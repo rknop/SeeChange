@@ -91,7 +91,10 @@ pipeline:
 # Extraction, Backgrounding, and PSF are done in one step.
 
 extraction:
-  psf_timeout: 240.
+  subconfigs_noncritical:
+    subconfigs:
+      extragalactic:
+        psf_timeout: 240.
 
 
 # ======================================================================

@@ -1573,7 +1573,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         from models.source_list import SourceList
 
         with PGDB( pgdb ) as pgdb:
-            q = sql.SQL( "SELECT _id FROM source_lists WHERE image_id={me}" ).foramt( me=self.id )
+            q = sql.SQL( "SELECT _id FROM source_lists WHERE image_id={me}" ).format( me=self.id )
             rows, _cols = pgdb.execute( q )
             return [ ( SourceList, row[0] ) for row in rows ]
 

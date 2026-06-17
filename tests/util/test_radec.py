@@ -42,3 +42,19 @@ def test_radec_to_gal_and_eclip():
     assert gal_b == pytest.approx( 28.23720981, abs=1e-8 )
     assert ecl_lon == pytest.approx( 219.79120568, abs=1e-8 )
     assert ecl_lat == pytest.approx( -18.63024354, abs=1e-8 )
+
+
+def test_ra_corss_zero_minmax():
+    assert radec.ra_cross_zero_minmax( 1., 2. ) == ( 1., 2. )
+    assert radec.ra_cross_zero_minmax( 2., 1. ) == ( 1., 2. )
+    assert radec.ra_cross_zero_minmax( 359., 1. ) == ( 359., 1. )
+    assert radec.ra_cross_zero_minmax( 1., 359. ) == ( 359., 1. )
+
+
+def test_ra_crossa_zero_avgra():
+    assert radec.ra_cross_zero_avgra( 1., 3. ) == 2.
+    assert radec.ra_cross_zero_avgra( 3., 1. ) == 2.
+    assert radec.ra_cross_zero_avgra( 359., 3. ) == 1.
+    assert radec.ra_cross_zero_avgra( 3., 359. ) == 1.
+    assert radec.ra_cross_zero_avgra( 357., 1. ) == 359.
+    assert radec.ra_cross_zero_avgra( 1., 357. ) == 359.

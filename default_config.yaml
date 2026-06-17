@@ -7,30 +7,30 @@ overrides:
   - local_overrides.yaml
 augments:
   - local_augments.yaml
-  
-# ======================================================================
-# Config Chooser
-#
-# We may need to have different configurations based on the data that's
-# coming in.  Right now, all we support is a cut based on the star
-# density (leading two two options, "extragalactic" and "galactic".
-#
-# The config loaded by the chooser must have *everything* in it.
-# By default, the extragalactic config includes the same stuff
-# that is included above, so is the same as what you'd get if you
-# didn't run a config chooser.
-#
-# However, any config that has been selected by a config chooser MUST
-# have configchoice.choice_algorithm: null, or you're liable to
-# end up in an infinite loop.  (You also get an infinite loop if
-# you make default_conifg.yaml one of the options.)
 
-configchoice:
-  choice_algorithm: star_density
-  config_dir: null
-  gaia_density_catalog: share/gaia_density/gaia_healpix_density.pq
-  star_mag_cutoff: 20
-  star_density_cutoff: 1.0e+5    # TODO : better determine this value  (1e5 is at least vaugely plausible)
-  configs:
-    galactic: default_config_galactic.yaml
-    extragalactic: default_config_extragalactic.yaml
+# # ======================================================================
+# # Config Chooser
+# #
+# # We may need to have different configurations based on the data that's
+# # coming in.  Right now, all we support is a cut based on the star
+# # density (leading two two options, "extragalactic" and "galactic".
+# #
+# # The config loaded by the chooser must have *everything* in it.
+# # By default, the extragalactic config includes the same stuff
+# # that is included above, so is the same as what you'd get if you
+# # didn't run a config chooser.
+# #
+# # However, any config that has been selected by a config chooser MUST
+# # have configchoice.choice_algorithm: null, or you're liable to
+# # end up in an infinite loop.  (You also get an infinite loop if
+# # you make default_conifg.yaml one of the options.)
+
+# configchoice:
+#   choice_algorithm: star_density
+#   config_dir: null
+#   gaia_density_catalog: share/gaia_density/gaia_healpix_density.pq
+#   star_mag_cutoff: 20
+#   star_density_cutoff: 1.0e+5    # TODO : better determine this value  (1e5 is at least vaugely plausible)
+#   configs:
+#     galactic: default_config_galactic.yaml
+#     extragalactic: default_config_extragalactic.yaml

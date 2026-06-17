@@ -319,7 +319,7 @@ After editing any schema, you have to create new database migrations to apply th
 ```
   alembic revision --autogenerate -m "<put a short comment here>"
 ```
-The comment will go in the filename, so it should really be short.  
+The comment will go in the filename, so it should really be short.
 Look out for any warnings, and review the created migration file before applying it (with `alembic upgrade head`).
 
 Note that in the devshell and test docker environments above, database migrations are automatically run when you create the environment with `docker compose up -d ...`, so there is no need for an initial `alembic upgrade head`.   However, if you then create additional migrations, and you haven't since run `docker compose down -v` (the `-v` being the thing that deletes the database), then you will need to run `alembic upgrade head` to apply those migrations to the running database inside your docker environment.
@@ -343,9 +343,9 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-This covers (most of) the basic python dependencies. 
+This covers (most of) the basic python dependencies.
 
-Install some of the standalone executables needed for 
+Install some of the standalone executables needed for
 analyzing astronomical images:
 
 ```bash
@@ -355,9 +355,9 @@ sudo ln -sf /usr/bin/SWarp /usr/bin/swarp
 ```
 
 The last two lines will create links to the executables
-with more commonly used spellings. 
+with more commonly used spellings.
 
-Now we need to install postgres and set it up 
+Now we need to install postgres and set it up
 to run on the default port (5432) with a database called `seechange`.
 
 On a mac, you can do this with homebrew:
@@ -369,27 +369,27 @@ brew services start postgresql
 ```
 
 Usually you will want to add the default user:
-    
+
 ```bash
 /usr/local/opt/postgres/bin/createuser -s postgres
 ```
 
 On linux/debian use
- 
+
 ```bash
 sudo apt install postgresql
 ```
 
 Make sure the default port is 5432 in /etc/postgresql/14/main/postgresql.conf
 (assuming the version of postgres is 14).
-To restart the service do 
+To restart the service do
 
 ```bash
 sudo service postgresql restart
 ```
 
 
-To log in to postgres (as the user "postgres"): 
+To log in to postgres (as the user "postgres"):
 ```bash
 sudo -u postgres psql
 ```
@@ -410,8 +410,8 @@ To use the database, login as above but then change into the database:
 
 #### Installing Q3C extension for postgres
 
-Get the code from <https://github.com/segasai/q3c>. 
-Installing following the instructions: 
+Get the code from <https://github.com/segasai/q3c>.
+Installing following the instructions:
 
 ```bash
 make
@@ -449,7 +449,7 @@ alembic revision --autogenerate -m "message"
 
 #### Installing submodules
 
-To install submodules used by SeeChange 
+To install submodules used by SeeChange
 (e.g., the `nersc-upload-connector` package that is used to connect the archive)
 do the following:
 
@@ -465,36 +465,36 @@ using:
 git submodule update
 ```
 
-Note that you can just do 
+Note that you can just do
 
 ```bash
 git submodule update --init
 ```
 
-from the root directory, which will also initialize any 
+from the root directory, which will also initialize any
 submodules that have not been initialized yet.
 
 #### Setting up environmental variables
 
 Some environmental variables are used by SeeChange.
- - `GITHUB_REPOSITORY_OWNER` is the name of your github user (used only for dockerized tests). 
-Usually this will point to a folder outside the SeeChange directory, 
+ - `GITHUB_REPOSITORY_OWNER` is the name of your github user (used only for dockerized tests).
+Usually this will point to a folder outside the SeeChange directory,
 where data can be downloaded and stored.
  - `SEECHANGE_CONFIG` can be used to specify the location of the main config file,
-but if that is not defined, SeeChange will just use the default config at the top level 
-of the SeeChange directory, or the one in the `tests` directory (when running local tests). 
+but if that is not defined, SeeChange will just use the default config at the top level
+of the SeeChange directory, or the one in the `tests` directory (when running local tests).
 
 #### Adding local config files for tests
 
-To allow tests to find the archive and the local database, 
-a custom config file needs to be loaded. 
+To allow tests to find the archive and the local database,
+a custom config file needs to be loaded.
 The default file, in `SeeChange/tests/seechange_config_test.yaml`,
 will automatically look for (and load) two local config files named
-`local_overrides.yaml` and `local_augments.yaml`. 
-The first will override any keys in the default config, 
-and the second one will update the existing parameter dictionaries and lists. 
+`local_overrides.yaml` and `local_augments.yaml`.
+The first will override any keys in the default config,
+and the second one will update the existing parameter dictionaries and lists.
 
-One way to set things up is to put the following into 
+One way to set things up is to put the following into
 `SeeChange/tests/local_augments.yaml`:
 
 ```yaml
@@ -515,8 +515,8 @@ db:
 Replace `/path/to/local/archive` with the path to the local archive directory.
 
 The same files (`local_overrides.yaml` and `local_augments.yaml`) can be used
-on the main SeeChange directory, where they have the same effect, 
-just for running a real instance of the SeeChange pipeline locally. 
+on the main SeeChange directory, where they have the same effect,
+just for running a real instance of the SeeChange pipeline locally.
 
 #### Running the tests
 
@@ -526,9 +526,9 @@ At this point the tests should be working from the IDE or from the command line:
 pytest --ignore=extern
 ```
 
-The extern folder includes submodules that do not support local testing at this point. 
+The extern folder includes submodules that do not support local testing at this point.
 
-You can also add a `.pytest.ini` file with the following: 
+You can also add a `.pytest.ini` file with the following:
 
 ```
 [pytest]
@@ -536,5 +536,5 @@ testpaths =
     tests
 ```
 
-Which will limit pytest to automatically only run the tests in that folder, 
+Which will limit pytest to automatically only run the tests in that folder,
 and ignore other test folders, e.g., those in the `extern` folder.

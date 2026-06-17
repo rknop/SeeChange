@@ -153,7 +153,7 @@ class ZeroPoint(Base, UUIDMixin, HasBitFlagBadness):
             rows, _cols = pgdb.execute( q )
             downstreams.extend( [ ( Image, row[0] ) for row in rows ] )
 
-            q = sql.SQL( "SELECT image_id FROM image_subtraction_components WHERE zp_id={me}" ).format( me=self.id )
+            q = sql.SQL( "SELECT image_id FROM image_subtraction_components WHERE new_zp_id={me}" ).format( me=self.id )
             rows, _cols = pgdb.execute( q )
             downstreams.extend( [ ( Image, row[0] ) for row in rows ] )
 

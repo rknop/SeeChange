@@ -33,178 +33,274 @@ class ParsDetector(Parameters):
     def __init__(self, **kwargs):
         super().__init__()
 
+        # IMPORTANT
+        # Notice that many of the parameters critical=False that really probably ought
+        #   to be critical=True.  Reason: the subconfig_update system in parameters.py.
+        # The massive subconfigs parameter, which IS critical, holds values that will
+        #   be set into the parameters at runtime.
+        # This *does* break the whole "critical" system of parameters a bit.  However,
+        #   we were facing the problem of wanting to have a *single* provenacne that
+        #   had *different* configs for galactic and extragalactic fields.
+        # This also means that the defaults configured in most of the "add_par" commands below
+        #   are never seen; they will be overwritten by the values from the default
+        #   in subconfigs and subconfigs_noncritical
+
         self.method = self.add_par(
-            'method', 'sextractor', str, 'Method to use (sextractor, sep, filter)', critical=True
+            name = 'method',
+            default = 'sextractor',
+            par_types = str,
+            docstring = 'Method to use (sextractor, sep, filter)',
+            critical = False
         )
 
         self.measure_psf = self.add_par(
-            'measure_psf',
-            False,
-            bool,
-            ( 'Measure PSF?  If false, will use existing image PSF.  If true, '
-              'will measure PSF and put it in image object; will also iterate '
-              'on source extraction to get PSF photometry with the returned PSF.' ),
-            critical=True
+            name = 'measure_psf',
+            default = False,
+            par_types = bool,
+            docstring = ( 'Measure PSF?  If false, will use existing image PSF.  If true, '
+                          'will measure PSF and put it in image object; will also iterate '
+                          'on source extraction to get PSF photometry with the returned PSF.' ),
+            critical = False
         )
 
         self.apers = self.add_par(
-            'apers',
-            [1.0, 2.0, 3.0, 5.0],
-            list,
-            'Apertures in which to measure photometry; a list of floats. ',
-            critical=True
+            name = 'apers',
+            default = [1.0, 2.0, 3.0, 5.0],
+            par_types = list,
+            docstring = 'Apertures in which to measure photometry; a list of floats. ',
+            critical = False
         )
         self.add_alias( 'apertures', 'apers' )
 
         self.inf_aper_num = self.add_par(
-            'inf_aper_num',
-            -1,
-            int,
-            'Which of apers is the one to use as the "infinite" aperture for aperture corrections. '
-            'If -1, will use the last aperture, not the PSF flux! ',
-            critical=True
+            name = 'inf_aper_num',
+            default = -1,
+            par_types = int,
+            docstring = ( 'Which of apers is the one to use as the "infinite" aperture for aperture corrections. '
+                          'If -1, will use the last aperture, not the PSF flux! ' ),
+            critical = False
         )
 
         self.best_aper_num = self.add_par(
-            'best_aper_num',
-            0,
-            int,
-            'Which of apers is the one to use as the "best" aperture, for things like plotting or calculating'
-            'the limiting magnitude. Note that -1 will use the PSF flux, not the last aperture on the list. '
+            name = 'best_aper_num',
+            default = 0,
+            par_types = int,
+            docstring = ( 'Which of apers is the one to use as the "best" aperture, for things like plotting '
+                          'or calculating the limiting magnitude. Note that -1 will use the PSF flux, not the '
+                          'last aperture on the list. ' ),
+            critical = False
         )
 
         self.aperunit = self.add_par(
-            'aperunit',
-            'fwhm',
-            str,
-            'Units of the apertures in the apers parameters; one of "fwhm" or "pixel"',
-            critical=True
+            name = 'aperunit',
+            default = 'fwhm',
+            par_types = str,
+            docstring = 'Units of the apertures in the apers parameters; one of "fwhm" or "pixel"',
+            critical = False
         )
         self.add_alias( 'aperture_unit', 'aperunit' )
 
         self.separation_fwhms = self.add_par(
-            'separation_fwhms',
-            1.0,
-            float,
-            'Minimum separation between sources in units of FWHM',
-            critical=True
+            name = 'separation_fwhms',
+            default = 1.0,
+            par_types = float,
+            docstring = 'Minimum separation between sources in units of FWHM',
+            critical = False
         )
 
-        self.initial_thredshold = self.add_par(
-            'initial_threshold',
-            1.5,
-            [float, int],
-            ( 'Like sextr_threshold, but used for the initial sextractor run before psf determination. '
-              'You want this to be higher so that only decent detections are passed on to psfex.' ),
-            critical=True
+        self.initial_threshold = self.add_par(
+            name = 'initial_threshold',
+            default = 1.5,
+            par_types = [float, int],
+            docstring = ( 'Like sextr_threshold, but used for the initial sextractor run before psf determination. '
+                          'You want this to be higher so that only decent detections are passed on to psfex.' ),
+            critical = False
         )
 
         self.sextr_threshold = self.add_par(
-            'sextr_threshold',
-            1.5,
-            [float, int],
-            ( 'The number of standard deviations above the background to use as the threshold '
-              'for detecting a source.  Passed to sextractor DETECT_THRESH and ANALYSIS_THRDSH '
-              'on the second pass when the psf is known.' ),
-            critical=True
+            name = 'sextr_threshold',
+            default = 1.5,
+            par_types = [float, int],
+            docstring = ( 'The number of standard deviations above the background to use as the threshold '
+                        'for detecting a source.  Passed to sextractor DETECT_THRESH and ANALYSIS_THRDSH '
+                        'on the second pass when the psf is known.' ),
+            critical = False
         )
 
 
         self.snr_threshold = self.add_par(
-            'snr_threshold',
-            3.0,
-            [float, int],
-            'Only keep things whose S/N is at least this high.',
-            critical=True
+            name = 'snr_threshold',
+            default = 3.0,
+            par_types = [float, int],
+            docstring = 'Only keep things whose S/N is at least this high.',
+            critical = False
         )
 
         self.subtraction = self.add_par(
-            'subtraction',
-            False,
-            bool,
-            'Whether this is expected to run on a subtraction image or a regular image. ',
-            critical=True
+            name = 'subtraction',
+            default = False,
+            par_types = bool,
+            docstring = 'Whether this is expected to run on a subtraction image or a regular image. ',
+            critical = False
         )
 
         self.sextractor_timeout = self.add_par(
-            'sextractor_timeout',
-            120,
-            int,
-            'Timeout for SExtractor, in seconds. ',
-            critical=False,
+            name = 'sextractor_timeout',
+            default = 120,
+            par_types = int,
+            docstring = 'Timeout for SExtractor, in seconds. ',
+            critical = False
         )
 
         self.sextractor_back_type = self.add_par(
-            'sextractor_back_type',
-            'MANUAL',
-            str,
-            ( "-BACK_TYPE parameter for sextractor: AUTO or MANUAL.  You usually want this to be MANUAL ",
-              "(with sextractor_back_value=0) because background subtraction is run separately from sextractor" ),
-            critical=True
+            name = 'sextractor_back_type',
+            default = 'MANUAL',
+            par_types = str,
+            docstring = ( "-BACK_TYPE parameter for sextractor: AUTO or MANUAL.  You usually want this to be "
+                          "MANUAL (with sextractor_back_value=0) because background subtraction is run separately "
+                          "from sextractor" ),
+            critical = False
         )
 
         self.sextractor_back_value = self.add_par(
-            'sextractor_back_value',
-            0,
-            float,
-            "-BACK_VALUE parameter for sextractor.  Ignored if sextractor_back_type is AUTO",
-            critical=True
+            name = 'sextractor_back_value',
+            default = 0,
+            par_types = float,
+            docstring = "-BACK_VALUE parameter for sextractor.  Ignored if sextractor_back_type is AUTO",
+            critical = False
         )
 
         self.sextractor_back_size = self.add_par(
-            'sextractor_back_size',
-            None,
-            ( int, None ),
-            ( "-BACK_SIZE parameter for sextractor.  Ignored if sextractor_back_type is MANUAL.  "
-              "Defaults to the Instrument's background_box_size" ),
-            critical=True
+            name = 'sextractor_back_size',
+            default = None,
+            par_types = ( int, None ),
+            docstring = ( "-BACK_SIZE parameter for sextractor.  Ignored if sextractor_back_type is MANUAL.  "
+                          "Defaults to the Instrument's background_box_size" ),
+            critical = False
         )
 
         self.sextractor_back_filtersize = self.add_par(
-            'sextractor_back_filtersize',
-            None,
-            ( int, None ),
-            ( "-BACK_FILTERSIZE parameter for sextractor.  Ignored if sextractor_back_type is MANUAL.  "
-              "Defaults to the Instrument's background_filt_size" ),
-            critical=True
+            name = 'sextractor_back_filtersize',
+            default = None,
+            par_types = ( int, None ),
+            docstring = ( "-BACK_FILTERSIZE parameter for sextractor.  Ignored if sextractor_back_type is MANUAL.  "
+                          "Defaults to the Instrument's background_filt_size" ),
+            critical = False
         )
 
         self.backgrounding = self.add_par(
-            'backgrounding',
-            { 'format': 'scalar', 'method': 'zero' },
-            dict,
-            ( "Parameters for background subtraction; see backgrounding.py.  If subtraction is True, "
-              "then backgrounding.method must be zero" ),
-            critical=True
+            name = 'backgrounding',
+            default = { 'format': 'scalar', 'method': 'zero' },
+            par_types = dict,
+            docstring = ( "Parameters for background subtraction; see backgrounding.py.  If subtraction is True, "
+                          "then backgrounding.method must be zero" ),
+            critical = False
         )
 
         self.psf_method = self.add_par(
-            'psf_method',
-            'psfex',
-            str,
-            ( "Which PSF method to use.  (Currently only psfex is supported.)  If subtraction is "
-              "True, no PSF fitting is done, so all psf_* parameters are ignored" ),
-            critical=True
+            name = 'psf_method',
+            default = 'psfex',
+            par_types = str,
+            docstring = ( "Which PSF method to use.  (Currently only psfex is supported.)  If subtraction is "
+                          "True, no PSF fitting is done, so all psf_* parameters are ignored" ),
+            critical = False
         )
 
         self.psf_timeout = self.add_par(
-            'psf_timeout',
-            240.,
-            ( float, int ),
-            "How many seconds to try fitting the PSF before assuming the process is hung",
-            critical=False
+            name = 'psf_timeout',
+            default = 240,
+            par_types = ( float, int ),
+            docstring = "How many seconds to try fitting the PSF before assuming the process is hung",
+            critical = False
         )
 
         self.psf_params = self.add_par(
-            'psf_params',
-            { 'fwhm_min': 0.5,
-              'fwhm_max_to_try': [ 10.0, 15.0, 20.0, 25.0 ],
-              'psf_init_size': 25,
-              'psf_final_size': None
-             },
-            dict,
-            "Parameters for PSF extraction; details depend on psf_method.",
-            critical=True
+            name = 'psf_params',
+            default = { 'fwhm_min': 0.5,
+                        'fwhm_max_to_try': [ 10.0, 15.0, 20.0, 25.0 ],
+                        'psf_init_size': 25,
+                        'psf_final_size': None
+                       },
+            par_types = dict,
+            docstring = "Parameters for PSF extraction; details depend on psf_method.",
+            critical = False
+        )
+
+        self.subconfigs = self.add_par(
+            name = 'subconfigs',
+            default = {
+                'choice_algorithm': 'star_density',
+                'choice_params': {
+                    # Magnitude cutoff to look at star density
+                    'star_mag_cutoff': 20,
+                    # For healpix(32,nest=True), each healpix is about 100' (1.8°) on a side,
+                    #   so each healpix is roughly 3.4 square degrees
+                    'star_density_cutoff': 1e5,
+                },
+                'default_subconfig': 'extragalactic',
+                'subconfigs': {
+                    'extragalactic': {
+                        'method': 'sextractor',
+                        'measure_psf': False,
+                        'apers': [ 1.0, 2.0, 3.0, 5.0 ],
+                        'inf_aper_num': -1,
+                        'best_aper_num': 0,
+                        'aperunit': 'fwhm',
+                        'separation_fwhms': 1.0,
+                        'initial_threshold': 1.5,
+                        'sextr_threshold': 1.5,
+                        'snr_threshold': 3.0,
+                        'subtraction': False,
+                        'subtractor_back_type': 'MANUAL',
+                        'sextractor_back_value': 0.,
+                        'sextractor_back_size': None,
+                        'sextractor_back_filtersize': None,
+                        'backgrounding': { 'format': 'scalar', 'method': 'zero' },
+                        # So, yeah, you're wondering why there are values for psf_method and
+                        #   psf_params when measure_psf is False.
+                        # We need measure_psf to default to False because there are places in the
+                        #   pipeline that depend on that.  However, we do want to have some defaults
+                        #   so that if somebody sets measure_psf to True, there will be defaults
+                        #   there for them.
+                        'psf_method': 'psfex',
+                        'psf_params': { 'fwhm_min': 0.5,
+                                        'fwhm_max_to_try': [ 10.0, 15.0, 20.0, 25.0 ],
+                                        'psf_init_size': 25,
+                                        'psf_final_size': None }
+                    },
+                    'galactic': {
+                        'snr_threshold': 10.0,
+                    }
+                }
+            },
+            par_types = dict,
+            docstring = ( "Algoirthm for choosing all the config parameters, and replacments for all the config "
+                          "parameters based on that choice." ),
+            critical = True
+        )
+
+        self.subconfigs_noncritical = self.add_par(
+            name = 'subconfigs_noncritical',
+            default = {
+                'choice_params': {
+                    # Parent directory to look for config files and tables. If None, uses CODE_ROOT
+                    'config_dir': None,
+                    'gaia_density_catalog': 'share/gaia_density/gaia_healpix_density.pq'
+                },
+                'subconfigs': {
+                    'extragalactic': {
+                        'sextractor_timeout': 240,
+                        'psf_timeout': 300.,
+                    },
+                    'galactic': {
+                        'sextractor_timeout': 120,
+                        'psf_timeout': 180.,
+                    }
+                }
+            },
+            par_types = dict,
+            docstring = "Substitutions for self.subconfigs that shouldn't go in the provenance",
+            critical = False
         )
 
         self._enforce_no_new_attrs = True
@@ -251,15 +347,9 @@ class Detector:
     """
 
     def __init__(self, **kwargs):
-        """Initialize Detector.
-
-        NOTE : if you change self.pars.backgrounding, call make_backgrounder to
-        get an updated backgrounding object!
-
-        """
+        """Initialize Detector."""
 
         self.pars = ParsDetector(**kwargs)
-        self.make_backgrounder()
 
         # this is useful for tests, where we can know if
         # the object did any work or just loaded from DB or datastore
@@ -301,10 +391,12 @@ class Detector:
         self.has_recalculated = False
 
         if self.pars.subtraction:
-            if  self.backgrounder.pars.method != 'zero':
-                raise ValueError( "Running detection on a subtraction requires backgrounding.method=zero" )
             try:
-                ds = DataStore.from_args(*args, **kwargs)
+                ds = DataStore.from_args( *args, **kwargs )
+                self.pars.subconfig_update( ds )
+                if  self.backgrounder.pars.method != 'zero':
+                    raise ValueError( "Running detection on a subtraction requires backgrounding.method=zero" )
+
                 t_start = time.perf_counter()
                 if ds.update_memory_usages:
                     import tracemalloc
@@ -383,7 +475,9 @@ class Detector:
 
         else:  # regular image
             try:
-                ds = DataStore.from_args(*args, **kwargs)
+                ds = DataStore.from_args( *args, **kwargs )
+                self.pars.subconfig_update( ds )
+                self.make_backgrounder()
                 prov = ds.get_provenance('extraction', self.pars.get_critical_pars())
 
                 if do_not_load:

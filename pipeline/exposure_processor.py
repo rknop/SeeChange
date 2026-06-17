@@ -19,7 +19,6 @@ from models.exposure import Exposure
 
 from pipeline.data_store import DataStore
 from pipeline.top_level import Pipeline
-from pipeline.configchooser import ConfigChooser
 
 
 class ExposureProcessor:
@@ -392,7 +391,6 @@ class ExposureProcessor:
             self.finish_work()
             return
 
-        cfg = Config.get()
         origconfig = Config._default
         try:
             if not ( self.ignore_known_exposures or self.nosave ):
@@ -403,14 +401,6 @@ class ExposureProcessor:
                                     { 'inst': self.instrument.name, 'iden': self.identifier,
                                       't': datetime.datetime.now( tz=datetime.UTC ) } )
                     conn.commit()
-
-            # Update the config if necessary.  This changes the global
-            #   config cache, which is scary, because we're changing it
-            #   based on the needs of the current exposure.  So, in
-            #   the finally block below, we try to restore the original
-            #   config.
-            config_chooser = ConfigChooser( **( cfg.value('configchoice') ) )
-            config_chooser.run( self.exposure )
 
             chips = [ c.identifier for c in self.instrument.fetch_sections().values() if not c.defective ]
             if self.onlychips is not None:

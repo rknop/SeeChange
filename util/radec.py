@@ -138,3 +138,54 @@ def radec_to_gal_ecl( ra, dec ):
     ecllon = float(coords.barycentrictrueecliptic.lon.deg)
 
     return gallat, gallon, ecllat, ecllon
+
+
+def ra_cross_zero_minmax( ramin, ramax ):
+    while ramin < 0.:
+        ramin += 360.
+    while ramin >= 360.:
+        ramin -= 360.
+    while ramax < 0.:
+        ramax += 360.
+    while ramax >= 360.:
+        ramax -= 360.
+
+    if ramin > ramax:
+        tmp = ramin
+        ramin = ramax
+        ramax = tmp
+
+    if ( ramax - ramin ) > 180.:
+        tmp = ramin
+        ramin = ramax
+        ramax = tmp
+
+    return ramin, ramax
+
+
+def ra_cross_zero_avgra( ramin, ramax ):
+    while ramin < 0.:
+        ramin += 360.
+    while ramin >= 360.:
+        ramin -= 360.
+    while ramax < 0.:
+        ramax += 360.
+    while ramax >= 360.:
+        ramax -= 360.
+
+    if ramin > ramax:
+        tmp = ramin
+        ramin = ramax
+        ramax = tmp
+
+    if ( ramax - ramin ) > 180.:
+        tmp = ramin
+        ramin = ramax
+        ramax = tmp
+        ramin -= 360.
+
+    ra = ( ramax + ramin ) / 2.
+    if ra < 0.:
+        ra += 360.
+
+    return ra

@@ -3,6 +3,7 @@ import pathlib
 import random
 import time
 import subprocess
+import types
 
 import numpy as np
 
@@ -594,6 +595,10 @@ class ImageAligner:
             source_sources_prov = Provenance.get( source_sources.provenance_id )
             extractor = Detector()
             extractor.pars.override(source_sources_prov.parameters, ignore_addons=True)
+            # OMG this is an ugly hack, but I guess this is what we get for doing anything
+            #   other than calling the "run" method of one of these pipeline objects.
+            fakeds = types.SimpleNamespace( wcs=target_wcs )
+            extractor.pars.subconfig_update( fakeds )
             warpedsources, warpedpsf, _, _ = extractor.extract_sources( warpedim, warpedbg )
 
             prov = Provenance(

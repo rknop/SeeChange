@@ -98,7 +98,7 @@ conductor:
 webap:
   webap_url: https://webap:8081/
 
-  
+
 # ======================================================================
 # Gaia DR3 server
 #
@@ -285,50 +285,82 @@ preprocessing:
 # for it might depend on the speed of your cluster's CPU and IO.
 
 extraction:
-  method: sextractor
-  measure_psf: true
-  apertures: [1.0, 2.0, 3.0, 5.0]
-  inf_aper_num: -1
-  best_aper_num: 0
-  aperunit: fwhm
-  separation_fwhm: 1.0
-  initial_threshold: 1.5
-  sextr_threshold: 1.5
-  snr_threshold: 3.0
-  subtraction: false
-  backgrounding:
-    format: map
-    method: sep
-    poly_order: 1
-    box_size: null
-    filt_size: null
-  psf_method: psfex
-  psf_params:
-    fwhm_min: 0.5
-    fwhm_max_to_try: [ 10.0, 15.0, 20.0, 25.0 ]
-    psf_init_size: 25
-    psf_final_size: null
+  subconfigs:
+    choice_algorithm: star_density
+    choice_params:
+      star_mag_cutoff: 20
+      star_density_cutoff: 1.0e+5
+    default_subconfig: extragalactic
+    subconfigs:
+      extragalactic:
+        method: sextractor
+        measure_psf: true
+        apertures: [1.0, 2.0, 3.0, 5.0]
+        inf_aper_num: -1
+        best_aper_num: 0
+        aperunit: fwhm
+        separation_fwhm: 1.0
+        initial_threshold: 1.5
+        sextr_threshold: 1.5
+        snr_threshold: 3.0
+        subtraction: false
+        backgrounding:
+          format: map
+          method: sep
+          poly_order: 1
+          box_size: null
+          filt_size: null
+        psf_method: psfex
+        psf_params:
+          fwhm_min: 0.5
+          fwhm_max_to_try: [ 10.0, 15.0, 20.0, 25.0 ]
+          psf_init_size: 25
+          psf_final_size: null
+      galactic:
+        snr_threshold: 10.0
 
 
 # ======================================================================
 # World Coordinates
 
 astrocal:
-  cross_match_catalog: gaia_dr3
-  solution_method: scamp
-  max_catalog_mag: [22.0]
-  mag_range_catalog: 6.0
-  min_catalog_stars: 50
-  max_sources_to_use: [2000, 1000, 500, 200]
+  subconfigs:
+    choice_algorithm: star_density
+    choice_params:
+      star_mag_cutoff: 20
+      star_density_cutoff: 1.0e+5
+    default_subconfig: extragalactic
+    subconfigs:
+      extragalactic:
+        cross_match_catalog: gaia_dr3
+        solution_method: scamp
+        max_catalog_mag: [22.0]
+        mag_range_catalog: 6.0
+        min_catalog_stars: 50
+        max_sources_to_use: [2000, 1000, 500, 200]
+      galactic:
+        max_catalog_mag: [15., 16., 17.]
+        mag_range_catalog: 2.0
 
 # ======================================================================
 # Zero Point
 
 photocal:
-  cross_match_catalog: gaia_dr3
-  max_catalog_mag: [22.0]
-  mag_range_catalog: 6.0
-  min_catalog_stars: 50
+  subconfigs:
+    choice_algorithm: star_density
+    choice_params:
+      star_mag_cutoff: 20
+      star_density_cutoff: 1.0e+5
+    default_subconfig: extragalactic
+    subconfigs:
+      extragalactic:
+        cross_match_catalog: gaia_dr3
+        max_catalog_mag: [22.0]
+        mag_range_catalog: 6.0
+        min_catalog_stars: 50
+      galactic:
+        max_catalog_mag: [17., 18., 19.]
+        mag_range_catalog: 3.0
 
 
 # ======================================================================
@@ -380,9 +412,20 @@ subtraction:
 # See pipline/subtraction.py for parameter definitions
 
 detection:
-  subtraction: true
-  method: filter
-  snr_threshold: 5.0
+  subconfigs:
+    choice_algorithm: star_density
+    choice_params:
+      star_mag_cutoff: 20
+      star_density_cutoff: 1.0e+5
+    default_subconfig: extragalactic
+    subconfigs:
+      extragalactic:
+        subtraction: true
+        method: filter
+        snr_threshold: 5.0
+      galactic:
+        snr_threshold: 10.0
+
 
 # ======================================================================#
 # Cutting
@@ -480,21 +523,34 @@ scoring:
 
 object:
   namefmt: obj%Y%a
-  
+
 # ======================================================================
 # Fake injection
 
 fakeinjection:
-  min_fake_mag: -2.
-  max_fake_mag: 1.
-  mag_rel_limmag: true
-  num_fakes: 100
-  mag_prob_ratio: 1.
-  random_seed: 0
-  hostless_frac: 1.
-  host_minmag: -3.
-  host_maxmag: 0.5
-  host_distscale: 1.
+  subconfigs:
+    choice_algorithm: star_density
+    choice_params:
+      star_mag_cutoff: 20
+      star_density_cutoff: 1.0e+5
+    default_subconfig: extragalactic
+    subconfigs:
+      extragalactic:
+        min_fake_mag: -2.
+        max_fake_mag: 1.
+        mag_rel_limmag: true
+        num_fakes: 100
+        mag_prob_ratio: 1.
+        random_seed: 0
+        hostless_frac: 1.
+        host_minmag: -3.
+        host_maxmag: 0.5
+        host_distscale: 1.
+      galactic:
+        min_fake_mag: -4.
+        num_fakes: 400
+        host_maxmag: 1.
+        host_distcale: 0.
 
 
 # ======================================================================

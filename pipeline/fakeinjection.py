@@ -18,104 +18,148 @@ class ParsFakeInjector(Parameters):
     def __init__( self, **kwargs ):
         super().__init__()
 
+        # IMPORTANT
+        # Notice that many of the parameters critical=False that really probably ought
+        #   to be critical=True.  Reason: the subconfig_update system in parameters.py.
+        #   See comment in detection.py
+
         self.min_fake_mag = self.add_par(
-            'min_fake_mag',
-            -2.,
-            float,
-            'Minimum (brightest) magnitude of fake to inject.  Relative to the image magnitude limit if '
-            'mag_rel_limmag is True, otherwise just the apparent magnitude.',
-            critical=True
+            name = 'min_fake_mag',
+            default = -2.,
+            par_types = float,
+            docstring = ( 'Minimum (brightest) magnitude of fake to inject.  Relative to the image magnitude limit if '
+                          'mag_rel_limmag is True, otherwise just the apparent magnitude.' ),
+            critical = False
         )
 
         self.max_fake_mag = self.add_par(
-            'max_fake_mag',
-            1.,
-            float,
-            'Maximum (dimmest) magnitude of fake to inject.  Relative to the image magnitlude limit if '
-            'mag_rel_limmag is True, otherwise just the apparent magnitude.',
-            critical=True
+            name = 'max_fake_mag',
+            default = 1.,
+            par_types = float,
+            docstring = ( 'Maximum (dimmest) magnitude of fake to inject.  Relative to the image magnitlude limit if '
+                          'mag_rel_limmag is True, otherwise just the apparent magnitude.' ),
+            critical = False
         )
 
         self.mag_rel_limmag = self.add_par(
-            'mag_rel_limmag',
-            True,
-            bool,
-            'Is min/max_fake_mag relative to the image lim_mag_estimate, or straight-up magnitude?',
-            critical=True
+            name = 'mag_rel_limmag',
+            default = True,
+            par_types = bool,
+            docstring = 'Is min/max_fake_mag relative to the image lim_mag_estimate, or straight-up magnitude?',
+            critical = False
         )
 
         self.num_fakes = self.add_par(
-            'num_fakes',
-            100,
-            int,
-            'Total number of fakes to inject',
-            critical=True
+            name = 'num_fakes',
+            default = 100,
+            par_types = int,
+            docstring = 'Total number of fakes to inject',
+            critical = False
         )
 
         self.mag_prob_ratio = self.add_par(
-            'mag_prob_ratio',
-            1.,
-            float,
-            'Probability density of max mag divided by probability density of min mag.  If 1., '
-            'fakes are chosen from a uniform magnitude distribution.  If <1., there will be more '
-            'brighter fakes than dimmer fakes.  If >1., there will be more dimmer fakes than '
-            'brighter fakes.',
-            critical=True
+            name = 'mag_prob_ratio',
+            default = 1.,
+            par_types = float,
+            docstring = ( 'Probability density of max mag divided by probability density of min mag.  If 1., '
+                          'fakes are chosen from a uniform magnitude distribution.  If <1., there will be more '
+                          'brighter fakes than dimmer fakes.  If >1., there will be more dimmer fakes than '
+                          'brighter fakes.' ),
+            critical = False
         )
 
         self.random_seed = self.add_par(
-            'random_seed',
-            0,
-            int,
-            "Random seed to use.  0 = pull a random seed from system entropy.  This is usually what you "
-            "want, but you can set this to something else if you want detailed reproducibility.  "
-            "Note that the provenance generated will depend on the actual random seed, not 0, so "
-            "you won't get reproducible provenances either if you keep this at 0!",
-            critical=True
+            name = 'random_seed',
+            default = 0,
+            par_types = int,
+            docstring = ( "Random seed to use.  0 = pull a random seed from system entropy.  This is usually what you "
+                          "want, but you can set this to something else if you want detailed reproducibility.  "
+                          "Note that the provenance generated will depend on the actual random seed, not 0, so "
+                          "you won't get reproducible provenances either if you keep this at 0!" ),
+            critical = False
         )
 
         self.hostless_frac = self.add_par(
-            'hostless_frac',
-            0.,
-            float,
-            "Fraction of fakes that aren't (necessdarily) near a host galaxy.  Hostless fakes will be "
-            "randomly placed in the image without regard to the distribution of sources in the image.  "
-            "Set this to 0. for all fakes to have a host, to 1. for all fakes to be purely randomly placed.",
-            critical=True
+            name = 'hostless_frac',
+            default = 0.,
+            par_types = float,
+            docstring = ( "Fraction of fakes that aren't (necessdarily) near a host galaxy.  Hostless fakes will be "
+                          "randomly placed in the image without regard to the distribution of sources in the image.  "
+                          "Set this to 0. for all fakes to have a host, to 1. for all fakes to be purely randomly "
+                          "placed." ),
+            critical = False
         )
 
         self.host_minmag = self.add_par(
-            'host_minmag',
-            -3.,
-            float,
-            "Place fakes on hosts that are no brighter than this relative to the fake magnitude. ",
-            critical=True
+            name = 'host_minmag',
+            default = -3.,
+            par_types = float,
+            docstring = "Place fakes on hosts that are no brighter than this relative to the fake magnitude. ",
+            critical = False
         )
 
         self.host_maxmag = self.add_par(
-            'host_maxmag',
-            0.5,
-            float,
-            "Place fakes on hosts that are no dimmer this relative to the fake magnitude. ",
-            critical=True
+            name = 'host_maxmag',
+            default = 0.5,
+            par_types = float,
+            docstring = "Place fakes on hosts that are no dimmer this relative to the fake magnitude. ",
+            critical = False
         )
 
         self.host_distscale = self.add_par(
-            'host_distscale',
-            1.,
-            float,
-            "Fakes placed on hosts will be placed in an exponential distribution with this length scale "
-            "away from the host from the center in units of the 1σ moment (Sextractor AWIN_IMAGE/BWIN_IMAGE).",
-            critical=True
+            name = 'host_distscale',
+            default = 1.,
+            par_types = float,
+            docstring = ( "Fakes placed on hosts will be placed in an exponential distribution with this length scale "
+                          "away from the host from the center in units of the 1σ moment (Sextractor "
+                          "AWIN_IMAGE/BWIN_IMAGE)." ),
+            critical = False
         )
 
         self.detection_pixel_range = self.add_par(
-            'detection_pixel_range',
-            2.,
-            float,
-            "When determining if a fake was detected, look for detections within this many pixels "
-            "of the fake's injected position",
-            critical=True
+            name = 'detection_pixel_range',
+            default = 2.,
+            par_types = float,
+            docstring = ( "When determining if a fake was detected, look for detections within this many pixels "
+                          "of the fake's injected position" ),
+            critical = False
+        )
+
+        self.subconfigs = self.add_par(
+            name = 'subconfigs',
+            default = {
+                'choice_algorithm': 'star_density',
+                'choice_params': {
+                    'star_mag_cutoff': 20,
+                    'star_density_cutoff': 1e5,
+                },
+                'default_subconfing': 'extragalactic',
+                'subconfigs': {
+                    'extragalactic': {
+                        'min_fake_mag': -2.,
+                        'max_fake_mag': 1.,
+                        'mag_rel_limag': True,
+                        'num_fakes': 100,
+                        'mag_prob_ratio': 1.,
+                        'random_seed': 0,
+                        'hostless_frac': 0.,
+                        'host_minmag': -3.,
+                        'host_maxmag': 0.5,
+                        'host_distcale': 1.,
+                        'detection_pixel_range': 2.
+                    },
+                    'galactic': {
+                        'min_fake_mag': -4.,
+                        'num_fakes': 400,
+                        'host_maxmag': 1.,
+                        'host_distscale': 0.
+                    },
+                }
+            },
+            par_types = dict,
+            docstring = ( "Algorithm for choosing all the config parameters, and replacements for all the "
+                          "config paramters based on that choice." ),
+            critical = True
         )
 
         self._enforce_no_new_attrs = True
@@ -277,6 +321,7 @@ class FakeInjector:
         try:
             t_start = time.perf_counter()
             ds = DataStore.from_args( *args, **kwargs )
+            self.pars.subconfig_udpate( ds )
             if ds.update_memory_usages:
                 import tracemalloc
                 tracemalloc.reset_peak()

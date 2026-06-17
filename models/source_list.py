@@ -232,7 +232,7 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         """A numpy array with variances on y position"""
         if self.format == 'sextrfits':
             return self.data['ERRX2WIN_IMAGE']
-        elif self.foramt == 'sepnpy':
+        elif self.format == 'sepnpy':
             # The sep documentation says this is "Second Moment Errors",
             # which may not really be what we want.
             return self.data['erry2']
@@ -246,7 +246,7 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         """A numpy array with variances on x position"""
         if self.format == 'sextrfits':
             return self.data['ERRY2WIN_IMAGE']
-        elif self.foramt == 'sepnpy':
+        elif self.format == 'sepnpy':
             # The sep documentation says this is "Second Moment Errors",
             # which may not really be what we want.
             return self.data['errx2']

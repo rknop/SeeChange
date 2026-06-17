@@ -71,16 +71,16 @@ class CodeVersion(Base, UUIDMixin):
         # The core processes of the pipeline
         'acquire_exposure': (0,2,0),
         'preprocessing': (0,10,0),
-        'extraction': (0,7,0),
-        'astrocal' : (0,4,0),
-        'photocal' : (0,1,0),
+        'extraction': (0,8,0),
+        'astrocal' : (0,5,0),
+        'photocal' : (0,2,0),
         'subtraction': (0,3,0),
-        'detection': (0,2,0),
+        'detection': (0,3,0),
         'cutting': (0,1,0),
         'measuring': (0,1,0),
         'scoring': (0,1,0),
         'alerting': (0,1,0),
-        'fakeinjection' : (0,1,0),
+        'fakeinjection' : (0,2,0),
 
         # Other processes of associated pipelines
         'referencing' : (0,8,0),

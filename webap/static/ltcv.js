@@ -27,7 +27,7 @@ seechange.LtcvView = class
         this.provtag = document.getElementById( "ltcv_initial_provtag" ).value;
         this.zp = parseFloat( document.getElementById( "ltcv_initial_zp" ).value );
         this.zpunits = document.getElementById( "ltcv_initial_zpunits" ).value;
-        
+
         this.auth = new rkAuth( this.authdiv, "",
                                 () => { self.render_page(); },
                                 () => { window.location.reload(); } );
@@ -51,7 +51,7 @@ seechange.LtcvView = class
                                      "text": "Log Out",
                                      "click": () => { self.auth.logout( () => { window.location.reload(); } ) }
                                    } );
-        
+
         rkWebUtil.wipeDiv( this.parentdiv );
 
         h2 = rkWebUtil.elemaker( "h2", this.parentdiv, { "text": "Detection lightcurve for " } );
@@ -65,7 +65,7 @@ seechange.LtcvView = class
         tr = rkWebUtil.elemaker( "tr", table );
         rkWebUtil.elemaker( "th", tr, { "text": "α, δ: ", 'classes': [ "right", "mmarginright" ] } );
         this.coordtd = rkWebUtil.elemaker( "td", tr, { "text": "(...loading...)" } );
-    
+
         hbox = rkWebUtil.elemaker( "div", this.parentdiv, { "classes": [ "hbox", "flexeven" ] } );
         this.ltcvdiv = rkWebUtil.elemaker( "div", hbox, { "classes": [ "mostlyborder", "mmargin", "padex",
                                                                        "flexfitcontent", "minwid40p",
@@ -123,7 +123,7 @@ seechange.LtcvView = class
                          'Y': '#222200' };
 
         rkWebUtil.wipeDiv( this.ltcvdiv );
-        
+
         for ( let i in data.instruments ) {
             let dex = data.instruments[i] + ':' + data.filters[i];
             xdatas[ dex ] = [];
@@ -190,7 +190,7 @@ seechange.LtcvView = class
     {
         let table, tr, th, td, img;
         let oversample = 5;
-        
+
         rkWebUtil.wipeDiv( this.cutoutsdiv );
 
         table = rkWebUtil.elemaker( "table", this.cutoutsdiv, { 'id': 'exposurecutoutstable' } );
@@ -228,9 +228,9 @@ seechange.LtcvView = class
                                           "height": oversample * data.cutouts.h[i],
                                           "alt": "sub" } } );
         }
-        
+
     };
-    
+
 };
 
 
@@ -241,4 +241,4 @@ seechange.LtcvView = class
 export { }
 
 
-    
+

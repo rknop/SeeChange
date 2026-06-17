@@ -29,7 +29,8 @@ def test_get_swarp_fodder_wcs( decam_datastore_through_zp, decam_elais_e1_two_re
     ds = decam_datastore_through_zp
     aligner = ImageAligner()
 
-    wcs = aligner.get_swarp_fodder_wcs( ds.image, ds.sources, ds.wcs, ds.zp, refds0.sources )
+    wcs = aligner.get_swarp_fodder_wcs( ds.image, ds.sources, ds.wcs, ds.zp,
+                                        refds0.image, refds0.sources, refds0.wcs )
 
     # target WCS should be close, but not identical, to the old target wcs
     x, y = np.meshgrid( np.array( [ 0.05, 0.5, 0.75, 0.95 ] ) * refds0.image.data.shape[1],
@@ -47,10 +48,12 @@ def test_get_swarp_fodder_wcs( decam_datastore_through_zp, decam_elais_e1_two_re
     # (The two refs are different chips from the same exposure, so don't overlap.)
     # Make sure we can find a solution.  (This is a gratuitous 60 second delay in tests....)
     with pytest.raises( subprocess.TimeoutExpired ):
-        wcs = aligner.get_swarp_fodder_wcs( refds1.image, refds1.sources, refds1.wcs, refds1.zp, refds0.sources )
+        wcs = aligner.get_swarp_fodder_wcs( refds1.image, refds1.sources, refds1.wcs, refds1.zp,
+                                            refds0.image, refds0.sources, refds0.wcs )
 
     # Make sure it falls back if we tell it to.  (Another 60 second delay in tests....)
-    wcs = aligner.get_swarp_fodder_wcs( refds1.image, refds1.sources, refds1.wcs, refds1.zp, refds0.sources,
+    wcs = aligner.get_swarp_fodder_wcs( refds1.image, refds1.sources, refds1.wcs, refds1.zp,
+                                        refds0.image, refds0.sources, refds0.wcs,
                                         fall_back_wcs=refds0.wcs.wcs )
     newsc = wcs.pixel_to_world( x, y )
     dra = np.fabs( ( oldsc.ra - newsc.ra ).value ) * np.cos( oldsc.dec.value * np.pi / 180. )
@@ -68,7 +71,7 @@ def test_warp_decam( decam_datastore_through_zp, decam_reference ):
         aligner = ImageAligner()
         ( warped, warpedsrc,
           warpedbg, warpedpsf ) = aligner.run( ds.ref_image, ds.ref_sources, ds.ref_bg, ds.ref_psf,
-                                               ds.ref_wcs, ds.ref_zp, ds.image, ds.sources )
+                                               ds.ref_wcs, ds.ref_zp, ds.image, ds.sources, ds.wcs )
         assert isinstance( warped, Image )
         assert isinstance( warpedsrc, SourceList )
         assert isinstance( warpedbg, Background )
