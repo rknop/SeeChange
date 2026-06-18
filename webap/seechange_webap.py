@@ -668,73 +668,79 @@ class PngCutoutsForSubImage( BaseView ):
                     apercorses[subid] = row['aper_cors']
             app.logger.debug( f'Got {len(subids)} subtractions.' )
 
-            app.logger.debug( f"Getting cutouts files for sub images {subids}" )
-            q = sql.SQL( textwrap.dedent(
-                """\
-                SELECT c.filepath,s._id AS subimageid,sl.filepath AS sources_path,s.section_id
-                FROM cutouts c
-                INNER JOIN provenance_tags cpt ON cpt.provenance_id=c.provenance_id AND cpt.tag={provtag}
-                INNER JOIN source_lists sl ON c.sources_id=sl._id
-                INNER JOIN images s ON sl.image_id=s._id
-                WHERE s._id=ANY(ARRAY[{subids}])
-                """
-            ) ).format( provtag=provtag, subids=sql.SQL(",").join(subids) )
-            rows = pgdb.execute( q )
-            sectionids = { asUUID( r['subimageid'] ): r['section_id'] for r in rows }
-            cutoutsfiles = { asUUID( r['subimageid'] ): r['filepath'] for r in rows }
-            app.logger.debug( f"Got: {len(cutoutsfiles)} cutouts files" )
-
-            # app.logger.debug( f"Getting measurements for sub images {subids}" )
-            app.logger.debug( f"Getting measurements for {len(subids)} sub images" )
-            q = sql.SQL( textwrap.dedent(
-                """\
-                SELECT m.ra AS measra, m.dec AS measdec, m.index_in_sources, m.best_aperture,
-                       m.flux, m.dflux, m.psfflux, m.dpsfflux, m.is_bad, m.name, m.is_test,
-                       m.score, m._algorithm, m.center_x_pixel, m.center_y_pixel, m.x, m.y, m.gfit_x, m.gfit_y,
-                       m.major_width, m.minor_width, m.position_angle, m.nbadpix, m.negfrac, m.negfluxfrac,
-                       s._id AS subid, s.section_id
-                FROM cutouts c
-                INNER JOIN provenance_tags cpt ON cpt.provenance_id=c.provenance_id AND cpt.tag={provtag}
-                INNER JOIN source_lists sl ON c.sources_id=sl._id
-                INNER JOIN images s ON sl.image_id=s._id
-                INNER JOIN
-                  ( SELECT ms.cutouts_id AS meascutid, meas.index_in_sources, meas.ra, meas.dec, meas.is_bad,
-                           meas.best_aperture, meas.flux_apertures[meas.best_aperture+1] AS flux,
-                           meas.flux_apertures_err[meas.best_aperture+1] AS dflux,
-                           meas.flux_psf AS psfflux, meas.flux_psf_err AS dpsfflux,
-                           meas.center_x_pixel, meas.center_y_pixel, meas.x, meas.y, meas.gfit_x, meas.gfit_y,
-                           meas.major_width, meas.minor_width, meas.position_angle,
-                           meas.nbadpix, meas.negfrac, meas.negfluxfrac,
-                           obj.name, obj.is_test, score.score, score._algorithm
-                    FROM measurements meas
-                    INNER JOIN measurement_sets ms ON meas.measurementset_id=ms._id
-                    INNER JOIN provenance_tags mpt ON ms.provenance_id=mpt.provenance_id AND mpt.tag={provtag}
-                    INNER JOIN objects obj ON meas.object_id=obj._id
-                    LEFT JOIN
-                      ( SELECT ss.measurementset_id, ss._algorithm, s.index_in_sources, s.score FROM deepscores s
-                        INNER JOIN deepscore_sets ss ON s.deepscoreset_id=ss._id
-                        INNER JOIN provenance_tags spt ON spt.provenance_id=ss.provenance_id
-                                                       AND spt.tag={provtag}
-                      ) AS score
-                      ON score.measurementset_id=ms._id AND score.index_in_sources=meas.index_in_sources
-                """
-            ) ).format( provtag=provtag )
-            if not nomeas:
-                q += sql.SQL( "    WHERE NOT meas.is_bad\n" )
-            q += sql.SQL( "   ) AS m ON m.meascutid=c._id\n"
-                          "WHERE s._id=ANY(ARRAY[{subids}])\n" ).format( subids=sql.SQL(",").join(subids) )
-            if data['sortby'] == 'fluxdesc_chip_index':
-                q += sql.SQL( "ORDER BY flux DESC NULLS LAST,s.section_id,m.index_in_sources\n" )
-            elif data['sortby'] == 'rbdesc_fluxdesc_chip_index':
-                q += sql.SQL( "ORDER BY is_bad,score DESC NULLS LAST,flux DESC NULLS LAST,\n"
-                              "         s.section_id,m.index_in_sources\n" )
+            if len(subids) == 0:
+                app.loger.debug( "No subtraction images, skipping getting cutouts and measurements." )
+                sectionids = {}
+                cutoutsfiles = {}
+                rows = []
             else:
-                raise RuntimeError( f"Unknown sort criterion {data['sortby']}" )
-            if limit is not None:
-                q += sql.SQL( "LIMIT {limit} OFFSET {offset}" ).format( limit=limit, offset=offset )
-            # app.logger.debug( f"Sending query to get measurements: {cursor.mogrify(q,subdict)}" )
-            rows = pgdb.execute( q )
-            # app.logger.debug( f"Got {len(rows)} rows" )
+                app.logger.debug( f"Getting cutouts files for sub images {subids}" )
+                q = sql.SQL( textwrap.dedent(
+                    """\
+                    SELECT c.filepath,s._id AS subimageid,sl.filepath AS sources_path,s.section_id
+                    FROM cutouts c
+                    INNER JOIN provenance_tags cpt ON cpt.provenance_id=c.provenance_id AND cpt.tag={provtag}
+                    INNER JOIN source_lists sl ON c.sources_id=sl._id
+                    INNER JOIN images s ON sl.image_id=s._id
+                    WHERE s._id=ANY(ARRAY[{subids}])
+                    """
+                ) ).format( provtag=provtag, subids=sql.SQL(",").join(subids) )
+                rows = pgdb.execute( q )
+                sectionids = { asUUID( r['subimageid'] ): r['section_id'] for r in rows }
+                cutoutsfiles = { asUUID( r['subimageid'] ): r['filepath'] for r in rows }
+                app.logger.debug( f"Got: {len(cutoutsfiles)} cutouts files" )
+
+                # app.logger.debug( f"Getting measurements for sub images {subids}" )
+                app.logger.debug( f"Getting measurements for {len(subids)} sub images" )
+                q = sql.SQL( textwrap.dedent(
+                    """\
+                    SELECT m.ra AS measra, m.dec AS measdec, m.index_in_sources, m.best_aperture,
+                           m.flux, m.dflux, m.psfflux, m.dpsfflux, m.is_bad, m.name, m.is_test,
+                           m.score, m._algorithm, m.center_x_pixel, m.center_y_pixel, m.x, m.y, m.gfit_x, m.gfit_y,
+                           m.major_width, m.minor_width, m.position_angle, m.nbadpix, m.negfrac, m.negfluxfrac,
+                           s._id AS subid, s.section_id
+                    FROM cutouts c
+                    INNER JOIN provenance_tags cpt ON cpt.provenance_id=c.provenance_id AND cpt.tag={provtag}
+                    INNER JOIN source_lists sl ON c.sources_id=sl._id
+                    INNER JOIN images s ON sl.image_id=s._id
+                    INNER JOIN
+                      ( SELECT ms.cutouts_id AS meascutid, meas.index_in_sources, meas.ra, meas.dec, meas.is_bad,
+                               meas.best_aperture, meas.flux_apertures[meas.best_aperture+1] AS flux,
+                               meas.flux_apertures_err[meas.best_aperture+1] AS dflux,
+                               meas.flux_psf AS psfflux, meas.flux_psf_err AS dpsfflux,
+                               meas.center_x_pixel, meas.center_y_pixel, meas.x, meas.y, meas.gfit_x, meas.gfit_y,
+                               meas.major_width, meas.minor_width, meas.position_angle,
+                               meas.nbadpix, meas.negfrac, meas.negfluxfrac,
+                               obj.name, obj.is_test, score.score, score._algorithm
+                        FROM measurements meas
+                        INNER JOIN measurement_sets ms ON meas.measurementset_id=ms._id
+                        INNER JOIN provenance_tags mpt ON ms.provenance_id=mpt.provenance_id AND mpt.tag={provtag}
+                        INNER JOIN objects obj ON meas.object_id=obj._id
+                        LEFT JOIN
+                          ( SELECT ss.measurementset_id, ss._algorithm, s.index_in_sources, s.score FROM deepscores s
+                            INNER JOIN deepscore_sets ss ON s.deepscoreset_id=ss._id
+                            INNER JOIN provenance_tags spt ON spt.provenance_id=ss.provenance_id
+                                                           AND spt.tag={provtag}
+                          ) AS score
+                          ON score.measurementset_id=ms._id AND score.index_in_sources=meas.index_in_sources
+                    """
+                ) ).format( provtag=provtag )
+                if not nomeas:
+                    q += sql.SQL( "    WHERE NOT meas.is_bad\n" )
+                q += sql.SQL( "   ) AS m ON m.meascutid=c._id\n"
+                              "WHERE s._id=ANY(ARRAY[{subids}])\n" ).format( subids=sql.SQL(",").join(subids) )
+                if data['sortby'] == 'fluxdesc_chip_index':
+                    q += sql.SQL( "ORDER BY flux DESC NULLS LAST,s.section_id,m.index_in_sources\n" )
+                elif data['sortby'] == 'rbdesc_fluxdesc_chip_index':
+                    q += sql.SQL( "ORDER BY is_bad,score DESC NULLS LAST,flux DESC NULLS LAST,\n"
+                                  "         s.section_id,m.index_in_sources\n" )
+                else:
+                    raise RuntimeError( f"Unknown sort criterion {data['sortby']}" )
+                if limit is not None:
+                    q += sql.SQL( "LIMIT {limit} OFFSET {offset}" ).format( limit=limit, offset=offset )
+                # app.logger.debug( f"Sending query to get measurements: {cursor.mogrify(q,subdict)}" )
+                rows = pgdb.execute( q )
+                # app.logger.debug( f"Got {len(rows)} rows" )
 
             retval = { 'status': 'ok',
                        'cutouts': {

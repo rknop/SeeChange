@@ -417,7 +417,7 @@ def provenance_base():
     yield p
 
     with PGDB() as pgdb:
-        pgdb.execute_nofetch( sql.SQL( "DELETE FROM provenances WHERE id={pvid}" ).format( pvid=p.id ) )
+        pgdb.execute_nofetch( sql.SQL( "DELETE FROM provenances WHERE _id={pvid}" ).format( pvid=p.id ) )
         pgdb.commit()
 
 
@@ -435,7 +435,7 @@ def provenance_extra( provenance_base ):
     yield p
 
     with PGDB() as pgdb:
-        pgdb.execute_nofetch( sql.SQL( "DELETE FROM provenances WHERE id={pvid}" ).format( pvid=p.id ) )
+        pgdb.execute_nofetch( sql.SQL( "DELETE FROM provenances WHERE _id={pvid}" ).format( pvid=p.id ) )
         pgdb.commit()
 
 
@@ -443,7 +443,7 @@ def provenance_extra( provenance_base ):
 def provenance_tags_loaded( provenance_base, provenance_extra ):
     try:
         with PGDB() as pgdb:
-            for tag, prov in zip( [ 'xyzzy', 'plugh', 'plug' ],
+            for tag, prov in zip( [ 'xyzzy', 'plugh', 'plugh' ],
                                   [ provenance_base.id, provenance_base.id, provenance_extra.id ] ):
                 pgdb.execute_nofetch( sql.SQL( textwrap.dedent(
                     """\
@@ -474,7 +474,7 @@ def provenance_preprocessing():
     yield p
 
     with PGDB() as pgdb:
-        pgdb.execute_nofetch( sql.SQL( "DELETE FROM provenances WHERE id={pvid}" ).format( pvid=p.id ) )
+        pgdb.execute_nofetch( sql.SQL( "DELETE FROM provenances WHERE _id={pvid}" ).format( pvid=p.id ) )
         pgdb.commit()
 
 
@@ -491,7 +491,7 @@ def provenance_extraction():
     yield p
 
     with PGDB() as pgdb:
-        pgdb.execute_nofetch( sql.SQL( "DELETE FROM provenances WHERE id={pvid}" ).format( pvid=p.id ) )
+        pgdb.execute_nofetch( sql.SQL( "DELETE FROM provenances WHERE _id={pvid}" ).format( pvid=p.id ) )
         pgdb.commit()
 
 

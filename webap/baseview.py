@@ -1,6 +1,8 @@
 import re
 import copy
 import uuid
+import types
+import textwrap
 import datetime
 import simplejson
 
@@ -58,6 +60,16 @@ class BaseView( flask.views.View ):
                 if len(rows) == 0:
                     self.authenticated = False
                     raise ValueError( f"Error, failed to find user {self.username} in database" )
+                self.user = types.SimpleNamespace( groups=[], **(rows[0]) )
+                q = sql.SQL( textwrap.dedent(
+                    """\
+                    SELECT g.name FROM authgroup g
+                    INNER JOIN auth_user_group aug ON aug.groupid=g.id
+                    WHERE aug.userid={uid}
+                    """
+                ) ).format( uid=self.user.id )
+                rows = pgdb.execute( q )
+                self.user.groups = [ r['name'] for r in rows ]
         return self.authenticated
 
 
