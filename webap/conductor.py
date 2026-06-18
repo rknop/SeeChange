@@ -265,22 +265,23 @@ class RegisterWorker( ConductorBaseView ):
                 newid = uuid.uuid4()
                 q = sql.SQL( textwrap.dedent(
                     """
-                    INSERT INTO pipelineworkers(clusterid, node_id, lastheartbeat)
-                    VALUES ({cluster_id}, {node_id}, {lastheartbeat}
+                    INSERT INTO pipelineworkers(_id, cluster_id, node_id, lastheartbeat)
+                    VALUES ({newid}, {cluster_id}, {node_id}, {lastheartbeat})
                     """
-                ) ).format( cluster_id=args['cluster_id'],
+                ) ).format( newid=newid,
+                            cluster_id=args['cluster_id'],
                             node_id=args['node_id'],
                             lastheartbeat=datetime.datetime.now( tz=datetime.UTC ) )
-                psycopg.execute_nofetch( q )
+                pgdb.execute_nofetch( q )
                 newworker = { '_id': newid, 'cluster_id': args['cluster_id'], 'node_id': args['node_id'] }
                 status = 'added'
             if status in ( 'updated', 'added' ):
                 pgdb.commit()
 
         return { 'status': status,
-                 'id': newworker._id,
-                 'cluster_id': newworker.cluster_id,
-                 'node_id': newworker.node_id }
+                 'id': newworker['_id'],
+                 'cluster_id': newworker['cluster_id'],
+                 'node_id': newworker['node_id'] }
 
 
 # ======================================================================
@@ -293,8 +294,8 @@ class UnregisterWorker( ConductorBaseView ):
     def do_the_things( self, pipelineworker_id ):
         pipelineworker_id = asUUID( pipelineworker_id )
         with PGDB( dictcursor=True ) as pgdb:
-            q = sql.SQL( "SELECT * FROM piplineworkers WHERE _id={pwid}" ).format( pwid=pipelineworker_id )
-            rows = pgdb.exectute( q )
+            q = sql.SQL( "SELECT * FROM pipelineworkers WHERE _id={pwid}" ).format( pwid=pipelineworker_id )
+            rows = pgdb.execute( q )
             if len(rows) == 0:
                 return f"Unknown pipeline worker {pipelineworker_id}", 422
             else:
@@ -312,7 +313,7 @@ class UnregisterWorker( ConductorBaseView ):
 class WorkerHeartbeat( ConductorBaseView ):
     def do_the_things( self, pipelineworker_id ):
         pipelineworker_id = asUUID( pipelineworker_id )
-        with PGDB( dictucorsor=True ) as pgdb:
+        with PGDB( dictcursor=True ) as pgdb:
             q = sql.SQL( "SELECT * FROM pipelineworkers WHERE _id={pwid}" ).format( pwid=pipelineworker_id )
             rows = pgdb.execute( q )
             if len(rows) == 0:
