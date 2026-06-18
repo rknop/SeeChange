@@ -23,17 +23,12 @@ storage:
 # ======================================================================
 # Database config
 #
-# Note that as of this writing, psycopg3 requires an SQLAlchemy engine
-#   of "postgresql+psycopg"; otherwise, it will try to use psycopg2.
+# engine MUST be psotgresql+psycopg; anything else will generate an error
 #
-# echoqueries, alwaysexplain, and alwaysanalyze are useful for
-# debugging, but you do *not* want them on in practice.  They will spam
-# the debug output.  They are used by class models/base.py::PGDB
+# The basic databse connection inf is not in site config because every
+# cluster working on the same survey needs to contact the same database.
 #
-# Not in site config because every cluster working on the same survey
-# needs to contact the same database.
-#
-# The values below are what is needed for our tests.
+# There is further configuration for database behavior in site_config.yaml.
 
 db:
   engine: postgresql+psycopg

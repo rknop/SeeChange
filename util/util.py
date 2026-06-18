@@ -372,7 +372,13 @@ def patch_image_overlap_limits( patchwid, x, y, imageshape ):
 def retry_with_sleep( func, sleepmin=0.1, sleept=0.5, sleepfac=2, sleepfuzz=0.1, sleepmax=32,
                       failmessage="to do the thing", exception_on_fail=True, retval_on_fail=None, randseed=None,
                       check_result=None, return_attr=None, good_returns=None, bad_returns=None,
-                      badreturn_handler=None ):
+                      badreturn_handler=None, accept_exceptions=Exception ):
+    if ( ( not isinstance(accept_exceptions, Exception) ) and
+         ( ( not isinstance(accept_exceptions), tuple ) and all( isinstance(i, Exception) for i in accept_exceptions )
+          )
+        ):
+        raise TypeError( "accept_exceptions must be a subclass of Exception, or a tuple of same." )
+
     failedatleastonce = False
     succeeded = False
     done = False
@@ -413,7 +419,7 @@ def retry_with_sleep( func, sleepmin=0.1, sleept=0.5, sleepfac=2, sleepfuzz=0.1,
 
             t1 = time.monotonic()
 
-        except Exception as ex:
+        except accept_exceptions as ex:
             t1 = time.monotonic()
             failedatleastonce = True
             if sleept > sleepmax:

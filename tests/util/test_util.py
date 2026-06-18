@@ -80,7 +80,7 @@ def test_retry_with_sleep( caplog ):
 
     def _failntimes( s ):
         s['count'] -= 1
-        if s['count'] > 0:
+        if s['count'] >= 0:
             raise RuntimeError( f"Failed because count={s['count']+1}" )
         else:
             return 42
@@ -160,8 +160,8 @@ def test_retry_with_sleep( caplog ):
     res = retry_with_sleep( dothething, sleepmin=0.1, sleept=0.125, sleepfac=2, sleepmax=1.0, sleepfuzz=0.1,
                             failmessage="getting the answer", randseed=42 )
     assert res == 42
-    assert len(caplog.records) == 3
-    for i, t in enumerate( [ '0.12', '0.25' ] ):
+    assert len(caplog.records) == 4
+    for i, t in enumerate( [ '0.12', '0.25', '0.5' ] ):
         mat = re.search( r"Failed getting the answer after (\d+) tries, will sleep "
                          r".* \(nominally (\d.\d\d)s\) and try again.  Exception: "
                          r"Failed because count=(\d+)",
@@ -171,8 +171,36 @@ def test_retry_with_sleep( caplog ):
         assert mat.group(2) == t
         assert int( mat.group(3) ) == 3 - i
         assert caplog.records[i].levelname == 'WARNING'
-    mat = re.search( r"Succeeded getting the answer after (\d.\d\d)s and (\d+) tries.", caplog.records[2].msg )
+    mat = re.search( r"Succeeded getting the answer after (\d.\d\d)s and (\d+) tries.", caplog.records[3].msg )
     assert mat is not None
-    assert float( mat.group(1) ) == pytest.approx( 0.375, rel=0.3 )
+    assert float( mat.group(1) ) == pytest.approx( 0.875, rel=0.3 )
     assert int( mat.group(2) ) == 3
     assert caplog.records[2].levelname == 'INFO'
+
+
+    # Test accept_exceptions
+    with pytest.raises( RuntimeError, match="Failed because count=1" ):
+        thing = { 'count': 1 }
+        dothething = functools.partial( _failntimes, thing )
+        retry_with_sleep( dothething, sleepmin=0.1, sleept=0.125, sleepfac=2, sleepmax=1.0, sleepfuzz=0.1,
+                          failmessage="getting the answer", randseed=42,
+                          accept_exceptions=ValueError )
+
+    with pytest.raises( RuntimeError, match="Failed because count=1" ):
+        thing = { 'count': 1 }
+        dothething = functools.partial( _failntimes, thing )
+        retry_with_sleep( dothething, sleepmin=0.1, sleept=0.125, sleepfac=2, sleepmax=1.0, sleepfuzz=0.1,
+                          failmessage="getting the answer", randseed=42,
+                          accept_exceptions=(ValueError,TypeError) )
+
+    thing = { 'count': 1 }
+    dothething = functools.partial( _failntimes, thing )
+    res = retry_with_sleep( dothething, sleepmin=0.1, sleept=0.125, sleepfac=2, sleepmax=1.0, sleepfuzz=0.1,
+                            accept_exceptions=RuntimeError )
+    assert res == 42
+
+    thing = { 'count': 1 }
+    dothething = functools.partial( _failntimes, thing )
+    res = retry_with_sleep( dothething, sleepmin=0.1, sleept=0.125, sleepfac=2, sleepmax=1.0, sleepfuzz=0.1,
+                            accept_exceptions=(RuntimeError,ValueError) )
+    assert res == 42

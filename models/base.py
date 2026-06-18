@@ -10,6 +10,7 @@ import datetime
 import uuid
 import socket
 import threading
+import functools
 import logging
 import textwrap
 from uuid import UUID
@@ -48,7 +49,7 @@ import util.config as config
 from util.archive import Archive
 from util.logger import SCLogger
 from util.radec import radec_to_gal_ecl
-from util.util import asUUID, NumpyAndUUIDJsonEncoder, listify
+from util.util import asUUID, NumpyAndUUIDJsonEncoder, listify, retry_with_sleep
 
 # Postgres adapters to allow insertion of some numpy types
 # ...let's see if we can get by without these in psycopg3
@@ -124,7 +125,6 @@ def setup_warning_filters():
 setup_warning_filters()  # need to call this here and also call it explicitly when setting up tests
 
 _engine = None
-_Session = None
 _psycopg_params = None
 
 
@@ -135,6 +135,8 @@ def _get_psycopg_params():
         cfg = config.Config.get()
         if cfg.value( "db.engine" ) != "postgresql+psycopg":
             raise ValueError( "This pipeline only supports PostgreSQL as a database engine" )
+        if psycopg.__version__[0] != '3':
+            raise ValueError( "This pipeline requires psycopg version 3." )
 
         password = cfg.value( 'db.password' )
         if password is None:
@@ -145,7 +147,8 @@ def _get_psycopg_params():
 
         # psycopg docs seems to suggest that the client_encoding parameter isn't necessary,
         #   but empirically it is.
-        _psycopg_params = { 'host': cfg.value('db.host'),
+        _psycopg_params = { 'engine': cfg.value('db.engine'),
+                            'host': cfg.value('db.host'),
                             'port': cfg.value('db.port'),
                             'dbname': cfg.value('db.database'),
                             'user': cfg.value('db.user'),
@@ -156,12 +159,13 @@ def _get_psycopg_params():
 
 
 def Session():
-    """Make a session if it doesn't already exist.
+    """Make a session if it a globally cached one already exist.
 
-    Use this in interactive sessions where you don't want to open the
-    session as a context manager.  Don't use this anywhere in the code
-    base.  Instead, always use a context manager, getting your
-    connection using "with SmartSession(...) as ...".
+    This is primarily intended for interactive sessions where you're
+    developing or testing.  In real code, you should use SmartSession in
+    a context manager ("with SmartSession(...) as sess: ... ").  In
+    fact, in real code, you should move towards using the PGDB context
+    manager and stop using SQLAlchemy at all.
 
     Returns
     -------
@@ -169,24 +173,13 @@ def Session():
         A session object that doesn't automatically close.
 
     """
-    global _Session, _engine
+    global _engine
 
-    if _Session is None:
+    if _engine is None:
+        params = _get_psycopg_params()
+        url = ( f'{params["db.engine"]}://{params["user"]}:{params["password"]}@{params["host"]}:{params["port"]}/'
+                f'{params["dbname"]}?client_encoding=utf8')
         cfg = config.Config.get()
-
-        if cfg.value("db.engine") != "postgresql+psycopg":
-            raise ValueError( "This pipeline only supports PostgreSQL as a database engine" )
-
-        password = cfg.value( "db.password" )
-        if password is None:
-            if cfg.value( "db.password_file" ) is None:
-                raise RuntimeError( "Must specify either db.password or db.password_file in config" )
-            with open( cfg.value( "db.password_file" ) ) as ifp:
-                password = ifp.readline().strip()
-
-        url = (f'{cfg.value("db.engine")}://{cfg.value("db.user")}:{password}'
-               f'@{cfg.value("db.host")}:{cfg.value("db.port")}/{cfg.value("db.database")}'
-               f'?client_encoding=utf8')
         _engine = sa.create_engine( url,
                                     future=True,
                                     poolclass=sa.pool.NullPool,
@@ -195,11 +188,7 @@ def Session():
                                                   }
                                    )
 
-        _Session = sessionmaker(bind=_engine, expire_on_commit=False)
-
-    session = _Session()
-
-    return session
+    return sessionmaker(bind=_engine, expire_on_commit=False)
 
 
 @contextmanager
@@ -210,8 +199,11 @@ def SmartSession(*args):
     If all inputs are None, create a session that would
     close at the end of the life of the calling scope.
 
+    For new code, use the PGDB() context manager, and start writing SQL
+    instead of using SQLAlchemy constructs.  (Issue #516.)
+
     """
-    global _Session, _engine
+    global _engine
 
     for arg in args:
         if isinstance(arg, sa.orm.session.Session):
@@ -309,6 +301,9 @@ def PsycopgConnection( current=None ):
     Useful if you don't want to fight with SQLAlchemy, e.g. if you
     want to use table locks (see comment above in SmartSession).
 
+    For new code, use the PGDB class (in a with block) instead of using
+    this function.
+
     Parameters
     ----------
       current : psycopg.Connection or None (default None)
@@ -393,14 +388,47 @@ class PGDB:
 
     """
 
-    # I originally wrote this class for DESC FASTDB, but it was useful
-    # so I imported it here.
+    _sleept = None
+    _sleepmin = None
+    _sleepfac = None
+    _sleepfuzz = None
+    _sleepmax = None
 
-    def __init__( self, con=None, dictcursor=False ):
+    def __init__( self, con=None, dictcursor=False,
+                  sleept=0.25, sleepmin=0.125, sleepfac=2, sleepfuzz=0.1, sleepmax=4.0
+                 ):
         """Instantiate.
 
         If you use this, either use it in a with block that doesn't last
         too long, or call close(), and soon.
+
+        It will use the connection it is passed, or, if not, make a new
+        connection and hold on to it.  It will relinquish the connection
+        when you call the object's close method.  (This may or may not
+        actually close the connection to the database, based on how the
+        class was instantiated.)  Better, use this inside a context
+        manager; then the connection is relinquished when the connection
+        is released.  Example:
+
+           with PGDB( oldconnection ) as pgdb:
+               # do things
+
+        Where oldconnection can be, ideally, a PGDB, but can also be a
+        psycopg.Connection or a psycopg.Cursor.  (A sqlalchemy Session
+        will also work, but we're trying to phase that out.)  The passed
+        connection will be wrapped by this PGDB, and will *not* be
+        closed when the with block (as whoever opened it and started
+        this with block will still be expecting it to be there).  If
+        oldconnectoin is None, then a new connection is made, and closed
+        when the with block ends.
+
+        In the event that you're opening a new connection, it will retry
+        the connection if it fails with a psycopg.OperationalError.
+        *Hopefully* this will work around temporary spates of there
+        being too many connections to the database.  (If everybody is
+        obeying the request to not hold database connections open too
+        long.)  If you don't want it to do this, pass the optional
+        parameter maxsleep=0. to the constructor.
 
         Parameters
         ----------
@@ -420,14 +448,15 @@ class PGDB:
             If False, then execute returns two lists: a list of tuples
             (the rows) and a list of strings (the column names).
 
+          sleept, sleepmin, sleepfac, sleepfuzz, sleepmax : passed to util.util.retry_with_sleep
+            If it needs to make a new connection to the database, and
+            the connection fails because of a psycopg.OperationalError,
+            it will retry, configured by these values.  They default to
+            values from config.db.*.
+
         """
 
-        cfg = config.Config.get()
-        _echoqueries = cfg.value( 'db.echoqueries' )
-        _alwaysexplain = cfg.value( 'db.alwaysexplain' )
-        _alwaysanalyze = cfg.value( 'db.alwaysanalyze' )
-
-        made_a_new_one = False
+        made_a_new_PGDB = True
         if con is not None:
             if isinstance( con, PGDB ):
                 self.con = con.con
@@ -435,32 +464,46 @@ class PGDB:
                 self.echoqueries = con.echoqueries
                 self.alwaysexplain = con.alwaysexplain
                 self.alwaysanalyze = con.alwaysanalyze
+                made_a_new_PGDB = False
             elif isinstance( con, psycopg.Connection ):
                 self.con = con
-                made_a_new_one = True
             elif isinstance( con, psycopg.Cursor ):
                 self.con = con.connection
-                made_a_new_one = True
             elif isinstance( con, sa.orm.session.Session ):
                 SCLogger.warning( "You're using a SQLAlchemy Session, still trying "
                                   "to make a PGDB from it (Issue #516)" )
                 self.con = con.connection().connection.driver_connection
-                made_a_new_one = True
             else:
                 raise TypeError( f"con must be None, a PGDB, a psycopg.Connection, a psycopg.Cursor, or a "
                                  f"sa.orm.session.Session (shudder), not a {type(con)}" )
             self._con_is_mine = False
         else:
             params = _get_psycopg_params()
-            self.con = psycopg.connect( **params )
+            connector = functools.partial( psycopg.connect, **params )
+            if PGDB._sleept is None:
+                cfg = config.Config.get()
+                PGDB._sleept = cfg.value( 'db.sleept' )
+                PGDB._sleepmin = cfg.value( 'db.sleepmin' )
+                PGDB._sleepfac = cfg.value( 'db.sleepfac' )
+                PGDB._sleepfuzz = cfg.value( 'db.sleepfuzz' )
+                PGDB._sleepmax = cfg.value( 'db.sleepmax' )
+            sleept = sleept if sleept is not None else PGDB._sleept
+            sleepmin = sleepmin if sleepmin is not None else PGDB._sleepmin
+            sleepfac = sleepfac if sleepfac is not None else PGDB._sleepfac
+            sleepfuzz = sleepfuzz if sleepfuzz is not None else PGDB._sleepfuzz
+            sleepmax = sleepmax if sleepmax is not None else PGDB._sleepmax
+            self.con = retry_with_sleep( connector, sleepmin=sleepmin, sleept=sleept, sleepfac=sleepfac,
+                                         sleepfuzz=sleepfuzz, sleepmax=sleepmax,
+                                         failmessage=f"to connect to database {params['dbname']} on {params['host']}",
+                                         accept_exceptions=psycopg.OperationalError )
             self._con_is_mine = True
-            made_a_new_one = True
 
-        if made_a_new_one:
+        if made_a_new_PGDB:
             self.timings = PGDBTimings()
-            self.echoqueries = _echoqueries
-            self.alwaysexplain = _alwaysexplain
-            self.alwaysanalyze = _alwaysanalyze
+            cfg = config.Config.get()
+            self.echoqueries = cfg.value( 'db.echoqueries' )
+            self.alwaysexplain = cfg.value( 'db.alwaysexplain' )
+            self.alwaysanalyze = cfg.value( 'db.alwaysanalyze' )
 
         self.dictcursor = dictcursor
         self.remake_cursor()
@@ -502,7 +545,9 @@ class PGDB:
 
         If the constructor was called with con=None, then the connection
         will be rolled back.  If the constructor was callled with a
-        non-None none, then this method does nothing.
+        non-None none, then this method does nothing.  (In the latter case,
+        this PGDB object is wrapping a connection that was made externally,
+        so whoever made it is responsible for rolling back and closing.)
 
         """
         if self._con_is_mine:
@@ -517,6 +562,7 @@ class PGDB:
 
         """
         self.con.rollback()
+
 
     def commit( self ):
         """Commit changes to the database.
@@ -537,7 +583,9 @@ class PGDB:
     def execute_nofetch( self, q, subdict={}, echo=None, explain=None, analyze=None ):
         """Runs a query where you don't expect to fetch results.
 
-        Parameters are the same as execute().  Returns nothing.
+        Parameters are the same as execute(), except for analyze, which
+        works just like explain, only it does "EXPLAIN ANALYZE" rather
+        than just "EXPLAIN".  Returns nothing.
 
         """
 
@@ -588,7 +636,7 @@ class PGDB:
 
         Parmaeters
         ----------
-          q : str or sql.Composed
+          q : str or sql.SQL (or a subclass thereof)
             The query.  Use %(var)s in the string for a substitution, if
             necessary.  The key "var" must then show up in subdict.
 
@@ -602,13 +650,13 @@ class PGDB:
           echo : bool, default None
             If True, echo queries before sending them.  If False, don't.
             If None, use the default (self.echoqueries, initialized from
-            the _echoqueries variable at the top of this module).
+            the db.echoqueries config value).
 
           explain : bool, default None
             If True, before running the query run an EXPLAIN on it and
             send the output to debug logging.  If False, don't.  If
             None, use the default (self.alwaysexplain, initialized from
-            the _alwaysexplain variable at the top of this module).
+            the db.alwaysexplain config value).
 
             WARNING: use of this makes you susceptible to SQL injection
             attacks if you aren't completely and totally confident about
