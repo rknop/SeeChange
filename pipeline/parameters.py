@@ -565,6 +565,7 @@ class Parameters:
             raise ValueError( f"Tried to set subconfig {subconfigtag}, but it's not present in "
                               f"subconfigs['subconfigs'] for {self.__class__.__name__}" )
 
+        SCLogger.debug( f"Updating config for {self.__class__.__name__} with tag {subconfigtag}" )
         newconfig.update( self.subconfigs['subconfigs'][subconfigtag] )
 
         if ( ( hasattr( self, 'subconfigs_noncritical' ) ) and

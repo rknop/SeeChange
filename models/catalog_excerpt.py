@@ -361,8 +361,9 @@ class GaiaDR3DownloadLock(Base, UUIDMixin):
                         sleept = nextsleept
 
                 # If we get here, we're holding a lock on the giadownloadlock table
-                SCLogger.debug( f"Locking gaia catalog row: {minra},{maxra},{mindec},{maxdec},{minmag},{maxmag}" )
                 lockid = uuid.uuid4()
+                SCLogger.debug( f"Locking gaia catalog row: {minra},{maxra},{mindec},{maxdec},{minmag},{maxmag}: "
+                                f"{lockid}" )
                 q = sql.SQL( textwrap.dedent (
                     """
                     INSERT INTO gaiadr3_downloadlock(_id,minra,maxra,mindec,maxdec,minmag,maxmag)
@@ -379,6 +380,7 @@ class GaiaDR3DownloadLock(Base, UUIDMixin):
         finally:
             # Release the lock row
             if lockid is not None:
+                SCLogger.debug( f"Releasing gaia catalog lock {lockid}" )
                 with PsycopgConnection() as conn:
                     cursor = conn.cursor()
                     q = sql.SQL( "DELETE FROM gaiadr3_downloadlock WHERE _id={_id}\n" ).format( _id=lockid )
