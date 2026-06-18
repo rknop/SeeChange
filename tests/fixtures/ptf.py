@@ -467,7 +467,6 @@ def ptf_ref(
     refmaker = RefMaker( maker={ 'name': 'test_ptf_ref',
                                  'instrument': 'PTF',
                                  'zp_prov_id': ptf_reference_image_datastores[0].zp.provenance_id } )
-    import pdb; pdb.set_trace()
     refmaker.setup_provenances()
     pipe = refmaker.coadd_pipeline
 
@@ -660,8 +659,10 @@ def ptf_ref_offset(ptf_ref):
 
 
 @pytest.fixture(scope='session')
-def ptf_refset(refmaker_factory, provenance_base):
-    refmaker = refmaker_factory('test_refset_ptf', 'PTF', provenance_base.id, 'ptf_refset')
+def ptf_refset(provenance_base):
+    refmaker = RefMaker( maker={ 'name': 'test_refset_ptf',
+                                 'instrument': 'PTF',
+                                 'zp_prov_id': provenance_base.id } )
     refmaker.pars.save_new_refs = True
 
     refmaker.make_refset()  # this makes a refset without making any references
@@ -680,7 +681,7 @@ def ptf_refset(refmaker_factory, provenance_base):
 
         session.commit()
 
-    # Clean out the provenance tag that may have been created by the refmaker_factory
+    # Clean out the provenance tag that may have been created by the refmaker
     with SmartSession() as session:
         session.execute( sa.text( "DELETE FROM provenance_tags WHERE tag=:tag" ), {'tag': 'ptf_refset' } )
         session.commit()

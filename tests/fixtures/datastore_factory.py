@@ -26,6 +26,7 @@ from models.deepscore import DeepScore, DeepScoreSet
 from models.refset import RefSet
 from models.object import Object
 from pipeline.data_store import DataStore
+from pipeline.top_level import Pipeline
 
 from util.logger import SCLogger
 from util.cache import copy_to_cache, copy_list_to_cache, copy_from_cache, copy_list_from_cache
@@ -35,7 +36,7 @@ from improc.bitmask_tools import make_saturated_flag
 
 
 @pytest.fixture(scope='session')
-def datastore_factory(data_dir, pipeline_factory, request, test_config):
+def datastore_factory(data_dir, request, test_config):
     """Provide a function that returns a datastore with all the products based on the given exposure and section ID.
 
     If "save_original_image" is True, then a copy of the image before
@@ -100,10 +101,10 @@ def datastore_factory(data_dir, pipeline_factory, request, test_config):
             absolute path.
 
           overrides: dict, default None
-            If passed, overrides parameters sent to pipeline_factory
+            If passed, overrides parameters in the top level Pipeline.
 
           augments: dict, default None
-            If passed, augments parameters sent to pipeline_factory
+            If passed, augments parameters in the top level Pipeline.
 
           bad_pixel_mnap:
 
@@ -204,7 +205,8 @@ def datastore_factory(data_dir, pipeline_factory, request, test_config):
         #   filepath on the uuids of the zeropoints that went into a coadd,
         #   or of the reference and zeropoint that went into a subtraction.
 
-        p = pipeline_factory( provtag )
+        kwargs = { 'pipeline': { 'provenance_tag': provtag } }
+        p = Pipeline( **kwargs )
         ds._pipeline = p
 
         # allow calling scope to override/augment parameters for any of the processing steps

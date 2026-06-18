@@ -11,9 +11,8 @@ from pipeline.data_store import DataStore
 from tests.conftest import SKIP_WARNING_TESTS
 
 
-def test_preprocessing(
-        provenance_decam_prep, decam_exposure, test_config, preprocessor, decam_default_calibrators, archive
-):
+def test_preprocessing(  provenance_decam_prep, decam_exposure, test_config, preprocessor,
+                         decam_default_calibrators, archive ):
     # The decam_default_calibrators fixture is included so that
     # _get_default_calibrators won't be called as a side effect of calls
     # to Preprocessor.run().  (To avoid committing.)

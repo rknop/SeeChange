@@ -63,7 +63,7 @@ class DeepScoreSet( Base, UUIDMixin, HasBitFlagBadness ):
     @property
     def deepscores( self ):
         if self._deepscores is None:
-            with PGDB() as pgdb:
+            with PGDB( dictcursor=True ) as pgdb:
                 q = sql.SQL( textwrap.dedent(
                     """\
                     SELECT * FROM deepscores
