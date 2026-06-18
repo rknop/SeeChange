@@ -125,6 +125,8 @@ def setup_warning_filters():
 setup_warning_filters()  # need to call this here and also call it explicitly when setting up tests
 
 _engine = None
+# _Session isn't actually a SQLAlchemy session, it's a sessionmaker
+_Session = None
 _psycopg_params = None
 
 
@@ -159,7 +161,7 @@ def _get_psycopg_params():
 
 
 def Session():
-    """Make a session if it a globally cached one already exist.
+    """Make a SQLAlchemy session.
 
     This is primarily intended for interactive sessions where you're
     developing or testing.  In real code, you should use SmartSession in
@@ -173,11 +175,11 @@ def Session():
         A session object that doesn't automatically close.
 
     """
-    global _engine
+    global _Session, _engine
 
-    if _engine is None:
+    if _Session is None:
         params = _get_psycopg_params()
-        url = ( f'{params["db.engine"]}://{params["user"]}:{params["password"]}@{params["host"]}:{params["port"]}/'
+        url = ( f'{params["engine"]}://{params["user"]}:{params["password"]}@{params["host"]}:{params["port"]}/'
                 f'{params["dbname"]}?client_encoding=utf8')
         cfg = config.Config.get()
         _engine = sa.create_engine( url,
@@ -187,8 +189,10 @@ def Session():
                                                    "connect_timeout": cfg.value("db.sa_connect_timeout")
                                                   }
                                    )
+        _Session = sessionmaker(bind=_engine, expire_on_commit=False)
 
-    return sessionmaker(bind=_engine, expire_on_commit=False)
+    session = _Session()
+    return session
 
 
 @contextmanager
@@ -334,7 +338,8 @@ def PsycopgConnection( current=None ):
 
     conn = None
     try:
-        params = _get_psycopg_params()
+        params = _get_psycopg_params().copy()
+        del params['engine']
         conn = psycopg.connect( **params )
         yield conn
 
@@ -478,7 +483,8 @@ class PGDB:
                                  f"sa.orm.session.Session (shudder), not a {type(con)}" )
             self._con_is_mine = False
         else:
-            params = _get_psycopg_params()
+            params = _get_psycopg_params().copy()
+            del params['engine']
             connector = functools.partial( psycopg.connect, **params )
             if PGDB._sleept is None:
                 cfg = config.Config.get()

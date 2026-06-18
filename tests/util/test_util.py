@@ -161,7 +161,7 @@ def test_retry_with_sleep( caplog ):
                             failmessage="getting the answer", randseed=42 )
     assert res == 42
     assert len(caplog.records) == 4
-    for i, t in enumerate( [ '0.12', '0.25', '0.5' ] ):
+    for i, t in enumerate( [ '0.12', '0.25', '0.50' ] ):
         mat = re.search( r"Failed getting the answer after (\d+) tries, will sleep "
                          r".* \(nominally (\d.\d\d)s\) and try again.  Exception: "
                          r"Failed because count=(\d+)",
@@ -174,8 +174,8 @@ def test_retry_with_sleep( caplog ):
     mat = re.search( r"Succeeded getting the answer after (\d.\d\d)s and (\d+) tries.", caplog.records[3].msg )
     assert mat is not None
     assert float( mat.group(1) ) == pytest.approx( 0.875, rel=0.3 )
-    assert int( mat.group(2) ) == 3
-    assert caplog.records[2].levelname == 'INFO'
+    assert int( mat.group(2) ) == 4
+    assert caplog.records[3].levelname == 'INFO'
 
 
     # Test accept_exceptions
