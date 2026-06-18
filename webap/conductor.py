@@ -6,6 +6,7 @@ import datetime
 import pytz
 import traceback
 import textwrap
+import uuid
 
 import psycopg
 import psycopg.types.json
@@ -14,9 +15,8 @@ from psycopg import sql
 import flask
 
 from util.util import asUUID
-from models.base import SmartSession, PsycopgConnection, PGDB
+from models.base import PsycopgConnection, PGDB
 from models.enums_and_bitflags import KnownExposureStateConverter, ImageTypeConverter
-from models.knownexposure import PipelineWorker
 from models.instrument import Instrument
 
 sys.path.insert( 0, pathlib.Path(__name__).resolve().parent )
@@ -188,7 +188,7 @@ class UpdateParameters( ConductorBaseView ):
                     clsatttoset[arg] = val
 
         if len(unknown) != 0:
-            return f"Unknown arguments to UpdateParameters: {unknown}", 500
+            return f"Unknown arguments to UpdateParameters: {unknown}", 422
 
         for att, val in clsatttoset.items():
             setattr( ConductorBaseView, att, val )
@@ -241,36 +241,44 @@ class RegisterWorker( ConductorBaseView ):
         args = self.argstr_to_args( argstr, { 'node_id': None, 'replace': 0 } )
         args['replace'] = int( args['replace'] )
         if 'cluster_id' not in args.keys():
-            return "cluster_id is required for registerworker", 500
-        with SmartSession() as session:
-            existing = ( session.query( PipelineWorker )
-                         .filter( PipelineWorker.cluster_id==args['cluster_id'] )
-                         .filter( PipelineWorker.node_id==args['node_id'] )
-                        ).all()
+            return "cluster_id is required for registerworker", 422
+        with PGDB( dictcursor=True ) as pgdb:
+            q = sql.SQL( "SELECT * FROM pipelineworkers WHERE cluster_id={cluster} AND node_id={node}"
+                        ).format( cluster=args['cluster_id'], node=args['node_id'] )
+            rows = pgdb.execute( q )
             newworker = None
             status = None
-            if len( existing ) > 0:
-                if len( existing ) > 1:
+            if len( rows ) > 0:
+                if len( rows ) > 1:
                     return ( f"cluster_id {args['cluster_id']} node_id{args['node_id']} multiply defined, "
-                             f"database needs to be cleaned up" ), 500
+                             f"database needs to be cleaned up" ), 422
                 if args['replace']:
-                    newworker = existing[0]
-                    newworker.lastheartbeat = datetime.datetime.now()
+                    newworker = rows[0]
+                    q = sql.SQL( "UPDATE pipelineworkers SET lastheartbeat={now}"
+                                ).format( datetime.datetime.now( tz=datetime.UTC ) )
+                    pgdb.execute_nofetch( q )
                     status = 'updated'
                 else:
-                    return f"cluster_id {args['cluster_id']} node_id {args['node_id']} already exists", 500
+                    return f"cluster_id {args['cluster_id']} node_id {args['node_id']} already exists", 422
 
             else:
-                newworker = PipelineWorker( cluster_id=args['cluster_id'],
-                                            node_id=args['node_id'],
-                                            lastheartbeat=datetime.datetime.now() )
+                newid = uuid.uuid4()
+                q = sql.SQL( textwrap.dedent(
+                    """
+                    INSERT INTO pipelineworkers(clusterid, node_id, lastheartbeat)
+                    VALUES ({cluster_id}, {node_id}, {lastheartbeat}
+                    """
+                ) ).format( cluster_id=args['cluster_id'],
+                            node_id=args['node_id'],
+                            lastheartbeat=datetime.datetime.now( tz=datetime.UTC ) )
+                psycopg.execute_nofetch( q )
+                newworker = { '_id': newid, 'cluster_id': args['cluster_id'], 'node_id': args['node_id'] }
                 status = 'added'
-            session.add( newworker )
-            session.commit()
-            # Make sure that newworker has the id field loaded
-            # session.merge( newworker )
+            if status in ( 'updated', 'added' ):
+                pgdb.commit()
+
         return { 'status': status,
-                 'id': newworker.id,
+                 'id': newworker._id,
                  'cluster_id': newworker.cluster_id,
                  'node_id': newworker.node_id }
 
@@ -283,14 +291,16 @@ class RegisterWorker( ConductorBaseView ):
 
 class UnregisterWorker( ConductorBaseView ):
     def do_the_things( self, pipelineworker_id ):
-        with SmartSession() as session:
-            pipelineworker_id = asUUID( pipelineworker_id )
-            existing = session.query( PipelineWorker ).filter( PipelineWorker._id==pipelineworker_id ).all()
-            if len(existing) == 0:
-                return f"Unknown pipeline worker {pipelineworker_id}", 500
+        pipelineworker_id = asUUID( pipelineworker_id )
+        with PGDB( dictcursor=True ) as pgdb:
+            q = sql.SQL( "SELECT * FROM piplineworkers WHERE _id={pwid}" ).format( pwid=pipelineworker_id )
+            rows = pgdb.exectute( q )
+            if len(rows) == 0:
+                return f"Unknown pipeline worker {pipelineworker_id}", 422
             else:
-                session.delete( existing[0] )
-                session.commit()
+                q = sql.SQL( "DELETE FROM pipelineworkers WHERE _id={pwid}" ).format( pwid=pipelineworker_id )
+                pgdb.execute_nofetch( q )
+                pgdb.commit()
         return { "status": "worker deleted" }
 
 
@@ -302,15 +312,16 @@ class UnregisterWorker( ConductorBaseView ):
 class WorkerHeartbeat( ConductorBaseView ):
     def do_the_things( self, pipelineworker_id ):
         pipelineworker_id = asUUID( pipelineworker_id )
-        with SmartSession() as session:
-            existing = session.query( PipelineWorker ).filter( PipelineWorker._id==pipelineworker_id ).all()
-            if len( existing ) == 0:
-                return f"Unknown pipelineworker {pipelineworker_id}"
-            existing = existing[0]
-            existing.lastheartbeat = datetime.datetime.now()
-            session.merge( existing )
-            session.commit()
-            return { 'status': 'updated' }
+        with PGDB( dictucorsor=True ) as pgdb:
+            q = sql.SQL( "SELECT * FROM pipelineworkers WHERE _id={pwid}" ).format( pwid=pipelineworker_id )
+            rows = pgdb.execute( q )
+            if len(rows) == 0:
+                return f"Unknown pipelineworker {pipelineworker_id}", 422
+            q = sql.SQL( "UPDATE pipelineworkers SET lastheartbeat={now} WHERE _id={pwid}"
+                        ).format( pwid=pipelineworker_id, now=datetime.datetime.now( tz=datetime.UTC ) )
+            pgdb.execute_nofetch( q )
+            pgdb.commit()
+        return { 'status': 'updated' }
 
 # ======================================================================
 # /getworkers
@@ -318,10 +329,10 @@ class WorkerHeartbeat( ConductorBaseView ):
 
 class GetWorkers( ConductorBaseView ):
     def do_the_things( self ):
-        with SmartSession() as session:
-            workers = session.query( PipelineWorker ).all()
-            return { 'status': 'ok',
-                     'workers': [ w.to_dict() for w in workers ] }
+        with PGDB( dictcursor=True ) as pgdb:
+            rows = pgdb.execute( "SELECT * FROM pipelineworkers" )
+        return { 'status': 'ok',
+                 'workers': rows }
 
 # ======================================================================
 # /requestexposure
@@ -331,7 +342,7 @@ class RequestExposure( ConductorBaseView ):
     def do_the_things( self, argstr=None ):
         args = self.argstr_to_args( argstr )
         if 'cluster_id' not in args.keys():
-            return "cluster_id is required for RequestExposure", 500
+            return "cluster_id is required for RequestExposure", 422
         if 'types' in args:
             types = args['types'].split( "," )
             if 'all' in [ t.lower() for t in types ]:
@@ -615,7 +626,7 @@ class DeleteKnownExposures( ConductorBaseView ):
     def do_the_things( self ):
         args = flask.request.json
         if 'knownexposure_ids' not in args:
-            return "Error, must pass knownexposure_ids in JSON post body", 500
+            return "Error, must pass knownexposure_ids in JSON post body", 422
         with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( "DELETE FROM knownexposures WHERE _id=ANY(%(expids)s)",
@@ -631,7 +642,7 @@ class FullyClearClusterClaim( ConductorBaseView ):
     def do_the_things( self ):
         args = flask.request.json
         if 'knownexposure_ids' not in args:
-            return "Error, must pass knownexposure_ids in JSON post body", 500
+            return "Error, must pass knownexposure_ids in JSON post body", 422
         with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( "UPDATE knownexposures SET cluster_id=NULL, node_id=NULL, machine_name=NULL, "

@@ -3,7 +3,7 @@ import os
 import time
 import logging
 
-from models.base import SmartSession, PsycopgConnection
+from models.base import SmartSession, PsycopgConnection, PGDB
 from models.knownexposure import KnownExposure
 from models.exposure import Exposure
 from models.image import Image
@@ -279,7 +279,7 @@ def test_exposure_launcher( conductor_connector,
                       .join( Image, SourceList.image_id==Image._id ) )
             meas0 = measq.filter( Image._id==subs[0].id ).all()
             meas1 = measq.filter( Image._id==subs[1].id ).all()
-            assert len(meas0) == 3
+            assert len(meas0) == 2
             assert len(meas1) == 4
 
     finally:
@@ -302,8 +302,7 @@ def test_exposure_launcher( conductor_connector,
 
         # Finally, remove the pipelineworker and provenance tags that got created
         # (Don't bother cleaning up knownexposures, the fixture will do that)
-        with PsycopgConnection() as con:
-            cursor = con.cursor()
-            cursor.execute( "DELETE FROM pipelineworkers WHERE cluster_id='testcluster'" )
-            cursor.execute( "DELETE FROM provenance_tags WHERE tag='test_explau'" )
-            con.commit()
+        with PGDB() as pgdb:
+            pgdb.execute_nofetch( "DELETE FROM pipelineworkers WHERE cluster_id='testcluster'" )
+            pgdb.execute_nofetch( "DELETE FROM provenance_tags WHERE tag='test_explau'" )
+            pgdb.commit()

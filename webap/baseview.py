@@ -5,12 +5,12 @@ import datetime
 import simplejson
 
 import numpy as np
+from psycopg import sql
 
 import flask
 import flask.views
 
-from models.base import SmartSession
-from models.user import AuthUser
+from models.base import PGDB
 
 
 # This is just like util/util.py:NumpyAndUUIDJsonEncoder,
@@ -52,9 +52,10 @@ class BaseView( flask.views.View ):
         self.authenticated = ( 'authenticated' in flask.session ) and flask.session['authenticated']
         self.user = None
         if self.authenticated:
-            with SmartSession() as session:
-                self.user = session.query( AuthUser ).filter( AuthUser.username==self.username ).first()
-                if self.user is None:
+            with PGDB( dictcursor=True ) as pgdb:
+                q = sql.SQL( "SELECT * FROM authuser WHERE username={username}" ).format( username=self.username )
+                rows = pgdb.execute( q )
+                if len(rows) == 0:
                     self.authenticated = False
                     raise ValueError( f"Error, failed to find user {self.username} in database" )
         return self.authenticated

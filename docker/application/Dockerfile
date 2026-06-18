@@ -375,9 +375,6 @@ COPY --from=included_code_build /seechange/lib /seechange/lib
 COPY default_config.yaml /seechange/default_config.yaml
 COPY pipeline_config.yaml /seechange/pipeline_config.yaml
 COPY site_config.yaml /seechange/site_config.yaml
-COPY default_config_extragalactic.yaml /seechange/default_config_extragalactic.yaml
-COPY default_config_galactic.yaml /seeconage/default_config_galactic.yaml
-COPY pipeline_config_galactic.yaml /seechange/pipeline_config_galactic.yaml
 COPY docker/application/local_overrides.yaml /seechange/local_overrides.yaml
 
 ENV PATH=/venv/bin:$PATH
@@ -407,9 +404,6 @@ COPY --from=webap_build /seechange/lib /seechange/lib
 COPY default_config.yaml /seechange/default_config.yaml
 COPY pipeline_config.yaml /seechange/pipeline_config.yaml
 COPY site_config.yaml /seechange/site_config.yaml
-COPY default_config_extragalactic.yaml /seechange/default_config_extragalactic.yaml
-COPY default_config_galactic.yaml /seeconage/default_config_galactic.yaml
-COPY pipeline_config_galactic.yaml /seechange/pipeline_config_galactic.yaml
 COPY webap/seechange_webap.yaml /seechange/seechange_webap.yaml
 COPY webap/webap_local_overrides.yaml /seechange/webap_local_overrides.yaml
 COPY webap/webap_local_augments.yaml /seechange/webap_local_augments.yaml
@@ -462,9 +456,6 @@ COPY --from=included_code_build /seechange/lib /seechange/lib
 COPY default_config.yaml /seechange/default_config.yaml
 COPY pipeline_conifg.yaml /seechange/pipeline_config.yaml
 COPY site_config.yaml /seechange/site_config.yaml
-COPY default_config_extragalactic.yaml /seechange/default_config_extragalactic.yaml
-COPY default_config_galactic.yaml /seeconage/default_config_galactic.yaml
-COPY pipeline_config_galactic.yaml /seechange/pipeline_config_galactic.yaml
 COPY docker/application/local_overrides.yaml /seechange/local_overrides.yaml
 
 ENV PATH=/venv/bin:$PATH
