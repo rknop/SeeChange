@@ -668,10 +668,11 @@ class RefMaker:
 
     # ======================================================================
 
-    def identify_reference_images_to_coadd( self, *args, _do_not_parse_arguments=False, **kwargs ):
+    def identify_reference_images_to_coadd( self, *args, _do_not_parse_arguments=False, pgdb=None, **kwargs ):
         """Identify images in the database that could be used to build our reference.
 
-        See parse_arguments for a description of the arguments.
+        See parse_arguments for a description of the arguments, except
+        for pgdb, which is what it usually is.
 
         (Parameter _do_not_parse_arguments is used internally, ignore it
         if calling this from the outside.)
@@ -754,7 +755,7 @@ class RefMaker:
 
         kwargs['return_wcs'] = True
 
-        possible, possible_wcs = Image.find_images( **kwargs )
+        possible, possible_wcs = Image.find_images( pgdb=pgdb, **kwargs )
 
         existing = []
         for image in possible:
@@ -771,11 +772,13 @@ class RefMaker:
         return existing, match_pos, match_count, match_pos_images
 
 
-    def choose_reference_images_to_coadd( self, *args, _do_not_parse_arguments=False, **kwargs ):
+    def choose_reference_images_to_coadd( self, *args, _do_not_parse_arguments=False, log_to_info=True, **kwargs ):
         ( images, match_pos, match_count, match_pos_images
           ) = self.identify_reference_images_to_coadd( *args,
                                                        _do_not_parse_arguments=_do_not_parse_arguments,
                                                        **kwargs )
+
+        infolog = SCLogger.info if log_to_info else SCLogger.debug
 
         # Make sure we got enough
         nrequired = [ self.pars.min_number ] * len( match_pos )
@@ -784,13 +787,13 @@ class RefMaker:
             nrequired[0] = max( self.pars.min_number, self.pars.center_min_number )
 
         if len(images) < self.pars.min_number:
-            SCLogger.info( f"RefMaker only found {len(images)} images overlapping the desired field, "
-                           f"which is less than the minimum of {self.pars.min_number}" )
+            infolog( f"RefMaker only found {len(images)} images overlapping the desired field, "
+                     f"which is less than the minimum of {self.pars.min_number}" )
             return None, match_pos, match_count
         if any( n < minn for n, minn in zip( match_count, nrequired ) ):
-            SCLogger.info( f"RefMaker didn't find enough references at at least one point on the image; "
-                           f"match_count={match_count}, min_number={self.pars.min_number} "
-                           f"({nrequired[0]} at center)." )
+            infolog( f"RefMaker didn't find enough references at at least one point on the image; "
+                     f"match_count={match_count}, min_number={self.pars.min_number} "
+                     f"({nrequired[0]} at center)." )
             return None, match_pos, match_count
 
         # If there were *too many* images, then we have to start trimming them out

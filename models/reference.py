@@ -223,6 +223,7 @@ class Reference(Base, UUIDMixin, HasBitFlagBadness):
             refset=None,
             provenance_ids=None,
             skip_bad=True,
+            pgdb=None,
             session=None
     ):
         """Find all references in the specified part of the sky, with the given filter.
@@ -307,15 +308,21 @@ class Reference(Base, UUIDMixin, HasBitFlagBadness):
         skip_bad: bool
             Whether to skip bad references. Default is True.
 
-        session: Session, optional
+        pgdb: PGDB, psycopg.Connection, psycopg.Cursor, or sa Session, optional
             The database session to use.
             If not given, will open a session and close it at end of function.
+
+        session: PGDB, psycopg.Connection, psycopg.Cursor, or sa Session, optional
+            Synonym for pgdb.  If you give both, will use pgdb if it's not None, else
+            session.
 
         Returns
         -------
           list of Reference, list of Image
 
         """
+
+        pgdb = pgdb if pgdb is not None else session
 
         radecgiven = ( ra is not None ) or ( dec is not None )
         areagiven = ( ( image is not None ) or ( wcs is not None )

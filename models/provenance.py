@@ -739,6 +739,9 @@ class ProvenanceTag(Base, UUIDMixin):
         # Use direct postgres connection rather than SQLAlchemy so that we can
         # lock tables without a world of hurt.  (See massive comment in
         # base.SmartSession.)
+        # NOTE : this lock is actually really scary.  LOTS of queries join to provenance_tags.
+        #   all it takes is somebody to leave a query idle in transaction that read from
+        #   provenance tags to cause this lock to wait forever.
         with PsycopgConnection() as conn:
             cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
             cursor.execute( "LOCK TABLE provenance_tags" )

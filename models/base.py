@@ -2685,7 +2685,7 @@ class FourCorners:
 
 
     @classmethod
-    def find_containing_siobj( cls, siobj, session=None, corner="corner", limprefix="" ):
+    def find_containing_siobj( cls, siobj, **kwargs ):
         """Return all images (or whatever) that contain the given SpatiallyIndexed thing
 
         Parameters
@@ -2693,10 +2693,7 @@ class FourCorners:
           siobj: SpatiallyIndexed
             A single object that is spatially indexed
 
-          session: sa.orm.session.Session, PGDB, psycopg.Connection, psycopg.Cursor, or None
-
-          corner, limprefix: str, default None
-             Used internally
+          **kwargs : further arguments passed to find_containing()
 
         Returns
         -------
@@ -2709,12 +2706,13 @@ class FourCorners:
         # siobj.dec could be set to anything.)
         ra = float( siobj.ra )
         dec = float( siobj.dec )
-        return cls.find_containing( ra, dec, session=session, corner=corner, limprefix=limprefix )
+        return cls.find_containing( ra, dec, **kwargs )
 
     @classmethod
     def _find_possibly_containing_temptable( cls, ra, dec, session, prov_id=None,
                                              fromclause=None, provtable='i',
-                                             corner="corner", limprefix="" ):
+                                             corner="corner", limprefix="",
+                                             temptable="temp_find_containing" ):
         """Internal.
 
         Looks for all cls objects where ra, dec is between minra:maxra,
@@ -2723,7 +2721,7 @@ class FourCorners:
 
         Lots of special case code for images that cross RA 0.
 
-        Loads up the temp table temp_find_containing
+        Loads up the temp table specified by argument temptable.
 
         Parameters
         ----------
@@ -2757,6 +2755,9 @@ class FourCorners:
              Complicated.  Used in Image.find_images.  WARNING.  Misuse
              of this can totally Bobby Tables the database.  Be good.
 
+          temptable : str, default "temp_find_containing"
+             Name of the temptable to write to.
+
         """
         if not isinstance( session, ( sa.orm.session.Session, psycopg.Connection, psycopg.Cursor, PGDB ) ):
             raise TypeError( f"session must be a sa.orm.session.Session, psycopg.Connection, psycopg.Cursor, or PGDB, "
@@ -2780,7 +2781,7 @@ class FourCorners:
                    i.dec_{corner}_01 AS dec_corner_01,
                    i.dec_{corner}_10 AS dec_corner_10,
                    i.dec_{corner}_11 AS dec_corner_11
-            INTO TEMP TABLE temp_find_containing
+            INTO TEMP TABLE {temptable}
             {fromclause}
             WHERE (
               ( i.{limprefix}maxdec >= {dec} AND i.{limprefix}mindec <= {dec} )
@@ -2795,15 +2796,17 @@ class FourCorners:
             )
             """
         ) ).format( ra=ra, dec=dec, fromclause=fromclause, provclause=provclause,
-                    corner=sql.SQL(corner), limprefix=sql.SQL(limprefix) )
+                    corner=sql.SQL(corner), temptable=sql.Identifier(temptable), limprefix=sql.SQL(limprefix) )
 
         with PGDB( session ) as pgdb:
-            pgdb.execute_nofetch( "DROP TABLE IF EXISTS temp_find_containing" )
+            pgdb.execute_nofetch( sql.SQL( "DROP TABLE IF EXISTS {temptable}" )
+                                  .format( temptable=sql.Identifier(temptable) ) )
             pgdb.execute_nofetch( q )
 
 
     @classmethod
-    def find_containing( cls, ra, dec, corner="corner", limprefix="", prov_id=None, session=None ):
+    def find_containing( cls, ra, dec, corner="corner", limprefix="", prov_id=None, session=None,
+                         temptable="temp_find_containing" ):
         """Return all objects in this class that contain the given RA and Dec
 
         Parameters
@@ -2825,6 +2828,9 @@ class FourCorners:
              If not None, search for objects with this provenance, or any of these provenances if a list.
 
           session: sa.orm.session.Session, PGDB, psycopg.Connection, psycopg.Cursor, or None
+
+          temptable: str, default "temp_find_containing"
+             Name of an internally used temporary table.
 
         Returns
         -------
@@ -2848,29 +2854,33 @@ class FourCorners:
 
         with PGDB( session, dictcursor=True ) as pgdb:
             cls._find_possibly_containing_temptable( ra, dec, pgdb, prov_id=prov_id,
-                                                     corner=corner, limprefix=limprefix )
+                                                     corner=corner, limprefix=limprefix,
+                                                     temptable=temptable )
 
             q = sql.SQL( textwrap.dedent(
                 """
                 SELECT i.* FROM {tab} i
-                INNER JOIN temp_find_containing t ON t._id=i._id
+                INNER JOIN {temptable} t ON t._id=i._id
                 WHERE q3c_poly_query( {ra}, {dec}, ARRAY[ t.ra_corner_00, t.dec_corner_00,
                                                           t.ra_corner_01, t.dec_corner_01,
                                                           t.ra_corner_11, t.dec_corner_11,
                                                           t.ra_corner_10, t.dec_corner_10 ])
                 """
-            ) ).format( tab=sql.Identifier(cls.__tablename__), ra=ra, dec=dec )
+            ) ).format( tab=sql.Identifier(cls.__tablename__),
+                        temptable=sql.Identifier(temptable),
+                        ra=ra, dec=dec )
 
             rows = pgdb.execute( q )
             objs = [ cls(**r) for r in rows ]
-            pgdb.execute_nofetch( "DROP TABLE temp_find_containing" )
+            pgdb.execute_nofetch( sql.SQL( "DROP TABLE {temptable}" ).format( temptable=temptable ) )
             return objs
 
 
     @classmethod
     def _find_potential_overlapping_temptable( cls, fcobj, session, prov_id=None,
                                                fromclause=None, provtable='i',
-                                               corner="corner", limprefix="" ):
+                                               corner="corner", limprefix="",
+                                               temptable="temp_find_overlapping" ):
         """Internal.
 
         Given a FourCorners object fcobj, will return all objects of
@@ -2903,6 +2913,9 @@ class FourCorners:
 
           corner, limprefix : See _find_possibly_containing_temptable ; same thing
 
+          temptable : str, default "temp_find_overlapping"
+             Name of temp table to create.
+
         """
 
         fromclause = cls._fromclause( fromclause )
@@ -2928,7 +2941,7 @@ class FourCorners:
                    i.dec_{corner}_01 AS dec_corner_01,
                    i.dec_{corner}_10 AS dec_corner_10,
                    i.dec_{corner}_11 AS dec_corner_11
-            INTO TEMP TABLE temp_find_overlapping
+            INTO TEMP TABLE {temptable}
             {fromclause}
             WHERE (
               ( i.{limprefix}maxdec >= {mindec} AND i.{limprefix}mindec <= {maxdec} )
@@ -2954,17 +2967,18 @@ class FourCorners:
             )
             """
         ) ).format( mindec=fcobj.mindec, maxdec=fcobj.maxdec, minra=fcobj.minra, maxra=fcobj.maxra,
-                    provclause=provclause, fromclause=fromclause,
+                    temptable=sql.Identifier(temptable), provclause=provclause, fromclause=fromclause,
                     corner=sql.SQL(corner), limprefix=sql.SQL(limprefix) )
 
         with PGDB( session ) as pgdb:
-            pgdb.execute_nofetch( "DROP TABLE IF EXISTS temp_find_overlapping" )
+            pgdb.execute_nofetch( sql.SQL( "DROP TABLE IF EXISTS {temptable}" )
+                                  .format( temptable=sql.Identifier(temptable) ) )
             pgdb.execute_nofetch( q )
 
 
     @classmethod
     def find_potential_overlapping( cls, fcobj, prov_id=None, session=None,
-                                    corner="corner", limprefix="" ):
+                                    corner="corner", limprefix="", temptable="temp_find_overlapping" ):
         """Return all objects of this class that *might* overlap FourCorners object fcobj.
 
         This will in general be a superset of things that actually do
@@ -3003,10 +3017,11 @@ class FourCorners:
         with PGDB( session, dictcursor=True ) as pgdb:
             cls._find_potential_overlapping_temptable( fcobj, pgdb, prov_id=prov_id,
                                                        corner=corner, limprefix=limprefix )
-            rows = pgdb.execute( sql.SQL( "SELECT i.* FROM {tab} i INNER JOIN temp_find_overlapping t ON i._id=t._id" )
-                                 .format( tab=sql.Identifier(cls.__tablename__) ) )
+            rows = pgdb.execute( sql.SQL( "SELECT i.* FROM {tab} i INNER JOIN {temptable} t ON i._id=t._id" )
+                                 .format( tab=sql.Identifier(cls.__tablename__),
+                                          temptable=sql.Identifier(temptable) ) )
             objs = [ cls(**r) for r in rows ]
-            pgdb.execute_nofetch( "DROP TABLE temp_find_overlapping" )
+            pgdb.execute_nofetch( sql.SQL( "DROP TABLE {temptable}" ).format( sql.Identifier(temptable) ) )
             return objs
 
 

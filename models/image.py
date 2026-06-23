@@ -2,6 +2,7 @@ import os
 import base64
 import hashlib
 import textwrap
+import random
 
 import numpy as np
 from psycopg import sql
@@ -1618,7 +1619,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             seeing_quality_factor=3.0,
             max_number=None,
             return_zeropoints=False,
-            return_wcs=False
+            return_wcs=False,
+            pgdb=None
     ):
         """Return a list of images that match criteria.
 
@@ -1786,6 +1788,9 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
 
         return_wcs: bool, default False
 
+        pgdb: PGDB, psycopg.Connection, psycopg.Cursor, or sa Session, default None
+            Database connection to use.  If not given, will open and close a new one.
+
         Returns
         -------
           One of:
@@ -1812,12 +1817,13 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         # Avoid circular imports
         from models.world_coordinates import WorldCoordinates
 
+        barf = "".join( random.choices( "abcdefghijklmnopqrstuvwxyz", k=6 ) )
         searchcontaining = False
         searchoverlapping = False
         searchtable = None
         fcobj = None
 
-        with PGDB( dictcursor=True ) as pgdb:
+        with PGDB( pgdb, dictcursor=True ) as pgdb:
             # First: position filter (but not including overlapfrac).  This may involve
             #   calling a FourCorners routine to build a temporary table.
 
@@ -1846,7 +1852,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                             ra, dec, session=pgdb, prov_id=provenance_ids, corner=corner, limprefix=limprefix,
                             fromclause=( "FROM world_coordinates i\n"
                                          "INNER JOIN zero_points z ON z.wcs_id=i._id" ),
-                            provtable='z'
+                            provtable='z',
+                            temptable=f"temp_find_containing_{barf}"
                         )
                     else:
                         WorldCoordinates._find_possibly_containing_temptable(
@@ -1858,19 +1865,20 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                             SELECT i._id,
                             t.ra_corner_00, t.ra_corner_01, t.ra_corner_10, t.ra_corner_11,
                             t.dec_corner_00, t.dec_corner_01, t.dec_corner_10, t.dec_corner_11
-                            INTO TEMP TABLE temp_find_image_1
+                            INTO TEMP TABLE temp_find_image_1_{barf}
                             FROM images i
                             INNER JOIN source_lists s ON i._id=s.image_id
                             INNER JOIN world_coordinates w ON s._id=w.sources_id
-                            INNER JOIN temp_find_containing t ON t._id=w._id
+                            INNER JOIN temp_find_containing_{barf} t ON t._id=w._id
                             """
-                        ) )
+                        ) ).format( barf=sql.SQL(barf) )
                     )
-                    searchtable = "temp_find_image_1"
+                    searchtable = f"temp_find_image_1_{barf}"
 
                 else:
-                    Image._find_possibly_containing_temptable( ra, dec, session=pgdb, prov_id=provenance_ids )
-                    searchtable = "temp_find_containing"
+                    Image._find_possibly_containing_temptable( ra, dec, session=pgdb, prov_id=provenance_ids,
+                                                               temptable=f"temp_find_containing_{barf}" )
+                    searchtable = f"temp_find_containing_{barf}"
 
             elif any( i is not None for i in [ image, minra, maxra, mindec, maxdec ] ):
                 # Filter by rectangle
@@ -1920,11 +1928,13 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                             fcobj, session=pgdb, prov_id=provenance_ids, corner=corner, limprefix=limprefix,
                             fromclause=( "FROM world_coordinates i\n"
                                          "INNER JOIN zero_points z ON z.wcs_id=i._id" ),
-                            provtable='z'
+                            provtable='z',
+                            temptable=f"temp_find_overlapping_{barf}"
                         )
                     else:
                         WorldCoordinates._find_possibly_containing_temptable(
-                            fcobj, session=pgdb, prov_id=provenance_ids, corner=corner, limprefix=limprefix )
+                            fcobj, session=pgdb, prov_id=provenance_ids, corner=corner, limprefix=limprefix,
+                            temptable=f"temp_find_overlapping_{barf}" )
 
                     pgdb.execute_nofetch(
                         sql.SQL( textwrap.dedent(
@@ -1932,19 +1942,20 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                             SELECT i._id,
                             t.ra_corner_00, t.ra_corner_01, t.ra_corner_10, t.ra_corner_11,
                             t.dec_corner_00, t.dec_corner_01, t.dec_corner_10, t.dec_corner_11
-                            INTO TEMP TABLE temp_find_image_2
+                            INTO TEMP TABLE temp_find_image_2_{barf}
                             FROM images i
                             INNER JOIN source_lists s ON i._id=s.image_id
                             INNER JOIN world_coordinates w ON s._id=w.sources_id
-                            INNER JOIN temp_find_overlapping t ON t._id=w._id
+                            INNER JOIN temp_find_overlapping_{barf} t ON t._id=w._id
                             """
-                        ) )
+                        ) ).format( barf=sql.SQL(barf) )
                     )
-                    searchtable = "temp_find_image_2"
+                    searchtable = f"temp_find_image_2_{barf}"
 
                 else:
-                    Image._find_potential_overlapping_temptable( fcobj, session=pgdb, prov_id=provenance_ids )
-                    searchtable = "temp_find_overlapping"
+                    Image._find_potential_overlapping_temptable( fcobj, session=pgdb, prov_id=provenance_ids,
+                                                                 temptable=f"temp_find_overlapping_{barf}" )
+                    searchtable = f"temp_find_overlapping_{barf}"
             else:
                 if overlapfrac is not None:
                     raise ValueError( "overlapfrac only makes sense with image or min/max ra/dec" )
@@ -1962,9 +1973,12 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             # it's not worth the effort of trying to figure out the
             # syntax.)
 
-            pgdb.execute_nofetch( "DROP TABLE IF EXISTS temp_find_images_image_ids" )
+            imgid_temptable = sql.Identifier( f"temp_find_images_image_ids_{barf}" )
+            pgdb.execute_nofetch( sql.SQL( "DROP TABLE IF EXISTS {temptable}" )
+                                  .format( temptable=imgid_temptable ) )
             if searchtable is None:
-                q = sql.SQL( "SELECT i.* INTO TEMP TABLE temp_find_images_image_ids FROM images i\n" )
+                q = sql.SQL( "SELECT i.* INTO TEMP TABLE {temptable} FROM images i\n"
+                             ).format( temptable=imgid_temptable )
 
                 if provenance_ids_are_wcs or provenance_ids_are_zp:
                     q += sql.SQL( "INNER JOIN source_lists s ON s.image_id=i._id\n"
@@ -1985,11 +1999,11 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                 q = sql.SQL( textwrap.dedent(
                     """\
                     SELECT i._id
-                    INTO TEMP TABLE temp_find_images_image_ids
+                    INTO TEMP TABLE {temptable}
                     FROM {searchtable} t
                     INNER JOIN images i ON t._id=i._id
                     """
-                ) ).format( searchtable=sql.Identifier(searchtable) )
+                ) ).format( searchtable=sql.Identifier(searchtable), temptable=imgid_temptable )
                 if searchcontaining:
                     # Refine the search from the broad overlap in the temp table
                     #   to a real poly search.
@@ -2061,8 +2075,9 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             pgdb.execute_nofetch( q )
 
             # Get the images
-            rows = pgdb.execute( "SELECT i.* FROM images i "
-                                 "INNER JOIN temp_find_images_image_ids t ON i._id=t._id" )
+            rows = pgdb.execute( sql.SQL( "SELECT i.* FROM images i "
+                                          "INNER JOIN {temptable} t ON i._id=t._id" )
+                                 .format( temptable=imgid_temptable ) )
             images = [ Image(**r) for r in rows ]
 
             # Get the WCSen if necessary
@@ -2072,20 +2087,20 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                         """\
                         SELECT s.image_id, w.* FROM world_coordinates w
                         INNER JOIN source_lists s ON w.sources_id=s._id
-                        INNER JOIN temp_find_images_image_ids t ON s.image_id=t._id
+                        INNER JOIN {temptable} t ON s.image_id=t._id
                         WHERE w.provenance_id=ANY(ARRAY[{provs}])
                         """
-                    ) ).format( provs=sql.SQL(",").join( provenance_ids ) )
+                    ) ).format( provs=sql.SQL(",").join( provenance_ids ), temptable=imgid_temptable )
                 elif provenance_ids_are_zp:
                     q = sql.SQL( textwrap.dedent(
                         """\
                         SELECT s.image_id, z.provenance_id AS zpprov, w.* FROM world_coordinates w
                         INNER JOIN zero_points z ON z.wcs_id=w._id
                         INNER JOIN source_lists s ON w.sources_id=s._id
-                        INNER JOIN temp_find_images_image_ids t ON s.image_id=t._id
+                        INNER JOIN {temptable} t ON s.image_id=t._id
                         WHERE z.provenance_id=ANY(ARRAY[{provs}])
                         """
-                    ) ).format( provs=sql.SQL(",").join( provenance_ids ) )
+                    ) ).format( provs=sql.SQL(",").join( provenance_ids ), temptable=imgid_temptable )
                 rows = pgdb.execute( q )
                 wcsen = {}
                 for row in rows:
@@ -2121,10 +2136,10 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                     SELECT s.image_id, z.* FROM zero_points z
                     INNER JOIN world_coordinates w ON z.wcs_id=w._id
                     INNER JOIN source_lists s ON w.sources_id=s._id
-                    INNER JOIN temp_find_images_image_ids t ON s.image_id=t._id
+                    INNER JOIN {temptable} t ON s.image_id=t._id
                     WHERE z.provenance_id=ANY(ARRAY[{provs}])
                     """
-                ) ).format( provs=sql.SQL(",").join( provenance_ids ) )
+                ) ).format( provs=sql.SQL(",").join( provenance_ids ), temptable=imgid_temptable )
                 rows = pgdb.execute( q )
                 zps = {}
                 for row in rows:
