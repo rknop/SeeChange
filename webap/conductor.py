@@ -535,7 +535,7 @@ class GetKnownExposures( ConductorBaseView ):
                 _and = sql.SQL( "  AND" )
 
         if args['maxmjd'] is not None:
-            q += sql.sql( "{_and} ke.mjd <= {maxmjd}\n" ).format( _and=_and, maxmjd=float(args['maxmjd']) )
+            q += sql.SQL( "{_and} ke.mjd <= {maxmjd}\n" ).format( _and=_and, maxmjd=float(args['maxmjd']) )
             _and = sql.SQL( "  AND" )
         if args['maxclaimtime'] is not None:
             claimtime = datetime.datetime.fromisoformat( args['maxclaimtime'] )
