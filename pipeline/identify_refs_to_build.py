@@ -100,6 +100,7 @@ def identify_refs_to_build( mjd0, mjd1, provtag=None, overlapfrac=None, refset=N
                     somebodyelseswillbegood.append( img )
                 else:
                     refmaker = RefMaker()
+                    refmaker.make_refset()
                     ( images, match_pos, match_count
                       ) = refmaker.choose_reference_images_to_coadd( img.id,
                                                                      image_zp_prov_id=zp.provenance_id,

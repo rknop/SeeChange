@@ -844,7 +844,7 @@ class DataStore:
 
 
     def make_prov_tree( self, pars, steps=None, provtag=None, ok_no_ref_prov=False, upstream_steps=None,
-                        starting_point=None ):
+                        starting_point=None, pgdb=None ):
         """Create the DataStore's provenance tree.
 
         Also creates provenances and saves them to the database if
@@ -978,6 +978,10 @@ class DataStore:
              don't specify this, then the 'starting_point' provenance in
              the ProvenanceTree will be figured out based on what's in
              the datastore as described above.
+
+          pgdb : PGDB, psycopg.Connection, psycopg.Cursor, or sa Session, default None
+             Databse connection.  If not given, will open and close a
+             new one (maybe more than once).  Warning : commits.
 
         Returns
         -------
@@ -1139,13 +1143,13 @@ class DataStore:
                                       parameters=pars[step],
                                       upstreams=upstream_provs,
                                       is_testing=is_testing )
-            provs[step].insert_if_needed()
+            provs[step].insert_if_needed( session=pgdb )
 
             # Set the provenance tag if requested.
             # (Chances are it's already set, but somebody will be first.)
             self._provtag = provtag
             if self._provtag is not None:
-                ProvenanceTag.addtag( self._provtag, provs.values(), add_missing_processes_to_provtag=True )
+                ProvenanceTag.addtag( self._provtag, provs.values(), add_missing_processes_to_provtag=True, pgdb=pgdb )
 
         self.prov_tree = provs
 

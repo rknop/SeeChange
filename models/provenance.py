@@ -11,12 +11,11 @@ import sqlalchemy.orm as orm
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.schema import UniqueConstraint
-import psycopg
 
-from util.util import NumpyAndUUIDJsonEncoder, asUUID
+from util.util import NumpyAndUUIDJsonEncoder, asUUID, listify
 from util.logger import SCLogger
 
-from models.base import Base, UUIDMixin, SeeChangeBase, SmartSession, PsycopgConnection, PGDB
+from models.base import Base, UUIDMixin, SeeChangeBase, SmartSession, PGDB
 
 
 
@@ -116,9 +115,18 @@ class CodeVersion(Base, UUIDMixin):
 
     @classmethod
     def get_by_id( cls, cvid, session=None ):
-        with SmartSession( session ) as sess:
-            cv = sess.query( CodeVersion ).filter( CodeVersion._id == cvid ).first()
-        return cv
+        with PGDB( session, dictcursor=True ) as pgdb:
+            rows = pgdb.execute(
+                sql.SQL( "SELECT * FROM code_versions WHERE _id={cvid}" )
+                .format( cvid=cvid )
+            )
+            if len(rows) == 0:
+                return None
+            elif len(rows) > 1:
+                raise RuntimeError( "This should never happen." )
+            else:
+                return CodeVersion( **(rows[0]) )
+
 
     @classmethod
     def is_cv_newer( cls, cv1, cv2 ):
@@ -375,14 +383,26 @@ class Provenance(Base):
     @classmethod
     def get( cls, provid, session=None ):
         """Get a provenance given an id, or None if it doesn't exist."""
-        with SmartSession( session ) as sess:
-            return sess.query( Provenance ).filter( Provenance._id==provid ).first()
+        with PGDB( session, dictcursor=True ) as pgdb:
+            rows = pgdb.execute( sql.SQL( "SELECT * FROM provenances WHERE _id={provid}" )
+                                 .format( provid=provid ) )
+            if len(rows) == 0:
+                return None
+            elif len(rows) > 1:
+                raise RuntimeError( "This should never happen." )
+            else:
+                return Provenance( dont_update_id=True, **(rows[0]) )
+
 
     @classmethod
     def get_batch( cls, provids, session=None ):
         """Get a list of provenances given a list of ids."""
-        with SmartSession( session ) as sess:
-            return sess.query( Provenance ).filter( Provenance._id.in_( provids ) ).all()
+        with PGDB( session, dictcursor=True ) as pgdb:
+            provids = listify( provids, require_string=True )
+            rows = pgdb.execute( sql.SQL( "SELECT * FROM provenances WHERE _id=ANY(ARRAY([{provids}]))" )
+                                 .format( provids=sql.SQL(",").join(provids) ) )
+            return [ Provenance(dont_update_id=True, **r) for r in rows ]
+
 
     @classmethod
     def get_for_tag( cls, tag, process=None, conn=None ):
@@ -398,7 +418,7 @@ class Provenance(Base):
              will get the provenances for all processes defined for the
              tag.
 
-          conn : psycopg.connection or None
+          conn : PGDB, psycopg.Connection, psycopg.Cursor, or (shudder) sa Session, default None
              If given, use this connection to the database.  Otherwise,
              a new connection will be created and closed in this
              function.
@@ -414,15 +434,17 @@ class Provenance(Base):
           provenance tag is not defined).
 
         """
-        with PsycopgConnection( conn ) as conn:
-            cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
-            q = ( "SELECT p.* FROM provenances "
-                  "INNER JOIN provenance_tags t ON p._id=t.provenance_id "
-                  "WHERE t.tag=%(tag)s" )
+        with PGDB( conn, dictcursor=True ) as pgdb:
+            q = sql.SQL( textwrap.dedent(
+                """\
+                SELECT p.* FROM provenances
+                INNER JOIN provenance_tags t ON p._id=t.provenance_id
+                WHERE t.tag={gtag}
+                """
+            ) ).format( tag=tag )
             if process is not None:
-                q+= " AND p.process=%(process)s"
-            cursor.execute( q, { 'tag': tag, 'process': process } )
-            rows = cursor.fetchall()
+                q += sql.SQL( "  AND p.process={process}" ).format( process=process )
+            rows = pgdb.execute( q )
 
         if process is not None:
             if len(rows) > 1:
@@ -471,8 +493,8 @@ class Provenance(Base):
 
         Parameters
         ----------
-        session: SmartSession
-            SQLAlchemy session object. If None, a new session is created,
+        session: PGDB, psycopg.Connection, psycopg.Cursor, or (shudder) sa Session, default None
+            Databse connection.  If None, a new session is created,
             and closed as soon as the function finishes.
 
         Returns
@@ -499,15 +521,20 @@ class Provenance(Base):
 
             codebase_semver = CodeVersion.CODE_VERSION_DICT[process]  # (major, minor, patch) eg. (2,0,1)
 
-            with PsycopgConnection() as conn:
-                cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
-                cursor.execute( "LOCK TABLE code_versions" )
-                cursor.execute( "SELECT * FROM code_versions "
-                                "WHERE process=%(proc)s AND version_major=%(maj)s "
-                                "  AND version_minor=%(min)s AND version_patch=%(pat)s",
-                                { 'proc': process, 'maj': codebase_semver[0],
-                                  'min': codebase_semver[1], 'pat': codebase_semver[2] } )
-                rows = cursor.fetchall()
+            with PGDB( session, dictcursor=True ) as pgdb:
+                pgdb.execute_nofetch( "LOCK TABLE code_versions" )
+                rows = pgdb.execute( sql.SQL( textwrap.dedent(
+                    """\
+                    SELECT * FROM code_versions
+                    WHERE process={process}
+                      AND version_major={major}
+                      AND version_minor={minor}
+                      AND version_patch={patch}
+                    """
+                ) ).format( process=process,
+                            major=codebase_semver[0],
+                            minor=codebase_semver[1],
+                            patch=codebase_semver[2] ) )
                 code_version = CodeVersion()
                 if len(rows) > 0:
                     rows[0]['_id'] = asUUID( rows[0]['_id'] )
@@ -518,18 +545,20 @@ class Provenance(Base):
                                 'version_major': codebase_semver[0],
                                 'version_minor': codebase_semver[1],
                                 'version_patch': codebase_semver[2] }
-                    cursor.execute( "INSERT INTO code_versions(_id,process,version_major,version_minor,version_patch) "
-                                    "VALUES (%(_id)s,%(process)s,%(version_major)s,"
-                                    "        %(version_minor)s,%(version_patch)s)",
-                                    subdict )
-                    conn.commit()
+                    pgdb.execute_nofetch( sql.SQL( textwrap.dedent(
+                        """\
+                        INSERT INTO code_versions(_id,process,version_major,version_minor,version_patch)
+                        VALUES ({_id},{process},{version_major},{version_minor},{verson_patch})
+                        """
+                    ) ).format( **subdict ) )
+                    pgdb.commit()
                     code_version.set_attributes_from_dict( subdict )
                 CodeVersion._code_version_cache[process] = code_version
 
         return CodeVersion._code_version_cache[process]
 
 
-    def insert( self, session=None, _exists_ok=False ):
+    def insert( self, session=None, _exists_ok=False, nocommit=False ):
         """Insert the provenance into the database.
 
         Will raise a constraint violation if the provenance ID already exists in the database.
@@ -537,7 +566,7 @@ class Provenance(Base):
         Parameters
         ----------
           session : PGDB, psycpog.Connection, psycopg.Cursor, or SQLAlchmey sesion, or None
-            Usually you don't want to use this.
+            Usually you don't want to use this.  Warning: commits unless nocommit is True.
 
         """
 
@@ -566,7 +595,8 @@ class Provenance(Base):
                                  "VALUES ({upstream},{me})" ).format( upstream=upstream.id, me=self.id )
                     pgdb.execute( q )
 
-            pgdb.commit()
+            if not nocommit:
+                pgdb.commit()
 
         # with SmartSession( session ) as sess:
         #     try:
@@ -593,17 +623,17 @@ class Provenance(Base):
         #             raise
 
 
-    def insert_if_needed( self, session=None ):
+    def insert_if_needed( self, session=None, nocommit=False ):
         """Insert the provenance into the database if it's not already there.
 
         Parameters
         ----------
-          session : SQLAlchemy session or None
-            Usually you don't want to use this
+          session : PGDB, psycopg.Connection, psycopg.Cursor, sa Session, or None
+            Usually you don't want to use this.  Warning: commits unless nocommit=True.
 
         """
 
-        self.insert( session=session, _exists_ok=True )
+        self.insert( session=session, _exists_ok=True, nocommit=nocommit )
 
 
     def get_upstreams( self, pgdb=None ):
@@ -692,7 +722,7 @@ class ProvenanceTag(Base, UUIDMixin):
                  f'provenance_id={self.provenance_id}>' )
 
     @classmethod
-    def addtag( cls, tag, provs, add_missing_processes_to_provtag=True ):
+    def addtag( cls, tag, provs, add_missing_processes_to_provtag=True, pgdb=None ):
         """Tag provenances with a given (string) tag.
 
         If the provenance tag does not exist at all, create it, tagging
@@ -724,6 +754,10 @@ class ProvenanceTag(Base, UUIDMixin):
           add_missing_processes_to_provtag: bool, default True
             See above.
 
+          pgdb : PGDB, psycopg.Connection, psycopg.Cursor, or sa Session, default None
+            Database connection.  If not given, will open and close a
+            new one.  Warning: commits.
+
         """
 
         # First, make sure that provs doesn't have multiple entries for
@@ -742,15 +776,17 @@ class ProvenanceTag(Base, UUIDMixin):
         # NOTE : this lock is actually really scary.  LOTS of queries join to provenance_tags.
         #   all it takes is somebody to leave a query idle in transaction that read from
         #   provenance tags to cause this lock to wait forever.
-        with PsycopgConnection() as conn:
-            cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
-            cursor.execute( "LOCK TABLE provenance_tags" )
-            cursor.execute( "SELECT t.tag,p._id,p.process FROM provenance_tags t "
-                            "INNER JOIN provenances p ON t.provenance_id=p._id "
-                            "WHERE t.tag=%(tag)s",
-                            { 'tag': tag } )
+        with PGDB( pgdb, dictcursor=True) as pgdb:
+            pgdb.execute_nofetch( "LOCK TABLE provenance_tags" )
+            rows = pgdb.execute( sql.SQL( textwrap.dedent(
+                """\
+                SELECT t.tag,p._id,p.process FROM provenance_tags t
+                INNER JOIN provenances p ON t.provenance_id=p._id
+                WHERE t.tag={tag}
+                """
+            ) ).format( tag=tag  ) )
             known = {}
-            for row in cursor.fetchall():
+            for row in rows:
                 if row['process'] == 'referencing':
                     if 'referencing' not in known:
                         known['referencing'] = [ row['_id'] ]
@@ -770,6 +806,7 @@ class ProvenanceTag(Base, UUIDMixin):
             for prov in provs:
                 # Special case handling for 'referencing', because there we do allow
                 #   multiple provenances tagged with the same tag.
+                # ...OR DO WE?  I don't think we do any more?
                 if prov.process == 'referencing':
                     if 'referencing' not in known:
                         known['referencing'] = []
@@ -777,9 +814,12 @@ class ProvenanceTag(Base, UUIDMixin):
                         if not add_missing_processes_to_provtag:
                             missing.append( prov )
                         else:
-                            cursor.execute( "INSERT INTO provenance_tags(tag,provenance_id,_id) "
-                                            "VALUES (%(tag)s,%(provid)s,%(uuid)s)",
-                                            { 'tag': tag, 'provid': prov.id, 'uuid': uuid.uuid4() } )
+                            pgdb.execute_nofetch( sql.SQL( textwrap.dedent(
+                                """\
+                                INSERT INTO provenance_tags(tag,provenance_id,_id)
+                                "VALUES ({tag},{provid},{uuid})
+                                """
+                            ) ).format( tag=tag, provid=prov.id, uuid=uuid.uuid4() ) )
                             known['referencing'].append( prov.id )
                             addedsome = True
                 else:
@@ -787,15 +827,18 @@ class ProvenanceTag(Base, UUIDMixin):
                         if not add_missing_processes_to_provtag:
                             missing.append( prov )
                         else:
-                            cursor.execute( "INSERT INTO provenance_tags(tag,provenance_id,_id) "
-                                            "VALUES (%(tag)s,%(provid)s,%(uuid)s)",
-                                            { 'tag': tag, 'provid': prov.id, 'uuid': uuid.uuid4() } )
+                            pgdb.execute_nofetch( sql.SQL( textwrap.dedent(
+                                """\
+                                INSERT INTO provenance_tags(tag,provenance_id,_id)
+                                VALUES ({tag},{provid},{uuid})
+                                """
+                            ) ).format( tag=tag, provid=prov.id, uuid=uuid.uuid4() ) )
                             known[prov.process] = prov.id
                             addedsome = True
                     elif known[prov.process] != prov.id:
                         conflict.append( prov )
             if ( addedsome ) and ( len(missing) == 0 ) and ( len(conflict) == 0 ):
-                conn.commit()
+                pgdb.commit()
 
         if len( conflict ) != 0:
             strio = io.StringIO()

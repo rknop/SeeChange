@@ -834,7 +834,7 @@ class Coadder:
 
         ImageAligner.cleanup_temp_images()
 
-    def get_coadd_prov( self, data_store_list, upstream_provs=None, code_version_id=None ):
+    def get_coadd_prov( self, data_store_list, upstream_provs=None, code_version_id=None, pgdb=None ):
         """Figure out the Provenance and CodeVersion of the coadded image.
 
         Also adds the coadd provenance to the database if necessary.
@@ -855,19 +855,23 @@ class Coadder:
             If None, the code version will be dtermined automatically
             using Provenance.get_code_version()
 
+          pgdb: PGDB, psycopg.Connection, psycopg.Cursor, sa Session, or None
+            Databse connectionh.  Will open and clopse a new one if not given.
+            Warning : commits.
+
         """
 
         # Figure out all upstream provenances
         if upstream_provs is None:
             provids = set( d.get_zp().provenance_id for d in data_store_list )
-            upstream_provs = Provenance.get_batch( provids )
+            upstream_provs = Provenance.get_batch( provids, session=pgdb )
             if len( upstream_provs ) != len( provids ):
                 raise RuntimeError( "Coadder didn't find all the expected upstream provenances!" )
 
         if code_version_id is None:
-            code_version = Provenance.get_code_version( process='coaddition' )
+            code_version = Provenance.get_code_version( process='coaddition', session=pgdb )
         else:
-            code_version = CodeVersion.get_by_id( code_version_id )
+            code_version = CodeVersion.get_by_id( code_version_id, session=pgdb )
 
         coadd_provenance = Provenance(
             code_version_id=code_version.id,
@@ -875,7 +879,7 @@ class Coadder:
             upstreams=upstream_provs,
             process='coaddition',
         )
-        coadd_provenance.insert_if_needed()
+        coadd_provenance.insert_if_needed( session=pgdb )
 
         return coadd_provenance, code_version
 
@@ -1273,7 +1277,7 @@ class CoaddPipeline:
         return self.datastore
 
     def make_provenance_tree( self, data_store_list, absolute_alignment_wcs=False,
-                              upstream_provs=None, code_version_id=None, remake=False ):
+                              upstream_provs=None, code_version_id=None, remake=False, pgdb=None ):
         """Make a provenance tree in self.datastore for all coadded data products."""
 
         if self.datastore.prov_tree is not None:
@@ -1285,8 +1289,7 @@ class CoaddPipeline:
                 return self.datastore.prov_tree
 
         coadd_prov, _code_version = self.coadder.get_coadd_prov( data_store_list, upstream_provs=upstream_provs,
-                                                                 code_version_id=code_version_id )
-        coadd_prov.insert_if_needed()
+                                                                 code_version_id=code_version_id, pgdb=pgdb )
 
         steps = [ 'extraction', 'astrocal', 'photocal' ]
         upstream_steps = { 'extraction': [],

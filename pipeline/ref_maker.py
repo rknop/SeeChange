@@ -1,4 +1,5 @@
 import io
+import copy
 import datetime
 import pytz
 import textwrap
@@ -13,7 +14,7 @@ from pipeline.parameters import Parameters
 from pipeline.coaddition import CoaddPipeline
 from pipeline.data_store import DataStore, ProvenanceTree
 
-from models.base import SmartSession, PGDB
+from models.base import PGDB
 from models.enums_and_bitflags import ImageTypeConverter
 from models.provenance import Provenance
 from models.reference import Reference
@@ -36,6 +37,33 @@ class ParsRefMaker(Parameters):
             'Name of the reference set. ',
             critical=False,  # the name of the refset is not in the Reference provenance!
             # this means multiple refsets can refer to the same Reference provenance
+        )
+
+        self.ignore_config_use_config_from_refset = self.add_par(
+            name = 'ignore_config_use_config_from_refset',
+            default = False,
+            par_types = bool,
+            docstring = ( "This is a weird one.  If this is False, then, basically, it does nothing. "
+                          "If it is True, AND if a refset already exists with the name given in the name "
+                          "parameter, then ref_maker will ignore ALL of the parmeters below, and instead "
+                          "set their values from the provenance of the named refset.  This is here for "
+                          "usability, so that we can go back and do more ref_makers with a pre-existing "
+                          "configuration without having to manually reconstruct that configuration.  "
+                          "Use with care." ),
+            critical = False
+        )
+
+        self.refset_must_already_exist = self.add_par(
+            name = 'refset_must_already_exist',
+            default = False,
+            par_types = bool,
+            docstring = ( "Often you want to use this with ignore_config_use_config_from_refset.  If "
+                          "the rest of the referencing config is *different* from what you expect from "
+                          "a pre-existing refmaker config with the specified name, then you don't want "
+                          "to create that name with all the rest of the config.  This is confusing.  Used "
+                          "during rapidfire development early in a survey when moving between refsets "
+                          "a lot." ),
+            critical = False
         )
 
         self.description = self.add_par(
@@ -358,6 +386,12 @@ class RefMaker:
 
         """
 
+        self.setup_config( **kwargs )
+        self.reset()
+
+
+    # ======================================================================
+    def setup_config( self, **kwargs ):
         # We are going to *include* the parametrs of the coadd
         # provenance as part of the parmeters of the referencing
         # provenance, because coadd is no longer an upstream of the
@@ -395,7 +429,7 @@ class RefMaker:
         #   so if that stuff changes, we need it here to make the ref_make provenance change.
         # Some of this is a little circular, since the coadd provenance will include this
         #   provenance as an upstream, but whatever.  Gotta have it like this to make sure
-        #   the referencing provenacne actually changes when something material about making
+        #   the referencing provenance actually changes when something material about making
         #   the reference changes.
         maker_dict.update( { "coadd_pipeline":
                              { "pipeline": self.coadd_pipeline.pars.get_critical_pars(),
@@ -416,7 +450,6 @@ class RefMaker:
         self.refset = None
         self.subtraction_minovfrac = config.value( 'subtraction.reference.minovfrac' )
 
-        self.reset()
 
     # ======================================================================
 
@@ -449,19 +482,19 @@ class RefMaker:
         #   provenance, but really it's the other way around: the coadd is produced
         #   based on stuff referencing calculates.
         pars = self.pars.get_critical_pars()
-        code_version = Provenance.get_code_version(self.pars.get_process_name())
+        code_version = Provenance.get_code_version(self.pars.get_process_name(), session=session)
         self.ref_prov = Provenance(
             process=self.pars.get_process_name(),
             code_version_id=code_version.id,
             parameters=pars,
             upstreams=[],
         )
-        self.ref_prov.insert_if_needed()
+        self.ref_prov.insert_if_needed( session )
 
-        zpprov = Provenance.get( self.pars.zp_prov_id )
+        zpprov = Provenance.get( self.pars.zp_prov_id, session=session )
         if zpprov is None:
             raise RuntimeError( f"Failed to find ZeroPoint provenance {self.pars.zp_prov_id}" )
-        upstreams = [ Provenance.get( self.pars.zp_prov_id ) ]
+        upstreams = [ Provenance.get( self.pars.zp_prov_id, session=session ) ]
         # Make the referencing an upstream of the coadd, because changes made to the referencing
         #  could change the images we chose to put into the coadd.
         upstreams.append( self.ref_prov )
@@ -470,7 +503,8 @@ class RefMaker:
         abswcs = ( self.coadd_pipeline.coadder.pars.alignment_index=='absolute' )
         self.coadd_provs = self.coadd_pipeline.make_provenance_tree( None,
                                                                      absolute_alignment_wcs=abswcs,
-                                                                     upstream_provs=upstreams )
+                                                                     upstream_provs=upstreams,
+                                                                     pgdb=session )
 
 
 
@@ -483,14 +517,38 @@ class RefMaker:
         (using the config) and load them into the database.
 
         """
-        with SmartSession( session ) as dbsession:
+
+        with PGDB( session, dictcursor=True ) as pgdb:
+            # First, handle ignore_config_use_config_from_refset
+            if self.pars.ignore_config_use_config_from_refset:
+                rows = pgdb.execute( sql.SQL( "SELECT provenance_id FROM refsets WHERE name={refset}" )
+                                     .format( refset=self.pars.name ) )
+                if self.pars.refset_must_already_exist and ( len(rows) == 0 ):
+                    raise RuntimeError( f"You asked for pre-existing refset {self.pars.name}, but it doesn't exist." )
+                elif len(rows) > 0:
+                    refprov = Provenance.get( rows[0]['provenance_id'], session=pgdb )
+
+                    # Mangle the parmaeters around to what setup_config expects
+                    kwargs = { 'maker': { k: copy.deepcopy(v)
+                                          for k, v in refprov.parameters.items()
+                                          if k != 'coadd_pipeline_confiog' }
+                              }
+                    if 'coadd_pipeline_config' not in refprov.parameters:
+                        raise RuntimeError( "I don't know how to cope." )
+                    for kw in [ 'coaddition', 'extraction', 'astrocal', 'photocal' ]:
+                        if kw not in refprov.parameters['coadd_pipeline_config']:
+                            raise RuntimeError( "I don't know how to cope." )
+                        kwargs[kw] = copy.deepcopy( refprov.parameters['coadd_pipeline_config'][kw] )
+
+                    # Set our config based on this provenance
+                    self.setup_config( **kwargs )
+
             # make sure all the sundry component provenances are in the database
-            self.setup_provenances( session=dbsession )
+            self.setup_provenances( session=pgdb )
 
             # make sure the ref_prov is in the database
-            self.ref_prov.insert_if_needed( session=dbsession )
+            self.ref_prov.insert_if_needed( session=pgdb )
 
-        with PGDB( dictcursor=True ) as pgdb:
             # Lock the refset table so we don't have a race condition
             pgdb.execute_nofetch( "LOCK TABLE refsets" )
             # Check to see if the refset already exists
