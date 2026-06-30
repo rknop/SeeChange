@@ -29,6 +29,7 @@ def identify_refs_to_build( mjd0, mjd1, provtag=None, overlapfrac=None, refset=N
                                   'refset_must_already_exist': no_make_refset } )
     refmaker = RefMaker( **kwargs )
     refmaker.make_refset()
+    SCLogger.info( f"Using refset {refmaker.pars.name} with reference provenance id {refmaker.ref_prov.id}" )
 
     SCLogger.info( f"Searching for images with provenance tag {provtag} between "
                    f"mjd {mjd0:.2f} and {mjd1:.2f}" )
@@ -92,10 +93,17 @@ def identify_refs_to_build( mjd0, mjd1, provtag=None, overlapfrac=None, refset=N
     canbuildrefs = []
     canbuildrefswcses = []
     nope = []
-
+    zpprovid = None
+    
     for ndone, (img, wcs, zp) in enumerate( zip( imgs, wcses, zps ) ):
         if ndone % 10 == 0:
             SCLogger.info( f"...did {ndone} of {len(imgs)}" )
+
+        if zpprovid is None:
+            zpprovid = zp.provenance_id
+        else:
+            if zpprovid != zp.provenance_id:
+                raise RuntimeError( "This should never happen." )
 
         refs, refimgs = Reference.get_references( image=img, filter=img.filter, instrument=img.instrument,
                                                   refset=refset, overlapfrac=overlapfrac )
@@ -134,7 +142,7 @@ def identify_refs_to_build( mjd0, mjd1, provtag=None, overlapfrac=None, refset=N
                                                'nope': [] }
             exposures[img.exposure_id][which].append( img )
 
-    return exposures
+    return exposures, refmaker, zpprovid
 
 
 
@@ -175,9 +183,9 @@ def main():
 
     SCLogger.setLevel( "DEBUG" if args.verbose else "INFO" )
 
-    exposures = identify_refs_to_build( args.mjd0, args.mjd1, provtag=args.prov,
-                                        overlapfrac=args.overlapfrac, refset=args.refset,
-                                        no_make_refset=args.no_make_refset )
+    exposures, refmaker, zpprovid = identify_refs_to_build( args.mjd0, args.mjd1, provtag=args.prov,
+                                                            overlapfrac=args.overlapfrac, refset=args.refset,
+                                                            no_make_refset=args.no_make_refset )
 
     exporder = list( exposures.keys() )
     exporder.sort( key=lambda x: exposures[x]['filepath'] )
@@ -202,7 +210,8 @@ def main():
 
     SCLogger.info( textwrap.dedent(
         f"""\
-        Summary: found {nimgs} new images in {len(exposures)} exposures.
+        Summary: refset is {refmaker.pars.name} ({refmaker.pars.description}), prov. id {refmaker.ref_prov.id}
+                 Found {nimgs} new images in {len(exposures)} exposures.
                  {nhaveref} images have pre-existing refs.
                  {ncanbuild} references identified to be built, which will serve for {ncanbuild+nother} images.
                  {nnope} can't get a ref.
@@ -211,12 +220,13 @@ def main():
 
     if args.write_builder_script is not None:
         with open( args.write_builder_script, 'w' ) as ofp:
-            ofp.write( "/bin/bash\n\n" )
+            ofp.write( "#/bin/bash\n\n" )
             for expdex in exporder:
                 expinfo = exposures[expdex]
                 if len(expinfo['nope']) <= args.max_no_hope:
                     for img in expinfo['canbuild']:
-                        ofp.write( f"python /seechange/pipeline/ref_maker.py -i {img.filepath} -f {img.filter}\n" )
+                        ofp.write( f"python /seechange/pipeline/ref_maker.py -i {img.filepath} -f {img.filter} "
+                                   f"-z {zpprovid}\n" )
 
 
 # ======================================================================

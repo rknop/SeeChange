@@ -399,7 +399,7 @@ class Provenance(Base):
         """Get a list of provenances given a list of ids."""
         with PGDB( session, dictcursor=True ) as pgdb:
             provids = listify( provids, require_string=True )
-            rows = pgdb.execute( sql.SQL( "SELECT * FROM provenances WHERE _id=ANY(ARRAY([{provids}]))" )
+            rows = pgdb.execute( sql.SQL( "SELECT * FROM provenances WHERE _id=ANY(ARRAY[{provids}])" )
                                  .format( provids=sql.SQL(",").join(provids) ) )
             return [ Provenance(dont_update_id=True, **r) for r in rows ]
 
@@ -496,7 +496,8 @@ class Provenance(Base):
         session: PGDB, psycopg.Connection, psycopg.Cursor, or (shudder) sa Session, default None
             Databse connection.  If None, a new session is created, and
             closed as soon as the function finishes.  WARNING : will
-            commit or rollback unless nocommit=True.
+            commit or rollback unless nocommit=True.  Use both this and nocomit with care;
+            safer to just not use either.
 
         Returns
         -------
@@ -545,29 +546,36 @@ class Provenance(Base):
                     rows[0]['_id'] = asUUID( rows[0]['_id'] )
                     code_version.set_attributes_from_dict( rows[0] )
                 else:
-                    pgdb.execute_nofetch( "LOCK TABLE code_versions" )
-                    rows = pgdb.execute( cvsearchq )
-                    if len(rows) > 0:
-                        rows[0]['_id'] = asUUID( rows[0]['_id'] )
-                        code_version.set_attribute_from_dict( rows[0] )
+                    # Rollback the database connection to free up any shared
+                    #   locks it has incidentally acquired.
+                    if not nocommit:
+                        pgdb.rollback()
+                    try:
+                        pgdb.execute_nofetch( "LOCK TABLE code_versions" )
+                        rows = pgdb.execute( cvsearchq )
+                        if len(rows) > 0:
+                            rows[0]['_id'] = asUUID( rows[0]['_id'] )
+                            code_version.set_attribute_from_dict( rows[0] )
+                        else:
+                            subdict = { '_id': uuid.uuid4(),
+                                        'process': process,
+                                        'version_major': codebase_semver[0],
+                                        'version_minor': codebase_semver[1],
+                                        'version_patch': codebase_semver[2] }
+                            pgdb.execute_nofetch( sql.SQL( textwrap.dedent(
+                                """\
+                                INSERT INTO code_versions(_id,process,version_major,version_minor,version_patch)
+                                VALUES ({_id},{process},{version_major},{version_minor},{version_patch})
+                                """
+                            ) ).format( **subdict ) )
+                            if not nocommit:
+                                pgdb.commit()
+                            code_version.set_attributes_from_dict( subdict )
+                    finally:
                         if not nocommit:
-                            # Release lock unless we were told not to
+                            # Make sure lock is freed
                             pgdb.rollback()
-                    else:
-                        subdict = { '_id': uuid.uuid4(),
-                                    'process': process,
-                                    'version_major': codebase_semver[0],
-                                    'version_minor': codebase_semver[1],
-                                    'version_patch': codebase_semver[2] }
-                        pgdb.execute_nofetch( sql.SQL( textwrap.dedent(
-                            """\
-                            INSERT INTO code_versions(_id,process,version_major,version_minor,version_patch)
-                            VALUES ({_id},{process},{version_major},{version_minor},{verson_patch})
-                            """
-                        ) ).format( **subdict ) )
-                        if not nocommit:
-                            pgdb.commit()
-                        code_version.set_attributes_from_dict( subdict )
+
                 CodeVersion._code_version_cache[process] = code_version
 
         return CodeVersion._code_version_cache[process]
@@ -605,55 +613,37 @@ class Provenance(Base):
                 return
 
             # Didn't exist, so we have to make it, and have to lock the table to avoid race conditions
-            pgdb.execute_nofetch( "LOCK TABLE provenances" )
-            rows, _cols = pgdb.execute( sql.SQL( "SELECT * FROM provenances WHERE _id={me}" ).format( me=self.id ) )
-            if len(rows) > 0:
+            # First rollback to free up any shared locks we've incidentally acquired
+            if not nocommit:
+                pgdb.rollback()
+            try:
+                pgdb.execute_nofetch( "LOCK TABLE provenances" )
+                rows, _cols = pgdb.execute( sql.SQL( "SELECT * FROM provenances WHERE _id={me}" ).format( me=self.id ) )
+                if len(rows) > 0:
+                    if len(rows) > 1:
+                        raise RuntimeError( "This should never happen." )
+                    if not _exists_ok:
+                        raise RuntimeError( f"Provenance {self.id} already exists in the database." )
+                    # Should we verity that it's actually the same?  If we trust the hashing that goes
+                    #   into the id, that shouldn't be necessary
+                    return
+
+                SCLogger.debug( f"Adding provenance {self.id} to database" )
+                SeeChangeBase.insert( self, pgdb, nocommit=True )
+                upstreams = self._upstreams if self._upstreams is not None else self.get_upstreams( pgdb=pgdb )
+                if len(upstreams) > 0:
+                    SCLogger.debug( f"Inserting upstreams of {self.id}: {[p.id for p in upstreams]}" )
+                    for upstream in upstreams:
+                        q = sql.SQL( "INSERT INTO provenance_upstreams(upstream_id, downstream_id) "
+                                     "VALUES ({upstream},{me})" ).format( upstream=upstream.id, me=self.id )
+                        pgdb.execute( q )
+
+                if not nocommit:
+                    pgdb.commit()
+            finally:
+                # Make sure to free database lock unless we were explicitly told not to
                 if not nocommit:
                     pgdb.rollback()
-                if len(rows) > 1:
-                    raise RuntimeError( "This should never happen." )
-                if not _exists_ok:
-                    raise RuntimeError( f"Provenance {self.id} already exists in the database." )
-                # Should we verity that it's actually the same?  If we trust the hashing that goes
-                #   into the id, that shouldn't be necessary
-                return
-
-            SCLogger.debug( f"Adding provenance {self.id} to database" )
-            SeeChangeBase.insert( self, pgdb, nocommit=True )
-            upstreams = self._upstreams if self._upstreams is not None else self.get_upstreams( pgdb=pgdb )
-            if len(upstreams) > 0:
-                SCLogger.debug( f"Inserting upstreams of {self.id}: {[p.id for p in upstreams]}" )
-                for upstream in upstreams:
-                    q = sql.SQL( "INSERT INTO provenance_upstreams(upstream_id, downstream_id) "
-                                 "VALUES ({upstream},{me})" ).format( upstream=upstream.id, me=self.id )
-                    pgdb.execute( q )
-
-            if not nocommit:
-                pgdb.commit()
-
-        # with SmartSession( session ) as sess:
-        #     try:
-        #         SeeChangeBase.insert( self, sess )
-
-        #         # Should be safe to go ahead and insert into the association table
-        #         # If the provenance already existed, we will have raised an exceptipn.
-        #         # If not, somebody else who might try to insert this provenance
-        #         # will get an exception on the insert() statement above, and so won't
-        #         # try the following association table inserts.
-
-        #         upstreams = self._upstreams if self._upstreams is not None else self.get_upstreams( session=sess )
-        #         if len(upstreams) > 0:
-        #             SCLogger.debug( f"Inserting upstreams of {self.id}: {[p.id for p in upstreams]}" )
-        #             for upstream in upstreams:
-        #                 sess.execute( sa.text( "INSERT INTO provenance_upstreams(upstream_id,downstream_id) "
-        #                                        "VALUES (:upstream,:me)" ),
-        #                               { 'me': self.id, 'upstream': upstream.id } )
-        #             sess.commit()
-        #     except IntegrityError as ex:
-        #         if _exists_ok and ( 'duplicate key value violates unique constraint "provenances_pkey"' in str(ex) ):
-        #             sess.rollback()
-        #         else:
-        #             raise
 
 
     def insert_if_needed( self, session=None, nocommit=False ):
@@ -810,6 +800,8 @@ class ProvenanceTag(Base, UUIDMixin):
         #   and create stuff if needed.
 
         def _search_for_provtag( tag, provs, pgdb ):
+            nonlocal add_missing_processes_to_provtag
+            
             rows = pgdb.execute( sql.SQL( textwrap.dedent(
                 """\
                 SELECT t.tag,p._id,p.process FROM provenance_tags t
@@ -847,16 +839,16 @@ class ProvenanceTag(Base, UUIDMixin):
                         known['referencing'] = []
                     if prov.id not in known['referencing']:
                         if add_missing_processes_to_provtag:
-                            mustadd.append( prov )
+                            mustadd.add( prov )
                             known['referencing'].append( prov.id )
                         else:
-                            missing.append( prov )
+                            missing.add( prov )
                 else:
                     if prov.process not in known:
                         if add_missing_processes_to_provtag:
-                            mustadd.append( prov )
+                            mustadd.add( prov )
                         else:
-                            missing.append( prov )
+                            missing.add( prov )
                             known[prov.process] = prov.id
                     elif known[prov.process] != prov.id:
                         conflict.add( prov )
@@ -868,18 +860,22 @@ class ProvenanceTag(Base, UUIDMixin):
 
             # See if we need to add stuff; if so, lock the table, search again, and add
             if ( len(missing) == 0 ) and ( len(conflict) == 0 ) and ( len(mustadd) > 0 ):
-                pgdb.execute_nofetch( "LOCK TABLE provenance_tags" )
-                known, mustadd, missing, conflict = _search_for_provtag( tag, provs, pgdb )
-                if ( len(missing) == 0 ) and ( len(conflict) == 0 ) and ( len(mustadd) > 0 ):
-                    for prov in mustadd:
-                        pgdb.execute_nofetch( sql.SQL( textwrap.dedent(
-                            """\
-                            INSERT INTO provenance_tags(tag,provenance_id,_id)
-                            VALUES ({tag},{provid},{uuid})
-                            """
-                        ) ).format( tag=tag, provid=prov.id, uuid=uuid.uuid4() ) )
-                    pgdb.commit()
-                else:
+                # Rollback the databse to free up any shared locks we may have incidentally
+                #   acquired, so that multiple processes doing this at once won't deadlock here.
+                pgdb.rollback()
+                try:
+                    pgdb.execute_nofetch( "LOCK TABLE provenance_tags" )
+                    known, mustadd, missing, conflict = _search_for_provtag( tag, provs, pgdb )
+                    if ( len(missing) == 0 ) and ( len(conflict) == 0 ) and ( len(mustadd) > 0 ):
+                        for prov in mustadd:
+                            pgdb.execute_nofetch( sql.SQL( textwrap.dedent(
+                                """\
+                                INSERT INTO provenance_tags(tag,provenance_id,_id)
+                                VALUES ({tag},{provid},{uuid})
+                                """
+                            ) ).format( tag=tag, provid=prov.id, uuid=uuid.uuid4() ) )
+                        pgdb.commit()
+                finally:
                     # Free that lock!
                     pgdb.rollback()
 

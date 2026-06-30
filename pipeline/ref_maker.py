@@ -529,18 +529,23 @@ class RefMaker:
         with PGDB( session, dictcursor=True ) as pgdb:
             # First, handle ignore_config_use_config_from_refset
             if self.pars.ignore_config_use_config_from_refset:
-                rows = pgdb.execute( sql.SQL( "SELECT provenance_id FROM refsets WHERE name={refset}" )
+                rows = pgdb.execute( sql.SQL( "SELECT description, provenance_id FROM refsets WHERE name={refset}" )
                                      .format( refset=self.pars.name ) )
                 if self.pars.refset_must_already_exist and ( len(rows) == 0 ):
                     raise RuntimeError( f"You asked for pre-existing refset {self.pars.name}, but it doesn't exist." )
                 elif len(rows) > 0:
+                    if len(rows) > 1:
+                        raise RuntimeError( "This should never happen." )
+
                     refprov = Provenance.get( rows[0]['provenance_id'], session=pgdb )
 
                     # Mangle the parmaeters around to what setup_config expects
                     kwargs = { 'maker': { k: copy.deepcopy(v)
                                           for k, v in refprov.parameters.items()
-                                          if k != 'coadd_pipeline_confiog' }
+                                          if k != 'coadd_pipeline_config' }
                               }
+                    kwargs['maker']['name'] = self.pars.name
+                    kwargs['maker']['description'] = rows[0]['description']
                     if 'coadd_pipeline_config' not in refprov.parameters:
                         raise RuntimeError( "I don't know how to cope." )
                     for kw in [ 'coaddition', 'extraction', 'astrocal', 'photocal' ]:
@@ -553,33 +558,57 @@ class RefMaker:
 
             # make sure all the sundry component provenances are in the database
             self.setup_provenances( session=pgdb )
+            SCLogger.debug( f"Refset {self.pars.name} ({self.pars.description}) with provenance {self.ref_prov.id}" )
 
             # make sure the ref_prov is in the database
             self.ref_prov.insert_if_needed( session=pgdb )
 
-            # Lock the refset table so we don't have a race condition
-            pgdb.execute_nofetch( "LOCK TABLE refsets" )
+            def _get_refset( name ):
+                rows = pgdb.execute( sql.SQL( "SELECT * FROM refsets WHERE name={name}" ).format( name=name ) )
+                if len(rows) > 0:
+                    if len(rows) > 1:
+                        raise RuntimeError( "This should never happen." )
+                    # refset already exists, make sure the provenance is right
+                    if rows[0]['provenance_id'] != self.ref_prov.id:
+                        raise ValueError( f"Refset {self.pars.name} already exists with provenance "
+                                          f"{rows[0]['provenance_id']}, which does not match the "
+                                          f"ref provenance we're using: {self.ref_prov.id}" )
+                    return rows[0]
+                else:
+                    return None
+
             # Check to see if the refset already exists
-            rows = pgdb.execute( "SELECT * FROM refsets WHERE name=%(name)s", { 'name': self.pars.name } )
-            if len(rows) > 0:
-                # refset already exists, make sure the provenance is right
-                if rows[0]['provenance_id'] != self.ref_prov.id:
-                    raise ValueError( f"Refset {self.pars.name} already exists with provenance "
-                                      f"{rows[0]['provenance_id']}, which does not match the "
-                                      f"ref provenance we're using: {self.ref_prov.id}" )
-                # Release the lock
-                pgdb.rollback()
-                self.refset = RefSet()
-                self.refset.set_attributes_from_dict( rows[0] )
-            else:
-                # refset doesn't exist, make it
-                self.refset = RefSet( name=self.pars.name, description=self.pars.description,
-                                      provenance_id=self.ref_prov.id )
-                pgdb.execute_nofetch( "INSERT INTO refsets(_id,name,description,provenance_id) "
-                                      "VALUES (%(id)s,%(name)s,%(desc)s,%(prov)s)",
-                                      { 'id': self.refset.id, 'name': self.refset.name,
-                                        'desc': self.refset.description, 'prov': self.refset.provenance_id } )
-                pgdb.commit()
+            row = _get_refset( self.pars.name )
+
+            if row is None:
+                # Gotta make it. To avoid race conditions, lock the table,
+                #   check *again* if it exists, and make it if it doesn't.
+                try:
+                    # Rollback the database connection to release all shared locks
+                    #   we have incidentally acquired, to avoid deadlocks where
+                    #   another process tries to get an exclusive lock.
+                    pgdb.rollback()
+                    # Now lock the refsets table
+                    pgdb.execute_nofetch( "LOCK TABLE refsets" )
+                    row = _get_refset( self.pars.name )
+                    if row is None:
+                        self.refset = RefSet( name=self.pars.name, description=self.pars.description,
+                                              provenance_id=self.ref_prov.id )
+                        q = sql.SQL( textwrap.dedent(
+                            """\
+                            INSERT INTO refsets(_id,name,description,provenance_id)
+                            VALUES ({_id},{name},{desc},{prov})
+                            """
+                        ) ).format( _id=self.refset.id, name=self.refset.name,
+                                    desc=self.refset.description, prov=self.refset.provenance_id )
+                        pgdb.execute_nofetch( q )
+                        pgdb.commit()
+                    else:
+                        self.refset = RefSet()
+                        self.refset.set_attributes_from_dict( row )
+                finally:
+                    # Make sure to release the lock
+                    pgdb.rollback()
 
 
     # ======================================================================

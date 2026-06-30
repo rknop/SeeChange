@@ -785,6 +785,8 @@ class SeeChangeBase:
     def _get_table_lock( cls, session, tablename=None ):
         """Never use this.  The code that uses this is already written.  Use it and get Bobby Tablesed."""
 
+        raise RuntimeError( "_get_table_lock is deprecated.  Issue #516." )
+
         # This is kind of irritating.  I got the point where I was sure
         # there were no deadlocks written into the code.  However,
         # sometimes, unreproducibly, we'd get a deadlock when trying to

@@ -348,7 +348,7 @@ class Object(Base, UUIDMixin, SpatiallyIndexed):
 
           connection : psycopg.Connection
             Database connection.  Will create and close one if this is
-            None.
+            None.  Warning : will commit and/or rollback.
 
           nocommit : bool, default False
             Do not commit to the database at the end of doing all the
@@ -374,56 +374,65 @@ class Object(Base, UUIDMixin, SpatiallyIndexed):
         with PsycopgConnection( connection ) as conn:
             neednew = []
             cursor = conn.cursor()
-            # We have to lock the object table for this entire process.
-            #   Otherwise, there is a race condition where two processes
-            #   with a source at the same RA/Dec (within uncertainty)
-            #   generate object names at the same time, and we end up
-            #   with two different objects that should only have been
-            #   one.
-            # This does mean we have to make sure *not* to commit the
-            #   database inside any functions called from this function.
-            #   (In practice, that is Object.generate_names.)
-            if not no_new:
-                cursor.execute( "LOCK TABLE objects" )
-            for m in measurements:
-                cursor.execute( ( "SELECT _id  FROM objects WHERE "
-                                  "  q3c_radial_query( ra, dec, %(ra)s, %(dec)s, %(radius)s ) "
-                                  "  AND is_test=%(test)s" ),
-                                { 'ra': m.ra, 'dec': m.dec, 'radius': radius/3600., 'test': is_testing } )
-                rows = cursor.fetchall()
-                if len(rows) > 0:
-                    m.object_id = rows[0][0]
-                else:
-                    neednew.append( m )
-
-            if ( not no_new ) and ( len(neednew) > 0 ):
-                names = cls.generate_names( number=len(neednew), year=year, month=month, day=day,
-                                            ra=m.ra, dec=m.dec, verifyunique=True, connection=conn )
-                for name, m in zip( names, neednew ):
-                    objid = uuid.uuid4()
-                    cursor.execute( ( "INSERT INTO objects(_id,ra,dec,name,is_test,is_bad) "
-                                      "VALUES(%(id)s, %(ra)s, %(dec)s, %(name)s, %(testing)s, FALSE)" ),
-                                    { 'id': objid, 'name': name, 'ra': m.ra, 'dec': m.dec, 'testing': is_testing } )
-                    m.object_id = objid
+            try:
+                # We have to lock the object table for this entire process.
+                #   Otherwise, there is a race condition where two processes
+                #   with a source at the same RA/Dec (within uncertainty)
+                #   generate object names at the same time, and we end up
+                #   with two different objects that should only have been
+                #   one.
+                # This does mean we have to make sure *not* to commit the
+                #   database inside any functions called from this function.
+                #   (In practice, that is Object.generate_names.)
+                if not no_new:
                     if not nocommit:
-                        # Make sure the object is committed even if one
-                        #  of the get_object_matches does a database
-                        #  rollback.
-                        conn.commit()
+                        # Rollback the connection before getting the lock to free up any
+                        #   shared locks the connection may incidentally have, to reduce
+                        #   the chances of two processes deadlock when we try to lock
+                        #   the object table.
+                        conn.rollback()
+                    cursor.execute( "LOCK TABLE objects" )
+                for m in measurements:
+                    cursor.execute( ( "SELECT _id  FROM objects WHERE "
+                                      "  q3c_radial_query( ra, dec, %(ra)s, %(dec)s, %(radius)s ) "
+                                      "  AND is_test=%(test)s" ),
+                                    { 'ra': m.ra, 'dec': m.dec, 'radius': radius/3600., 'test': is_testing } )
+                    rows = cursor.fetchall()
+                    if len(rows) > 0:
+                        m.object_id = rows[0][0]
+                    else:
+                        neednew.append( m )
 
-                        # Don't care about the return value for the matches,
-                        #   just making sure the database is loaded for
-                        #   later alert purposes
-                        if not no_associate_legacy_survey:
-                            ObjectLegacySurveyMatch.get_object_matches( objid, con=conn,
-                                                                        radius=liumatch_radius,
-                                                                        liuserver=liumatch_server )
+                if ( not no_new ) and ( len(neednew) > 0 ):
+                    names = cls.generate_names( number=len(neednew), year=year, month=month, day=day,
+                                                ra=m.ra, dec=m.dec, verifyunique=True, connection=conn )
+                    for name, m in zip( names, neednew ):
+                        objid = uuid.uuid4()
+                        cursor.execute( ( "INSERT INTO objects(_id,ra,dec,name,is_test,is_bad) "
+                                          "VALUES(%(id)s, %(ra)s, %(dec)s, %(name)s, %(testing)s, FALSE)" ),
+                                        { 'id': objid, 'name': name, 'ra': m.ra, 'dec': m.dec, 'testing': is_testing } )
+                        m.object_id = objid
+                        if not nocommit:
+                            # Make sure the object is committed even if one
+                            #  of the get_object_matches does a database
+                            #  rollback.
+                            conn.commit()
 
-                        if not no_associate_gaia:
-                            ObjectGaiaMatch.get_object_matches( objid, radius=gaiamatch_radius,
-                                                                gaiacat=gaiacat, con=conn )
+                            # Don't care about the return value for the matches,
+                            #   just making sure the database is loaded for
+                            #   later alert purposes
+                            if not no_associate_legacy_survey:
+                                ObjectLegacySurveyMatch.get_object_matches( objid, con=conn,
+                                                                            radius=liumatch_radius,
+                                                                            liuserver=liumatch_server )
 
-
+                            if not no_associate_gaia:
+                                ObjectGaiaMatch.get_object_matches( objid, radius=gaiamatch_radius,
+                                                                    gaiacat=gaiacat, con=conn )
+            finally:
+                # Make sure database locks are released
+                if not nocommit:
+                    conn.rollback()
 
 
     @classmethod
