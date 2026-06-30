@@ -17,11 +17,18 @@ from models.reference import Reference
 from pipeline.ref_maker import RefMaker
 
 
-def identify_refs_to_build( mjd0, mjd1, provtag=None, overlapfrac=None, refset=None ):
+def identify_refs_to_build( mjd0, mjd1, provtag=None, overlapfrac=None, refset=None, no_make_refset=None ):
     cfg = Config.get()
     provtag = provtag if provtag is not None else cfg.value('pipeline.provenance_tag')
     overlapfrac  = overlapfrac if overlapfrac is not None else cfg.value('subtraction.reference.minovfrac')
     refset = refset if refset is not None else cfg.value('subtraction.refset')
+
+    kwargs = { 'maker': { 'name': refset } }
+    if no_make_refset is not None:
+        kwargs['maker'].update( { 'ignore_config_use_config_from_refset': no_make_refset,
+                                  'refset_must_already_exist': no_make_refset } )
+    refmaker = RefMaker( **kwargs )
+    refmaker.make_refset()
 
     SCLogger.info( f"Searching for images with provenance tag {provtag} between "
                    f"mjd {mjd0:.2f} and {mjd1:.2f}" )
@@ -76,59 +83,56 @@ def identify_refs_to_build( mjd0, mjd1, provtag=None, overlapfrac=None, refset=N
                     mooch[imgs[dex].id] = imgs[subdex].id
                     break
 
-        SCLogger.info( f"...{len(mooch)} of {len(imgs)} images can mooch" )
+    SCLogger.info( f"...{len(mooch)} of {len(imgs)} images can mooch" )
 
-        SCLogger.info( "Looking for existing references and buildable references..." )
+    SCLogger.info( "Looking for existing references and buildable references..." )
 
-        haverefs = []
-        somebodyelseswillbegood = []
-        canbuildrefs = []
-        canbuildrefswcses = []
-        nope = []
+    haverefs = []
+    somebodyelseswillbegood = []
+    canbuildrefs = []
+    canbuildrefswcses = []
+    nope = []
 
-        for ndone, (img, wcs, zp) in enumerate( zip( imgs, wcses, zps ) ):
-            if ndone % 10 == 0:
-                SCLogger.info( f"...did {ndone} of {len(imgs)}" )
+    for ndone, (img, wcs, zp) in enumerate( zip( imgs, wcses, zps ) ):
+        if ndone % 10 == 0:
+            SCLogger.info( f"...did {ndone} of {len(imgs)}" )
 
-            refs, refimgs = Reference.get_references( image=img, filter=img.filter, instrument=img.instrument,
-                                                      refset=refset, overlapfrac=overlapfrac, pgdb=pgdb )
-            if len(refs) > 0:
-                haverefs.append( img )
+        refs, refimgs = Reference.get_references( image=img, filter=img.filter, instrument=img.instrument,
+                                                  refset=refset, overlapfrac=overlapfrac )
+        if len(refs) > 0:
+            haverefs.append( img )
 
+        else:
+            if img.id in mooch.keys():
+                somebodyelseswillbegood.append( img )
             else:
-                if img.id in mooch.keys():
-                    somebodyelseswillbegood.append( img )
+                ( images, match_pos, match_count
+                  ) = refmaker.choose_reference_images_to_coadd( img.id,
+                                                                 image_zp_prov_id=zp.provenance_id,
+                                                                 filter=img.filter,
+                                                                 log_to_info=False )
+                if images is not None:
+                    canbuildrefs.append( img )
+                    canbuildrefswcses.append( wcs )
                 else:
-                    refmaker = RefMaker()
-                    refmaker.make_refset()
-                    ( images, match_pos, match_count
-                      ) = refmaker.choose_reference_images_to_coadd( img.id,
-                                                                     image_zp_prov_id=zp.provenance_id,
-                                                                     filter=img.filter,
-                                                                     log_to_info=False,
-                                                                     pgdb=pgdb )
-                    if images is not None:
-                        canbuildrefs.append( img )
-                        canbuildrefswcses.append( wcs )
-                    else:
-                        nope.append( img )
+                    nope.append( img )
 
-        SCLogger.info( "Grouping by exposure..." )
+    SCLogger.info( "Grouping by exposure..." )
 
-        # Group by exposure
-        exposures = {}
-        for which, collection in zip( ['haverefs', 'other', 'canbuild', 'nope'],
-                                      [haverefs, somebodyelseswillbegood, canbuildrefs, nope] ):
-            for img in collection:
-                if img.exposure_id not in exposures:
-                    exp = Exposure.get_by_id( img.exposure_id, pgdb=pgdb )
-                    exposures[img.exposure_id] = { 'identifier': exp.origin_identifier,
-                                                   'filepath': exp.filepath,
-                                                   'haverefs': [],
-                                                   'other': [],
-                                                   'canbuild': [],
-                                                   'nope': [] }
-                exposures[img.exposure_id][which].append( img )
+    # Group by exposure
+    exposures = {}
+    for which, collection in zip( ['haverefs', 'other', 'canbuild', 'nope'],
+                                  [haverefs, somebodyelseswillbegood, canbuildrefs, nope] ):
+        for img in collection:
+            if img.exposure_id not in exposures:
+                exp = Exposure.get_by_id( img.exposure_id )
+                exposures[img.exposure_id] = { 'identifier': exp.origin_identifier,
+                                               'filepath': exp.filepath,
+                                               'haverefs': [],
+                                               'other': [],
+                                               'canbuild': [],
+                                               'nope': [] }
+            exposures[img.exposure_id][which].append( img )
 
     return exposures
 
@@ -151,6 +155,12 @@ def main():
     parser.add_argument( '-r', '--refset', default=cfg.value( "subtraction.refset" ),
                          help=( "The reset to search for existing references in.  Defaults to config value of "
                                 "subtraction.refset" ) )
+    parser.add_argument( '-n', '--no-make-refset',
+                         default=cfg.value( "referencing.maker.ignore_config_use_config_from_refset"),
+                         help=( "Don't make a new refset, only use a pre-existing one, and use the config from "
+                                "that pre-existing refset even if the rest of refmaker config conflicts with it.  "
+                                "Defaults to what is set "
+                                "in config referencing.maker.ignore_config_use_config_from_refset" ) )
     parser.add_argument( '-w', '--write-builder-script', default=None,
                          help=( "If given, write a bash script that will run the ref maker for exposures that have "
                                 "refs that can be built." ) )
@@ -166,7 +176,8 @@ def main():
     SCLogger.setLevel( "DEBUG" if args.verbose else "INFO" )
 
     exposures = identify_refs_to_build( args.mjd0, args.mjd1, provtag=args.prov,
-                                        overlapfrac=args.overlapfrac, refset=args.refset )
+                                        overlapfrac=args.overlapfrac, refset=args.refset,
+                                        no_make_refset=args.no_make_refset )
 
     exporder = list( exposures.keys() )
     exporder.sort( key=lambda x: exposures[x]['filepath'] )

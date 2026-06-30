@@ -632,6 +632,8 @@ coaddition:
 referencing:
   maker:  # these handles the top level configuration (e.g., how to choose images that go into the reference maker)
     name: best_references  # the name of the reference set that you want to make references for
+    ignore_config_use_config_from_refset: false
+    refset_must_already_exist: false
     description: "The Best References"   # Description of the reference set
     start_time: null  # only grab images after this time
     end_time: null  # only grab images before this time

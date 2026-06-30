@@ -516,6 +516,14 @@ class RefMaker:
         Sets self.refset.  Will also make all the required provenances
         (using the config) and load them into the database.
 
+        Parameters
+        ----------
+          session : PGDB, psycopg.Connection, psycopg.Cursor, or sa Session, default None
+             Databse connection.  Will open and close a new one if not
+             given. WARNING : will always commit or rollback!  For that
+             reason, you usually do NOT want to specify something for
+             session, but leave it at None.
+
         """
 
         with PGDB( session, dictcursor=True ) as pgdb:
@@ -559,6 +567,8 @@ class RefMaker:
                     raise ValueError( f"Refset {self.pars.name} already exists with provenance "
                                       f"{rows[0]['provenance_id']}, which does not match the "
                                       f"ref provenance we're using: {self.ref_prov.id}" )
+                # Release the lock
+                pgdb.rollback()
                 self.refset = RefSet()
                 self.refset.set_attributes_from_dict( rows[0] )
             else:

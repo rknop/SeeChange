@@ -485,7 +485,7 @@ class Provenance(Base):
 
 
     @classmethod
-    def get_code_version(cls, process, session=None):
+    def get_code_version(cls, process, session=None, nocommit=False):
         """Get the most relevant or latest code version.
 
         Searches the DB to check if the codeversion matching the current
@@ -494,13 +494,15 @@ class Provenance(Base):
         Parameters
         ----------
         session: PGDB, psycopg.Connection, psycopg.Cursor, or (shudder) sa Session, default None
-            Databse connection.  If None, a new session is created,
-            and closed as soon as the function finishes.
+            Databse connection.  If None, a new session is created, and
+            closed as soon as the function finishes.  WARNING : will
+            commit or rollback unless nocommit=True.
 
         Returns
         -------
         code_version: CodeVersion
             CodeVersion object
+
         """
 
         if CodeVersion._code_version_cache is None:
@@ -522,8 +524,10 @@ class Provenance(Base):
             codebase_semver = CodeVersion.CODE_VERSION_DICT[process]  # (major, minor, patch) eg. (2,0,1)
 
             with PGDB( session, dictcursor=True ) as pgdb:
-                pgdb.execute_nofetch( "LOCK TABLE code_versions" )
-                rows = pgdb.execute( sql.SQL( textwrap.dedent(
+                # To minimize use of locks, first see if the code version exists, and if it does, be happy.
+                # If not, lock the table, check *again* to see if it exists (because another process
+                # might have created it in the mean time!), and create it if it doesn't.
+                cvsearchq = sql.SQL( textwrap.dedent(
                     """\
                     SELECT * FROM code_versions
                     WHERE process={process}
@@ -534,25 +538,36 @@ class Provenance(Base):
                 ) ).format( process=process,
                             major=codebase_semver[0],
                             minor=codebase_semver[1],
-                            patch=codebase_semver[2] ) )
+                            patch=codebase_semver[2] )
+                rows = pgdb.execute( cvsearchq )
                 code_version = CodeVersion()
                 if len(rows) > 0:
                     rows[0]['_id'] = asUUID( rows[0]['_id'] )
                     code_version.set_attributes_from_dict( rows[0] )
                 else:
-                    subdict = { '_id': uuid.uuid4(),
-                                'process': process,
-                                'version_major': codebase_semver[0],
-                                'version_minor': codebase_semver[1],
-                                'version_patch': codebase_semver[2] }
-                    pgdb.execute_nofetch( sql.SQL( textwrap.dedent(
-                        """\
-                        INSERT INTO code_versions(_id,process,version_major,version_minor,version_patch)
-                        VALUES ({_id},{process},{version_major},{version_minor},{verson_patch})
-                        """
-                    ) ).format( **subdict ) )
-                    pgdb.commit()
-                    code_version.set_attributes_from_dict( subdict )
+                    pgdb.execute_nofetch( "LOCK TABLE code_versions" )
+                    rows = pgdb.execute( cvsearchq )
+                    if len(rows) > 0:
+                        rows[0]['_id'] = asUUID( rows[0]['_id'] )
+                        code_version.set_attribute_from_dict( rows[0] )
+                        if not nocommit:
+                            # Release lock unless we were told not to
+                            pgdb.rollback()
+                    else:
+                        subdict = { '_id': uuid.uuid4(),
+                                    'process': process,
+                                    'version_major': codebase_semver[0],
+                                    'version_minor': codebase_semver[1],
+                                    'version_patch': codebase_semver[2] }
+                        pgdb.execute_nofetch( sql.SQL( textwrap.dedent(
+                            """\
+                            INSERT INTO code_versions(_id,process,version_major,version_minor,version_patch)
+                            VALUES ({_id},{process},{version_major},{version_minor},{verson_patch})
+                            """
+                        ) ).format( **subdict ) )
+                        if not nocommit:
+                            pgdb.commit()
+                        code_version.set_attributes_from_dict( subdict )
                 CodeVersion._code_version_cache[process] = code_version
 
         return CodeVersion._code_version_cache[process]
@@ -566,17 +581,35 @@ class Provenance(Base):
         Parameters
         ----------
           session : PGDB, psycpog.Connection, psycopg.Cursor, or SQLAlchmey sesion, or None
-            Usually you don't want to use this.  Warning: commits unless nocommit is True.
+            Usually you don't want to use this.  Warning: commits or
+            rollbacks unless nocommit is True.
 
         """
 
         with PGDB( session ) as pgdb:
-            # Lock the table so we don't have a disaster of two different processes inserting
-            #  the provenance and the upstreams all at the same time.
+            # Lock the table so we don't have a disaster of two different processes inserting the
+            #  provenance and the upstreams all at the same time.  But, because any use of database
+            #  locks is just asking for a deadlock, first search without locking, and if it exists,
+            #  be happy.  If it doesn't, only then lock, search *again* (just in case somebody else
+            #  created it in the mean time), and create it if it doesn't exist.  This doesn't guarantee
+            #  no database deadlocks (have to audit the entire SeeChange codebase to make sure that
+            #  won't happen...), but it should reduce the risk.
+            rows, _cols = pgdb.execute( sql.SQL( "SELECT * FROM provenances WHERE _id={me}" ).format( me=self.id ) )
+            if len(rows) > 0:
+                if len(rows) > 1:
+                    raise RuntimeError( "This should never happen." )
+                if not _exists_ok:
+                    raise RuntimeError( f"Provenance {self.id} already exists in the database." )
+                # Should we verity that it's actually the same?  If we trust the hashing that goes
+                #   into the id, that shouldn't be necessary
+                return
+
+            # Didn't exist, so we have to make it, and have to lock the table to avoid race conditions
             pgdb.execute_nofetch( "LOCK TABLE provenances" )
             rows, _cols = pgdb.execute( sql.SQL( "SELECT * FROM provenances WHERE _id={me}" ).format( me=self.id ) )
             if len(rows) > 0:
-                pgdb.rollback()
+                if not nocommit:
+                    pgdb.rollback()
                 if len(rows) > 1:
                     raise RuntimeError( "This should never happen." )
                 if not _exists_ok:
@@ -756,28 +789,27 @@ class ProvenanceTag(Base, UUIDMixin):
 
           pgdb : PGDB, psycopg.Connection, psycopg.Cursor, or sa Session, default None
             Database connection.  If not given, will open and close a
-            new one.  Warning: commits.
+            new one.  Warning: may commit or rollback!
 
         """
 
         # First, make sure that provs doesn't have multiple entries for
         #   processes other than 'referencing'
         seen = set()
-        missing = []
-        conflict = []
         for p in provs:
             if ( p.process != 'referencing' ) and ( p.process in seen ):
                 raise ValueError( f"Process {p.process} is in the list of provenances more than once!" )
             seen.add( p.process )
 
         # Use direct postgres connection rather than SQLAlchemy so that we can
-        # lock tables without a world of hurt.  (See massive comment in
-        # base.SmartSession.)
-        # NOTE : this lock is actually really scary.  LOTS of queries join to provenance_tags.
-        #   all it takes is somebody to leave a query idle in transaction that read from
-        #   provenance tags to cause this lock to wait forever.
-        with PGDB( pgdb, dictcursor=True) as pgdb:
-            pgdb.execute_nofetch( "LOCK TABLE provenance_tags" )
+        #   lock tables without a world of hurt.  (See massive comment in
+        #   base.SmartSession.)
+        # Because database locks are scary, do the search first to see if everything
+        #   is in place and correct.  If so, then just be happy, no need to lock anything.
+        #   If not, then we have to lock, do the search *again* to avoid race conditions,
+        #   and create stuff if needed.
+
+        def _search_for_provtag( tag, provs, pgdb ):
             rows = pgdb.execute( sql.SQL( textwrap.dedent(
                 """\
                 SELECT t.tag,p._id,p.process FROM provenance_tags t
@@ -786,6 +818,9 @@ class ProvenanceTag(Base, UUIDMixin):
                 """
             ) ).format( tag=tag  ) )
             known = {}
+            mustadd = set()
+            missing = set()
+            conflict = set()
             for row in rows:
                 if row['process'] == 'referencing':
                     if 'referencing' not in known:
@@ -797,12 +832,12 @@ class ProvenanceTag(Base, UUIDMixin):
                         raise RuntimeError( f"Database corruption error!  The process {row['process']} "
                                             f"has more than one entry for provenance tag {tag}." )
                     known[row['process']] = row['_id']
+
             if len(known) == 0:
                 # If the provenance tag didn't exist at all, then create it even
                 # if add_missing_process_to_provtag is False
                 add_missing_processes_to_provtag = True
 
-            addedsome = False
             for prov in provs:
                 # Special case handling for 'referencing', because there we do allow
                 #   multiple provenances tagged with the same tag.
@@ -811,34 +846,42 @@ class ProvenanceTag(Base, UUIDMixin):
                     if 'referencing' not in known:
                         known['referencing'] = []
                     if prov.id not in known['referencing']:
-                        if not add_missing_processes_to_provtag:
-                            missing.append( prov )
-                        else:
-                            pgdb.execute_nofetch( sql.SQL( textwrap.dedent(
-                                """\
-                                INSERT INTO provenance_tags(tag,provenance_id,_id)
-                                "VALUES ({tag},{provid},{uuid})
-                                """
-                            ) ).format( tag=tag, provid=prov.id, uuid=uuid.uuid4() ) )
+                        if add_missing_processes_to_provtag:
+                            mustadd.append( prov )
                             known['referencing'].append( prov.id )
-                            addedsome = True
+                        else:
+                            missing.append( prov )
                 else:
                     if prov.process not in known:
-                        if not add_missing_processes_to_provtag:
-                            missing.append( prov )
+                        if add_missing_processes_to_provtag:
+                            mustadd.append( prov )
                         else:
-                            pgdb.execute_nofetch( sql.SQL( textwrap.dedent(
-                                """\
-                                INSERT INTO provenance_tags(tag,provenance_id,_id)
-                                VALUES ({tag},{provid},{uuid})
-                                """
-                            ) ).format( tag=tag, provid=prov.id, uuid=uuid.uuid4() ) )
+                            missing.append( prov )
                             known[prov.process] = prov.id
-                            addedsome = True
                     elif known[prov.process] != prov.id:
-                        conflict.append( prov )
-            if ( addedsome ) and ( len(missing) == 0 ) and ( len(conflict) == 0 ):
-                pgdb.commit()
+                        conflict.add( prov )
+
+            return known, mustadd, missing, conflict
+
+        with PGDB( pgdb, dictcursor=True) as pgdb:
+            known, mustadd, missing, conflict = _search_for_provtag( tag, provs, pgdb )
+
+            # See if we need to add stuff; if so, lock the table, search again, and add
+            if ( len(missing) == 0 ) and ( len(conflict) == 0 ) and ( len(mustadd) > 0 ):
+                pgdb.execute_nofetch( "LOCK TABLE provenance_tags" )
+                known, mustadd, missing, conflict = _search_for_provtag( tag, provs, pgdb )
+                if ( len(missing) == 0 ) and ( len(conflict) == 0 ) and ( len(mustadd) > 0 ):
+                    for prov in mustadd:
+                        pgdb.execute_nofetch( sql.SQL( textwrap.dedent(
+                            """\
+                            INSERT INTO provenance_tags(tag,provenance_id,_id)
+                            VALUES ({tag},{provid},{uuid})
+                            """
+                        ) ).format( tag=tag, provid=prov.id, uuid=uuid.uuid4() ) )
+                    pgdb.commit()
+                else:
+                    # Free that lock!
+                    pgdb.rollback()
 
         if len( conflict ) != 0:
             strio = io.StringIO()
