@@ -163,8 +163,12 @@ extraction:
 # ======================================================================
 # World Coordinates
 
-astrocal:
-  astrometry_net_indexdir: /seechange/tests/astronomy_net_data
+# astrocal:
+#   # This is what the tests want, but is not a good default.
+#   #   "None" is maybe a good default, as that tells astrometry.net
+#   #   to look in its own directories.
+#   # This value is set in tests/seechange_test_site_config.yaml
+#   # astrometry_net_indexdir: /seechange/tests/astronomy_net_data
 
 
 # ======================================================================

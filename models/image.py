@@ -967,6 +967,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             if ( output.maxra < output.minra ):
                 output.ra = ( output.maxra + output.minra - 360. ) / 2.
                 output.ra = output.ra + 360. if output.ra < 0. else output.ra
+            else:
+                output.ra = ( output.minra + output.maxra ) / 2.
             output.dec = ( output.maxdec + output.mindec ) / 2.
             output.calculate_coordinates()
         else:

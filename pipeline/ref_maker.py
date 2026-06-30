@@ -414,6 +414,7 @@ class RefMaker:
         self.coadd_provs = None
         self.ref_prov = None
         self.refset = None
+        self.subtraction_minovfrac = config.value( 'subtraction.reference.minovfrac' )
 
         self.reset()
 
@@ -864,7 +865,8 @@ class RefMaker:
             section_id=self.section_id,
             filter=self.filter,
             provenance_ids=self.ref_prov.id,
-            for_image_mjd=self.mjd
+            for_image_mjd=self.mjd,
+            overlapfrac=self.subtraction_minovfrac
         )
 
         refs, _ = refsandimgs
@@ -1056,6 +1058,8 @@ def main():
                          help=( "List the images that are combined into the ref.  If --no-build is True, "
                                 "list the images that would have been combined into the ref even if a "
                                 "ref is not built." ) )
+    parser.add_argument( "-v", "--verbose", default=False, action="store_true",
+                         help="Set log level to DEBUG (default INFO)" )
 
     # TODO : add arugments that let us override what's in the config file?  Or just rely on config file?
     # (Probably we want this, so we can do one-offs, but put in warnings or require a --override-config
@@ -1072,6 +1076,10 @@ def main():
 
     args = parser.parse_args()
     kwargs = vars(args).copy()
+
+    SCLogger.setLevel( "DEBUG" if kwargs['verbose'] else "INFO" )
+    del kwargs['verbose']
+
     kwargs['do_not_build'] = kwargs['no_build']
     kwargs['identify_even_if_not_building'] = kwargs['list_images']
     del kwargs['no_build']

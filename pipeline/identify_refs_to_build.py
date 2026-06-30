@@ -20,7 +20,7 @@ from pipeline.ref_maker import RefMaker
 def identify_refs_to_build( mjd0, mjd1, provtag=None, overlapfrac=None, refset=None ):
     cfg = Config.get()
     provtag = provtag if provtag is not None else cfg.value('pipeline.provenance_tag')
-    overlapfrac  = overlapfrac if overlapfrac is not None else cfg.value('references.maker.overlap_fraction')
+    overlapfrac  = overlapfrac if overlapfrac is not None else cfg.value('subtraction.reference.minovfrac')
     refset = refset if refset is not None else cfg.value('subtraction.refset')
 
     SCLogger.info( f"Searching for images with provenance tag {provtag} between "
@@ -142,11 +142,11 @@ def main():
     parser.add_argument( '-p', '--prov', default=cfg.value( 'pipeline.provenance_tag' ),
                          help=( "Provenance tag of images/wcses/zps to look for; defaults to config value of "
                                 "pipeline.provenance_tag" ) )
-    parser.add_argument( '-o', '--overlapfrac', default=cfg.value( 'referencing.maker.overlap_fraction' ),
+    parser.add_argument( '-o', '--overlapfrac', default=cfg.value( 'subtraction.reference.minovfrac' ),
                          help=( "Fraction of area that an existing ref must overlap an image for it to be "
                                 "considered a good reference for that image.  *Also* the overlap fraction "
                                 "for two images to decide if they can share the same newly-built reference."
-                                "Defaults to config value of referencing.maker.overlap_fraction" ) )
+                                "Defaults to config value of subtraction.reference.minovfrac" ) )
     parser.add_argument( '-r', '--refset', default=cfg.value( "subtraction.refset" ),
                          help=( "The reset to search for existing references in.  Defaults to config value of "
                                 "subtraction.refset" ) )
