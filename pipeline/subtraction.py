@@ -396,10 +396,10 @@ class Subtractor:
             # use higher orders, and worry and fret a lot.
             nominalsigpix = nominalfwhm / trtlt / pixscale
             if nominalsigpix < 0.6:
-                self.logger.warning( f'Seeings were close enough '
-                                     f'(new={new_psf.fwhm_pixels:.2f}, ref={ref_psf.fwhm_pixels:.2f}) '
-                                     f'that nominalsigpix was < 0.6.  Going to use higher orders in case there needs '
-                                     f'to be sharpening scariness (brrr...)' )
+                SCLogger.warning( f'Seeings were close enough '
+                                  f'(new={new_psf.fwhm_pixels:.2f}, ref={ref_psf.fwhm_pixels:.2f}) '
+                                  f'that nominalsigpix was < 0.6.  Going to use higher orders in case there needs '
+                                  f'to be sharpening scariness (brrr...)' )
                 nominalsigpix = 1.0
                 hotgaussorders = [6, 4, 2]
                 hotgaussfactors = [0.5, 1., 2]
