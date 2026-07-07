@@ -34,7 +34,6 @@ from models.enums_and_bitflags import ImageTypeConverter
 from models.base import PsycopgConnection, PGDB
 from models.deepscore import DeepScoreSet
 from models.fakeset import FakeSet, FakeAnalysis
-from models.report import Report
 
 sys.path.insert( 0, pathlib.Path(__name__).resolve().parent )
 from baseview import BaseView
@@ -301,42 +300,51 @@ class Exposures( BaseView ):
             app.logger.debug( "Exposures summing images and measurements" )
             pgdb.execute_nofetch( q )
 
-            # Run a third query to count reports.  Because there might be
-            #   lots of reports for the same exposure, we're just going to
-            #   count the latest one that matches the expected provenance tag.
-            # WORRY : all of these join shenanigans (in particular, the one
-            #   that pokes into the jsonb column) may get really slow when
-            #   tables are big.  Think about that.
+            # Previous one inserted into a temp table because we will also
+            #   need to use it to join in the reports query.  Also,
+            #   at some point in the future, we might be able to have
+            #   the reports join do everything and only need to get
+            #   results at the end of that.
+            app.logger.debug( "Exposures getting results" )
+            exposureinfo = pgdb.execute( "SELECT * FROM temp_imgs_2" )
+
+            # Run a third query to count reports.  Tried using
+            #   models/report.py::Report.query_for_reports, but it
+            #   was horribly slow as it exploded a JSON and then
+            #   sorted it all even though it wasn't necessary.
+            #   I might be able to make that better.  But, for now,
+            #   just pull down *all* reports, and filter in python.
+            #   This is still horribly slow because we fetch way too much,
+            #   at least if there have been lots of reruns for exposures,
+            #   which is the case as of this writing.
+            app.logger.debug( f"Getting provenance tags for {provenancetag}" )
+            rows = pgdb.execute( sql.SQL( "SELECT provenance_id FROM provenance_tags WHERE tag={tag}" )
+                                 .format( tag=provenancetag ) )
+            provids = set( r['provenance_id'] for r in rows )
+            app.logger.debug( "Exposures getting reports" )
             q = sql.SQL( textwrap.dedent(
                 """\
-                SELECT t._id, t.filepath, t.mjd, t.airmass, t.target, t.project,
-                  t._type, t._filter, t.filter_array, t.exp_time,
-                  t.seeingavg, t.limmagavg, t.num_subs, t.num_sources, t.num_measurements,
-                  SUM( CASE WHEN r.success THEN 1 ELSE 0 END ) as n_successim,
-                  SUM( CASE WHEN r.error_message IS NOT NULL THEN 1 ELSE 0 END ) AS n_errors
+                SELECT r.*
                 FROM temp_imgs_2 t
-                LEFT JOIN (
+                INNER JOIN reports r ON t._id=r.exposure_id
+                ORDER BY t._id, r.section_id, r.start_time DESC
                 """
             ) )
-            # WARNING : right now the next thing is actually returning text, not SQL.
-            # Update TODO
-            subq, subdict = Report.query_for_reports( prov_tag=provenancetag,
-                                                      fields=[ 'exposure_id', 'success', 'error_message' ] )
-            q += sql.SQL( subq )
-            q += sql.SQL( ") r ON r.exposure_id=t._id\n" )
-            # I wonder if making a primary key on the temp table would be more efficient than
-            #    all these columns in GROUP BY?  Investigate this.
-            q += sql.SQL( textwrap.dedent(
-                """\
-                GROUP BY t._id, t.filepath, t.mjd, t.airmass, t.target, t.project, t._type,
-                  t._filter, t.filter_array, t.exp_time, t.seeingavg, t.limmagavg, t.num_subs,
-                  t.num_sources, t.num_measurements
-                ORDER BY t.mjd, t._filter, t.filter_array
-                """
-            ) )
-
-            app.logger.debug( "Exposures getting reports" )
-            rows = pgdb.execute( q, subdict  )
+            reportinfo = pgdb.execute( q )
+            # Filter the reports so that we only keep ones where all of the process
+            #   provenance ids are the right ones, keeping just the latest report
+            #   that matches for any given id and section.
+            app.logger.debug( "Exposures filtering reports" )
+            exp_errors = { e['_id']: 0 for e in exposureinfo }
+            exp_successim = { e['_id']: 0 for e in exposureinfo }
+            curid = ( None, None )
+            for row in reportinfo:
+                if ( row['exposure_id'], row['section_id'] ) == curid:
+                    continue
+                if all( v in provids for v in row['process_provid'].values() ):
+                    curid = ( row['exposure_id'], row['section_id'] )
+                    exp_errors[ row['exposure_id'] ] += 1 if row['error_message'] is not None else 0
+                    exp_successim[ row['exposure_id'] ] += 1 if row['success'] else 0
 
             ids = []
             name = []
@@ -356,7 +364,7 @@ class Exposures( BaseView ):
             n_errors = []
 
             slashre = re.compile( '^.*/([^/]+)$' )
-            for row in rows:
+            for row in exposureinfo:
                 ids.append( row['_id'] )
                 match = slashre.search( row['filepath'] )
                 if match is None:
@@ -377,8 +385,8 @@ class Exposures( BaseView ):
                 n_subs.append( row['num_subs'] )
                 n_sources.append( row['num_sources'] )
                 n_measurements.append( row['num_measurements'] )
-                n_successim.append( row['n_successim'] )
-                n_errors.append( row['n_errors'] )
+                n_successim.append( exp_successim[ row['_id'] ] )
+                n_errors.append( exp_errors[ row['_id'] ] )
 
             app.logger.debug( "Exposures returning" )
             return { 'status': 'ok',
@@ -480,12 +488,14 @@ class ExposureImages( BaseView ):
             imagerows = pgdb.execute( q )
 
             # Get reports
-            # We want the reports were all the provenances in process_provid
-            #   are tagged with the right provenance tag.  Report.query_for_reports
-            #   is supposed to be cleverl SQL that does all this server side, but
-            #   I suspect it has performance problems.  TODO look into that.  In
-            #   the mean time, just pull down ALL the reports for ALL of the epxosures,
-            #   and filter in python
+            # We want the reports were all the provenances in
+            #   process_provid are tagged with the right provenance tag.
+            #   Report.query_for_reports is supposed to be cleverl SQL
+            #   that does all this server side, but I
+            #   suspect^H^H^H^H^H^H^H know it has performance problems.
+            #   TODO look into that.  In the mean time, just pull down
+            #   ALL the reports for ALL of the epxosures, and filter in
+            #   python
             allreports = pgdb.execute( sql.SQL( "SELECT * FROM reports WHERE exposure_id={expid}\n"
                                                 "ORDER BY modified DESC" )
                                        .format( expid=expid ) )
@@ -558,19 +568,22 @@ class ExposureImages( BaseView ):
 
 class ExposureReports( BaseView ):
     def do_the_things( self, expid, provtag ):
-        q, subdict = Report.query_for_reports( provtag )
-        q = f"SELECT e._id,r.* FROM exposures e INNER JOIN ({q}) r ON e._id=r.exposure_id WHERE e._id=%(expid)s"
-        subdict['expid'] = expid
-        with PsycopgConnection() as conn:
-            cursor = conn.cursor()
-            cursor.execute( q, subdict )
-            columns = { cursor.description[i][0]: i for i in range( len(cursor.description) ) }
-            rows = cursor.fetchall()
-
+        # As in Exposures, going to pull down ALL reports for the exposure,
+        #  then filter later.
+        with PGDB( dictcursor=True ) as pgdb:
+            rows = pgdb.execute( sql.SQL( "SELECT provenance_id FROM provenance_tags WHERE tag={provtag}" )
+                                 .format( provtag=provtag ) )
+            okprovs = set( r['provenance_id'] for r in rows )
+            rows = pgdb.execute( sql.SQL( "SELECT * FROM reports WHERE exposure_id={expid}\n"
+                                          "ORDER BY start_time DESC" )
+                                 .format( expid=expid ) )
             retval = { 'status': 'ok',
                        'reports': {} }
             for row in rows:
-                retval['reports'][row[columns['section_id']]] = { c: row[columns[c]] for c in columns }
+                if row['section_id'] in retval['reports']:
+                    continue
+                if all( v in okprovs for v in row['process_provid'].values() ):
+                    retval['reports'][row['section_id']] = row
 
             return retval
 
@@ -1030,16 +1043,21 @@ class FakeAnalysisData( BaseView ):
 # =====================================================================
 # Create and configure the flask app
 
-cfg = Config.get()
-
 app = flask.Flask( __name__, instance_relative_config=True )
 
+# Logger
 _formatter = logging.Formatter( '[%(asctime)s - %(levelname)s] - %(message)s', datefmt='%Y-%m-%d %H:%M:%S' )
 flask.logging.default_handler.setFormatter( _formatter )
 
-# app.logger.setLevel( logging.INFO )
-app.logger.setLevel( logging.DEBUG )
+# SeeChange Config.  Put logger in debug so we see logs about what config overrides are read.
+app.logger.setLevel( "DEBUG" )
+cfg = Config.get()
+if not cfg.value( "webap.verbose", True ):
+    app.logger.setLevel( "INFO" )
+app.logger.debug( "Set log level to DEBUG" )
 
+
+# Regular flask setup
 secret_key = cfg.value( 'webap.flask_secret_key' )
 if secret_key is None:
     with open( cfg.value( 'webap.flask_secret_key_file' ) ) as ifp:
@@ -1062,6 +1080,7 @@ import rkauth_flask
 import conductor
 import ltcv
 
+# Make sure we have the info we need to connect to the database and send password upate email
 kwargs = {
     'usegroups': True,
     'db_host': cfg.value( 'db.host' ),
@@ -1085,12 +1104,12 @@ if ( kwargs['smtp_password'] ) is None and ( cfg.value('email.smtp_password_file
 
 rkauth_flask.RKAuthConfig.setdbparams( **kwargs )
 
+# Register urls from subapps
 app.register_blueprint( rkauth_flask.bp )
 app.register_blueprint( conductor.bp )
 app.register_blueprint( ltcv.bp )
 
 # Configure urls
-
 urls = {
     "/": MainPage,
     "/provtags": ProvTags,

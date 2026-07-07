@@ -21,12 +21,6 @@ webap/static/resetpasswd_start.js
 webap/static/rkauth.js
 webap/static/rkwebutil.js
 webap/static/svgplot.js
-# util/githash.py is automatically generated
-#  by util/Makefile.am, and is needed by
-#  installed code that isn't a git checkout.
-#  Because it's automatically generated, it
-#  should *not* be in the archive.
-util/githash.py
 
 
 ### Stuff created by autoconf and ./configure

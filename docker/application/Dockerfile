@@ -3,6 +3,22 @@
 # for building (including python pip) doesn't have to be included in the
 # final image.
 #
+# To build for webap, from root of checkout
+#
+#   docker build --build-arg OVFILE=<filename> AUGFILE=<filename> \
+#      -t <image> --target webap \
+#      -f docker/application/Dockerfile .
+#
+#
+# where OVFILE and AUGFILE are files to read in place of the default
+# empty webap_local_overrides.yaml and webap_local_aughments.yaml (which
+# need to be empty for tests!).  For ls4, we use the empty files, but
+# have an override in /secrets/local_overrides.yaml (wich
+# seechange_webap.yaml reads).
+#
+#   docker build . --target webap -f docker/application/Dockerfile \
+#       -t registry.nersc.gov/m4616/seechange-webap:ls4-production-YYYYMMDDx
+#
 # The docker-compose.yaml files in tests and devshell each do a few
 # different builds from this Dockerfile.
 #
@@ -270,6 +286,15 @@ RUN curl -L https://astrometry.net/downloads/astrometry.net-$astrometry_net_ver.
 
 
 # ======================================================================
+# Add packages needed for webap
+
+FROM build AS webap_prebuild
+
+COPY requirements-webap.txt /seechange/requirements-webap.txt
+RUN source /venv/bin/activate \
+     && pip install -r /seechange/requirements-webap.txt
+
+# ======================================================================
 # Add the packages needed for tests
 
 FROM build AS build_dev
@@ -304,13 +329,9 @@ RUN mkdir -p /usr/src/seechange/seechange
 #  docker to be thinking about.  (This step will still get redone a lot
 #  anyway because we will regularly be editing things in the improc,
 #  models, pipeline, and util subdirectories.  Fortunately, it should be
-#  a pretty fast step.)  (The one is the longest and most wasteful, and
-#  is just there so that the creation of util/githash.py works in
-#  util/Makefile.am.)
-ADD .git /usr/src/seechange/seechange/.git
+#  a pretty fast step.)
 ADD configure.ac /usr/src/seechange/seechange/configure.ac
 ADD Makefile.am /usr/src/seechange/seechange/Makefile.am
-ADD requirements.txt /usr/src/seechange/seechange/requirements.txt
 ADD improc/ /usr/src/seechange/seechange/improc/
 ADD models/ /usr/src/seechange/seechange/models/
 ADD pipeline/ /usr/src/seechange/seechange/pipeline/
@@ -331,7 +352,7 @@ RUN make install
 # This is the target used to do a make install for the webap's
 #   specific server and client code.
 
-FROM included_code_build AS webap_build
+FROM webap_prebuild AS webap_build
 
 COPY requirements-webap.txt /seechange/requirements-webap.txt
 RUN source /venv/bin/activate \
@@ -340,6 +361,8 @@ RUN source /venv/bin/activate \
 RUN mkdir -p /usr/src/seechange/webap
 ADD webap/ /usr/src/seechange/webap/
 ADD extern/rkwebutil /usr/src/seechange/extern/rkwebutil
+
+COPY --from=included_code_build /seechange/lib /seechange/lib
 
 WORKDIR /usr/src/seechange/webap
 RUN make INSTALLDIR=/webap_code install
@@ -395,18 +418,21 @@ CMD ["tail", "-f", "/etc/issue"]
 
 FROM base AS webap
 
-COPY --from=webap_build /usr/bin/hotpants /usr/bin/hotpants
-COPY --from=webap_build /venv/ /venv/
-COPY --from=webap_build /astrometry.net/ /astrometry.net/
-COPY --from=webap_build /webap_code/ /webap_code/
+ARG OVFILE=webap/webap_local_overrides.yaml
+ARG AUGFILE=webap/webap_local_augments.yaml
+
 COPY --from=webap_build /seechange/lib /seechange/lib
+COPY --from=webap_build /usr/bin/hotpants /usr/bin/hotpants
+COPY --from=webap_build /astrometry.net/ /astrometry.net/
+COPY --from=webap_build /venv/ /venv/
+COPY --from=webap_build /webap_code/ /webap_code/
 
 COPY default_config.yaml /seechange/default_config.yaml
 COPY pipeline_config.yaml /seechange/pipeline_config.yaml
 COPY site_config.yaml /seechange/site_config.yaml
 COPY webap/seechange_webap.yaml /seechange/seechange_webap.yaml
-COPY webap/webap_local_overrides.yaml /seechange/webap_local_overrides.yaml
-COPY webap/webap_local_augments.yaml /seechange/webap_local_augments.yaml
+COPY ${OVFILE} /seechange/webap_local_overrides.yaml
+COPY ${AUGFILE} /seechange/webap_local_augments.yaml
 
 # Copy in the self-signed certificate we need to use in tests.
 # This should *not* be used in production, even though it's

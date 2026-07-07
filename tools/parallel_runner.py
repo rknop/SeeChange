@@ -52,7 +52,8 @@ def main():
         print( f"stdout for failure of {line}\n{out}\n" )
         print( f"\nstderr for failure of {line}\n{err}\n" )
 
-    print( f"\nAll done." )
+    print( "\nAll done." )
+
 
 # ======================================================================
 

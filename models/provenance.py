@@ -801,7 +801,7 @@ class ProvenanceTag(Base, UUIDMixin):
 
         def _search_for_provtag( tag, provs, pgdb ):
             nonlocal add_missing_processes_to_provtag
-            
+
             rows = pgdb.execute( sql.SQL( textwrap.dedent(
                 """\
                 SELECT t.tag,p._id,p.process FROM provenance_tags t

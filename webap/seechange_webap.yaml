@@ -8,8 +8,10 @@ preloads:
   - default_config.yaml
 overrides:
   - webap_local_overrides.yaml
+  - /secrets/local_overrides.yaml
 augments:
   - webap_local_augments.yaml
+  - /secrets/local_augments.yaml
 
 # This flask secret key is what we use in our tests.  You would be advised to
 # make it something else for your environment.  Better, leave it null,
@@ -18,6 +20,7 @@ augments:
 webap:
   flask_secret_key: 'dgzd0wy04gr83pkttq9md13rl1xe0f3n9jnk5tbtpfzflfh4gcmyhjal28g4d4om'
   flask_secret_key_file: null
+  verbose: false
 
 # The webap must run where it can mount (readonly) the archive
 # directories directly.  This is how it gets cutouts.

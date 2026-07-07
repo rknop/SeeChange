@@ -94,7 +94,7 @@ def identify_refs_to_build( mjd0, mjd1, provtag=None, overlapfrac=None, refset=N
     canbuildrefswcses = []
     nope = []
     zpprovid = None
-    
+
     for ndone, (img, wcs, zp) in enumerate( zip( imgs, wcses, zps ) ):
         if ndone % 10 == 0:
             SCLogger.info( f"...did {ndone} of {len(imgs)}" )

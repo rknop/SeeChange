@@ -682,21 +682,25 @@ class PGDB:
             if self.cursor.description is None:
                 return None
             else:
+                SCLogger.debug( "Fetching..." )
                 t0 = time.perf_counter()
                 rval = self.cursor.fetchall()
                 t1 = time.perf_counter()
                 self.timings.last_fetch_time = t1 - t0
                 self.timings.tot_fetch_time += t1 - t0
+                SCLogger.debug( "...fetched" )
                 return rval
         else:
             if self.cursor.description is None:
                 return None, None
+            SCLogger.debug( "Fetching..." )
             t0 = time.perf_counter()
             rows = self.cursor.fetchall()
             cols = [ desc[0] for desc in self.cursor.description ]
             t1 = time.perf_counter()
             self.timings.last_fetch_time = t1 - t0
             self.timings.tot_fetch_time += t1 - t0
+            SCLogger.debug( "...fetched" )
             return rows, cols
 
 
