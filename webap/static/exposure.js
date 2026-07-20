@@ -1,5 +1,6 @@
 import { rkWebUtil } from "./rkwebutil.js";
 import { SVGPlot } from "./svgplot.js";
+import { ImView } from "./imview.js";
 import { seechange } from "./seechange_ns.js";
 
 // **********************************************************************
@@ -55,10 +56,13 @@ seechange.Exposure = class
         this.cutoutsimage_dropdown = null;
 
         this.sectionfordetails_dropdown = null;
+        this.sectionforfakes_dropdown = null;
 
         this.cutouts = {};
         this.cutouts_pngs = {};
         this.fakeanalysis_data = {};
+        this.image_data = {};
+        this.sub_data = {};
         this.reports = null;
         this.reports_subdiv = null;
     };
@@ -196,7 +200,7 @@ seechange.Exposure = class
             td = rkWebUtil.elemaker( "td", tr, { "text": imgrow.filename,
                                                  "classes": [ "link" ],
                                                  "click": function() {
-                                                     self.update_image_details( dex );
+                                                     self.update_image_details( imgrow.section_id );
                                                      self.tabs.selectTab( "Image Details" );
                                                  }
                                                } );
@@ -278,18 +282,17 @@ seechange.Exposure = class
                           () => { self.select_image_details() } );
         this.create_image_details_widgets();
 
+        this.fakes_div = rkWebUtil.elemaker( "div", null, { 'id': 'exposureimagefakesdiv' } );
+        this.tabs.addTab( "Fakes", "Fakes", this.fakes_div, false,
+                          () => { self.select_image_fakes() } );
+        this.create_fakes_widgets();
+
         this.reports_div = rkWebUtil.elemaker( "div", null, { 'id': 'exposurereportsdiv' } );
         this.tabs.addTab( "Reports", "Reports", this.reports_div, false, ()=>{ self.show_reports() } );
 
         this.cutoutsdiv = rkWebUtil.elemaker( "div", null, { 'id': 'exposurecutoutsdiv' } );
         this.tabs.addTab( "Cutouts", "Sources", this.cutoutsdiv, false, ()=>{ self.select_cutouts() } );
         this.create_cutouts_widgets();
-    };
-
-    // ****************************************
-
-    show_image_details( imageid ) {
-        window.alert( "show image details not impmlemented yet" );
     };
 
     // ****************************************
@@ -500,7 +503,7 @@ seechange.Exposure = class
 
         if ( this.sectionfordetails_dropdown == null ) {
             this.sectionfordetails_dropdown = rkWebUtil.elemaker( "select", null,
-                                                                  { "change": () => self.select_section_details() } );
+                                                                  { "change": () => self.select_image_details() } );
             rkWebUtil.elemaker( "option", this.sectionfordetails_dropdown, { "text": "<Choose Section For Details>",
                                                                              "attributes": {
                                                                                  "value": "_select_section",
@@ -513,7 +516,6 @@ seechange.Exposure = class
             }
         }
     }
-
 
     // ****************************************
 
@@ -537,7 +539,7 @@ seechange.Exposure = class
 
         rkWebUtil.wipeDiv( this.image_details_div );
 
-        p = rkWebUtil.elemaker( "p", this.image_details_div, { "text": "Image details for " } );
+        p = rkWebUtil.elemaker( "p", this.image_details_div, { "text": "Image for " } );
         p.appendChild( this.sectionfordetails_dropdown );
 
         this.image_details_content_div = rkWebUtil.elemaker( "div", this.image_details_div );
@@ -545,21 +547,113 @@ seechange.Exposure = class
         if ( sec == "_select_section" )
             return;
 
+        if ( this.image_data.hasOwnProperty( sec ) ) {
+            this.show_image_for_section( this.image_details_content_div, sec, this.image_data[sec] );
+        }
+        else {
+            let url = "image_data/" + this.id + "/" + this.data.provenancetag + "/" + sec;
+            this.context.connector.sendHttpRequestGetRaw( url, {},
+                                                          (data) => { self.show_image_for_section(
+                                                              this.image_details_content_div, sec, data ) },
+                                                          (data) => { self.get_image_data_error(data) } );
+        }
+    }
+
+    // ****************************************
+
+    get_image_data_error( msg )
+    {
+        window.alert( msg.error );
+    }
+
+    // ****************************************
+
+    show_image_for_section( div, sec, data )
+    {
+        rkWebUtil.wipeDiv( div );
+
+        if ( ! this.image_data.hasOwnProperty( sec ) ) this.image_data[sec] = data;
+
+        let dv = new DataView( data );
+        let height = dv.getUint16( 0, true );
+        let width = dv.getUint16( 2, true );
+        let image = new DataView( data, 4 );
+        this.imview = new ImView( { "data": image,
+                                    "width": width,
+                                    "height": height,
+                                    "parent": div,
+                                    "dispwidth": 800,   // ...make this configurable?
+                                    "dispheight": 800
+                                  } );
+    }
+
+    // ****************************************
+
+    create_fakes_widgets() {
+        let self = this;
+
+        if ( this.sectionforfakes_dropdown == null ) {
+            this.sectionforfakes_dropdown = rkWebUtil.elemaker( "select", null,
+                                                                { "change": () => self.select_section_fakes() } );
+            rkWebUtil.elemaker( "option", this.sectionforfakes_dropdown, { "text": "<Choose Section For Fakes>",
+                                                                           "attributes": {
+                                                                               "value": "_select_section",
+                                                                               "selected": 1 } } );
+            for ( let imgrow of this.data.images) {
+                rkWebUtil.elemaker( "option", this.sectionforfakes_dropdown, { "text": imgrow.section_id,
+                                                                               "attributes": {
+                                                                                   "value": imgrow.section_id
+                                                                               } } );
+            }
+        }
+    }
+
+
+    // ****************************************
+
+    update_image_fakes( secid ) {
+        if ( secid != null ) {
+            let oldevent = this.sectionforfakes_dropdown.onchange;
+            this.sectionforfakes_dropdown.onchange = null;
+            this.sectionforfakes_dropdown.value = secid;
+            this.sectionforfakes_dropdown.onchange = oldevent;
+        }
+
+        this.select_image_fakes();
+    }
+
+    // ****************************************
+
+    select_image_fakes()
+    {
+        let self = this;
+        let p;
+
+        rkWebUtil.wipeDiv( this.fakes_div );
+
+        p = rkWebUtil.elemaker( "p", this.fakes_div, { "text": "Fakes for " } );
+        p.appendChild( this.sectionforfakes_dropdown );
+
+        this.fakes_content_div = rkWebUtil.elemaker( "div", this.fakes_div );
+        let sec = this.sectionforfakes_dropdown.value.toString();
+        if ( sec == "_select_section" )
+            return;
+
         if ( this.fakeanalysis_data.hasOwnProperty( sec ) ) {
-            this.show_image_details_for_section( this.image_details_content_div, sec, this.fakeanlaysis_data[sec] );
+            this.show_fakes_for_section( this.fakes_content_div, sec, this.fakeanlaysis_data[sec] );
         }
         else {
             let url = "fakeanalysisdata/" + this.id + "/" + this.data.provenancetag + "/" + sec;
             this.context.connector.sendHttpRequest( url, {},
-                                                    (data) => { self.show_image_details_for_section(
-                                                        this.image_details_content_div,
+                                                    (data) => { self.show_fakes_for_section(
+                                                        this.fakes_content_div,
                                                         sec, data ) } );
         }
     }
 
     // ****************************************
 
-    show_image_details_for_section( div, sec, indata )
+    show_fakes_for_section( div, sec, indata )
     {
         let p, table, tr, th, td;
 

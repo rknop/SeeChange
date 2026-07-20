@@ -22,6 +22,7 @@ import h5py
 import PIL
 import astropy.time
 import astropy.visualization
+from astropy.io import fits
 from psycopg import sql
 
 import flask
@@ -413,6 +414,75 @@ class Exposures( BaseView ):
                          'n_errors': n_errors,
                      }
                     }
+
+
+# ======================================================================
+
+class ImageData( BaseView ):
+    def do_the_things( self, expid, provtag, sectionid, sub=0 ):
+        q = sql.SQL( textwrap.dedent(
+            """\
+            SELECT {t}.filepath
+            FROM images i
+            INNER JOIN provenance_tags t ON i.provenance_id=t.provenance_id AND t.tag={provtag}
+            """
+        ) ).format( provtag=provtag, t=sql.Identifier('sub' if sub else 'i') )
+        if sub:
+            q += sql.SQL( textwrap.dedent(
+                """\
+                INNER JOIN (
+                   SELECT s._id, s.image_id
+                   FROM source_lists s
+                   INNER JOIN provenance_tags t ON s.provenance_id=t.provenance_id AND t.tag={provtag}
+                ) i ON s.image_id=i._id
+                INNER JOIN (
+                   SELECT w._id, w.sources_id
+                   FROM world_coordinates w
+                   INNER JOIN provenance_tags t ON w.provenance_id=t.provenance_id AND t.tag={provtag}
+                ) w ON w.sources_id=s._id
+                INNER JOIN (
+                   SELECT z._id, z.wcs_id
+                   FROM zero_points z
+                   INNER JOIN provenance_tags t ON z.provenance_id=t.provenance_id AND t.tag={provtag}
+                ) z ON z.wcs_id=w._id
+                INNER JOIN (
+                   SELECT i._id, i.filepath, isc.new_zp_id AS newzpid
+                   FROM images i
+                   INNER JOIN image_subtraction_components isc ON i._id=isc.image_id
+                   INNER JOIN provenance_tags t ON i.provenance_id=t.provenance_id AND t.tag={provtag}
+                ) sub ON sub.newzpid=z._id
+                """
+            ) ).format( expid=expid, secid=sectionid, provtag=provtag )
+        q += sql.SQL( textwrap.dedent(
+            """\
+            WHERE i.exposure_id={expid} AND i.section_id={secid}
+            """
+        ) ).format( expid=expid, secid=sectionid )
+
+        with PGDB( dictcursor=True ) as pgdb:
+            rows = pgdb.execute( q )
+            filepath = rows[0]['filepath'] if len(rows) > 0 else None
+
+        if filepath is None:
+            return f"No {'subtraction' if sub else 'image'} for exposure {expid} section {sectionid}", 422
+
+        else:
+            cfg = Config.get()
+            # We're assuming images are not fpacked here...
+            # We're also assuming file naming convention, whereas we should probably call a function.
+            #   But, I think the only function we have right now is get_fullpath, which will
+            #   make it relative to data_dir... augh, thought required.
+            filepath = pathlib.Path( cfg.value( 'archive.local_read_dir' ) ) / f'{filepath}.image.fits'
+            with fits.open( filepath ) as hdu:
+                # The convention for rkWebUtil ImView is little-endian 32-bit floats
+                data = hdu[0].data.astype( "<f4" )
+            barf = bytearray( 4 * data.shape[0] * data.shape[1] + 4 )
+            barf[0] = data.shape[0] % 256
+            barf[1] = data.shape[0] // 256
+            barf[2] = data.shape[1] % 256
+            barf[3] = data.shape[1] // 256
+            barf[4:] = data.data
+            return bytes(barf)
 
 
 # ======================================================================
@@ -1122,6 +1192,8 @@ urls = {
     "/exposures/<provenancetag>/<path:argstr>": Exposures,
     "/exposure_images/<expid>/<provtag>": ExposureImages,
     "/exposure_reports/<expid>/<provtag>": ExposureReports,
+    "/image_data/<expid>/<provtag>/<sectionid>": ImageData,
+    "/image_data/<expid>/<provtag>/<sectionid>/<int:sub>": ImageData,
     "/png_cutouts_for_sub_image/<exporsubid>/<provtag>/<int:issubid>/<int:nomeas>": PngCutoutsForSubImage,
     "/png_cutouts_for_sub_image/<exporsubid>/<provtag>/<int:issubid>/<int:nomeas>/<int:limit>": PngCutoutsForSubImage,
     ( "/png_cutouts_for_sub_image/<exporsubid>/<provtag>/<int:issubid>/<int:nomeas>/"

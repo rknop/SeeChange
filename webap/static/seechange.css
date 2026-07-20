@@ -54,8 +54,15 @@ body { color: var(--main-color);
 .xmargin { margin-left: 1ex; margin-right: 1ex }
 .mmargin { margin-left: 1em; margin-right: 1em }
 .mmarginright { margin-right: 1em }
+.marginleftex { margin-left: 1ex }
 .mostlyborder { border: 2px solid var(--mostlyfull-color-border); }
 .midborder { border: 2px solid var(--mid-color-border); }
+.insetborder { border-style: inset;
+               border-color: var(--mostlyfull-color-border);
+             }
+.outsetborder { border-style: outset;
+                border-color: var(--mostlyfull-color-border);
+              }
 
 .right { text-align: right }
 .center { text-align: center }
@@ -143,6 +150,9 @@ div.vbox100p  { display: flex;
                 height: 100%;
               }
 
+.justifyleft { justify-content: flex-start }
+.justifycenter { justify-content: center }
+
 .fillpage { position: fixed; top: 0; bottom: 0; left: 0; right: 0 }
 .flexeven { justify-content: space-evenly }
 .minwid25p { min-width: 25%; }
@@ -226,3 +236,26 @@ div.svgplotvbox { display: flex;
                   flex-direction: column;
                   min-width: 0;
                   min-height: 0; }
+
+div.imview_topdiv { display: flex;
+                    flex-direction: column;
+                    justify-content: flex-start;
+                    flex-grow: 0;
+                    flex-shrink: 1;
+                    min-width: 0;
+                    min-height: 0;
+                    padding: 1ex;
+                    border: 1px solid var(--full-color-border);
+                  }
+
+div.imview_canvasdiv { flex-grow: 0;
+                       flex-shrink: 1;
+                       padding: 1ex;
+                       border: 2px solid var(--full-color-border);
+                     }
+
+div.imview_canvaswrapper { position: relative; margin: 0; padding: 0; border: 0 }
+canvas.imview_canvas { position: absolute; left: 0; top: 0; margin: 0; padding: 0; border: 0; z-index: 1;
+                       image-rendering: pixelated }
+svg.imview_svg { position: absolute; left: 0; top: 0; margin: 0; padding: 0; border: 0;
+                 pointer-events: none; z-index: 2 }

@@ -555,7 +555,7 @@ class Provenance(Base):
                         rows = pgdb.execute( cvsearchq )
                         if len(rows) > 0:
                             rows[0]['_id'] = asUUID( rows[0]['_id'] )
-                            code_version.set_attribute_from_dict( rows[0] )
+                            code_version.set_attributes_from_dict( rows[0] )
                         else:
                             subdict = { '_id': uuid.uuid4(),
                                         'process': process,

@@ -112,8 +112,11 @@ class BaseView( flask.views.View ):
                 return retval, 200, { 'Content-Type': 'text/plain; charset=utf-8' }
             elif isinstance( retval, tuple ):
                 return retval
-            else:
+            elif isinstance( retval, bytes ):
                 return retval, 200, { 'Content-Type': 'application/octet-stream' }
+            else:
+                raise RuntimeError( f"I don't know how to deal with the something of type {type(retval)} "
+                                    f"in dispatch_request" )
         except BadUpdaterReturnError as ex:
             return str(ex), 500
         except Exception as ex:
