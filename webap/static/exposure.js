@@ -58,11 +58,11 @@ seechange.Exposure = class
         this.sectionfordetails_dropdown = null;
         this.sectionforfakes_dropdown = null;
 
+        this.sub_ids = {};
         this.cutouts = {};
         this.cutouts_pngs = {};
         this.fakeanalysis_data = {};
         this.image_data = {};
-        this.sub_data = {};
         this.reports = null;
         this.reports_subdiv = null;
     };
@@ -156,7 +156,12 @@ seechange.Exposure = class
         let totnmeas = 0;
         let nsubs = 0;
         for ( let imgrow of this.data.images ) {
-            if ( imgrow.has_sub ) nsubs +=1 ;
+            if ( imgrow.has_sub ) {
+                nsubs +=1 ;
+                this.sub_ids[ imgrow.section_id ] = imgrow.subid;
+            } else {
+                this.sub_ids[ imgrow.section_id ] = null;
+            }
             totncutouts += imgrow['ncutout'];
             totngoodmeas += imgrow['ngoodmeas'];
             totnmeas += imgrow['nmeas'];
@@ -547,14 +552,27 @@ seechange.Exposure = class
         if ( sec == "_select_section" )
             return;
 
+        let imgrow = null;
+        for ( let r of this.data.images ) {
+            if ( r.section_id == sec ) {
+                imgrow = r;
+                break;
+            }
+        }
+        if ( imgrow == null ) {
+            window.alert( "Error, failed to find section " + sec + " in my cache of images. " +
+                          "You should probably never see this error." );
+            return;
+        }
+
         if ( this.image_data.hasOwnProperty( sec ) ) {
-            this.show_image_for_section( this.image_details_content_div, sec, this.image_data[sec] );
+            this.show_image_for_section( this.image_details_content_div, imgrow, this.image_data[sec] );
         }
         else {
             let url = "image_data/" + this.id + "/" + this.data.provenancetag + "/" + sec;
             this.context.connector.sendHttpRequestGetRaw( url, {},
                                                           (data) => { self.show_image_for_section(
-                                                              this.image_details_content_div, sec, data ) },
+                                                              this.image_details_content_div, imgrow, data ) },
                                                           (data) => { self.get_image_data_error(data) } );
         }
     }
@@ -568,11 +586,13 @@ seechange.Exposure = class
 
     // ****************************************
 
-    show_image_for_section( div, sec, data )
+    show_image_for_section( div, imgrow, data )
     {
+        let self = this;
+
         rkWebUtil.wipeDiv( div );
 
-        if ( ! this.image_data.hasOwnProperty( sec ) ) this.image_data[sec] = data;
+        if ( ! this.image_data.hasOwnProperty( imgrow.section_id ) ) this.image_data[imgrow.section_id] = data;
 
         let dv = new DataView( data );
         let height = dv.getUint16( 0, true );
@@ -585,6 +605,18 @@ seechange.Exposure = class
                                     "dispwidth": 600,   // ...make this configurable?
                                     "dispheight": 600
                                   } );
+        if ( imgrow.has_sub ) {
+            this.load_cutouts( imgrow.subid, (which, data) => { self.add_sources_to_image(which, data); } );
+        }
+    }
+
+    // **********************************************************************
+
+    add_sources_to_image( which_coutouts, data ) {
+        for ( let dex in data.cutouts.x ) {
+            this.imview.addsquare( data.cutouts.x[dex], data.cutouts.y[dex], 10, "blue", data.cutouts.source_index );
+        }
+        this.imview.render_image();
     }
 
     // ****************************************
@@ -963,24 +995,45 @@ seechange.Exposure = class
         rkWebUtil.elemaker( "p", this.cutouts_content_div, { "text": "Loading cutouts...",
                                                              "classes": [ "bold", "italic", "warning" ] } );
 
+        let sansmeas = ( this.cutoutssansmeasurements_checkbox.checked  ? 1 : 0 ).toString();
+        this.load_cutouts( which_cutouts,
+                           (which, data) => { self.show_cutouts_for_image( self.cutouts_content_div, which, data ) },
+                           sansmeas );
+    };
+
+
+    // **********************************************************************
+
+    load_cutouts( subid, callback, sansmeas=false )
+    {
+        let self = this;
+        let which_cutouts;
+
         let url = "png_cutouts_for_sub_image/";
-        if ( which_cutouts == "_all_images" ) {
+        if ( subid == "_all_images" ) {
+            which_cutouts = "_all_images/0/0";
             url += this.id + "/" + this.data.provenancetag + "/0/0";
-            which_cutouts += "/0/0";
-        } else {
-            let sansmeas = ( this.cutoutssansmeasurements_checkbox.checked  ? 1 : 0 ).toString();
-            url += which_cutouts + "/" + this.data.provenancetag + "/1/" + sansmeas;
-            which_cutouts += "/1/" + sansmeas;
+        }
+        else {
+            which_cutouts = subid + "/1/" + ( sansmeas ? "1" : "0" );
+            url += subid + "/" + this.data.provenancetag + "/1/" + ( sansmeas ? "1" : "0" );
         }
 
         if ( this.cutouts_pngs.hasOwnProperty( which_cutouts ) ) {
-            this.show_cutouts_for_image( this.cutouts_content_div, which_cutouts, this.cutouts_pngs[dex] );
+            callback( which_cutouts, this.cutouts_pngs[which_cutouts] );
         } else {
             this.context.connector.sendHttpRequest( url, {},
-                                                    (data) => { self.show_cutouts_for_image( this.cutouts_content_div,
-                                                                                             which_cutouts, data ) } );
+                                                    (data) => { self.receive_cutouts( which_cutouts,
+                                                                                      data,
+                                                                                      callback ); } );
         }
-    };
+    }
+
+    receive_cutouts( which_cutouts, data, callback ) {
+        if ( ! this.cutouts_pngs.hasOwnProperty( which_cutouts ) )
+            this.cutouts_pngs[ which_cutouts ] = data;
+        callback( which_cutouts, data );
+    }
 
     // ****************************************
     // TODO : implement limit and offset
