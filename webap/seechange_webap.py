@@ -434,7 +434,7 @@ class ImageData( BaseView ):
                    SELECT s._id, s.image_id
                    FROM source_lists s
                    INNER JOIN provenance_tags t ON s.provenance_id=t.provenance_id AND t.tag={provtag}
-                ) i ON s.image_id=i._id
+                ) s ON s.image_id=i._id
                 INNER JOIN (
                    SELECT w._id, w.sources_id
                    FROM world_coordinates w

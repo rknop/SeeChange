@@ -55,14 +55,19 @@ seechange.Exposure = class
         this.cutoutssansmeasurements_label = null;
         this.cutoutsimage_dropdown = null;
 
+        this.neworsub_dropdown = null;
         this.sectionfordetails_dropdown = null;
         this.sectionforfakes_dropdown = null;
 
-        this.sub_ids = {};
+        this.new_imviews = {};
+        this.sub_imviews = {};
+
+        this.imgrows = {};
         this.cutouts = {};
         this.cutouts_pngs = {};
         this.fakeanalysis_data = {};
         this.image_data = {};
+        this.sub_data = {};
         this.reports = null;
         this.reports_subdiv = null;
     };
@@ -156,12 +161,7 @@ seechange.Exposure = class
         let totnmeas = 0;
         let nsubs = 0;
         for ( let imgrow of this.data.images ) {
-            if ( imgrow.has_sub ) {
-                nsubs +=1 ;
-                this.sub_ids[ imgrow.section_id ] = imgrow.subid;
-            } else {
-                this.sub_ids[ imgrow.section_id ] = null;
-            }
+            this.imgrows[ imgrow.section_id ] = imgrow;
             totncutouts += imgrow['ncutout'];
             totngoodmeas += imgrow['ngoodmeas'];
             totnmeas += imgrow['nmeas'];
@@ -508,17 +508,29 @@ seechange.Exposure = class
 
         if ( this.sectionfordetails_dropdown == null ) {
             this.sectionfordetails_dropdown = rkWebUtil.elemaker( "select", null,
-                                                                  { "change": () => self.select_image_details() } );
+                                                                  { "change": () => { self.select_image_details() } } );
             rkWebUtil.elemaker( "option", this.sectionfordetails_dropdown, { "text": "<Choose Section For Details>",
                                                                              "attributes": {
                                                                                  "value": "_select_section",
                                                                                  "selected": 1 } } );
-            for ( let imgrow of this.data.images) {
+            for ( let imgrow of this.data.images ) {
                 rkWebUtil.elemaker( "option", this.sectionfordetails_dropdown, { "text": imgrow.section_id,
                                                                                  "attributes": {
                                                                                      "value": imgrow.section_id
                                                                                  } } );
             }
+        }
+
+        if ( this.neworsub_dropdown == null ) {
+            this.neworsub_dropdown = rkWebUtil.elemaker( "select", null,
+                                                         { "change": () => { self.select_image_details() } } );
+            rkWebUtil.elemaker( "option", this.neworsub_dropdown, { "text": "New",
+                                                                    "attributes": {
+                                                                        "value": "New",
+                                                                        "selected": 1 } } );
+            rkWebUtil.elemaker( "option", this.neworsub_dropdown, { "text": "Sub",
+                                                                    "attributes": {
+                                                                        "value": "Sub" } } );
         }
     }
 
@@ -544,7 +556,9 @@ seechange.Exposure = class
 
         rkWebUtil.wipeDiv( this.image_details_div );
 
-        p = rkWebUtil.elemaker( "p", this.image_details_div, { "text": "Image for " } );
+        p = rkWebUtil.elemaker( "p", this.image_details_div, )
+        p.appendChild( this.neworsub_dropdown );
+        p.appendChild( document.createTextNode( " image for " ) );
         p.appendChild( this.sectionfordetails_dropdown );
 
         this.image_details_content_div = rkWebUtil.elemaker( "div", this.image_details_div );
@@ -552,28 +566,30 @@ seechange.Exposure = class
         if ( sec == "_select_section" )
             return;
 
-        let imgrow = null;
-        for ( let r of this.data.images ) {
-            if ( r.section_id == sec ) {
-                imgrow = r;
-                break;
-            }
-        }
-        if ( imgrow == null ) {
-            window.alert( "Error, failed to find section " + sec + " in my cache of images. " +
-                          "You should probably never see this error." );
+        let imgrow = this.imgrows[ sec ];
+        let issub = ( this.neworsub_dropdown.value  == "Sub" );
+        let viewarray = issub ? this.sub_imviews : this.new_imviews;
+        let dataarray = issub ? this.sub_data : this.image_data;
+
+        if ( issub && ( ! imgrow.has_sub ) ) {
+            rkWebUtil.elemaker( "p", this.image_details_div,
+                                { "text": "No subtraction for section " + sec,
+                                  "classes": [ "bold", "warning" ] } );
             return;
         }
 
-        if ( this.image_data.hasOwnProperty( sec ) ) {
-            this.show_image_for_section( this.image_details_content_div, imgrow, this.image_data[sec] );
+        if ( dataarray.hasOwnProperty( sec ) ) {
+            this.show_image_for_section( this.image_details_content_div, imgrow, dataarray[sec], issub );
         }
         else {
             let url = "image_data/" + this.id + "/" + this.data.provenancetag + "/" + sec;
-            this.context.connector.sendHttpRequestGetRaw( url, {},
-                                                          (data) => { self.show_image_for_section(
-                                                              this.image_details_content_div, imgrow, data ) },
-                                                          (data) => { self.get_image_data_error(data) } );
+            if ( issub )
+                url += "/1";
+            this.context.connector.sendHttpRequestGetRaw(
+                url, {},
+                (data) => { self.show_image_for_section( self.image_details_content_div, imgrow, data, issub ); },
+                (data) => { self.get_image_data_error(data); }
+            );
         }
     }
 
@@ -586,37 +602,57 @@ seechange.Exposure = class
 
     // ****************************************
 
-    show_image_for_section( div, imgrow, data )
+    show_image_for_section( div, imgrow, data, issub=false )
     {
         let self = this;
 
         rkWebUtil.wipeDiv( div );
 
-        if ( ! this.image_data.hasOwnProperty( imgrow.section_id ) ) this.image_data[imgrow.section_id] = data;
+        let viewarray = issub ? this.sub_imviews : this.new_imviews;
+        let otherviewarray = issub ? this.new_imviews : this.sub_imviews;
+        if ( viewarray.hasOwnProperty( imgrow.section_id ) ) {
+            div.appendChild( viewarray[ imgrow.section_id ].div );
+            return;
+        }
+
+        let dataarray = issub ? this.sub_data : this.image_data;
+        if ( ! dataarray.hasOwnProperty( imgrow.section_id ) ) dataarray[ imgrow.section_id ] = data;
 
         let dv = new DataView( data );
         let height = dv.getUint16( 0, true );
         let width = dv.getUint16( 2, true );
         let image = new DataView( data, 4 );
-        this.imview = new ImView( { "data": image,
-                                    "width": width,
-                                    "height": height,
-                                    "parent": div,
-                                    "dispwidth": 600,   // ...make this configurable?
-                                    "dispheight": 600
-                                  } );
+        let imview = new ImView( { "data": image,
+                                   "width": width,
+                                   "height": height,
+                                   "parent": div,
+                                   "dispwidth": 600,   // ...make this configurable?
+                                   "dispheight": 600
+                                 },
+                                 true
+                               );
+        viewarray[ imgrow.section_id ] = imview;
+        if ( otherviewarray.hasOwnProperty( imgrow.section_id ) ) {
+            // Copy the zoom from the sub/new for the new/sub if possible
+            // Didn't just pass x0, y0, scale to the constructor because
+            //   I didn't want the "init" values to be these, but the auto ones
+            imview.x0 = otherviewarray[ imgrow.section_id ].x0;
+            imview.y0 = otherviewarray[ imgrow.section_id ].y0;
+            imview.scale = otherviewarray[ imgrow.section_id ].scale;
+        }
+        imview.render_image();
         if ( imgrow.has_sub ) {
-            this.load_cutouts( imgrow.subid, (which, data) => { self.add_sources_to_image(which, data); } );
+            this.load_cutouts( imgrow.subid, (which, data) => { self.add_sources_to_image(imview, data); } );
         }
     }
 
     // **********************************************************************
 
-    add_sources_to_image( which_coutouts, data ) {
+    add_sources_to_image( imview, data ) {
         for ( let dex in data.cutouts.x ) {
-            this.imview.addsquare( data.cutouts.x[dex], data.cutouts.y[dex], 10, "blue", data.cutouts.source_index );
+            imview.addsquare( data.cutouts.x[dex], data.cutouts.y[dex], 10, "blue", data.cutouts.source_index );
         }
-        this.imview.render_image();
+        imview.render_image();
     }
 
     // ****************************************
