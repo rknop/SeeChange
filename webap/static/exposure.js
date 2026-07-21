@@ -582,8 +582,8 @@ seechange.Exposure = class
                                     "width": width,
                                     "height": height,
                                     "parent": div,
-                                    "dispwidth": 800,   // ...make this configurable?
-                                    "dispheight": 800
+                                    "dispwidth": 600,   // ...make this configurable?
+                                    "dispheight": 600
                                   } );
     }
 
