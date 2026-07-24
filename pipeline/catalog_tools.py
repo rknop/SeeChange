@@ -230,15 +230,13 @@ def download_gaia_dr3( minra, maxra, mindec, maxdec, padding=0.1, minmag=18., ma
                                exception_on_fail=False, retval_on_fail=None )
 
     if ( ( df is None ) and cfg.value( 'catalog_gaiadr3.fallback_datalab' ) ):
-        SCLogger.error( 'Skipping quering NOIRLab Astro Data Archive for Gaia DR3 stars; '
-                        'need to handle RA spanning 0, or verify that noirlab does it right.' )
-        # Leave this code here for the unspecified future time when we deal with
-        # ra spanning 0.  For now, we'll hope that the custom gaia dr3 server
-        # is just working....
-        if False:
-            SCLogger.warning( "NOIRLab Astro Data Archive querying right now doesn't handle RA spanning 0" )
-            SCLogger.info( 'Querying NOIRLab Astro Data Archive for Gaia DR3 stars' )
-
+        # Handle RA spanning 0.  When this happens, ralow will be < 0
+        if ralow < 0:
+            raranges = [ (ralow+360., 360.), (0, rahigh) ]
+        else:
+            raranges = [ (ralow, rahigh) ]
+        dfs = []
+        for rarange in raranges:
             gaia_query = (
                 f"SELECT source_id, ra, dec, ra_error, dec_error, pm, pmra, pmdec, "
                 f"       phot_g_mean_mag, phot_g_mean_flux_over_error, "
@@ -246,7 +244,7 @@ def download_gaia_dr3( minra, maxra, mindec, maxdec, padding=0.1, minmag=18., ma
                 f"       phot_rp_mean_mag, phot_rp_mean_flux_over_error, "
                 f"       classprob_dsc_combmod_star, classprob_dsc_combmod_quasar, classprob_dsc_combmod_galaxy "
                 f"FROM gaia_dr3.gaia_source "
-                f"WHERE ra>={ralow} AND ra<={rahigh} AND dec>={declow} AND dec<={dechigh} "
+                f"WHERE ra>={rarange[0]} AND ra<={rarange[1]} AND dec>={declow} AND dec<={dechigh} "
             )
             if minmag is not None:
                 gaia_query += f"AND phot_g_mean_mag>={minmag} "
@@ -268,7 +266,12 @@ def download_gaia_dr3( minra, maxra, mindec, maxdec, padding=0.1, minmag=18., ma
                 SCLogger.error( errstr )
                 raise RuntimeError( errstr )
 
-            df = dl.helpers.utils.convert( qresult, "pandas" )
+            dfs.append( dl.helpers.utils.convert( qresult, "pandas" ) )
+
+        if len(dfs) == 1:
+            df = dfs[0]
+        else:
+            df = pandas.concat( dfs ).reset_index()
 
     if df is None:
         raise RuntimeError( "Failed to download Gaia DR3 sources" )

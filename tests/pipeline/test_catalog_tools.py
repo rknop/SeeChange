@@ -4,13 +4,14 @@ import types
 import pytest
 
 from util.exceptions import CatalogNotFoundError
+from util.config import Config
 from util import ldac
 from pipeline.catalog_tools import download_gaia_dr3, fetch_gaia_dr3_excerpt
 from models.base import FourCorners
 from models.image import Image
 
 
-def test_download_gaia_dr3(temp_dir, data_dir):
+def do_basic_download_dr3( temp_dir, data_dir ):
     firstfilepath = None
     secondfilepath = None
     try:
@@ -44,6 +45,27 @@ def test_download_gaia_dr3(temp_dir, data_dir):
             pathlib.Path( firstfilepath ).unlink( missing_ok=True )
         if secondfilepath is not None:
             pathlib.Path( secondfilepath ).unlink( missing_ok=True )
+
+
+def test_download_gaia_dr3( temp_dir, data_dir ):
+    do_basic_download_dr3( temp_dir, data_dir )
+
+
+def test_download_gaia_dr3_noirlab(temp_dir, data_dir):
+    # NEVER DO THIS.  If you modify the _static field of a Config object, you're doing it wrong.
+    # But.... for this test to work we have to do it wrong.
+    cfg = Config.get()
+    cfg._static = False
+    orig_use_server = cfg.value( 'catalog_gaiadr3.use_server' )
+    orig_fallback_datalab = cfg.value( 'catalog_gaiadr3.fallback_datalab' )
+    try:
+        cfg.set_value( 'catalog_gaiadr3.use_server', False )
+        cfg.set_value( 'catalog_gaiadr3.fallback_datalab', True )
+        do_basic_download_dr3( temp_dir, data_dir )
+    finally:
+        cfg.set_value( 'catalog_gaiadr3.use_server', orig_use_server )
+        cfg.set_value( 'catalog_gaiadr3.fallback_datalab', orig_fallback_datalab )
+        cfg._static = True
 
 
 def test_fetch_gaia_dr3_excerpt( test_config ) :
@@ -165,8 +187,7 @@ def test_gaia_dr3_excerpt( ztf_datastore_uncommitted, ztf_gaia_dr3_excerpt ):
         newcatexp = fetch_gaia_dr3_excerpt( ds.image, maxmags=[20.5], magrange=4.0, minstars=50, onlycached=True )
 
 
-def test_gaia_dr3_excerpt_ra_span_zero():
-
+def do_download_gaia_dr3_excerpt_ra_span_zero():
     stars = None
     firstcat = None
     try:
@@ -213,3 +234,24 @@ def test_gaia_dr3_excerpt_ra_span_zero():
             stars.delete_from_disk_and_database()
         if firstcat is not None:
             firstcat.delete_from_disk_and_database()
+
+
+def test_gaia_dr3_excerpt_ra_span_zero():
+    do_download_gaia_dr3_excerpt_ra_span_zero()
+
+
+def test_gaia_dr3_excerpt_ra_span_zero_noirlab():
+    # NEVER DO THIS.  If you modify the _static field of a Config object, you're doing it wrong.
+    # But.... for this test to work we have to do it wrong.
+    cfg = Config.get()
+    cfg._static = False
+    orig_use_server = cfg.value( 'catalog_gaiadr3.use_server' )
+    orig_fallback_datalab = cfg.value( 'catalog_gaiadr3.fallback_datalab' )
+    try:
+        cfg.set_value( 'catalog_gaiadr3.use_server', False )
+        cfg.set_value( 'catalog_gaiadr3.fallback_datalab', True )
+        do_download_gaia_dr3_excerpt_ra_span_zero()
+    finally:
+        cfg.set_value( 'catalog_gaiadr3.use_server', orig_use_server )
+        cfg.set_value( 'catalog_gaiadr3.fallback_datalab', orig_fallback_datalab )
+        cfg._static = True
