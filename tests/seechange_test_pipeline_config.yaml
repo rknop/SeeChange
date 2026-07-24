@@ -80,3 +80,12 @@ fakeinjection:
         hostless_frac: 0.
         host_maxmag: 1.
         host_distcale: 0.
+
+# **********************************************************************
+# TEMP WHILE NERSC SPIN IS DOWN, REMOVE THIS
+catalog_gaiadr3:
+  use_server: False
+  fallback_datalab: True
+
+measuring:
+  liumatch_server: https://c3-sn.lbl.gov/xgboost

@@ -1018,6 +1018,10 @@ class ObjectLegacySurveyMatch( Base, ObjectCatalogMatch ):
                             f"{res.text if len(res.text) < 240 else res.text[:240]}\"." )
 
         do_the_thing = functools.partial( requests.post, url, **kwargs )
+        # ****
+        import random
+        import remote_pdb; remote_pdb.RemotePdb('127.0.0.1', random.randint( 4000, 30000 ) ).set_trace()
+        # ****
         res = retry_with_sleep( do_the_thing, sleepmin=0.2, sleept=1.0, sleepmax=32.0, sleepfac=2.,
                                 sleepfuzz=0.1, failmessage=f"contacting {liuserver}",
                                 good_returns=[200], return_attr='status_code', badreturn_handler=_errmsg )
