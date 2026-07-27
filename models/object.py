@@ -422,13 +422,17 @@ class Object(Base, UUIDMixin, SpatiallyIndexed):
                             #   just making sure the database is loaded for
                             #   later alert purposes
                             if not no_associate_legacy_survey:
+                                SCLogger.debug( "Starting legacy survey matching..." )
                                 ObjectLegacySurveyMatch.get_object_matches( objid, con=conn,
                                                                             radius=liumatch_radius,
                                                                             liuserver=liumatch_server )
+                                SCLogger.debug( "...done with legacy survey matching." )
 
                             if not no_associate_gaia:
+                                SCLogger.debug( "Starting gaia matching..." )
                                 ObjectGaiaMatch.get_object_matches( objid, radius=gaiamatch_radius,
                                                                     gaiacat=gaiacat, con=conn )
+                                SCLogger.debug( "...done with gaia matching." )
             finally:
                 # Make sure database locks are released
                 if not nocommit:
@@ -1019,8 +1023,8 @@ class ObjectLegacySurveyMatch( Base, ObjectCatalogMatch ):
 
         do_the_thing = functools.partial( requests.post, url, **kwargs )
         # ****
-        import random
-        import remote_pdb; remote_pdb.RemotePdb('127.0.0.1', random.randint( 4000, 30000 ) ).set_trace()
+        # import random
+        # import remote_pdb; remote_pdb.RemotePdb('127.0.0.1', random.randint( 4000, 30000 ) ).set_trace()
         # ****
         res = retry_with_sleep( do_the_thing, sleepmin=0.2, sleept=1.0, sleepmax=32.0, sleepfac=2.,
                                 sleepfuzz=0.1, failmessage=f"contacting {liuserver}",

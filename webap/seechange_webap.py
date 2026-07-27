@@ -509,6 +509,8 @@ class ExposureImages( BaseView ):
                        z._id IS NOT NULL AS has_zp,
                        sub._id IS NOT NULL AS has_sub,
                        sub._id AS subid,
+                       CASE WHEN sub._id IS NULL THEN NULL
+                            ELSE substring( sub.filepath FROM '/?([^/]+)$') END AS subfilename,
                        dets.ncutout,
                        dets.ngoodmeas,
                        dets.nmeas
@@ -536,7 +538,7 @@ class ExposureImages( BaseView ):
                    INNER JOIN provenance_tags t ON z.provenance_id=t.provenance_id AND t.tag={provtag}
                 ) z ON z.wcs_id=w._id
                 LEFT JOIN (
-                   SELECT i._id, isc.new_zp_id AS newzpid
+                   SELECT i._id, i.filepath, isc.new_zp_id AS newzpid
                    FROM images i
                    INNER JOIN image_subtraction_components isc ON i._id=isc.image_id
                    INNER JOIN provenance_tags t ON i.provenance_id=t.provenance_id AND t.tag={provtag}

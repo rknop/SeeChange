@@ -60,13 +60,17 @@ seechange.Exposure = class
         this.sectionforfakes_dropdown = null;
 
         this.new_imviews = {};
+        this.new_imview_divs = {};
         this.sub_imviews = {};
+        this.sub_imview_divs = {};
+        this.box_width = 10;
 
         this.imgrows = {};
-        this.cutouts = {};
-        this.cutouts_pngs = {};
+        this.cutouts_promises = {};
         this.fakeanalysis_data = {};
+        this.image_promises = {};
         this.image_data = {};
+        this.sub_promises = {};
         this.sub_data = {};
         this.reports = null;
         this.reports_subdiv = null;
@@ -120,12 +124,12 @@ seechange.Exposure = class
 
         this.div = rkWebUtil.elemaker( "div", this.parentdiv );
 
-        var h2, h3, ul, li, table, tr, td, th, hbox, p, span, tiptext, ttspan;
+        var h2, h3, ul, li, but, table, tr, td, th, hbox, p, span, tiptext, ttspan;
 
         h2 = rkWebUtil.elemaker( "h2", this.div, { "text": "Exposure " + this.data.exposure.filepath } );
 
-
-        ul = rkWebUtil.elemaker( "ul", this.div );
+        ul = rkWebUtil.elemaker( "ul", null );
+        ul.style.display="none";
         li = rkWebUtil.elemaker( "li", ul );
         li.innerHTML = "<b>provenance tag:</b> " + this.data.provenancetag;
         li = rkWebUtil.elemaker( "li", ul );
@@ -151,6 +155,10 @@ seechange.Exposure = class
         li.innerHTML = "<b>t_exp (s):</b> " + this.data.exposure.exp_time;
         li = rkWebUtil.elemaker( "li", ul );
         li.innerHTML = "<b>airmass:</b> " + this.data.exposure.airmass;
+        but = rkWebUtil.hideOrShowButton( null, ul, "Exp Info", false );
+        p = rkWebUtil.elemaker( "div", this.div, { "classes": [ "hbox", "alignflexstart", "marginbotex" ] } );
+        p.appendChild( but );
+        p.appendChild( ul );
 
         this.tabs = new rkWebUtil.Tabbed( this.div );
 
@@ -205,7 +213,7 @@ seechange.Exposure = class
             td = rkWebUtil.elemaker( "td", tr, { "text": imgrow.filename,
                                                  "classes": [ "link" ],
                                                  "click": function() {
-                                                     self.update_image_details( imgrow.section_id );
+                                                     self.update_image_details( imgrow.section_id, true );
                                                      self.tabs.selectTab( "Image Details" );
                                                  }
                                                } );
@@ -261,9 +269,9 @@ seechange.Exposure = class
             if ( imgrow.report.error_step != null ) {
                 span = rkWebUtil.elemaker( "span", td, { "classes": [ "tooltipsource" ],
                                                          "text": "error" } );
-                tiptext = ( imgrow.report.errorr_type + " error in step " +
+                tiptext = ( imgrow.report.error_type + " error in step " +
                             seechange.Exposure.process_steps[imgrow.report.error_step] +
-                            " (" + imgrow.report.error_step.replaceAll( "\n", "<br>") + ")" );
+                            " (" + imgrow.report.error_message.replaceAll( "\n", "<br>") + ")" );
                 ttspan = rkWebUtil.elemaker( "span", span, { "classes": [ "tooltiptext" ] } );
                 ttspan.innerHTML = tiptext;
             }
@@ -324,7 +332,7 @@ seechange.Exposure = class
     update_reports() {
         let self = this;
 
-        rkWebUtil.wipeDiv( this.resports_subdiv );
+        rkWebUtil.wipeDiv( this.reports_subdiv );
         rkWebUtil.elemaker( "p", this.reports_subdiv, { "text": "Loading reports...",
                                                         "classes": [ "bold", "italic", "warning" ] } );
         this.context.connector.sendHttpRequest( "exposure_reports/" + this.id + "/" + this.data.provenancetag,
@@ -536,7 +544,7 @@ seechange.Exposure = class
 
     // ****************************************
 
-    update_image_details( secid ) {
+    update_image_details( secid, nosel=false ) {
         if ( secid != null ) {
             let oldevent = this.sectionfordetails_dropdown.onchange;
             this.sectionfordetails_dropdown.onchange = null;
@@ -544,7 +552,8 @@ seechange.Exposure = class
             this.sectionfordetails_dropdown.onchange = oldevent;
         }
 
-        this.select_image_details();
+        if ( ! nosel )
+            this.select_image_details();
     }
 
     // ****************************************
@@ -569,6 +578,8 @@ seechange.Exposure = class
         let imgrow = this.imgrows[ sec ];
         let issub = ( this.neworsub_dropdown.value  == "Sub" );
         let viewarray = issub ? this.sub_imviews : this.new_imviews;
+        let viewarray_div = issub ? this.sub_imview_divs : this.new_imview_divs;
+        let promisesarray = issub ? this.sub_promises : this.image_promises;
         let dataarray = issub ? this.sub_data : this.image_data;
 
         if ( issub && ( ! imgrow.has_sub ) ) {
@@ -578,19 +589,15 @@ seechange.Exposure = class
             return;
         }
 
-        if ( dataarray.hasOwnProperty( sec ) ) {
-            this.show_image_for_section( this.image_details_content_div, imgrow, dataarray[sec], issub );
-        }
-        else {
+        if ( ! promisesarray.hasOwnProperty( sec ) ) {
             let url = "image_data/" + this.id + "/" + this.data.provenancetag + "/" + sec;
             if ( issub )
                 url += "/1";
-            this.context.connector.sendHttpRequestGetRaw(
-                url, {},
-                (data) => { self.show_image_for_section( self.image_details_content_div, imgrow, data, issub ); },
-                (data) => { self.get_image_data_error(data); }
-            );
+            promisesarray[sec] = this.context.connector.httpPromise( url, null, false );
+            promisesarray[sec].catch( (data) => self.get_image_data_error(data) );
         }
+        promisesarray[sec].then( (data) => self.show_image_for_section( self.image_details_content_div,
+                                                                         imgrow, data, issub ) );
     }
 
     // ****************************************
@@ -605,18 +612,24 @@ seechange.Exposure = class
     show_image_for_section( div, imgrow, data, issub=false )
     {
         let self = this;
+        let hbox, p, h3;
 
         rkWebUtil.wipeDiv( div );
 
         let viewarray = issub ? this.sub_imviews : this.new_imviews;
+        let viewarray_div = issub ? this.sub_imview_divs : this.new_imview_divs;
         let otherviewarray = issub ? this.new_imviews : this.sub_imviews;
-        if ( viewarray.hasOwnProperty( imgrow.section_id ) ) {
-            div.appendChild( viewarray[ imgrow.section_id ].div );
+        let otherviewarray_div = issub ? this.new_imview_divs : this.sub_imview_divs;
+        if ( viewarray_div.hasOwnProperty( imgrow.section_id ) ) {
+            div.appendChild( viewarray_div[ imgrow.section_id ] );
             return;
         }
 
         let dataarray = issub ? this.sub_data : this.image_data;
         if ( ! dataarray.hasOwnProperty( imgrow.section_id ) ) dataarray[ imgrow.section_id ] = data;
+
+        hbox = rkWebUtil.elemaker( "div", div, { "classes": [ "hbox" ] } );
+        viewarray_div[ imgrow.section_id ] = hbox;
 
         let dv = new DataView( data );
         let height = dv.getUint16( 0, true );
@@ -625,9 +638,10 @@ seechange.Exposure = class
         let imview = new ImView( { "data": image,
                                    "width": width,
                                    "height": height,
-                                   "parent": div,
+                                   "parent": hbox,
                                    "dispwidth": 600,   // ...make this configurable?
-                                   "dispheight": 600
+                                   "dispheight": 600,
+                                   "clickcallback": (x, y) => { self.clicked_on_image(imgrow, x, y); }
                                  },
                                  true
                                );
@@ -640,19 +654,184 @@ seechange.Exposure = class
             imview.y0 = otherviewarray[ imgrow.section_id ].y0;
             imview.scale = otherviewarray[ imgrow.section_id ].scale;
         }
+        let but = rkWebUtil.button( imview.zoom_buttonbox, "Copy Zoom",
+                                    function() {
+                                        if ( otherviewarray.hasOwnProperty( imgrow.section_id ) ) {
+                                            imview.x0 = otherviewarray[ imgrow.section_id ].x0;
+                                            imview.y0 = otherviewarray[ imgrow.section_id ].y0;
+                                            imview.scale = otherviewarray[ imgrow.section_id].scale;
+                                            imview.render_image();
+                                        }
+                                    } );
+        but.classList.add( "marginleftex" );
         imview.render_image();
         if ( imgrow.has_sub ) {
             this.load_cutouts( imgrow.subid, (which, data) => { self.add_sources_to_image(imview, data); } );
         }
+
+        this.image_info_div = rkWebUtil.elemaker( "div", hbox, { "classes": [ "vbox", "marginleftem" ] } );
+        h3 = rkWebUtil.elemaker( "h3", this.image_info_div,
+                                 { "text": "Image: " + imgrow.filename } );
+        if ( imgrow.has_sub ) {
+            rkWebUtil.elemaker( "br", h3 );
+            rkWebUtil.elemaker( "text", h3, { "text": "Sub Image: " + imgrow.subfilename } );
+        }
+
+        let ul = rkWebUtil.elemaker( "ul", null );
+        ul.style.display = "block";
+        let li = rkWebUtil.elemaker( "li", ul );
+        li.innerHTML = "<b>filter:</b> " + imgrow.filter;
+        li = rkWebUtil.elemaker( "li", ul );
+        li.innerHTML = "<b>fwhm:</b> " + imgrow.fwhm;
+        li = rkWebUtil.elemaker( "li", ul );
+        li.innerHTML = "<b>zp:</b> " + imgrow.zero_point_estimate;
+        li = rkWebUtil.elemaker( "li", ul );
+        li.innerHTML = "<b>lim mag:</b> " + imgrow.lim_mag_estimate;
+        li = rkWebUtil.elemaker( "li", ul );
+        li.innerHTML = "<b>Total detections:</b> " + imgrow.ncutout;
+        li = rkWebUtil.elemaker( "li", ul );
+        li.innerHTML = "<b>Kept detections:</b> " + imgrow.nmeas;
+        li = rkWebUtil.elemaker( "li", ul );
+        li.innerHTML = "<b>Good detections:</b> " + imgrow.ngoodmeas;
+        but = rkWebUtil.hideOrShowButton( null, ul, "Img Info", true );
+        let subdiv = rkWebUtil.elemaker( "div", this.image_info_div,
+                                         { "classes": [ "hbox", "alignflexstart", "marginbotex" ] } );
+        subdiv.appendChild( but );
+        subdiv.appendChild( ul );
+
+        this.cutouts_div = rkWebUtil.elemaker( "div", this.image_info_div, { "classes": [ "vbox" ] } );
+
     }
 
     // **********************************************************************
 
     add_sources_to_image( imview, data ) {
         for ( let dex in data.cutouts.x ) {
-            imview.addsquare( data.cutouts.x[dex], data.cutouts.y[dex], 10, "blue", data.cutouts.source_index );
+            imview.addsquare( data.cutouts.x[dex], data.cutouts.y[dex], this.box_width,
+                              "green", data.cutouts.source_index );
         }
         imview.render_image();
+    }
+
+    // ****************************************
+
+    clicked_on_image( imgrow, x, y ) {
+        let self=this;
+        this.load_cutouts( imgrow.subid, (which, data) => { self.process_clicked_on_image(x, y, data); } );
+    }
+
+    process_clicked_on_image( x, y, data ) {
+        let table, tr, td, ul, li, span, ttspan;
+        let oversample = 5;
+
+        for ( let dex in data.cutouts.x ) {
+            if ( ( x <= data.cutouts.x[dex] + this.box_width / 2. ) &&
+                 ( x >= data.cutouts.x[dex] - this.box_width / 2. ) &&
+                 ( y <= data.cutouts.y[dex] + this.box_width / 2. ) &&
+                 ( y >= data.cutouts.y[dex] - this.box_width / 2. ) )
+            {
+                rkWebUtil.wipeDiv( this.cutouts_div );
+
+                let table = rkWebUtil.elemaker( "table", this.cutouts_div );
+                let tr = rkWebUtil.elemaker( "tr", table );
+                rkWebUtil.elemaker( "th", tr, { "text": "new" } );
+                rkWebUtil.elemaker( "th", tr, { "text": "ref" } );
+                rkWebUtil.elemaker( "th", tr, { "text": "sub" } );
+                tr = rkWebUtil.elemaker( "tr", table );
+                for ( let which of [ 'new', 'ref', 'sub' ] ) {
+                    td = rkWebUtil.elemaker( "td", tr );
+                    rkWebUtil.elemaker( "img", td,
+                                        { "attributes": {
+                                            "src": ( "data:image/png;base64," +
+                                                     data.cutouts[which + '_png'][dex] ),
+                                            "width": oversample * data.cutouts['w'][dex],
+                                            "height": oversample * data.cutouts['h'][dex],
+                                            "alt": which } } );
+                }
+
+                // A bunch of the rest of this code is very similar to show_cutouts_for_image;
+                //   should efficientize
+
+                ul = rkWebUtil.elemaker( "ul", this.cutouts_div );
+                // row: source index, with good/bad
+                li = rkWebUtil.elemaker( "li", ul );
+                rkWebUtil.elemaker( "b", li, "source index:" );
+                rkWebUtil.elemaker( "text", li, { "text": data.cutouts.source_index[dex] + "  "  } );
+                span = rkWebUtil.elemaker( "b", li, { "text": ( data.cutouts.is_bad[dex] ?
+                                                                "fails cuts" : "passes cuts" ) } );
+                span.classList.add( "tooltipcolorlesssource" );
+                ttspan = rkWebUtil.elemaker( "span", span, { "classes": [ "tooltiptext" ] } );
+                ttspan.innerHTML = ( "<p>major_width: " + seechange.nullorfixed( data.cutouts.major_width[dex], 2 )
+                                     + "<br>" +
+                                     "minor_width: " + seechange.nullorfixed( data.cutouts.minor_width[dex], 2 )
+                                     + "<br>" +
+                                     "nbadpix: " + data.cutouts.nbadpix[dex]
+                                     + "<br>" +
+                                     "negfrac: " + data.cutouts.negfrac[dex]
+                                     + "<br>" +
+                                     "negfluxfrac: " + data.cutouts.negfluxfrac[dex]
+                                     + "<br>" +
+                                     "Gauss fit pos: " + seechange.nullorfixed( data.cutouts['gfit_x'][dex], 2 )
+                                     + " , " + seechange.nullorfixed( data.cutouts['gfit_y'][dex], 2 ) +
+                                     "</p>" )
+                span.classList.add( data.cutouts.is_bad[dex] ? "bad" : "good" );
+                // row: ra/dec
+                li = rkWebUtil.elemaker( "li", ul );
+                rkWebUtil.elemaker( "b", li, { "text": "(α, δ): " } );
+                rkWebUtil.elemaker( "text", li, { "text": "(" +
+                                                  seechange.nullorfixed( data.cutouts['measra'][dex], 5 )
+                                                  + " , " +
+                                                  seechange.nullorfixed( data.cutouts['measdec'][dex], 5 )
+                                                  + ")" } );
+                // row: x, y from cutouts; this is where it was originally detected.
+                li = rkWebUtil.elemaker( "li", ul );
+                rkWebUtil.elemaker( "b", li, { "text": "det. (x, y): " } );
+                rkWebUtil.elemaker( "text", li, { "text": "(" +
+                                                  seechange.nullorfixed( data.cutouts['cutout_x'][dex], 2 )
+                                                  + " , " +
+                                                  seechange.nullorfixed( data.cutouts['cutout_y'][dex], 2 )
+                                                  + ")" } );
+                // row: x, y from measurement table.
+                li = rkWebUtil.elemaker( "li", ul );
+                rkWebUtil.elemaker( "b", li, { "text": "meas. (x, y): " } );
+                rkWebUtil.elemaker( "text", li, { "text": "(" +
+                                                  seechange.nullorfixed( data.cutouts['x'][dex], 2 )
+                                                  + " , " +
+                                                  seechange.nullorfixed( data.cutouts['y'][dex], 2 )
+                                                  + ")" } );
+                // row: flux
+                li = rkWebUtil.elemaker( "li", ul );
+                rkWebUtil.elemaker( "b", li, { "text": "Flux: " } );
+                rkWebUtil.elemaker( "text", li, { "text": seechange.nullorfixed( data.cutouts["flux"][dex], 0 )
+                                                  + " ± " +
+                                                  seechange.nullorfixed( data.cutouts["dflux"][dex], 0 )
+                                                  + "  " +
+                                                  + ( ( ( data.cutouts['aperrad'][dex] == null ) ||
+                                                        ( data.cutouts['aperrad'][dex] <= 0 ) ) ?
+                                                      '(psf)' :
+                                                      ( "(aper r=" +
+                                                        seechange.nullorfixed( data.cutouts['aperrad'][dex], 2 )
+                                                        + " px)" ) ) } );
+                // row: mag
+                li = rkWebUtil.elemaker( "li", ul );
+                rkWebUtil.elemaker( "b", li, { "text": "Mag: " } );
+                rkWebUtil.elemaker( "text", li, { "text": seechange.nullorfixed( data.cutouts['mag'][dex], 2 )
+                                                  + " ± " +
+                                                  seechange.nullorfixed( data.cutouts['dmag'][dex], 2 ) } );
+                // row; R/B
+                li = rkWebUtil.elemaker( "li", ul );
+                span = rkWebUtil.elemaker( "span", li );
+                if ( ( data.cutouts['rb'][dex] == null ) || ( data.cutouts['rb'][dex] < data.cutouts['rbcut'][dex] ) )
+                    span.classList.add( 'bad' );
+                else
+                    span.classList.add( 'good' );
+                rkWebUtil.elemaker( "b", span, { "text": "R/B: " } );
+                rkWebUtil.elemaker( "text", span, { "text": seechange.nullorfixed( data.cutouts['rb'][dex], 3 ) } );
+
+                // Found one, don't bother looking at the rest
+                break;
+            }
+        }
     }
 
     // ****************************************
@@ -708,7 +887,7 @@ seechange.Exposure = class
             return;
 
         if ( this.fakeanalysis_data.hasOwnProperty( sec ) ) {
-            this.show_fakes_for_section( this.fakes_content_div, sec, this.fakeanlaysis_data[sec] );
+            this.show_fakes_for_section( this.fakes_content_div, sec, this.fakeanalysis_data[sec] );
         }
         else {
             let url = "fakeanalysisdata/" + this.id + "/" + this.data.provenancetag + "/" + sec;
@@ -1055,35 +1234,20 @@ seechange.Exposure = class
             url += subid + "/" + this.data.provenancetag + "/1/" + ( sansmeas ? "1" : "0" );
         }
 
-        if ( this.cutouts_pngs.hasOwnProperty( which_cutouts ) ) {
-            callback( which_cutouts, this.cutouts_pngs[which_cutouts] );
-        } else {
-            this.context.connector.sendHttpRequest( url, {},
-                                                    (data) => { self.receive_cutouts( which_cutouts,
-                                                                                      data,
-                                                                                      callback ); } );
+        if ( ! this.cutouts_promises.hasOwnProperty( which_cutouts ) ) {
+            this.cutouts_promises[ which_cutouts ] = this.context.connector.httpPromise( url );
         }
-    }
-
-    receive_cutouts( which_cutouts, data, callback ) {
-        if ( ! this.cutouts_pngs.hasOwnProperty( which_cutouts ) )
-            this.cutouts_pngs[ which_cutouts ] = data;
-        callback( which_cutouts, data );
+        this.cutouts_promises[ which_cutouts ].then( (data) => { callback( which_cutouts, data ); } );
     }
 
     // ****************************************
     // TODO : implement limit and offset
     //   (will require modifing select_cutouts too)
 
-    show_cutouts_for_image( div, which_cutouts, indata )
+    show_cutouts_for_image( div, which_cutouts, data )
     {
         var table, tr, th, td, img, span, ttspan;
         var oversample = 5;
-
-        if ( ! this.cutouts_pngs.hasOwnProperty( which_cutouts ) )
-            this.cutouts_pngs[which_cutouts] = indata;
-
-        var data = this.cutouts_pngs[which_cutouts];
 
         rkWebUtil.wipeDiv( div );
 
