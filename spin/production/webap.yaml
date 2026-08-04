@@ -31,7 +31,8 @@ spec:
         workload.user.cattle.io/workloadselector: deployment-ls4-production-webap
     spec:
       containers:
-      - image: registry.nersc.gov/m4616/seechange-webap:ls4-production-20260623b
+      - image: registry.nersc.gov/m4616/seechange-webap:ls4-production-20260804e
+        # command: [ "tail", "-f", "/etc/issue" ]
         imagePullPolicy: IfNotPresent
         name: seechange-webap
         resources: {}
@@ -123,6 +124,9 @@ kind: Ingress
 metadata:
   name: webap
   namespace: ls4-production
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 10m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
 spec:
   rules:
   - host: webap.ls4-production.production.svc.spin.nersc.org

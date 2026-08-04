@@ -1,0 +1,41 @@
+preloads:
+  - /seechange/default_config.yaml
+
+path:
+  data_root: /tmp
+  data_temp: /tmp
+ 
+webap:
+  webap_url: https://ls4-pipeline.lbl.gov/
+  flask_secret_key: null
+  flask_secret_key_file: /secrets/flask_secret_key
+  verbose: true
+  
+db:
+  echoqueries: True
+  alwaysexplain: True
+  alwaysanalyze: False
+  host: ls4db.lbl.gov
+  # 5432 is direct to postgres, 6432 is pgbouncer
+  port: 5432
+  # port: 6432
+  database: ls4_production
+  user: ls4_production
+  password: null
+  password_file: /secrets/seechange_dbpasswd
+ 
+archive:
+  archive_url: null
+  local_read_dir: /archive/base
+  local_write_dir: null
+  
+email:
+  email_from: 'LS4 SeeChange <raknop@lbl.gov>'
+  email_subject: 'LS4 Pipeline Website Password Reset'
+  email_system_name: 'SeeChange'
+  smtp_server: smtp.lbl.gov
+  smtp_port: 25
+  smtp_use_ssl: false
+  smtp_username: null
+  smtp_password: null
+  smtp_password_file: null
