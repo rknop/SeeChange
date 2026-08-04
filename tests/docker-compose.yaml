@@ -228,10 +228,7 @@ services:
     environment:
       SEECHANGE_CONFIG: /seechange/tests/seechange_config_test.yaml
       SEECHANGE_TEST_ARCHIVE_DIR: /archive_storage/base
-      # ****
       TEST_DOWNLOAD_URL: null
-      # TEST_DOWNLOAD_URL: file:///rknop_data_dir/m4616_www/SeeChange_testing_data
-      # ****
     depends_on:
       setuptables:
         condition: service_completed_successfully

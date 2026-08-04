@@ -5,7 +5,7 @@
 #
 # To build for webap, from root of checkout
 #
-#   docker build --build-arg OVFILE=<filename> AUGFILE=<filename> \
+#   docker build --build-arg WEBAP_CONFIG=/secrets/seechange_config.yaml \
 #      -t <image> --target webap \
 #      -f docker/application/Dockerfile .
 #
@@ -418,8 +418,7 @@ CMD ["tail", "-f", "/etc/issue"]
 
 FROM base AS webap
 
-ARG OVFILE=webap/webap_local_overrides.yaml
-ARG AUGFILE=webap/webap_local_augments.yaml
+ARG WEBAP_CONFIG=/secrets/seechange_config.yaml
 
 COPY --from=webap_build /seechange/lib /seechange/lib
 COPY --from=webap_build /usr/bin/hotpants /usr/bin/hotpants
@@ -430,9 +429,6 @@ COPY --from=webap_build /webap_code/ /webap_code/
 COPY default_config.yaml /seechange/default_config.yaml
 COPY pipeline_config.yaml /seechange/pipeline_config.yaml
 COPY site_config.yaml /seechange/site_config.yaml
-COPY webap/seechange_webap.yaml /seechange/seechange_webap.yaml
-COPY ${OVFILE} /seechange/webap_local_overrides.yaml
-COPY ${AUGFILE} /seechange/webap_local_augments.yaml
 
 # Copy in the self-signed certificate we need to use in tests.
 # This should *not* be used in production, even though it's
@@ -442,7 +438,7 @@ COPY docker/application/webap_bogus_cert.pem /webap_code/bogus_cert.pem
 RUN chmod a+r /webap_code/bogus*pem
 
 ENV PATH=/venv/bin:$PATH
-ENV SEECHANGE_CONFIG=/seechange/seechange_webap.yaml
+ENV SEECHANGE_CONFIG=${WEBAP_CONFIG}
 ENV PYTHONPATH="/seechange/lib"
 
 RUN mkdir /sessions

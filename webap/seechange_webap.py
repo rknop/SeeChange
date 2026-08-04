@@ -468,21 +468,25 @@ class ImageData( BaseView ):
 
         else:
             cfg = Config.get()
-            # We're assuming images are not fpacked here...
-            # We're also assuming file naming convention, whereas we should probably call a function.
+            # We're assuming file naming convention, whereas we should probably call a function.
             #   But, I think the only function we have right now is get_fullpath, which will
             #   make it relative to data_dir... augh, thought required.
-            filepath = pathlib.Path( cfg.value( 'archive.local_read_dir' ) ) / f'{filepath}.image.fits'
-            with fits.open( filepath ) as hdu:
-                # The convention for rkWebUtil ImView is little-endian 32-bit floats
-                data = hdu[0].data.astype( "<f4" )
-            barf = bytearray( 4 * data.shape[0] * data.shape[1] + 4 )
-            barf[0] = data.shape[0] % 256
-            barf[1] = data.shape[0] // 256
-            barf[2] = data.shape[1] % 256
-            barf[3] = data.shape[1] // 256
-            barf[4:] = data.data
-            return bytes(barf)
+            for fz, hdun in zip( [ '', '.fz' ], [ 0, 1 ] ):
+                fullpath = pathlib.Path( cfg.value( 'archive.local_read_dir' ) ) / f'{filepath}.image.fits{fz}'
+                if fullpath.is_file():
+                    with fits.open( fullpath ) as hdu:
+                        # The convention for rkWebUtil ImView is little-endian 32-bit floats
+                        data = hdu[hdun].data.astype( "<f4" )
+                    barf = bytearray( 4 * data.shape[0] * data.shape[1] + 4 )
+                    barf[0] = data.shape[0] % 256
+                    barf[1] = data.shape[0] // 256
+                    barf[2] = data.shape[1] % 256
+                    barf[3] = data.shape[1] // 256
+                    barf[4:] = data.data
+                    app.logger.debug( f"Returning {len(barf)-4} bytes for a {data.shape[0]}×{data.shape[1]} image" )
+                    return bytes(barf)
+
+            return f"Failed to find image {filepath}.image.fits[.fz]", 422
 
 
 # ======================================================================
