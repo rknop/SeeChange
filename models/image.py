@@ -3,6 +3,7 @@ import base64
 import hashlib
 import textwrap
 import random
+import numbers
 
 import numpy as np
 from psycopg import sql
@@ -1178,7 +1179,53 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
     def __str__(self):
         return self.__repr__()
 
+    def trim(self, x0, x1, y0, y1, wcs=None, copy_header=False ):
+        """Trim the image.
+
+        Returns a new Image with a trimmed data, weight, and flags
+        array.  If wcs is given (strongly recommended) will update all
+        ra/dec fields, otherwise they will be copied from this object.
+
+        Parameters
+        ----------
+          x0, x1, y0, y1: int, required
+             The minimum (inclusive)/maximum (exclusive) pixel limits of
+             the trimmed region.
+
+          wcs: WorldCoordinates, default None
+             If given, will update all coordinate fields of the object
+             to be right for the trimmed object (assuming the wcs is
+             right).  Will also return the wcs for the trimmed image.
+
+          copy_header: bool, default False
+             If True, then the header of the original image is included
+             as the header of the trimmd image.  Warning: no editing of
+             any header fields is done, so this is scary.
+
+        Returns
+        -------
+          Image or Image, WorldCoordinates
+
+            If wcs is None, just returns an Image.  If wcs is non-None, returns both.
+
+        """
+
+        if not all( isinstance( numbers.Integral, i ) for i in [ x0, x1, y0 ,y1 ] ):
+            raise TypeErrror( "x0, x1, y0, y1 must all be integers." )
+
+        if ( x0 < 0 ) or ( x1 > self.data.shape[1] ) or ( y0 < 0 ) or ( y1 > self.data.shape[0] ):
+            raise ValueError( "Trim limits [{x0}:{x1}, {y0}:y1}] are outside image borders." )
+        
+        newimage = Image.copy( self, no_copy_data=True )
+        newimage.data = self.data[y0:y1, x0:x1].copy()
+        # newimage.weight = self.weight[7y0
+        
+
+          
+
+    
     def invent_filepath(self, name_convention=None ):
+
         """Create a relative file path for the object.
 
         Create a file path relative to data root for the object based on its
@@ -1263,12 +1310,29 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             prov_hash=prov_hash,
         )
 
-        # TODO: which elements of the naming convention are really necessary?
-        #  and what is a good way to make sure the filename actually depends on them?
-
-        # Add some barf at the end if this is a coadded or subtracted image.
-        # Reason: it's possible all the rest of the filename will be identical
-        #  to an existing image.
+        # For coadded and subtracted images, add some more things to the filename.
+        # Reason: you can have more than one coadd or subtraction image in the
+        #   same provenance that has the same iamge used as the base for its name,
+        #   but they *can* be different images.
+        # Two things can be different:
+        #   (1) the set of images combined may be different
+        #   (2) it's possible that the set of images combined in a coadd
+        #       is the same, but the image is centered differently.
+        #
+        # To keep filenames unique, add two things to the end of the
+        #    filename.  First, add a hash of the images (really,
+        #    zeropoint ids) that went into the coadd or subtraction.
+        #    Second, add a 0.0001-resolution RA and Dec.  (...Yeah,
+        #    somebody might coadd things that are centered differently,
+        #    but by less than 0.0001° in RA or Dec, but that's a really
+        #    perverse edge case.  pipeline/ref_maker.py should usually
+        #    be run with an overlap fraction that allows for
+        #    misalignment of more than an arcsecond when choosing refs!)
+        #
+        # ...it's possible that the ra and dec is already in the filename,
+        #   given the naming convention.  Probably we should refactor this
+        #   to have separate naming conventions for regular, coadded, and
+        #   subtracted images!
         if self.is_coadd or self.is_sub:
             utag = hashlib.sha256()
 
@@ -1283,6 +1347,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             utag = '_u-' + utag[:6]
             filepath += utag
 
+            filepath += f"_{ra:08.4f}{dec:+08.4f}"
+            
         return filepath
 
 

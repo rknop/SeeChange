@@ -1154,7 +1154,7 @@ class CoaddPipeline:
 
 
     def run( self, data_store_list, prov_tree=None,aligned_datastores=None,
-             alignment_target_datastore=None, alignment_wcs=None ):
+             alignment_target_datastore=None, alignment_wcs=None, always_build=False ):
         """Run the CoaddPipeline
 
         Parameters
@@ -1165,13 +1165,13 @@ class CoaddPipeline:
             databse should hold enough information that sources, bg,
             psf, wcs, and zp will all return something.
 
-         prov_tree: ProvenanceTree, default None
+          prov_tree: ProvenanceTree, default None
             The provenance tree for the pipeline.  This is dangerous,
             you have to make sure you've done it right.  (I *think* we
             do it right in ref_maker.py.)  Should have keys
             starting_point, extraction, astrocal, photocal.
 
-         aligned_datastores: list of DataStore (optional)
+          aligned_datastores: list of DataStore (optional)
             Usually you don't want to give this.  If you don't, all
             images will be aligned according to the parameters.  This is
             here for efficiency (e.g. it's used in tests, where the
@@ -1182,6 +1182,24 @@ class CoaddPipeline:
             right, i.e. that they correspond to the list of images in
             data_store_list (in the same order), and that they were
             created with the proper alignment parameters.
+
+          always_build: bool, default False
+             Normally, this function will look in the database and see
+             if a coadd already exists for this set of images.  If so,
+             it will just return that coadd.  However, it may be that
+             you're coadding the *same* images, but want to align it
+             differently.  Pass always_build=True to skip this check.
+             Warning: that could lead to errors later when you try to
+             save the image, because the image may already exist in the
+             database.
+
+             TODO : handle this better.  Right now we identify an
+             existing coadd based on the provenance and the list of
+             images that go into the coadd.  If alignment_index is
+             "absolute" or "other" then we also need to look at the
+             image's position and alignment... which could be
+             nontrivial.  See Issue #541.
+     
 
         Returns
         -------
@@ -1205,11 +1223,16 @@ class CoaddPipeline:
         else:
             self.make_provenance_tree( data_store_list, absolute_alignment_wcs=(alignment_wcs is not None) )
 
+        coadd_prov = self.datastore.prov_tree['starting_point']
+
         # check if this exact coadd image already exists in the DB
-        with SmartSession() as dbsession:
-            coadd_prov = self.datastore.prov_tree['starting_point']
-            coadd_image = Image.get_coadd_from_components( [ d.zp for d in data_store_list ],
-                                                           coadd_prov, session=dbsession)
+        # Remove the if around this once we fix Issue #541
+        if always_build:
+            coadd_image = None
+        else:
+            with SmartSession() as dbsession:
+                coadd_image = Image.get_coadd_from_components( [ d.zp for d in data_store_list ],
+                                                               coadd_prov, session=dbsession)
 
         if coadd_image is not None:
             self.datastore.image = coadd_image

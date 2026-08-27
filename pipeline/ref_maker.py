@@ -1039,7 +1039,7 @@ class RefMaker:
             return None
         else:
             SCLogger.debug( f"Overlap statistics:{nlsp}{mess}" )
-            SCLogger.debug( f"Combining images to make ref:\n"
+            SCLogger.debug( f"Combining images to make ref:{nlsp}"
                             f"{nlsp.join( d.image.filepath for d in dses )}" )
 
         alignment_target_datastore = None
@@ -1088,9 +1088,21 @@ class RefMaker:
                   'CUNIT1': 'deg',
                   'CUNIT2': 'deg' } )
 
+        import pdb; pdb.set_trace()
+        # TODO : right now, we set always_build=True, because we had a
+        #   case where exactly the same set of images were going to be
+        #   coadded as had been previously, but they were not centered
+        #   the same way (given an alignment_wcs).  We need to improve
+        #   our "existing coadd" recongition to fix this; see the TODO
+        #   in the docstring on CoaddPipeline.run in the always_build
+        #   parameter documentation.  For now, trust that if there was
+        #   a proper pre-existing coadd, it would only have been there
+        #   because somebody was making a ref, and we would have found
+        #   it above.  This is scary... somebody might make coadds for
+        #   other reasons.  Issue #541.
         coadd_ds = self.coadd_pipeline.run( dses, prov_tree=self.coadd_provs,
                                             alignment_target_datastore=alignment_target_datastore,
-                                            alignment_wcs=alignment_wcs )
+                                            alignment_wcs=alignment_wcs, always_build=True )
         t0 = None
         if self.pars.validity_start is not None:
             t0 = self.pars.validity_start

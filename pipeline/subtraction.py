@@ -84,6 +84,16 @@ class ParsSubtractor(Parameters):
             critical=True
         )
 
+        self.trim_size = self.add_par(
+            name = 'trim_size',
+            default = None,
+            par_types = ( int, None ),
+            docstring = ( "If not None, after subtracting trim the difference image to a square this many pixels "
+                          "on a side.  If this is not None, then either (x, y) or (ra, dec) must be passed to "
+                          "the run() method.  This is used in the Lightcurve pipeline." ),
+            critical=True
+        )
+        
         self.trust_aligned_images = self.add_par(
             'trust_aligned_images',
             True,
