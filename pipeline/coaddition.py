@@ -1030,6 +1030,7 @@ class Coadder:
             ra_corners, dec_corners = alignment_wcs.pixel_to_world_values( xs, ys )
 
         output = Image.from_image_zps( [ d.zp for d in data_store_list ],
+                                       images=[ d.image for d in data_store_list ],
                                        index=index if index>=0 else 0,
                                        alignment_target=( alignment_target_datastore.image
                                                           if alignment_target_datastore is not None

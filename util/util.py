@@ -73,8 +73,8 @@ def ensure_file_does_not_exist( filepath, delete=False ):
 def listify( val, require_string=False ):
     """Return a list version of val.
 
-    If val is already a sequence other than a string, return list(val).
-    Otherwise, return [val].  If val is None, return None.
+    If val is None, return None.  If val is an iterable (but not a str
+    or bytes), return list(val).  Otherwise, return [val].
 
     Parameters
     ----------
@@ -90,8 +90,8 @@ def listify( val, require_string=False ):
     if val is None:
         return val
 
-    if isinstance( val, collections.abc.Sequence ):
-        if isinstance( val, str ):
+    if isinstance( val, collections.abc.Iterable ):
+        if isinstance( val, str ) or isinstance( val, bytes ):
             return [ val ]
         else:
             if require_string and ( not all( [ isinstance( i, str ) for i in val ] ) ):

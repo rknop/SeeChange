@@ -1091,7 +1091,7 @@ class SeeChangeBase:
                             setattr( obj, col.name, getattr( dbobj, col.name ) )
 
 
-    def _delete_from_database( self, pgdb ):
+    def _delete_from_database( self, pgdb=None ):
         """Remove the object from the database.  Don't call this, call delete_from_disk_and_database.
 
         This does not remove any associated files (if this is a

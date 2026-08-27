@@ -16,10 +16,14 @@ def test_listify():
     assert listify( None ) is None
     assert listify( ( None, ) ) == [ None ]
     assert listify( "test" ) == [ "test" ]
-    assert listify( 1 ) == [ 1  ]
+    assert listify( bytes([1, 2, 3]) ) == [ bytes([1, 2, 3]) ]
+    assert listify( 1 ) == [ 1 ]
     assert listify( [ "a", "b", "c" ] ) == [ "a", "b", "c" ]
     assert listify( [ 1, 2, 3 ] ) == [ 1, 2, 3 ]
     assert listify( ( 1, 2, 3 ) ) == [ 1, 2, 3 ]
+    listofset = listify( { 1, 2, 3 } )
+    assert isinstance( listofset, list )
+    assert set( listofset ) == { 1, 2, 3 }
 
     # Make sure require_string works right
     assert listify( "test", require_string=True ) == [ "test" ]

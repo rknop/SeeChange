@@ -10,17 +10,18 @@ import time
 import warnings
 
 import psycopg
+import psycopg.errors
 import numpy as np
 
 from astropy.io import fits
 from astropy.utils.exceptions import AstropyWarning
 
 import sqlalchemy as sa
-from sqlalchemy.exc import IntegrityError
 
 from models.base import SmartSession, FileOnDiskMixin, PsycopgConnection
 from models.provenance import Provenance
 from models.instrument import Instrument
+from models.exposure import Exposure
 from models.image import Image
 from models.reference import Reference
 from models.enums_and_bitflags import image_preprocessing_inverse, string_to_bitflag, image_badness_inverse
@@ -82,7 +83,7 @@ def test_image_no_null_values(provenance_base):
                 setattr(image, k, added.get(k, None))
 
             # without all the required columns on image, it cannot be added to DB
-            with pytest.raises( IntegrityError ) as exc:
+            with pytest.raises( psycopg.errors.NotNullViolation ) as exc:
                 image.insert()
 
             # Figure out which column screamed and yelled about being null
@@ -155,7 +156,7 @@ def test_image_must_have_md5(sim_image_uncommitted, provenance_base):
 
         im.md5sum = None
 
-        with pytest.raises(IntegrityError, match='violates check constraint'):
+        with pytest.raises(psycopg.errors.CheckViolation, match='violates check constraint'):
             im.insert()
 
         # adding md5sums should fix this problem
@@ -679,12 +680,13 @@ def test_image_from_exposure( provenance_base, sim_exposure1 ):
     #  almost certainly instrument-specific code to do this.)
 
     try:
-        with pytest.raises(IntegrityError, match='null value in column .* of relation "images"'):
+        with pytest.raises(psycopg.errors.NotNullViolation, match='null value in column .* of relation "images"'):
             im.insert()
 
         # must add the provenance!
         im.provenance_id = provenance_base.id
-        with pytest.raises(IntegrityError, match='null value in column "filepath" of relation "images"'):
+        with pytest.raises(psycopg.errors.NotNullViolation,
+                           match='null value in column "filepath" of relation "images"'):
             im.insert()
 
         im.data = im.raw_data
@@ -698,7 +700,7 @@ def test_image_from_exposure( provenance_base, sim_exposure1 ):
         assert im.exposure_id is not None
         assert im.exposure_id == sim_exposure1.id
 
-        assert [ asUUID(i.id) for i in im.get_upstreams() ] == [ asUUID(sim_exposure1.id) ]
+        assert im.get_upstream_ids() == [ ( Exposure, asUUID(sim_exposure1.id) ) ]
 
     finally:
         # All necessary cleanup *should* be done in fixtures
@@ -763,6 +765,17 @@ def test_image_from_reduced_exposure( decam_reduced_origin_exposure_loaded_in_db
     assert img._flags.sum() == 266089
 
 
+def fill_annoying_non_null_wcs_columns( wcs ):
+    for radec in [ 'ra', 'dec' ]:
+        setattr( wcs, radec, 0. )
+        for good in [ 'corner', 'good' ]:
+            for corner in [ '00', '01', '10', '11' ]:
+                setattr( wcs, f'{radec}_{good}_{corner}', 0. )
+        for good in [ '', 'good_' ]:
+            for minmax in [ 'min', 'max' ]:
+                setattr( wcs, f'{good}{minmax}{radec}', 0. )
+
+
 def test_image_coadd( sim_image_r1, sim_image_r2, sim_image_r3, provenance_base ):
     imgs = [ sim_image_r1, sim_image_r2, sim_image_r3 ]
     imgs.sort( key = lambda x: x.mjd )
@@ -789,6 +802,7 @@ def test_image_coadd( sim_image_r1, sim_image_r2, sim_image_r3, provenance_base 
             bgs.append( bg )
             wcs = WorldCoordinates( sources_id=sl.id, provenance_id=provenance_base.id,
                                     filepath=f'foo_wcs{i}', md5sum=uuid.uuid4() )
+            fill_annoying_non_null_wcs_columns( wcs )
             wcs.insert()
             wcses.append( wcs )
             zp = ZeroPoint( wcs_id=wcs.id, background_id=bg.id, zp=25., dzp=0.1,
@@ -942,6 +956,7 @@ def test_image_subtraction(sim_exposure1, sim_exposure2, provenance_base, proven
         im1bg.insert()
         im1wcs = WorldCoordinates( sources_id=im1sl.id, provenance_id=provenance_base.id,
                                    filepath='foo_wcs1', md5sum=uuid.uuid4() )
+        fill_annoying_non_null_wcs_columns( im1wcs )
         im1wcs.insert()
         im1zp = ZeroPoint( wcs_id=im1wcs.id, background_id=im1bg.id, zp=25., dzp=0.1, provenance_id=provenance_base.id )
         im1zp.insert()
@@ -954,6 +969,7 @@ def test_image_subtraction(sim_exposure1, sim_exposure2, provenance_base, proven
         im2bg.insert()
         im2wcs = WorldCoordinates( sources_id=im2sl.id, provenance_id=provenance_base.id,
                                    filepath='foo_wcs2', md5sum=uuid.uuid4() )
+        fill_annoying_non_null_wcs_columns( im2wcs )
         im2wcs.insert()
         im2zp = ZeroPoint( wcs_id=im2wcs.id, background_id=im2bg.id, zp=25., dzp=0.1, provenance_id=provenance_base.id )
         im2zp.insert()
