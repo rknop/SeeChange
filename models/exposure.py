@@ -23,7 +23,7 @@ from models.base import (
     FileOnDiskMixin,
     SpatiallyIndexed,
     SmartSession,
-    HasBitFlagBadness,
+    HasBitFlagBadnessButNoUpstream,
 )
 from models.instrument import Instrument
 
@@ -156,7 +156,7 @@ class ExposureImageIterator:
             raise StopIteration
 
 
-class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBadness):
+class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBadnessButNoUpstream):
     """Encapsulates one exposure, which includes many images each on different sensor sections (chips).
 
     Access to the data is through the data, weight, and flags
@@ -346,7 +346,7 @@ class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBad
         doc='Opaque string used by InstrumentOriginExposures to identify this exposure remotely'
     )
 
-    def __init__(self, current_file=None, invent_filepath=True, **kwargs):
+    def __init__(self, current_file=None, invent_filepath=True, nofile=False, **kwargs):
         """Initialize the exposure object.
 
         If the filepath is given (as a keyword argument), it will parse the instrument name
@@ -371,9 +371,13 @@ class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBad
            unless the global property Exposure.nofile is True (but you
            really shouldn't be playing around with that).
 
+        nofile: bool, default False
+           Set this to True if there is no actual exposure file.  This
+           should probably only be used in specific tests.
+
         """
         FileOnDiskMixin.__init__(self, **kwargs)
-        HasBitFlagBadness.__init__(self)
+        HasBitFlagBadnessButNoUpstream.__init__(self)
         SeeChangeBase.__init__(self)  # don't pass kwargs as they could contain non-column key-values
 
         self._data = None  # the underlying image data for each section
@@ -430,14 +434,15 @@ class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBad
             prov = self.make_provenance(self.instrument)  # a default provenance for exposures
             self.provenance_id = prov.id
 
-
         # instrument_obj is lazy loaded when first getting it
         if self.instrument_object is None:
             raise RuntimeError( "I don't know how to cope." )
-        if current_file is not None:
-            self.use_instrument_to_read_header_data( fromfile=current_file )
-        else:
-            self.use_instrument_to_read_header_data()
+
+        if not nofile:
+            if current_file is not None:
+                self.use_instrument_to_read_header_data( fromfile=current_file )
+            else:
+                self.use_instrument_to_read_header_data()
 
         # Allow passed keywords to override what's detected from the header
         self.set_attributes_from_dict( kwargs )

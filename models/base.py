@@ -744,7 +744,7 @@ class SeeChangeBase:
 
         if hasattr(self, '_bitflag'):
             self._bitflag = 0
-        if hasattr(self, 'upstream_bitflag'):
+        if hasattr(self, '_upstream_bitflag'):
             self._upstream_bitflag = 0
 
         for k, v in kwargs.items():
@@ -2320,7 +2320,7 @@ class UUIDMixin:
         self._id = asUUID( val )
 
     @classmethod
-    def get_by_id( cls, uuid, session=None, pgdb=None ):
+    def get_by_id( cls, uuid, session=None, pgdb=None, **kwargs ):
         """Get an object of the current class that matches the given uuid.
 
         Returns None if not found.
@@ -2333,6 +2333,8 @@ class UUIDMixin:
           session, pgdb: PGDB, psycopg.Connection, psycopg.Cursor, or sqlalchmey session
             Will use pgdb if it's not None, else session.  If both are None,
             makes and closes a new connection to the database.
+
+          **kwargs: further keywords are passed on to the object constructor
 
         Returns
         -------
@@ -2348,7 +2350,9 @@ class UUIDMixin:
             elif len(rows) > 1:
                 raise RuntimeError( "This should never happen." )
             else:
-                return cls( **(rows[0]) )
+                kwargs = kwargs.copy()
+                kwargs.update( rows[0] )
+                return cls( **kwargs )
 
 
     @classmethod
@@ -3285,9 +3289,14 @@ class FourCornersWithGood( FourCorners ):
             self.ecllon = sc.barycentrictrueecliptic.lon.deg
 
 
-class HasBitFlagBadness:
 
-    """A mixin class that adds a bitflag marking why this object is bad. """
+class HasBitFlagBadnessButNoUpstream:
+    """A mixin class that adds a bitflag marking why this object is bad.
+
+    Most classes actually use HasBitFlagBadness, but Exposure uses this one.
+
+    """
+
     _bitflag = sa.Column(
         sa.BIGINT,
         nullable=False,
@@ -3299,31 +3308,21 @@ class HasBitFlagBadness:
             'upstream object that were used to make this one. '
     )
 
-    @declared_attr
-    def _upstream_bitflag(cls):  # noqa: N805
-        if cls.__name__ != 'Exposure':
-            return sa.Column(
-                sa.BIGINT,
-                nullable=False,
-                server_default=sa.sql.elements.TextClause( '0' ),
-                index=True,
-                doc='Bitflag of objects used to generate this object. '
-            )
-        else:
-            return None
-
     @hybrid_property
     def bitflag(self):
         if self._bitflag is None:
             self._bitflag = 0
-        if self._upstream_bitflag is None:
-            self._upstream_bitflag = 0
-        return self._bitflag | self._upstream_bitflag
+        if hasattr( self, '_upstream_bitflag' ):
+            if self._upstream_bitflag is None:
+                self._upstream_bitflag = 0
+            return self._bitflag | self._upstream_bitflag
+        else:
+            return self._bitflag
 
-    @bitflag.inplace.expression
-    @classmethod
-    def bitflag(cls):
-        return cls._bitflag.op('|')(cls._upstream_bitflag)
+    # @bitflag.inplace.expression
+    # @classmethod
+    # def bitflag(cls):
+    #     return cls._bitflag.op('|')(cls._upstream_bitflag)
 
     @bitflag.inplace.setter
     def bitflag(self, value):
@@ -3448,7 +3447,8 @@ class HasBitFlagBadness:
 
     def __init__(self):
         self._bitflag = 0
-        self._upstream_bitflag = 0
+        if hasattr( self, '_upstream_bitflag' ):
+            self._upstream_bitflag = 0
 
     def update_downstream_badness(self, session=None, commit=True, _objbank=None):
         """Send a recursive command to update all downstream objects that have bitflags.
@@ -3534,6 +3534,16 @@ class HasBitFlagBadness:
         For the base class this is the most inclusive inverse (allows all badness).
         """
         return data_badness_inverse
+
+
+class HasBitFlagBadness( HasBitFlagBadnessButNoUpstream ):
+    _upstream_bitflag = sa.Column(
+        sa.BIGINT,
+        nullable=False,
+        server_default=sa.sql.elements.TextClause( '0' ),
+        index=True,
+        doc='Bitflag of objects used to generate this object. '
+    )
 
 
 class ArchiveLock( Base, UUIDMixin ):

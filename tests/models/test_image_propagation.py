@@ -136,7 +136,7 @@ def test_image_upstreams_downstreams( ptf_ref, ptf_supernova_image_datastores, p
 
 def test_image_badness(sim_image1):
 
-    exposure = Exposure.get_by_id( sim_image1.exposure_id )
+    exposure = Exposure.get_by_id( sim_image1.exposure_id, nofile=True )
 
     # this is not a legit "badness" keyword...
     with pytest.raises(ValueError, match='Keyword "foo" not recognized'):
