@@ -3319,10 +3319,13 @@ class HasBitFlagBadnessButNoUpstream:
         else:
             return self._bitflag
 
-    # @bitflag.inplace.expression
-    # @classmethod
-    # def bitflag(cls):
-    #     return cls._bitflag.op('|')(cls._upstream_bitflag)
+    @bitflag.inplace.expression
+    @classmethod
+    def bitflag(cls):
+        if hasattr( cls, '_bitflag' ):
+            return cls._bitflag.op('|')(cls._upstream_bitflag)
+        else:
+            return cls._bitflag
 
     @bitflag.inplace.setter
     def bitflag(self, value):
@@ -3502,7 +3505,11 @@ class HasBitFlagBadnessButNoUpstream:
                 if upstream_id in _objbank.keys():
                     upstream = _objbank[ upstream_id ]
                 else:
-                    upstream = upstream_model.get_by_id( upstream_id, pgdb=pgdb )
+                    # HACK ALERT.... remove this ugly hack when Issue #542 is solved
+                    if upstream_model.__name__ == 'Exposure':
+                        upstream = upstream_model.get_by_id( upstream_id, pgdb=pgdb, nofile=True )
+                    else:
+                        upstream = upstream_model.get_by_id( upstream_id, pgdb=pgdb )
                     _objbank[ upstream_id ] = upstream
                 if hasattr(upstream, '_bitflag'):
                     new_bitflag |= upstream.bitflag

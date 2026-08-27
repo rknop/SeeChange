@@ -1,7 +1,7 @@
 import pytest
 import uuid
 import sqlalchemy as sa
-from models.base import SmartSession, PsycopgConnection
+from models.base import SmartSession, PsycopgConnection, PGDB
 from models.provenance import Provenance
 from models.exposure import Exposure
 from models.image import Image
@@ -220,9 +220,10 @@ def test_multiple_images_badness(
         sim_image2.upsert()
 
         # note that this image is not directly bad, but the exposure has banding
-        sim_exposure3 = Exposure.get_by_id( sim_image3.exposure_id )
+        sim_exposure3 = Exposure.get_by_id( sim_image3.exposure_id, nofile=True )
         sim_exposure3.set_badness( 'banding' )
         sim_exposure3.upsert()
+        import pdb; pdb.set_trace()
         sim_exposure3.update_downstream_badness()
 
         sim_image3 = Image.get_by_id( sim_image3.id )
@@ -231,13 +232,17 @@ def test_multiple_images_badness(
         assert sim_image3.bitflag == 2 ** 1
 
         # find the images that are good vs bad
-        with SmartSession() as session:
-            good_images = session.scalars(sa.select(Image).where(Image.bitflag == 0)).all()
-            assert sim_image1.id in [i.id for i in good_images]
+        with PGDB() as pgdb:
+            rows, _ = pgdb.execute( "SELECT _id FROM images WHERE _bitflag=0" )
+            assert sim_image1.id in [ r[0] for r in rows ]
+            rows, _ = pgdb.execute( "SELECT _id FROM images WHERE _bitflag!=0" )
+            assert sim_image2.id in [ r[0] for r in rows ]
+            rows, _ = pgdb.execute( "SELECT _id FROM images WHERE _upstream_bitflag!=0" )
+            assert sim_image3.id in [ r[0] for r in rows ]
 
-            bad_images = session.scalars(sa.select(Image).where(Image.bitflag != 0)).all()
-            assert sim_image2.id in [i.id for i in bad_images]
-            assert sim_image3.id in [i.id for i in bad_images]
+            assert Image.get_by_id( sim_image1.id, pgdb=pgdb ).bitflag == 0
+            assert Image.get_by_id( sim_image2.id, pgdb=pgdb ).bitflag == 2 ** 5
+            assert Image.get_by_id( sim_image3.id, pgdb=pgdb ).bitflag == 2 ** 1
 
         def make_associates( image, extra="" ):
             with SmartSession() as session:
@@ -250,6 +255,15 @@ def test_multiple_images_badness(
                 bkg.insert( session=session )
                 wcs = WorldCoordinates( sources_id=srclist.id, provenance_id=provenance_extra.id,
                                         filepath=f'foo{extra}_wcs', md5sum=uuid.uuid4() )
+                # Fill in the rest of the fields of wcs that can't be null
+                for radec in [ 'ra', 'dec' ]:
+                    setattr( wcs, radec, 0. )
+                    for good in [ 'corner', 'good' ]:
+                        for corner in [ '00', '01', '10', '11' ]:
+                            setattr( wcs, f'{radec}_{good}_{corner}', 0. )
+                    for good in [ '', 'good_' ]:
+                        for minmax in [ 'min', 'max' ]:
+                            setattr( wcs, f'{good}{minmax}{radec}', 0. )
                 wcs.insert( session=session )
                 zp = ZeroPoint( wcs_id=wcs.id, background_id=bkg.id, zp=25., dzp=0.1,
                                 provenance_id=provenance_extra.id )
@@ -424,7 +438,7 @@ def test_multiple_images_badness(
             assert sim_image8.id in [i.id for i in bad_coadd]
 
         # try to add some badness to one of the underlying exposures
-        sim_exposure1 = Exposure.get_by_id( sim_image1.exposure_id )
+        sim_exposure1 = Exposure.get_by_id( sim_image1.exposure_id, nofile=True )
         sim_exposure1.set_badness( 'shaking' )
         sim_exposure1.upsert()
         sim_exposure1.update_downstream_badness()

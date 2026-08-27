@@ -226,6 +226,18 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         )
     )
 
+    width = sa.Column(
+        sa.SmallInteger,
+        nullable=False,
+        doc="Width of the image"
+    )
+
+    height = sa.Column(
+        sa.SmallInteger,
+        nullable=False,
+        doc="Height of the image"
+    )
+
     mjd = sa.Column(
         sa.Double,
         nullable=False,
@@ -583,10 +595,10 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
            as the things calculated from it (galactic, ecliptic
            coordinates).
 
-        width : int, default data.shape[1]
+        width : int, default self.width
            Width (x-size) of the image
 
-        height : int, default data.shape[0]
+        height : int, default self.height
            Height (y-size) of the image
 
         """
@@ -596,13 +608,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         if ( wcs.axis_type_names == ['', ''] ):
             raise ValueError( "Could not find a good WCS" )
 
-        # Note: this used to prefer raw_data; changed it to prefer
-        #  data, because we believe that's what we want to prefer,
-        #  but left this note here in case things go haywire.
-        # data = self.raw_data if self.raw_data is not None else self.data
-        data = self.data if self.data is not None else self.raw_data
-        width = data.shape[1]
-        height = data.shape[0]
+        width = self.width if width is None else width
+        height = self.height if height is None else height
 
         FourCorners.set_corners_from_wcs( self, wcs, width, height, setradec=setradec )
 
@@ -690,8 +697,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                 del new.header[delkw]
 
         # numpy array axis ordering is backwards from FITS ordering
-        width = new.raw_data.shape[1]
-        height = new.raw_data.shape[0]
+        new.width = new.raw_data.shape[1]
+        new.height = new.raw_data.shape[0]
 
         names = ['ra', 'dec'] + new.instrument_object.get_auxiliary_exposure_header_keys()
         header_info = new.instrument_object.extract_header_info(new._header, names)
@@ -724,8 +731,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             new.calculate_coordinates()  # galactic and ecliptic coordinates
 
             # Set the corners
-            halfwid = new.instrument_object.pixel_scale * width / 2. / np.cos( new.dec * np.pi / 180. ) / 3600.
-            halfhei = new.instrument_object.pixel_scale * height / 2. / 3600.
+            halfwid = new.instrument_object.pixel_scale * new.width / 2. / np.cos( new.dec * np.pi / 180. ) / 3600.
+            halfhei = new.instrument_object.pixel_scale * new.height / 2. / 3600.
             ra0 = new.ra - halfwid
             ra1 = new.ra + halfwid
             dec0 = new.dec - halfhei
@@ -833,7 +840,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         return new
 
     @classmethod
-    def from_image_zps(cls, zps, index=0, images=None, alignment_target=None,
+    def from_image_zps(cls, zps, width=None, height=None, index=0, images=None, alignment_target=None,
                        ra_corners=None, dec_corners=None, set_is_coadd=True):
         """Create a new Image object from a list of other ZeroPoint objects
 
@@ -858,6 +865,12 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         ----------
         zps: list of ZeroPoint objects
             The ZeroPoints of the images to combine into a new Image object.
+
+        width: int, required
+            Width of the summed image
+
+        height: int, required
+            Height of the summed image
 
         index: int, default 0
             The image index in the (mjd sorted) list of upstream images
@@ -952,7 +965,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         #   control this.
         upstream_ids = [ z.id for z in zps ]
 
-        output = Image( nofile=True, is_coadd=set_is_coadd )
+        output = Image( nofile=True, is_coadd=set_is_coadd, width=width, height=height )
 
         fail_if_not_consistent_attributes = ['filter']
         copy_if_consistent_attributes = ['section_id', 'instrument', 'telescope', 'project', 'target', 'filter']
@@ -1031,7 +1044,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         return cls.from_new_and_ref(new_image, ref)
 
     @classmethod
-    def from_new_and_ref(cls, new_image_zp, ref, new_image=None):
+    def from_new_and_ref(cls, new_image_zp, ref, new_image=None, width=None, height=None):
         """Create a new Image object from a Reference object and a new Image object.
         This is the first step in making a difference image.
 
@@ -1054,6 +1067,10 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             If you pass this, then it must be the Image that goes along
             with ZeroPoint.  Normally, this function will search the
             database to find the right Image.
+
+        width, height: int, default None
+            You probably never want to set these, because they will
+            default to the size of new_image.
 
         Returns
         -------
@@ -1101,7 +1118,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         #   the sub image to the new image here (which is the
         #   default).
         for att in ['instrument', 'telescope', 'project', 'section_id', 'filter', 'target',
-                    'exp_time', 'airmass', 'mjd', 'end_mjd', 'info', 'header',
+                    'exp_time', 'airmass', 'mjd', 'end_mjd', 'info', 'header', 'width', 'height',
                     'gallon', 'gallat', 'ecllon', 'ecllat', 'ra', 'dec',
                     'ra_corner_00', 'ra_corner_01', 'ra_corner_10', 'ra_corner_11',
                     'dec_corner_00', 'dec_corner_01', 'dec_corner_10', 'dec_corner_11',
@@ -2269,6 +2286,15 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
     def data(self, value):
         self._nandata = None
         self._data = value
+        if value is not None:
+            self.width = value.shape[1]
+            self.height = value.shape[0]
+            # zero out inconsistent weight and flags.  This isn't obviously
+            # the right thing to do, but doing nothing is obviously wrong.
+            if ( self._weight is not None ) and ( self._weight.shape != value.shape ):
+                self._weight = None
+            if ( self._flags is not None ) and ( self._flags.shape != value.shape ):
+                self._flags = None
 
     @property
     def header(self):
@@ -2299,6 +2325,9 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
 
     @flags.setter
     def flags(self, value):
+        if ( self._data is not None ) and ( value is not None ) and ( self._data.shape != value.shape ):
+            raise ValueError( f"Tried to set flags array of shape {value.shape} "
+                              f"for image with shape {self._data.shape}" )
         self._nandata = None
         self._nanscore = None
         self._flags = value
@@ -2312,6 +2341,9 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
 
     @weight.setter
     def weight(self, value):
+        if ( self._data is not None ) and ( value is not None ) and ( self._data.shape != value.shape ):
+            raise ValueError( f"Tried to set weight array of shape {value.shape} "
+                              f"for image with shape {self._data.shape}" )
         self._weight = value
 
     @property

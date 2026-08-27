@@ -75,7 +75,8 @@ def test_image_no_null_values(provenance_base):
         im_id = None  # make sure to delete the image if it is added to DB
 
         # md5sum is spoofed as we don't have this file saved to archive
-        image = Image(f"Demo_test_{rnd_str(5)}.fits", md5sum=uuid.uuid4(), nofile=True, section_id=1)
+        image = Image(f"Demo_test_{rnd_str(5)}.fits", md5sum=uuid.uuid4(), nofile=True,
+                      section_id=1, width=10, height=10)
 
         for i in range( len(required ) ):
             # set the exposure to the values in "added" or None if not in "added"
@@ -776,6 +777,8 @@ def fill_annoying_non_null_wcs_columns( wcs ):
                 setattr( wcs, f'{good}{minmax}{radec}', 0. )
 
 
+# This next test doesn't actually test coadding images, it tests that the
+#   database tracking of a coadded image works
 def test_image_coadd( sim_image_r1, sim_image_r2, sim_image_r3, provenance_base ):
     imgs = [ sim_image_r1, sim_image_r2, sim_image_r3 ]
     imgs.sort( key = lambda x: x.mjd )
@@ -810,7 +813,7 @@ def test_image_coadd( sim_image_r1, sim_image_r2, sim_image_r3, provenance_base 
             zp.insert()
             zps.append( zp )
 
-        im = Image.from_image_zps( zps )
+        im = Image.from_image_zps( zps, width=sim_image_r1.width, height=sim_image_r1.height )
         im.provenance_id = provenance_base.id
         # Spoof the md5sum since we aren't saving anything, but want to insert
         im.md5sum = uuid.uuid4()
