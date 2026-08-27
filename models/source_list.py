@@ -167,12 +167,17 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
     @property
     def data(self):
         """The data in this source list. A table of sources and their properties."""
+        if self._format == 0:
+            # null format
+            return None
         if self._data is None and self.filepath is not None:
             self.load()
         return self._data
 
     @data.setter
     def data(self, value):
+        if self._format == 0:
+            raise RuntimeError( "Can't set the data of a null source list." )
 
         if value is not None:
             if isinstance(value, pd.DataFrame):
@@ -194,6 +199,10 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         astropy.io.fits.header.Header)
 
         """
+        if self.__format == 0:
+            # null format
+            return None
+
         if ( self._info is None ) and ( self.filepath is not None ):
             self.load()
         return self._info
@@ -201,12 +210,18 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
     @info.setter
     def info(self, value):
         """Set the info property.  Does no type checking."""
+        if self._format == 0:
+            raise RuntimeError( "Can't set the info of a null source list" )
+
         self._info = value
 
     @property
     def x( self ):
         """A numpy array with 0-offset, n.0-pixel-center based x values of sources"""
-        if self.format == 'sextrfits':
+        if self._format == 0:
+            # null format
+            return None
+        elif self.format == 'sextrfits':
             return self.data['XWIN_IMAGE']
         elif self.format == 'sepnpy':
             return self.data['x']
@@ -218,7 +233,10 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
     @property
     def y( self ):
         """A numpy array with 0-offset, n.0-pixel-center based y values of sources"""
-        if self.format == 'sextrfits':
+        if self._format == 0:
+            # null format
+            return None
+        elif self.format == 'sextrfits':
             return self.data['YWIN_IMAGE']
         elif self.format == 'sepnpy':
             return self.data['y']
@@ -230,7 +248,10 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
     @property
     def varx( self ):
         """A numpy array with variances on y position"""
-        if self.format == 'sextrfits':
+        if self._format == 0:
+            # null format
+            return None
+        elif self.format == 'sextrfits':
             return self.data['ERRX2WIN_IMAGE']
         elif self.format == 'sepnpy':
             # The sep documentation says this is "Second Moment Errors",
@@ -244,7 +265,10 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
     @property
     def vary( self ):
         """A numpy array with variances on x position"""
-        if self.format == 'sextrfits':
+        if self._format == 0:
+            # null format
+            return None
+        elif self.format == 'sextrfits':
             return self.data['ERRY2WIN_IMAGE']
         elif self.format == 'sepnpy':
             # The sep documentation says this is "Second Moment Errors",
@@ -258,7 +282,10 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
     @property
     def ra( self ):
         """A numpy array with RA in degrees, or None if not available"""
-        if self.format == 'sextrfits':
+        if self._format == 0:
+            # null format
+            return None
+        elif self.format == 'sextrfits':
             return self.data['X_WORLD']
         elif self.format == 'sepnpy':
             return None
@@ -270,7 +297,9 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
     @property
     def dec( self ):
         """A numpy array with Dec in degrees, or None if not available"""
-        if self.format == 'sextrfits':
+        if self._format == 0:
+            return None
+        elif self.format == 'sextrfits':
             return self.data['Y_WORLD']
         elif self.format == 'sepnpy':
             return None
@@ -282,12 +311,20 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
     @property
     def errx( self ):
         """A numpy array with uncertainties on x position"""
-        return np.sqrt( self.varx ) if self.varx is not None else None
+        if self.format == 0:
+            # null format
+            return None
+        else:
+            return np.sqrt( self.varx ) if self.varx is not None else None
 
     @property
     def erry( self ):
         """A numpy array with uncertainties on y position"""
-        return np.sqrt( self.vary ) if self.vary is not None else None
+        if self.format == 0:
+            # null format
+            return None
+        else:
+            return np.sqrt( self.vary ) if self.vary is not None else None
 
     @property
     def good( self ):
@@ -311,6 +348,10 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         and should be investigated; Issue #112).
 
         """
+
+        if self.format == 0:
+            # null format
+            return None
 
         if self.format != 'sextrfits':
             raise NotImplementedError( f"good not currently implemented for format {self.format}" )
@@ -369,6 +410,10 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
 
         """
 
+        if self._format == 0:
+            # null format
+            return None
+
         if self._is_star is not None:
             return self._is_star
 
@@ -409,6 +454,10 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
           flux, dflux : numpy arrays
         """
 
+        if self._format == 0:
+            # null format
+            return None
+
         if self.format != 'sextrfits':
             raise NotImplementedError( f"Not currently implemented for format {self.format}" )
 
@@ -439,6 +488,10 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
 
         """
 
+        if self._format == 0:
+            # null format
+            return None
+
         if self.format != 'sextrfits':
             raise NotImplementedError( f"Not currently implemented for format {self.format}" )
         if 'FLUX_PSF' not in self.data.dtype.names:
@@ -448,6 +501,10 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
 
     def calc_aper_cors( self, min_stars=20 ):
         """Return a list of aperture corrections to go with self.aper_rads"""
+
+        if self._format == 0:
+            raise RuntimeError( "Can't calculate aperture corrections for null source list" )
+
         apercors = []
         for i, rad in enumerate( self.aper_rads ):
             if i == self.inf_aper_num:
@@ -493,6 +550,9 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
           apercor: float
 
         """
+
+        if self._format == 0:
+            raise RuntimeError( "Can't calculate aperture corrections for null source list" )
 
         if inf_aper_num is None:
             inf_aper_num = self.inf_aper_num
@@ -552,6 +612,9 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
             Will return None if no zero point available
 
         """
+
+        if self._format == 0:
+            raise RuntimeError( "Can't estimate limiting magnitude for null source list" )
 
         if zp is None:
             # We can't just search the database, because the zp is not necessarily unique.
@@ -614,6 +677,10 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
              If None, will load the file retunred by self.get_fullpath()
 
         """
+
+        if self._format == 0:
+            # Null format
+            return
 
         if filepath is None:
             filepath = self.get_fullpath( nofile=False )
@@ -711,6 +778,8 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
             filename += '.npy'
         elif self.format == 'sextrfits':
             filename += '.fits'
+        elif self.format == 'null':
+            filename += '.no_file'
         else:
             raise TypeError( f"Unable to create a filepath for sources file of type {self.format}" )
 
@@ -729,6 +798,10 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
              the filename.
 
         """
+
+        if self._format == 0:
+            # Null format
+            return
 
         if self.data is None:
             raise ValueError("Cannot save source list without data")
@@ -892,6 +965,10 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
            If the file exists, overwrite it
 
         """
+
+        if self._format == 0:
+            raise RuntimeError( "Can't get a region file from a null source list." )
+
         ensure_file_does_not_exist( regfile, delete=clobber )
 
         if isinstance( whichsources, str ):
@@ -979,20 +1056,3 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
                 output.extend( [ ( model, row[0] ) for row in rows ] )
 
         return output
-
-
-    def show(self, **kwargs):
-        """Show the source positions on top of the image.
-
-        This is a convenience function that uses the Image.show() method.
-        The arguments are passed into the Image.show() method.
-
-        """
-        import matplotlib.pyplot as plt
-
-        raise NotImplementedError( "This is broken. needs to be fixed." )
-
-        if self.image is None:
-            raise ValueError("Can't show source list without an image")
-        self.image.show(**kwargs)
-        plt.plot(self.x, self.y, 'ro', markersize=5, fillstyle='none')

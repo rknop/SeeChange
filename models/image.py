@@ -12,6 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy import orm
 
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as sqlUUID
 from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.exc import IntegrityError
@@ -53,7 +54,28 @@ from models.enums_and_bitflags import (
 
 import util.config as config
 
-from improc.tools import sigma_clipping
+
+# one-to-one link of trimmed images to their parent(s)
+image_trim_parent = sa.Table(
+    'image_trim_parent',
+    Base.metadata,
+    sa.Column('image_id',
+              sqlUUID,
+              sa.ForeignKey('images._id', ondelete="RESTRICT", name="image_trim_image_fkey" ),
+              index=True,
+              nullable=False,
+              primary_key=True ),
+    sa.Column( 'parent_image_id',
+               sqlUUID,
+               sa.ForeignKey('images._id', ondelete="RESTRICT", name="image_trim_parent_image_fkey" ),
+               nullable=False,
+               index=True ),
+    sa.Column( 'parent_wcs_id',
+               sqlUUID,
+               sa.ForeignKey('world_coordinates._id', ondelete="RESTRICT", name="image_trim_parent_wcs_fkey" ),
+               nullable=True,
+               index=True ),
+)
 
 
 class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, HasBitFlagBadness):
@@ -1179,12 +1201,33 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
     def __str__(self):
         return self.__repr__()
 
-    def trim(self, x0, x1, y0, y1, wcs=None, copy_header=False ):
-        """Trim the image.
+    def trim( self, x0, x1, y0, y1, wcs=None, save_prov=False, provtag=None,
+              provenance=None, save_to_db=False, pgdb=None ):
+        """Return an Image (etc.) that's a cutout of this image.
 
         Returns a new Image with a trimmed data, weight, and flags
         array.  If wcs is given (strongly recommended) will update all
-        ra/dec fields, otherwise they will be copied from this object.
+        coordate (ra/dec, etc.) fields, otherwise they will be copied
+        from this object... which means that the coordinate fields will
+        be quite wrong in the returned Image.
+
+        The new Image will have its filepath set to a call to the result
+        of self.invent_filepath(), with "_{x}_{y}" (the center of the
+        trim region) appended before the suffix.  (This is sufficient to
+        make the image unique, because the width and height are in the
+        provenance.)
+
+        If self.provenance_id is not None, then a Provenance will be
+        loaded or created for the trimmed image which has process
+        "Image.trim" and parameters { "width": x1-x0, "height": y1-y0,
+        "used_wcs": wcs is not None }.  It will have
+        self.provenance_id as an upstream.  If save_prov is True, this
+        provenance will be saved to the databse.  If provtag is not
+        None, this provenance will be tagged with the indicated tag.  If
+        there are any conflicts in all of this, an exception will be
+        raised.
+
+        No FITS header copying is done.
 
         Parameters
         ----------
@@ -1197,35 +1240,150 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
              to be right for the trimmed object (assuming the wcs is
              right).  Will also return the wcs for the trimmed image.
 
-          copy_header: bool, default False
-             If True, then the header of the original image is included
-             as the header of the trimmd image.  Warning: no editing of
-             any header fields is done, so this is scary.
+          save_prov: bool, default False
+             If True, make sure the Provenance of the trimmed image is
+             saved to the database.
+
+          provtag: str, deafult None
+             If not None, tag the Provenance of the trimmed image with
+             this tag.  Requires save_prov to be True.
+
+          provenance: Provenance, default None Just for efficiency; pass
+             the Provenance that goes with self.provenance_id here.  If
+             this is None, and the Provenance is needed, it will call
+             Provenance.get_by_id.
+
+          save_to_db: bool, default False
+             If True, then save everything created to the database.  If
+             this is True, requires save_prov to also be True.  (Note
+             that provenances may be separately saved if this is False
+             based the value of save_prov.)  If you intend on saving to
+             the database, it's a good idea to do this here rather than
+             yourself, because this makes sure all the fiddly stuff gets
+             done.  But, this defaults to False so that callers can
+             collect things for efficiency.
+
+             For this to work, both self and wcs (if wcs is not None)
+             must already be saved to the database.
+
+          pgdb: PGDB, psycopg.Connection, psycopg.Cursor, or sa Session, default None
+             Database connection to use.  If not given, will open and
+             close a new one if one is needed.
 
         Returns
         -------
-          Image or Image, WorldCoordinates
+          ( Image, Provenance ) or ( Image, SourceList, WorldCoordinates, [Provenance, Provenance, Provenance] )
 
-            If wcs is None, just returns an Image.  If wcs is non-None, returns both.
+            If wcs is None, just returns an Image and the new image
+            Provenance (or None if there is no provenance for the new
+            image).  If wcs is non-None, returns the image, a SourceList
+            (which will be a null-type source list with no actual
+            sources, only used for database bookkeeping) and a
+            WorldCoordinates, and then a list of the three provenances
+            in order.
 
         """
 
-        if not all( isinstance( numbers.Integral, i ) for i in [ x0, x1, y0 ,y1 ] ):
-            raise TypeErrror( "x0, x1, y0, y1 must all be integers." )
+        _pgdb = pgdb    # ....really, it's a good idea
 
+        # a bit of validation
+        if save_to_db and ( not save_prov ):
+            raise ValueError( "save_to_db requires save_prov" )
+        if save_prov and ( self.provenance_id is None ):
+            raise ValueError( "save_prov was set but self.provenance_id is None" )
+        if ( provtag is not None ) and ( not save_prov ):
+            raise ValueError( "Passing a provtag requires save_prov=True" )
+        if not all( isinstance( numbers.Integral, i ) for i in [ x0, x1, y0 ,y1 ] ):
+            raise TypeError( "x0, x1, y0, y1 must all be integers." )
         if ( x0 < 0 ) or ( x1 > self.data.shape[1] ) or ( y0 < 0 ) or ( y1 > self.data.shape[0] ):
             raise ValueError( "Trim limits [{x0}:{x1}, {y0}:y1}] are outside image borders." )
-        
+
+        # Make the image
         newimage = Image.copy( self, no_copy_data=True )
-        newimage.data = self.data[y0:y1, x0:x1].copy()
-        # newimage.weight = self.weight[7y0
-        
+        newimage.data = self.data[ y0:y1, x0:x1 ].copy()
+        newimage.weight = self.weight[ y0:y1, x0:x1 ].copy() if self.weight is not None else None
+        newimage.flags = self.flags[ y0:y1, x0:x1 ].copy() if self.flags is not None else None
 
-          
+        xcen = int( np.floor( (x0 + x1) / 2. ) )
+        ycen = int( np.floor( (y0 + y1) / 2. ) )
+        newimage.filepath = newimage.invent_filepath( extra=f"_{xcen}_{ycen}" )
 
-    
-    def invent_filepath(self, name_convention=None ):
+        # Make the subset wcs if necessary
+        if wcs is not None:
+            # Imports here to avoid circular imports
+            from models.source_list import SourceList
+            newwcs = wcs[ y0:y1, x0:x1 ]
+            newsources = SourceList( image=newimage, format='null' )
+            newwcs.sources_id = newsources.id
+            newwcs.set_corners_from_wcs( newwcs.wcs, width=x1-x0, height=y1-y0, setradec=True, mask=newimage.flags )
+            newimage.set_corners_from_wcs( newwcs.wcs, width=x1-x0, height=y1-y0, setradec=True, mask=newimage.flags )
 
+        # Make the provenances if necessary
+        improv = None
+        provs = []
+        if self.provenance_id is not None:
+            with PGDB( _pgdb ) as pgdb:
+                improv = Provenance( code_version_id=Provenance.get_code_version( 'Image.trim', session=pgdb ).id,
+                                     process='Image.trim',
+                                     parameters={ 'width': x1-x0, 'height': y1-y0, 'used_wcs': wcs is not None },
+                                     upstreams=[ ( provenance if provenance is not None
+                                                   else Provenance.get_by_id( self.provenance_id, session=pgdb ) ) ]
+                                    )
+                provs.append( improv )
+                if save_prov:
+                    improv.insert_if_needed( session=pgdb )
+
+                if wcs is not None:
+                    srcprov = Provenance( code_version_id=Provenance.get_code_version( 'Image.trim.nullsources',
+                                                                                       session=pgdb ).id,
+                                          process='Image.trim.nullsources',
+                                          upstreams=[ improv ] )
+                    wcsprov = Provenance( code_version_id=Provenance.get_code_version( 'Image.trim.wcs',
+                                                                                       session=pgdb ).id,
+                                          process='Image.trim.wcs',
+                                          upstreams=[ srcprov ] )
+                    provs.append( srcprov )
+                    provs.append( wcsprov )
+                    if save_prov:
+                        srcprov.insert_if_needed( session=pgdb )
+                        wcsprov.insert_if_needed( session=pgdb )
+
+                if provtag is not None:
+                    Provenance.addtag( provtag, provs, pgdb=pgdb )
+
+                if save_to_db:
+                    # It's safe to have this inside the "if
+                    # self.provenance_id is not None" block because the
+                    # validation at the top of this function will have
+                    # (indirectly) caused an error if save_to_db is true
+                    # and self.provenance_id is not.
+                    newimage.save()
+                    newimage.insert( session=pgdb, nocommit=True )
+                    if wcs is not None:
+                        # newsources is a null souce list so there's
+                        #   nothing to save.  However, the database
+                        #   requires a non-null filepath, so make one.
+                        #   (It will have extension ".no_file".)
+                        newsources.filepath = newsources.invent_filepath( image=newimage, provenance=srcprov )
+                        newsources.insert( session=pgdb, nocommit=True )
+                        newwcs.save( image=newimage )
+                        newwcs.insert( session=pgdb, nocommit=True )
+
+                    pgdb.execute( sql.SQL( "INSERT INTO image_trim_parent(image_id,parent_image_id,parent_wcs_id) "
+                                           "VALUES ({imid},{parid},{wcsid})" )
+                                  .format( imid=newimage.id,
+                                           parid=self.id,
+                                           wcsid=wcs.id if wcs is not None else None )
+                                 )
+                    pgdb.commit()
+
+        if wcs is None:
+            return newimage, improv
+        else:
+            return newimage, newsources, newwcs, provs
+
+
+    def invent_filepath( self, name_convention=None, extra=None ):
         """Create a relative file path for the object.
 
         Create a file path relative to data root for the object based on its
@@ -1234,12 +1392,34 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         (e.g., SourceList) will just append another string to the Image
         filename.
 
-        Coadded or difference images (that have a list of upstream_images)
-        will also be appended a "u-tag" which is just the letter u
-        (for "upstreams") follwed by the first 6 characters of the
-        SHA256 hash of the upstream image filepaths.  This is to make
-        sure that the filepath is unique for each combination of
-        upstream images.
+        Coadded or difference images (that have a list of
+        upstream_images) will also be appended a "u-tag" which is just
+        the letter u (for "upstreams") follwed by the first 6 characters
+        of the SHA256 hash of the upstream image filepaths.  This is to
+        make sure that the filepath is unique for each combination of
+        upstream images.  Furthermore, they will have the RA and Dec (to
+        4 decimal places) appended, so that filenames will be unique for
+        coadds that happen to include exactly the same upstream images
+        but that are centered differently.  (TODO: same center,
+        different alignments!  Issue #541.)
+
+        Does NOT set self.filepath, just returns what you might want to
+        set it to.
+
+        Parameters
+        ----------
+           name_convention: str, default None
+              A properly-formatted naming convention.  Uses
+              storage.image.name_convention from the config file if this
+              isn't given.
+
+           extras: str, default None If not None, this will be appended
+              ot the end of the filepath (but before stuff that's added
+              for coadded or difference images, described above).
+
+        Returns
+        -------
+           str
 
         """
         prov_hash = inst_name = im_type = date = time = filter = ra = dec = dec_int_pm = project = ''
@@ -1289,6 +1469,9 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             name_convention = cfg.value('storage.images.name_convention', default=None)
         if name_convention is None:
             name_convention = default_convention
+
+        if extra is not None:
+            name_convention += extra
 
         filepath = name_convention.format(
             inst_name=inst_name,
@@ -1348,7 +1531,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             filepath += utag
 
             filepath += f"_{ra:08.4f}{dec:+08.4f}"
-            
+
         return filepath
 
 
@@ -2439,25 +2622,6 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
     @nanscore.setter
     def nanscore(self, value):
         self._nanscore = value
-
-    def show(self, **kwargs):
-        """Display the image using the matplotlib imshow function.
-
-        Parameters
-        ----------
-        **kwargs: passed on to matplotlib.pyplot.imshow()
-            Additional keyword arguments to pass to imshow.
-        """
-        import matplotlib.pyplot as plt
-        mu, sigma = sigma_clipping(self.data)
-        defaults = {
-            'cmap': 'gray',
-            # 'origin': 'lower',
-            'vmin': mu - 3 * sigma,
-            'vmax': mu + 5 * sigma,
-        }
-        defaults.update(kwargs)
-        plt.imshow(self.nandata, **defaults)
 
 
 if __name__ == '__main__':

@@ -93,7 +93,7 @@ class ParsSubtractor(Parameters):
                           "the run() method.  This is used in the Lightcurve pipeline." ),
             critical=True
         )
-        
+
         self.trust_aligned_images = self.add_par(
             'trust_aligned_images',
             True,

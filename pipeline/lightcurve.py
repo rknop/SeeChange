@@ -3,7 +3,7 @@ import uuid
 from pipeline.parameters import Parameters
 
 
-class ParsLightcurve(Parametrs):
+class ParsLightcurve(Parameters):
     def __init__( self, **kwargs ):
         super().__init__()
 
@@ -91,7 +91,7 @@ class ParsLightcurve(Parametrs):
 
         self.object_id = self.add_par(
             name = "object_id",
-            default = None
+            default = None,
             par_types = ( uuid.UUID, str, None ),
             docstring = ( "The id of the object to build a lightcurve for.  Specify either this, object_name, "
                           "or ra and dec." ),
@@ -109,7 +109,7 @@ class ParsLightcurve(Parametrs):
 
         self.ra = self.add_par(
             name = "ra",
-            default = None
+            default = None,
             par_types = ( float, None ),
             docstring = ( "The ra of the object to build a lightcurve for.  Specify exactly one of object_id, "
                           "object_name, or (ra and dec)." ),
@@ -118,7 +118,7 @@ class ParsLightcurve(Parametrs):
 
         self.dec = self.add_par(
             name = "dec",
-            default = None
+            default = None,
             par_types = ( float, None ),
             docstring = ( "The ra of the object to build a lightcurve for.  Specify exactly one of object_id, "
                           "object_name, or (ra and dec)." ),

@@ -158,6 +158,9 @@ class CutoutsFormatConverter( FormatConverter ):
 
 class SourceListFormatConverter( EnumConverter ):
     _dict = {
+        0: 'null',    # Not actually a source list, but a database entry that allows us to directly associate
+                      # a WorldCoordinates with an image without having to completely redesign our whole
+                      # database structure
         1: 'sepnpy',
         2: 'sextrfits',
         3: 'filter',  # when manually constructing a source table from a matched-filter image (e.g., on the subtraction)

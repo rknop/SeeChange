@@ -86,6 +86,9 @@ class CodeVersion(Base, UUIDMixin):
         'coaddition' : (0,8,0),
         'positioning': (0,1,0),
         'flat_bias_builder': (0,5,0),
+        'Image.trim': (0,1,0),
+        'Image.trim.nullsources': (0,1,0),
+        'Image.trim.wcs': (0,1,0),
 
         # The next couple are processes whose direct data products
         #   are not saved to the database.  If their version change,

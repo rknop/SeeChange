@@ -1199,7 +1199,7 @@ class CoaddPipeline:
              "absolute" or "other" then we also need to look at the
              image's position and alignment... which could be
              nontrivial.  See Issue #541.
-     
+
 
         Returns
         -------

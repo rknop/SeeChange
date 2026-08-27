@@ -1,6 +1,7 @@
 import os
 import textwrap
 import pathlib
+import numbers
 
 import numpy as np
 
@@ -69,6 +70,22 @@ class WorldCoordinates(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness, Spat
 
         # manually set all properties (columns or not)
         self.set_attributes_from_dict(kwargs)
+
+    def __getitem__( self, subset ):
+        if not ( isinstance( subset, tuple ) and ( len(subset) == 2) and
+                 isinstance( subset[0], slice ) and isinstance( subset[1], slice ) and
+                 ( subset[0].step is None ) and ( subset[1] is None ) and
+                 isinstance( subset[0].start, numbers.Integral ) and
+                 isinstance( subset[0].stop, numbers.Integral ) and
+                 isinstance( subset[1].start, numbers.Integral ) and
+                 isinstance( subset[1].stop, numbers.Integral )
+                ):
+            raise TypeError( "When indexing a WorldCoordinates, must index with two "
+                             "colon-separated ranges of integers." )
+
+        newwcs = WorldCoordinates()
+        newwcs.wcs = self.wcs[ subset[1].start:subset[1].stop, subset[0].start:subset[0].start ]
+        return newwcs
 
     def _get_inverse_badness(self):
         """Get a dict with the allowed values of badness that can be assigned to this object"""

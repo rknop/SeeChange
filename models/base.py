@@ -913,25 +913,13 @@ class SeeChangeBase:
 
         _ = self.id    # Make sure id is generated
 
-        # Doing this manually for a few reasons.  First, doing a
-        #  Session.add wasn't always just doing an insert, but was doing
-        #  other things like going to the database and checking if it
-        #  was there and merging, whereas here we want an exception to
-        #  be raised if the row already exists in the database.  Second,
-        #  to work around that, we did orm.make_transient( self ), but
-        #  that wiped out the _id field, and I'm nervous about what
-        #  other unintended consequences calling that SQLA function
-        #  might have.  Third, now that we've moved defaults to be
-        #  database-side defaults, we'll get errors from SQLA if those
-        #  fields aren't filled by trying to do an add, whereas we
-        #  should be find with that as the database will just load
-        #  the defaults.
-        #
-        # In any event, doing this manually dodges any weirdness associated
-        #  with objects attached, or not attached, to sessions.
-        #
-        # (Even better, unless a sa Session is passed, bypass sqlalchemy
-        # altogether by just usgin PGDB.)
+        # Do this manually.  SQLAlchemy's Session.add was doing all
+        # kinds of stuff behind the scenes that made it impossible to
+        # really know what was happening to the database, was raising
+        # errors, and was generally doing all the things that make me
+        # wish that I had never even heard of SQLAlchemy in the first
+        # place.  We *want* an exception if we try to insert something
+        # that just already exists.
 
         cols, values = self._get_cols_and_vals_for_insert()
         subdict = { c: v for c,v in zip( cols, values ) if c != 'modified' }
@@ -1945,7 +1933,7 @@ class FileOnDiskMixin:
         return fullname
 
 
-    def save(self, data, component=None, overwrite=True, exists_ok=True, verify_md5=True, no_archive=False ):
+    def save(self, data, component=None, overwrite=True, exists_ok=True, verify_md5=True, no_archive=False):
         """Save a file to disk, and to the archive.
 
         Does not write anything to the database.  (At least, it's not supposed to....)
