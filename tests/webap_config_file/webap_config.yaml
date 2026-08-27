@@ -1,0 +1,42 @@
+webap:
+  webap_url: https://webap:8081/
+  flask_secret_key: 'dgzd0wy04gr83pkttq9md13rl1xe0f3n9jnk5tbtpfzflfh4gcmyhjal28g4d4om'
+  flask_secret_key_file: null
+  verbose: false
+
+path:
+  data_root: /tmp
+  data_temp: /tmp
+
+# storage:
+#   images:
+#     format: fits
+#     single_file: false
+#     name_convention: "{ra_int:03d}/{inst_name}_{date}_{time}_{section_id}_{filter}_{im_type}_{prov_hash:.6s}"
+
+db:
+  engine: postgresql+psycopg
+  user: postgres
+  password: fragile
+  password_file: null
+  host: postgres
+  port: 5432
+  database: seechange
+  echoqueries: false
+  alwaysexplain: false
+  alwaysanalyze: false
+
+archive:
+  archive_url: null
+  local_read_dir: /archive-storage/base/test
+
+email:
+  email_from: 'Seechange <nobody@nowhere.org>'
+  email_subject: 'Seechange password reset'
+  email_system_name: 'Seechange'
+  smtp_server: 'mailhog'
+  smtp_port: 1025
+  smtp_use_ssl: false
+  smtp_username: null
+  smtp_password: null
+  smtp_password_file: null
