@@ -254,15 +254,7 @@ def test_multiple_images_badness(
                 bkg.insert( session=session )
                 wcs = WorldCoordinates( sources_id=srclist.id, provenance_id=provenance_extra.id,
                                         filepath=f'foo{extra}_wcs', md5sum=uuid.uuid4() )
-                # Fill in the rest of the fields of wcs that can't be null
-                for radec in [ 'ra', 'dec' ]:
-                    setattr( wcs, radec, 0. )
-                    for good in [ 'corner', 'good' ]:
-                        for corner in [ '00', '01', '10', '11' ]:
-                            setattr( wcs, f'{radec}_{good}_{corner}', 0. )
-                    for good in [ '', 'good_' ]:
-                        for minmax in [ 'min', 'max' ]:
-                            setattr( wcs, f'{good}{minmax}{radec}', 0. )
+                wcs._fill_bogus_coordinate_fields()
                 wcs.insert( session=session )
                 zp = ZeroPoint( wcs_id=wcs.id, background_id=bkg.id, zp=25., dzp=0.1,
                                 provenance_id=provenance_extra.id )

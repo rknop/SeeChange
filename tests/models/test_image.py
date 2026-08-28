@@ -766,17 +766,6 @@ def test_image_from_reduced_exposure( decam_reduced_origin_exposure_loaded_in_db
     assert img._flags.sum() == 266089
 
 
-def fill_annoying_non_null_wcs_columns( wcs ):
-    for radec in [ 'ra', 'dec' ]:
-        setattr( wcs, radec, 0. )
-        for good in [ 'corner', 'good' ]:
-            for corner in [ '00', '01', '10', '11' ]:
-                setattr( wcs, f'{radec}_{good}_{corner}', 0. )
-        for good in [ '', 'good_' ]:
-            for minmax in [ 'min', 'max' ]:
-                setattr( wcs, f'{good}{minmax}{radec}', 0. )
-
-
 # This next test doesn't actually test coadding images, it tests that the
 #   database tracking of a coadded image works
 def test_image_coadd( sim_image_r1, sim_image_r2, sim_image_r3, provenance_base ):
@@ -805,7 +794,7 @@ def test_image_coadd( sim_image_r1, sim_image_r2, sim_image_r3, provenance_base 
             bgs.append( bg )
             wcs = WorldCoordinates( sources_id=sl.id, provenance_id=provenance_base.id,
                                     filepath=f'foo_wcs{i}', md5sum=uuid.uuid4() )
-            fill_annoying_non_null_wcs_columns( wcs )
+            wcs._fill_bogus_coordinate_fields()
             wcs.insert()
             wcses.append( wcs )
             zp = ZeroPoint( wcs_id=wcs.id, background_id=bg.id, zp=25., dzp=0.1,
@@ -959,7 +948,7 @@ def test_image_subtraction(sim_exposure1, sim_exposure2, provenance_base, proven
         im1bg.insert()
         im1wcs = WorldCoordinates( sources_id=im1sl.id, provenance_id=provenance_base.id,
                                    filepath='foo_wcs1', md5sum=uuid.uuid4() )
-        fill_annoying_non_null_wcs_columns( im1wcs )
+        im1wcs._fill_bogus_coordinate_fields()
         im1wcs.insert()
         im1zp = ZeroPoint( wcs_id=im1wcs.id, background_id=im1bg.id, zp=25., dzp=0.1, provenance_id=provenance_base.id )
         im1zp.insert()
@@ -972,7 +961,7 @@ def test_image_subtraction(sim_exposure1, sim_exposure2, provenance_base, proven
         im2bg.insert()
         im2wcs = WorldCoordinates( sources_id=im2sl.id, provenance_id=provenance_base.id,
                                    filepath='foo_wcs2', md5sum=uuid.uuid4() )
-        fill_annoying_non_null_wcs_columns( im2wcs )
+        im2wcs._fill_bogus_coordinate_fields()
         im2wcs.insert()
         im2zp = ZeroPoint( wcs_id=im2wcs.id, background_id=im2bg.id, zp=25., dzp=0.1, provenance_id=provenance_base.id )
         im2zp.insert()

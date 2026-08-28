@@ -70,6 +70,20 @@ class WorldCoordinates(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness, Spat
         # manually set all properties (columns or not)
         self.set_attributes_from_dict(kwargs)
 
+
+    def _fill_bogus_coordinate_fields( self ):
+        """This is used in tests to make sure some fields aren't NULL."""
+
+        for radec in [ 'ra', 'dec' ]:
+            setattr( self, radec, -999. )
+            for good in [ 'corner', 'good' ]:
+                for corner in [ '00', '01', '10', '11' ]:
+                    setattr( self, f'{radec}_{good}_{corner}', -999. )
+            for good in [ '', 'good_' ]:
+                for minmax in [ 'min', 'max' ]:
+                    setattr( self, f'{good}{minmax}{radec}', -999. )
+
+
     def _get_inverse_badness(self):
         """Get a dict with the allowed values of badness that can be assigned to this object"""
         return catalog_match_badness_inverse
