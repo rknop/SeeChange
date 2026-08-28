@@ -15,7 +15,7 @@ _rundir = pathlib.Path(__file__).parent
 class TestConfig:
     @pytest.fixture(scope='class')
     @classmethod
-    def cfg(self):
+    def cfg(cls):
         # We don't want to set the default config, because the config
         #   here is just for these tests.  All the other tests need
         #   what's in tests/seechange_config_test.yaml

@@ -344,7 +344,7 @@ def zogy_subtract(image_ref, image_new, psf_ref, psf_new, noise_ref, noise_new, 
     del V_ast
 
     zero_mask = V_S == 0  # get rid of zeros
-    V_S_sqrt = np.sqrt(V_S, where=~zero_mask)
+    V_S_sqrt = np.sqrt(V_S, where=~zero_mask, out=None)
     V_S_sqrt[zero_mask] = 1
     S_corr = S / V_S_sqrt
     Z_corr = Z / V_S
