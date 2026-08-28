@@ -1013,7 +1013,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         output.end_mjd = max([image.end_mjd for image in images])  # exposure ends are not necessarily sorted
                                                                    # ...but that only matters in pathological cases
 
-        # ...not obvious this is the right thing to do
+        # ...not obvious this is the right thing to do.
+        # (In fact, I want to get rid of Image.inf -- see Issue #542
         output.info = images[index].info
         # TODO? : this next one is woeful.  Coordinates should be updated
         #   to come from the alignment target image, but lots of
@@ -1023,12 +1024,12 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         #   up getting replaced if we use the swarp coaddition method,
         #   and the other methods use an index, so probably we don't
         #   really need to worry about it.)
-        # output.header = images[index].header
+        output.header = images[index].header
         #
         # ...in fact, let's just set an empty header.  That way, we don't have to
         #   read image, and this will work in tests where there are Image
         #   objects without associated files.
-        output.header = fits.Header()
+        # output.header = fits.Header()
 
         output.format = config.Config.get().value( 'storage.images.format' )
 
