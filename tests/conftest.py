@@ -1013,15 +1013,7 @@ def bogus_wcs( bogus_sources_and_psf ):
                             provenance_id=prov.id,
                             filepath='fake_bogus_wcs.txt',
                             md5sum=uuid.uuid4() )
-    # Gotta fill in a whole bunch of non-nullable fields...
-    for radec in [ 'ra', 'dec' ]:
-        setattr( wcs, radec, 0. )
-        for good in [ 'corner', 'good' ]:
-            for corner in [ '00', '01', '10', '11' ]:
-                setattr( wcs, f'{radec}_{good}_{corner}', 0. )
-        for good in [ '', 'good_' ]:
-            for minmax in [ 'min', 'max' ]:
-                setattr( wcs, f'{good}{minmax}{radec}', 0. )
+    wcs._fill_bogus_coordinate_fields()
 
     wcs.insert()
 

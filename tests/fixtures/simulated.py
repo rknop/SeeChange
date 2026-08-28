@@ -830,14 +830,7 @@ def sim_lightcurve_reference_image_unsaved( sim_lightcurve_image_parameters, sim
     ds.wcs.sources_id = ds.sources.id
     # This is a cheat, as we didn't really use the params in the provenance, but, whatevs
     ds.wcs.provenance_id = ds.prov_tree['astrocal'].id
-    for radec in [ 'ra', 'dec' ]:
-        setattr( ds.wcs, radec, 0. )
-        for good in [ 'corner', 'good' ]:
-            for corner in [ '00', '01', '10', '11' ]:
-                setattr( ds.wcs, f'{radec}_{good}_{corner}', 0. )
-        for good in [ '', 'good_' ]:
-            for minmax in [ 'min', 'max' ]:
-                setattr( ds.wcs, f'{good}{minmax}{radec}', 0. )
+    ds.wcs._fill_bogus_coordinate_fields()
 
     # Likewise, make a fake zeropoint, cheating again on provenance
     # (Re: number of stars, there just aren't that many not-deblended
@@ -947,15 +940,7 @@ def sim_lightcurve_image_datastore_maker_factory( sim_lightcurve_image_parameter
         ds.wcs.sources_id = ds.sources.id
         ds.wcs.provenance_id = ds.prov_tree['astrocal'].id
         ds.wcs.save( image=ds.image )
-        for radec in [ 'ra', 'dec' ]:
-            setattr( ds.wcs, radec, getattr( refds.wcs, radec ) )
-            for good in [ 'corner', 'good' ]:
-                for corner in [ '00', '01', '10', '11' ]:
-                    setattr( ds.wcs, f'{radec}_{good}_{corner}', getattr( refds.wcs, f'{radec}_{good}_{corner}' ) )
-            for good in [ '', 'good_' ]:
-                for minmax in [ 'min', 'max' ]:
-                    setattr( ds.wcs, f'{good}{minmax}{radec}', getattr( refds.wcs, f'{good}{minmax}{radec}' ) )
-
+        ds.wcs._fill_bogus_coordinate_fields()
         ds.wcs.insert()
 
         # Likewise, make a fake zeropoint, cheating again on provenance
