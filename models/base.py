@@ -2886,7 +2886,7 @@ class FourCorners:
 
             rows = pgdb.execute( q )
             objs = [ cls(**r) for r in rows ]
-            pgdb.execute_nofetch( sql.SQL( "DROP TABLE {temptable}" ).format( temptable=temptable ) )
+            pgdb.execute_nofetch( sql.SQL( "DROP TABLE {temptable}" ).format( temptable=sql.Identifier(temptable) ) )
             return objs
 
 
@@ -3035,7 +3035,7 @@ class FourCorners:
                                  .format( tab=sql.Identifier(cls.__tablename__),
                                           temptable=sql.Identifier(temptable) ) )
             objs = [ cls(**r) for r in rows ]
-            pgdb.execute_nofetch( sql.SQL( "DROP TABLE {temptable}" ).format( sql.Identifier(temptable) ) )
+            pgdb.execute_nofetch( sql.SQL( "DROP TABLE {temptable}" ).format( temptable=sql.Identifier(temptable) ) )
             return objs
 
 

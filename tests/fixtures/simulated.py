@@ -283,6 +283,7 @@ def sim_reference(provenance_preprocessing, provenance_extraction, provenance_ex
         wcs.wcs.wcs.crval = np.array([ra, dec])
         wcs.provenance_id = provenance_extra.id
         wcs.sources_id = sl.id
+        wcs.set_corners_from_wcs( wcs.wcs, im.width, im.height, setradec=True )
         wcs.save( image=im )
         wcs.insert()
         zp = ZeroPoint()
@@ -829,6 +830,14 @@ def sim_lightcurve_reference_image_unsaved( sim_lightcurve_image_parameters, sim
     ds.wcs.sources_id = ds.sources.id
     # This is a cheat, as we didn't really use the params in the provenance, but, whatevs
     ds.wcs.provenance_id = ds.prov_tree['astrocal'].id
+    for radec in [ 'ra', 'dec' ]:
+        setattr( ds.wcs, radec, 0. )
+        for good in [ 'corner', 'good' ]:
+            for corner in [ '00', '01', '10', '11' ]:
+                setattr( ds.wcs, f'{radec}_{good}_{corner}', 0. )
+        for good in [ '', 'good_' ]:
+            for minmax in [ 'min', 'max' ]:
+                setattr( ds.wcs, f'{good}{minmax}{radec}', 0. )
 
     # Likewise, make a fake zeropoint, cheating again on provenance
     # (Re: number of stars, there just aren't that many not-deblended
@@ -914,6 +923,11 @@ def sim_lightcurve_image_datastore_maker_factory( sim_lightcurve_image_parameter
         # (We also then need to pass input_psf to extractor.run.)
         pipparams['extraction'].update( { 'measure_psf': False } )
         pip = Pipeline( **pipparams )
+        # ....gah.  Because of our whole subconfigs business, we have to fix this now.
+        # Never do this in real code.  This kind of post-hoc parameter editing is
+        # a recipe for trouble; I know it works here because of the internals of the code,
+        # but will probably regret having said that later.
+        pip.extractor.pars.subconfigs['subconfigs']['extragalactic']['measure_psf'] = False
         ds.prov_tree = pip.make_provenance_tree( ds, no_provtag=True, ok_no_ref_prov=True )
 
         ds = pip.extractor.run( ds, input_psf=refds.psf )
@@ -933,6 +947,15 @@ def sim_lightcurve_image_datastore_maker_factory( sim_lightcurve_image_parameter
         ds.wcs.sources_id = ds.sources.id
         ds.wcs.provenance_id = ds.prov_tree['astrocal'].id
         ds.wcs.save( image=ds.image )
+        for radec in [ 'ra', 'dec' ]:
+            setattr( ds.wcs, radec, getattr( refds.wcs, radec ) )
+            for good in [ 'corner', 'good' ]:
+                for corner in [ '00', '01', '10', '11' ]:
+                    setattr( ds.wcs, f'{radec}_{good}_{corner}', getattr( refds.wcs, f'{radec}_{good}_{corner}' ) )
+            for good in [ '', 'good_' ]:
+                for minmax in [ 'min', 'max' ]:
+                    setattr( ds.wcs, f'{good}{minmax}{radec}', getattr( refds.wcs, f'{good}{minmax}{radec}' ) )
+
         ds.wcs.insert()
 
         # Likewise, make a fake zeropoint, cheating again on provenance

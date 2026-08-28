@@ -22,10 +22,20 @@ db:
   host: postgres
   port: 5432
   database: seechange
+
+  sa_connect_timeout: 10
+  sleept: 0.25
+  sleepmin: 0.125
+  sleepfac: 2
+  sleepfuzz: 0.1
+  sleepmax: 4
+
   echoqueries: false
   alwaysexplain: false
   alwaysanalyze: false
 
+  
+  
 archive:
   archive_url: null
   local_read_dir: /archive-storage/base/test

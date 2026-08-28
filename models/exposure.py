@@ -376,7 +376,7 @@ class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBad
            should probably only be used in specific tests.
 
         """
-        FileOnDiskMixin.__init__(self, **kwargs)
+        FileOnDiskMixin.__init__(self, nofile=nofile, **kwargs)
         HasBitFlagBadnessButNoUpstream.__init__(self)
         SeeChangeBase.__init__(self)  # don't pass kwargs as they could contain non-column key-values
 

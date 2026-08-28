@@ -654,6 +654,12 @@ class DECam(Instrument):
                                    dec_corner_00=0., dec_corner_01=0., dec_corner_10=0., dec_corner_11=0.,
                                    minra=0, maxra=0, mindec=0, maxdec=0,
                                    target="", project="" )
+
+                    # Load the image data... mostly to force it to set the width and height fields
+                    #   for the database.  Because of how we downloaded it, we know it's in the right
+                    #   place in the local file store.
+                    image.load()
+
                     # Use FileOnDiskMixin.save instead of Image.save here because we're doing
                     # a lower-level operation.  image.save would be if we wanted to read and
                     # save FITS data, but here we just want to have it make sure the file

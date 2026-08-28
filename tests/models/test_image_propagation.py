@@ -223,7 +223,6 @@ def test_multiple_images_badness(
         sim_exposure3 = Exposure.get_by_id( sim_image3.exposure_id, nofile=True )
         sim_exposure3.set_badness( 'banding' )
         sim_exposure3.upsert()
-        import pdb; pdb.set_trace()
         sim_exposure3.update_downstream_badness()
 
         sim_image3 = Image.get_by_id( sim_image3.id )
@@ -380,7 +379,7 @@ def test_multiple_images_badness(
         # sim_image4 has saturation (3).
 
         # make a coadded image (without including the subtraction sim_image4):
-        sim_image8 = Image.from_image_zps( [zp1, zp2, zp3, zp5, zp6] )
+        sim_image8 = Image.from_image_zps( [zp1, zp2, zp3, zp5, zp6], width=1024, height=1024 )
         sim_image8.is_coadd = True
         upprovs = Provenance.get_batch( [ zp1.provenance_id, zp2.provenance_id,
                                           zp3.provenance_id, zp5.provenance_id,
@@ -415,7 +414,7 @@ def test_multiple_images_badness(
 
         # now let's add the subtraction image to the coadd:
         # make a coadded image (now including the subtraction sim_image4):
-        sim_image8 = Image.from_image_zps( [zp1, zp2, zp3, zp4, zp5, zp6] )
+        sim_image8 = Image.from_image_zps( [zp1, zp2, zp3, zp4, zp5, zp6], width=1024, height=1024 )
         sim_image8.is_coadd = True
         upprovs = Provenance.get_batch( [zp1.provenance_id, zp2.provenance_id,
                                          zp3.provenance_id, zp4.provenance_id,

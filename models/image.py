@@ -866,11 +866,13 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         zps: list of ZeroPoint objects
             The ZeroPoints of the images to combine into a new Image object.
 
-        width: int, required
-            Width of the summed image
+        width: int
+            Width of the summed image.  You must set this if you aren't
+            going to later set the .data property of the created Image.
 
-        height: int, required
-            Height of the summed image
+        height: int
+            Height of the summed image.  You must set this if you aren't
+            going to later set the .data property of the created Image.
 
         index: int, default 0
             The image index in the (mjd sorted) list of upstream images
@@ -1021,7 +1023,12 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         #   up getting replaced if we use the swarp coaddition method,
         #   and the other methods use an index, so probably we don't
         #   really need to worry about it.)
-        output.header = images[index].header
+        # output.header = images[index].header
+        #
+        # ...in fact, let's just set an empty header.  That way, we don't have to
+        #   read image, and this will work in tests where there are Image
+        #   objects without associated files.
+        output.header = fits.Header()
 
         output.format = config.Config.get().value( 'storage.images.format' )
 
@@ -1463,6 +1470,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             if not os.path.isfile(filename):
                 raise FileNotFoundError(f"Could not find the image file: {filename}")
             self._data, self._header = read_fits_image(filename, ext='image', output='both')
+            self.width = self._data.shape[1]
+            self.height = self._data.shape[0]
             for att in self.saved_components:
                 if att == 'image':
                     continue
@@ -1472,6 +1481,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         else:  # load each data array from a separate file
             if self.components is None:
                 self._data, self._header = read_fits_image( self.get_fullpath(nofile=False), output='both' )
+                self.width = self._data.shape[1]
+                self.height = self._data.shape[0]
             else:
                 gotim = False
                 gotweight = False
@@ -1481,6 +1492,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                         raise FileNotFoundError(f"Could not find the image component file: {filename}")
                     if comp == 'image':
                         self._data, self._header = read_fits_image( filename, output='both' )
+                        self.width = self._data.shape[1]
+                        self.height = self._data.shape[0]
                     else:
                         setattr( self, f'_{comp}', read_fits_image( filename, output='data' ) )
 
@@ -1876,7 +1889,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                         )
                     else:
                         WorldCoordinates._find_possibly_containing_temptable(
-                            ra, dec, session=pgdb, prov_id=provenance_ids, corner=corner, limprefix=limprefix )
+                            ra, dec, session=pgdb, prov_id=provenance_ids, corner=corner, limprefix=limprefix,
+                            temptable=f"temp_find_containing_{barf}" )
 
                     pgdb.execute_nofetch(
                         sql.SQL( textwrap.dedent(

@@ -161,6 +161,8 @@ def test_upsert( provenance_base ):
 
         image = Image( _id = uuidstodel[0],
                        provenance_id = provenance_base.id,
+                       width=1024.,
+                       height=2048.,
                        mjd = 60575.474664,
                        end_mjd = 60575.4750116,
                        exp_time = 30.,
