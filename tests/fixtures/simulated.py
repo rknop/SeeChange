@@ -283,7 +283,7 @@ def sim_reference(provenance_preprocessing, provenance_extraction, provenance_ex
         wcs.wcs.wcs.crval = np.array([ra, dec])
         wcs.provenance_id = provenance_extra.id
         wcs.sources_id = sl.id
-        wcs.set_corners_from_wcs( wcs.wcs, im.width, im.height, setradec=True )
+        wcs.set_corners_from_wcs( image=image, setradec=True )
         wcs.save( image=im )
         wcs.insert()
         zp = ZeroPoint()

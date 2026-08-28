@@ -608,11 +608,7 @@ class AstroCalibrator:
                     raise ValueError( f'Unknown solution method {self.pars.solution_method}' )
 
                 # Update the four corners for this WCS object
-                # SADNESS : we have to load the data just to get the width.  (Issue #412)
-                # Not getting it from the flags just in case that is None, though, really,
-                # at this point, it should not be.
-                ds.wcs.set_corners_from_wcs( ds.wcs.wcs, width=ds.image.data.shape[1], height=ds.image.data.shape[0],
-                                             setradec=True, mask=ds.image.flags )
+                ds.wcs.set_corners_from_wcs( setradec=True, mask=ds.image.flags )
 
                 # If an astro cal wasn't previously run on this image,
                 # update the image's ra/dec and corners attributes based on this new wcs

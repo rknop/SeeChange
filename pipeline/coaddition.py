@@ -1254,13 +1254,8 @@ class CoaddPipeline:
                 self.datastore.wcs = WorldCoordinates( sources_id=self.datastore.sources.id,
                                                        provenance_id=self.datastore.prov_tree['astrocal'].id )
                 self.datastore.wcs.wcs = alignment_wcs
-                self.datastore.wcs.set_corners_from_wcs( alignment_wcs, setradec=True,
-                                                         width=self.coadder.pars.absolute_width,
-                                                         height=self.coadder.pars.absolute_height,
-                                                         mask=self.datastore.image.flags )
-                self.datastore.image.set_corners_from_wcs( alignment_wcs, setradec=True,
-                                                           width=self.coadder.pars.absolute_width,
-                                                           height=self.coadder.pars.absolute_height )
+                self.datastore.wcs.set_corners_from_wcs( setradec=True, mask=self.datastore.image.flags )
+                self.datastore.image.set_corners_from_wcs( alignment_wcs, setradec=True )
                 self.datastore.image.astro_cal_done = True
         else:
             SCLogger.info( "CoaddPipeline doing astrometric calibration on the coadded image." )
