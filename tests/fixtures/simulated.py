@@ -830,7 +830,9 @@ def sim_lightcurve_reference_image_unsaved( sim_lightcurve_image_parameters, sim
     ds.wcs.sources_id = ds.sources.id
     # This is a cheat, as we didn't really use the params in the provenance, but, whatevs
     ds.wcs.provenance_id = ds.prov_tree['astrocal'].id
-    ds.wcs._fill_bogus_coordinate_fields()
+    ds.wcs._fill_bogus_coordinate_fields( ra=imageargs['ra'], dec=imageargs['dec'],
+                                          minra=imageargs['minra'], maxra=imageargs['maxra'],
+                                          mindec=imageargs['mindec'], maxdec=imageargs['maxdec'] )
 
     # Likewise, make a fake zeropoint, cheating again on provenance
     # (Re: number of stars, there just aren't that many not-deblended
@@ -906,6 +908,7 @@ def sim_lightcurve_reference_module(  sim_lightcurve_reference_image_unsaved ):
 @pytest.fixture( scope='session' )
 def sim_lightcurve_image_datastore_maker_factory( sim_lightcurve_image_parameters, sim_lightcurve_pipeline_parameters,
                                                   sim_lightcurve_reference_image_unsaved ):
+    imageinfo, imageargs = sim_lightcurve_image_parameters
     refds = sim_lightcurve_reference_image_unsaved
     dsentocleanup = []
 
@@ -940,7 +943,9 @@ def sim_lightcurve_image_datastore_maker_factory( sim_lightcurve_image_parameter
         ds.wcs.sources_id = ds.sources.id
         ds.wcs.provenance_id = ds.prov_tree['astrocal'].id
         ds.wcs.save( image=ds.image )
-        ds.wcs._fill_bogus_coordinate_fields()
+        ds.wcs._fill_bogus_coordinate_fields( ra=imageargs['ra'], dec=imageargs['dec'],
+                                              minra=imageargs['minra'], maxra=imageargs['maxra'],
+                                              mindec=imageargs['mindec'], maxdec=imageargs['maxdec'] )
         ds.wcs.insert()
 
         # Likewise, make a fake zeropoint, cheating again on provenance
