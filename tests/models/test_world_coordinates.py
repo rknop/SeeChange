@@ -191,7 +191,7 @@ def test_save_and_load_wcs(ztf_datastore_uncommitted, provenance_base, provenanc
     origwcs = WCS( ds.image.header )
     wcobj = WorldCoordinates()
     wcobj.wcs = origwcs
-    wcobj.set_corners_from_wc( ds.image )
+    wcobj.set_corners_from_wcs( ds.image )
     wcobj.sources_id = ds.sources.id
     wcobj.provenance_id = provenance_extra.id
 
