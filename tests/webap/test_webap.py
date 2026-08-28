@@ -292,7 +292,7 @@ def test_webap( webap_browser_logged_in, webap_url, decam_datastore, admin_user 
         assert cols[3].text == 'Sci'
         assert cols[4].text == 'ELAIS-E1'
         assert cols[7].text == '1'    # n_images
-        assert cols[8].text == '256'  # detections
+        assert cols[8].text == '258'  # detections
         assert cols[9].text == '10'    # sources
 
         # ======================================================================
@@ -326,7 +326,7 @@ def test_webap( webap_browser_logged_in, webap_url, decam_datastore, admin_user 
         imagesdiv = subcontentdiv.find_element( By.XPATH, "./div" )
         assert imagesdiv.get_attribute('id') == 'exposureimagesdiv'
         assert re.search( r"^Exposure has 1 images and 1 completed subtractions.*"
-                          r"\s10 out of 256 detections pass preliminary cuts",
+                          r"\s10 \(10 good\) out of 258 detections pass preliminary cuts",
                           imagesdiv.text, re.DOTALL ) is not None
         imagestab = imagesdiv.find_element( By.TAG_NAME, 'table' )
         rows = imagestab.find_elements( By.TAG_NAME, 'tr' )
