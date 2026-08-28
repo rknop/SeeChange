@@ -591,28 +591,28 @@ class ExposureImages( BaseView ):
         for imagerow in imagerows:
             myreports = [ r for r in reports if r['section_id'] == imagerow['section_id'] ]
             if len(myreports) == 0:
-                imagerow['report'] == { 'exposure_id': None,
-                                        'section_id': None,
-                                        'start_time': datetime.datetime( 1970, 1, 1 ),
-                                        'finish_time': None,
-                                        'success': False,
-                                        'node_id': None,
-                                        'cluster_id': None,
-                                        'error_type': None,
-                                        'error_step': None,
-                                        'error_message': None,
-                                        'warnings': None,
-                                        'process_memory': {},
-                                        'process_runtime': {},
-                                        'progress_steps_bitflag': 0,
-                                        'products_exist_bitflag': 0,
-                                        'products_committed_bitflag': 0,
-                                        'created_at': datetime.datetime( 1970, 1, 1 ),
-                                        'modiifed': datetime.datetime( 1970, 1, 1 ),
-                                        '_id': None,
-                                        'image_id': None,
-                                        'process_provid': None
-                                       }
+                imagerow['report'] = { 'exposure_id': None,
+                                       'section_id': None,
+                                       'start_time': datetime.datetime( 1970, 1, 1 ),
+                                       'finish_time': None,
+                                       'success': False,
+                                       'node_id': None,
+                                       'cluster_id': None,
+                                       'error_type': None,
+                                       'error_step': None,
+                                       'error_message': None,
+                                       'warnings': None,
+                                       'process_memory': {},
+                                       'process_runtime': {},
+                                       'progress_steps_bitflag': 0,
+                                       'products_exist_bitflag': 0,
+                                       'products_committed_bitflag': 0,
+                                       'created_at': datetime.datetime( 1970, 1, 1 ),
+                                       'modiifed': datetime.datetime( 1970, 1, 1 ),
+                                       '_id': None,
+                                       'image_id': None,
+                                       'process_provid': None
+                                      }
             else:
                 imagerow['report'] = myreports[0]
                 for report in myreports[1:]:
