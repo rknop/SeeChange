@@ -69,22 +69,22 @@ class CodeVersion(Base, UUIDMixin):
     CODE_VERSION_DICT = {
         # The core processes of the pipeline
         'acquire_exposure': (0,2,0),
-        'preprocessing': (0,10,0),
-        'extraction': (0,8,0),
-        'astrocal' : (0,5,0),
-        'photocal' : (0,2,0),
-        'subtraction': (0,3,0),
-        'detection': (0,3,0),
-        'cutting': (0,1,0),
-        'measuring': (0,1,0),
-        'scoring': (0,1,0),
+        'preprocessing': (0,11,0),
+        'extraction': (0,9,0),
+        'astrocal' : (0,6,0),
+        'photocal' : (0,3,0),
+        'subtraction': (0,4,0),
+        'detection': (0,4,0),
+        'cutting': (0,2,0),
+        'measuring': (0,2,0),
+        'scoring': (0,2,0),
         'alerting': (0,1,0),
         'fakeinjection' : (0,2,0),
 
         # Other processes of associated pipelines
-        'referencing' : (0,8,0),
-        'coaddition' : (0,8,0),
-        'positioning': (0,1,0),
+        'referencing' : (0,9,0),
+        'coaddition' : (0,9,0),
+        'positioning': (0,2,0),
         'flat_bias_builder': (0,5,0),
 
         # The next couple are processes whose direct data products
@@ -92,8 +92,8 @@ class CodeVersion(Base, UUIDMixin):
         #   then probably the subtraction, and maybe the coadd,
         #   version should chagne too, as changes in these processes
         #   will affect both subtraction and coadd.
-        'alignment' : (0,3,0),
-        'inpainting' : (0,1,0),
+        'alignment' : (0,4,0),
+        'inpainting' : (0,2,0),
 
         # These are processes for downloading stuff
         #   that we need either to do specific surveys,
