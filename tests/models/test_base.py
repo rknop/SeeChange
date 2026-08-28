@@ -822,6 +822,10 @@ def test_fileondisk_save_multifile_noarchive( diskfile ):
         config.Config._configs[ config.Config._default ] = origcfgobj
 
 
+
+# NOTE : FourCorners.set_corners_from_wcs and FourCornersWithGood.set_corners_from_wcs
+#   are tested in test_world_coordinates.py
+
 def test_fourcorners_sort_radec():
     ras = [ 0, 1, 0, 1 ]
     decs = [ 1, 1, 0, 0 ]

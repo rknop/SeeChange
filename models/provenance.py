@@ -88,9 +88,9 @@ class CodeVersion(Base, UUIDMixin):
         'flat_bias_builder': (0,5,0),
 
         # The next couple are processes whose direct data products
-        #   are not saved to the database.  If their version change,
+        #   are not saved to the database.  If their versions change,
         #   then probably the subtraction, and maybe the coadd,
-        #   version should chagne too, as changes in these processes
+        #   version should change too, as changes in these processes
         #   will affect both subtraction and coadd.
         'alignment' : (0,4,0),
         'inpainting' : (0,2,0),

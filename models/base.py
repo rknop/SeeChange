@@ -3129,19 +3129,28 @@ class FourCorners:
         obj = shapely.Polygon( corners )
         return obj.contains( shapely.Point( ra, dec ) )
 
-    def set_corners_from_wcs( self, wcs, width, height, setradec=False ):
+
+    def set_corners_from_wcs( self, wcs=None, width=None, height=None, setradec=False ):
         """Update the object's four corners (and, optionally, RA/Dec) from a WCS.
+
+        Subclasses may have alternate sets of arguments they can supply.
 
         Parameters
         ----------
-        wcs : astropy.wcs.WCS,
-           The WCS to use.  Required.
+        wcs : astropy.wcs.WCS or WorldCoordinates default None
+           The WCS to use.  If nothing is here in this positional
+           parameter, then the first two positional parameters are
+           actually width and height, and this method will use self.wcs.
+           This will only work if self.wcs exists and is the right kind
+           of thing.
 
-        width : int
-            Width (x-size) of image.  Required.
+        width : int, default None
+            Width (x-size) of image.  Either (width, height) or image is required.
 
-        height : int
-            Height (y-size) of image.  Required
+        height : int, default None
+            Height (y-size) of image.  Either (width, height) or image is required
+
+        image : Image, default None
 
         setradec : bool, default False
            If True, also update the image's ra and dec fields, as well
@@ -3150,11 +3159,16 @@ class FourCorners:
 
         """
 
-        if not isinstance( wcs, astropy.wcs.WCS ):
-            raise TypeError( f"wcs must be a astropy.wcs.WCS, not a {type(wcs)}" )
-        # Try to detect a bad WCS
-        if ( wcs.axis_type_names == ['', ''] ):
-            raise ValueError( "Don't know how to cope with this WCS" )
+        # avoid circular imports
+        from models.world_coordinates import WorldCoordinates
+
+        if any( x is None for x in ( wcs, width, height ) ):
+            raise ValueError( "Must provide all of wcs, width, height" )
+
+        if isinstance( wcs, WorldCoordinates ):
+            wcs = wcs.wcs
+        elif not isinstance( wcs, astropy.wcs.WCS ):
+            raise TypeError( f"Error, wcs must be a WorldCoordinates or a WCS, not a {type(wcs)}" )
 
         ras = []
         decs = []
@@ -3245,7 +3259,12 @@ class FourCornersWithGood( FourCorners ):
 
 
     def set_corners_from_wcs( self, wcs, width=None, height=None, setradec=False, mask=None ):
-        """Update four corners"""
+        """Update four corners.
+
+        If mask is given, use that to set the "good" corners and limits.
+        Otherwise, they will be direct copies of the regular ones.
+
+        """
 
         if ( width is None ) or ( height is None ):
             if mask is None:
@@ -3272,8 +3291,8 @@ class FourCornersWithGood( FourCorners ):
             ys = [ ygood0, ygood1, ygood0, ygood1 ]
             goodras, gooddecs = wcs.pixel_to_world_values( xs, ys )
         else:
-            goodras = None
-            gooddecs = None
+            goodras = ras
+            gooddecs = decs
 
         self.set_corners_minmax( ras, decs, goodras, gooddecs )
 

@@ -111,7 +111,71 @@ class WorldCoordinates(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness, Spat
         return np.mean(pixel_scales) * 3600.0
 
 
+    def set_corners_from_wcs( self, image=None, width=None, height=None, setradec=False, mask=None ):
+        """Update the WorldCoordinates four corners (and optionally, RA/Dec)
+
+        Parameters
+        ----------
+          image: Image, default None
+             Can use this instead of giving width and height.  Must pass
+             one of image, mask, or (width and height).
+
+           width, height: int, default None
+             Size of the image, so that we can figure out where the
+             corners are.  Can omit this if image is not None or mask is
+             not None.
+
+           mask: 2d numpy array, default None
+             If given, where values are not 0, those are considered bad
+             pixels.  The "good" corner and min/max fields will be set
+             such that all pixels on the image outside that region are
+             flagged as bad.  Useful on chips where big swaths are bad
+             (e.g. if the left 200 pixels are vignetted, or something).
+
+             If this is not given, the "good" corners and min/max are
+             not set.
+
+           setradec: bool, default False
+             Set this to True to also update ra and dec (plus ecliptic
+             and galactic coordinates), not just the corners and
+             min/max.
+
+        """
+
+        mskwid = mask.shape[1] if mask is not None else None
+        mskhei = mask.shape[0] if mask is not None else None
+        imwid = None
+        imhei = None
+        if image is not None:
+            if isinstance( image, Image ):
+                imwid = image.width
+                imhei = image.height
+            else:
+                imwid = image.shape[1]
+                imhei = image.shape[0]
+
+        if ( mskwid is not None ) and ( imwid is not None ) and ( ( imwid != mskwid ) or ( imhei != mskhei ) ):
+            raise ValueError( f"Image is {imwid}×{imhei}, but mask is {mskwid}×{mskhei}, which is inconsistent." )
+
+        if ( width is not None ) and ( ( ( imwid is not None ) and ( imwid != width ) )
+                                       or
+                                       ( ( mskwid is not None ) and ( mskwid != width ) )
+                                      ):
+            raise ValueError( f"You passed width {width}, which is not consistent with the image and/or mask" )
+        if ( height is not None ) and ( ( ( imhei is not None ) and ( imhei != height ) )
+                                        or
+                                        ( ( mskhei is not None ) and ( mskhei != height ) )
+                                       ):
+            raise ValueError( f"You passed height {height}, which is not consistent with the image and/or mask" )
+
+        width = width if width is not None else imwid if imwid is not None else None
+        height = height if height is not None else imhei if imhei is not None else None
+
+        super().set_corners_from_wcs( wcs=self.wcs, width=width, height=height, mask=mask, setradec=setradec )
+
+
     def save( self, filename=None, image=None, **kwargs ):
+
         """Write the WCS data to disk.
 
         Updates self.filepath

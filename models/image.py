@@ -1156,6 +1156,18 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         return output
 
 
+    def set_corners_from_wcs( self, wcs=None, width=None, height=None, setradec=False ):
+        if wcs is None:
+            raise ValueError( "Must provide a wcs" )
+        if ( ( ( width is not None ) and ( width != self.width ) ) or
+             ( ( height is not None ) and ( height != self.height ) ) ):
+            raise ValueError( f"You passed width={width} and height={height}, but this is an image "
+                              f"of dimensions {self.width}×{self.height}" )
+        width = self.width if width is None else width
+        height = self.height if height is None else height
+        super().set_corners_from_wcs( wcs, width, height, setradec=setradec )
+
+
     def set_coordinates_to_match_target( self, target ):
         """Make sure the coordinates (RA,dec, corners and WCS) all match the alignment target image. """
 
