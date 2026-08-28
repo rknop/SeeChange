@@ -321,7 +321,7 @@ class FakeInjector:
         try:
             t_start = time.perf_counter()
             ds = DataStore.from_args( *args, **kwargs )
-            self.pars.subconfig_udpate( ds )
+            self.pars.subconfig_update( ds )
             if ds.update_memory_usages:
                 import tracemalloc
                 tracemalloc.reset_peak()

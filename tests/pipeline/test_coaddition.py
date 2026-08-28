@@ -401,7 +401,7 @@ def test_coaddition_run(coadder, ptf_reference_image_datastores, ptf_aligned_ima
 def test_coaddition_pipeline_outputs(ptf_reference_image_datastores, ptf_aligned_image_datastores):
     try:
         pipe = CoaddPipeline( coaddition={ 'cleanup_alignment': False } )
-        coadd_ds = pipe.run( ptf_reference_image_datastores, ptf_aligned_image_datastores )
+        coadd_ds = pipe.run( ptf_reference_image_datastores, aligned_datastores=ptf_aligned_image_datastores )
 
         # check that the second list input was ingested
         assert pipe.aligned_datastores == ptf_aligned_image_datastores
@@ -469,11 +469,12 @@ def test_coadded_reference(ptf_ref, ptf_reference_image_datastores):
     assert isinstance(ptf_ref.zp, ZeroPoint)
 
     ref_prov = Provenance.get( ptf_ref.provenance_id )
-    assert len( ref_prov.upstreams ) == 1
-    assert ref_prov.upstreams[0].id == ptf_ref.zp.provenance_id
+    assert len( ref_prov.upstreams ) == 0
     improv = Provenance.get( ptf_ref.image.provenance_id )
-    assert len( improv.upstreams ) == 1
-    assert improv.upstreams[0].id == ptf_reference_image_datastores[0].zp.provenance_id
+    assert len( improv.upstreams ) == 2
+    assert set( improv.upstreams[i].id for i in (0,1) ) == { ptf_reference_image_datastores[0].zp.provenance_id,
+                                                             ref_prov.id }
+    assert improv.process == 'coaddition'
     assert ref_prov.process == 'referencing'
 
 

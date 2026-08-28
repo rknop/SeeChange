@@ -160,7 +160,8 @@ def test_pull_decam( conductor_connector, conductor_config_for_decam_pull ):
 
 
 def test_request_knownexposure_get_none( conductor_connector ):
-    with pytest.raises( RuntimeError, match=( r"Got response 500: cluster_id is required for RequestExposure" ) ):
+    with pytest.raises( RuntimeError, match=( r"Error response from server: "
+                                              r"cluster_id is required for RequestExposure" ) ):
         conductor_connector.send( "conductor/requestexposure" )
 
     data = conductor_connector.send( 'conductor/requestexposure/cluster_id=test_cluster' )

@@ -295,8 +295,9 @@ def test_extract_sources_sextractor( decam_datastore_through_preprocessing,
                                      extractor, provenance_base, data_dir, blocking_plots ):
     ds = decam_datastore_through_preprocessing
 
+    extractor.pars.subconfig_update( ds )
     extractor.pars.method = 'sextractor'
-    extractor.measure_psf = True
+    extractor.pars.measure_psf = True
     extractor.pars.snr_threshold = 5.0
     # Have to set sextractor subtract the background, because we aren't
     #    running the part of the code that esimates the background
