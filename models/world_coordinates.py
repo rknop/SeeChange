@@ -71,26 +71,40 @@ class WorldCoordinates(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness, Spat
         self.set_attributes_from_dict(kwargs)
 
 
-    def _fill_bogus_coordinate_fields( self, ra=-999., dec=-999.,
+    def _fill_bogus_coordinate_fields( self, image=None, ra=-999., dec=-999.,
                                        minra=-999., maxra=-999., mindec=-999., maxdec=-999. ):
         """This is used in tests to make sure some fields aren't NULL."""
 
-        self.ra = ra
-        self.dec = dec
-        for good in [ '', 'good_' ]:
-            setattr( self, f'{good}minra', minra )
-            setattr( self, f'{good}maxra', maxra )
-            setattr( self, f'{good}mindec', mindec )
-            setattr( self, f'{good}maxdec', maxdec )
-        for good in [ 'corner', 'good' ]:
-            setattr( self, f'ra_{good}_00', minra )
-            setattr( self, f'ra_{good}_01', minra )
-            setattr( self, f'ra_{good}_10', maxra )
-            setattr( self, f'ra_{good}_11', maxra )
-            setattr( self, f'dec_{good}_00', mindec )
-            setattr( self, f'dec_{good}_01', maxdec )
-            setattr( self, f'dec_{good}_10', mindec )
-            setattr( self, f'dec_{good}_11', maxdec )
+        if image is not None:
+            self.ra = image.ra
+            self.dec = image.dec
+            self.calculate_coordinates()
+            for radec in [ 'ra', 'dec' ]:
+                for good in [ '', 'good_' ]:
+                    for minmax in [ 'min', 'max' ]:
+                        setattr( self, f'{good}{minmax}{radec}', getattr( image, f'{minmax}{radec}' ) )
+                for good in [ 'corner', 'good' ]:
+                    for corner in [ '00', '01', '10', '11' ]:
+                        setattr( self, f'{radec}_{good}_{corner}', getattr( image, f'{radec}_corner_{corner}' ) )
+        else:
+            self.ra = ra
+            self.dec = dec
+            if ( self.ra >= 0. ) and ( self.ra < 360. ) and ( self.dec >= -90. ) and ( self.dec <= 90. ):
+                self.calculate_coordinates()
+            for good in [ '', 'good_' ]:
+                setattr( self, f'{good}minra', minra )
+                setattr( self, f'{good}maxra', maxra )
+                setattr( self, f'{good}mindec', mindec )
+                setattr( self, f'{good}maxdec', maxdec )
+            for good in [ 'corner', 'good' ]:
+                setattr( self, f'ra_{good}_00', minra )
+                setattr( self, f'ra_{good}_01', minra )
+                setattr( self, f'ra_{good}_10', maxra )
+                setattr( self, f'ra_{good}_11', maxra )
+                setattr( self, f'dec_{good}_00', mindec )
+                setattr( self, f'dec_{good}_01', maxdec )
+                setattr( self, f'dec_{good}_10', mindec )
+                setattr( self, f'dec_{good}_11', maxdec )
 
 
     def _get_inverse_badness(self):

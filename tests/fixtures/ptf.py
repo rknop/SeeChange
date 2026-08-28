@@ -491,7 +491,7 @@ def ptf_ref(
                                  'instrument': 'PTF',
                                  'zp_prov_id': ptf_reference_image_datastores[0].zp.provenance_id } )
     refmaker.setup_provenances()
-    pipe = refmaker.coadd_pipeline
+    pipe = refmaker._coadd_pipeline
 
     # Copying code from Image.invent_filepath so that
     #   we know what the filenames will be

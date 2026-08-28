@@ -117,7 +117,7 @@ def test_finding_references( provenance_base, provenance_extra ):
             oops.insert()
 
         # Something somewhere, 0.2° on a side, in r and g, and one with a different provenance
-        img1 = Image( provenance_id=provenance_base.id, ra=20., dec=45.,
+        img1 = Image( provenance_id=provenance_base.id, width=2048, height=2048, ra=20., dec=45.,
                       minra=19.8586, maxra=20.1414, mindec=44.9, maxdec=45.1,
                       ra_corner_00=19.8586, ra_corner_01=19.8586, ra_corner_10=20.1414, ra_corner_11=20.1414,
                       dec_corner_00=44.9, dec_corner_10=44.9, dec_corner_01=45.1, dec_corner_11=45.1,
@@ -133,6 +133,7 @@ def test_finding_references( provenance_base, provenance_extra ):
         bgstodel.add( bg1.id )
         wcs1 = WorldCoordinates( sources_id=src1.id, provenance_id=basewcsprov.id, filepath='wcs1.fits',
                                  **reusewcskw )
+        wcs1._fill_bogus_coordinate_fields( img1 )
         wcs1.insert()
         wcsstodel.add( wcs1.id )
         zp1 = ZeroPoint( wcs_id=wcs1.id, provenance_id=basezpprov.id, **reusezpkw )
@@ -142,7 +143,7 @@ def test_finding_references( provenance_base, provenance_extra ):
         ref1.insert()
         refstodel.add( ref1.id )
 
-        img2 = Image( provenance_id=provenance_base.id, ra=20., dec=45.,
+        img2 = Image( provenance_id=provenance_base.id, width=2048, height=2048, ra=20., dec=45.,
                       minra=19.8586, maxra=20.1414, mindec=44.9, maxdec=45.1,
                       ra_corner_00=19.8586, ra_corner_01=19.8586, ra_corner_10=20.1414, ra_corner_11=20.1414,
                       dec_corner_00=44.9, dec_corner_10=44.9, dec_corner_01=45.1, dec_corner_11=45.1,
@@ -158,6 +159,7 @@ def test_finding_references( provenance_base, provenance_extra ):
         bgstodel.add( bg2.id )
         wcs2 = WorldCoordinates( sources_id=src2.id, provenance_id=basewcsprov.id, filepath='wcs2.fits',
                                  **reusewcskw )
+        wcs2._fill_bogus_coordinate_fields( img2 )
         wcs2.insert()
         wcsstodel.add( wcs2.id )
         zp2 = ZeroPoint( wcs_id=wcs2.id, provenance_id=basezpprov.id, **reusezpkw )
@@ -167,7 +169,7 @@ def test_finding_references( provenance_base, provenance_extra ):
         ref2.insert()
         refstodel.add( ref2.id )
 
-        imgp = Image( provenance_id=provenance_extra.id, ra=20., dec=45.,
+        imgp = Image( provenance_id=provenance_extra.id, width=2048, height=2048, ra=20., dec=45.,
                       minra=19.8586, maxra=20.1414, mindec=44.9, maxdec=45.1,
                       ra_corner_00=19.8586, ra_corner_01=19.8586, ra_corner_10=20.1414, ra_corner_11=20.1414,
                       dec_corner_00=44.9, dec_corner_10=44.9, dec_corner_01=45.1, dec_corner_11=45.1,
@@ -183,6 +185,7 @@ def test_finding_references( provenance_base, provenance_extra ):
         bgstodel.add( bgp.id )
         wcsp = WorldCoordinates( sources_id=srcp.id, provenance_id=extrawcsprov.id, filepath='wcsp.fits',
                                  **reusewcskw )
+        wcsp._fill_bogus_coordinate_fields( imgp )
         wcsp.insert()
         wcsstodel.add( wcsp.id )
         zpp = ZeroPoint( wcs_id=wcsp.id, provenance_id=extrazpprov.id, **reusezpkw )
@@ -193,7 +196,7 @@ def test_finding_references( provenance_base, provenance_extra ):
         refstodel.add( refp.id )
 
         # Offset by 0.15° in both ra and dec
-        img3 = Image( provenance_id=provenance_base.id, ra=20.2121, dec=45.15,
+        img3 = Image( provenance_id=provenance_base.id, width=2048, height=2048, ra=20.2121, dec=45.15,
                       minra=20.0707, maxra=20.3536, mindec=45.05, maxdec=45.25,
                       ra_corner_00=20.0707, ra_corner_01=20.0707, ra_corner_10=20.3536, ra_corner_11=20.3536,
                       dec_corner_00=45.05, dec_corner_10=45.05, dec_corner_01=45.25, dec_corner_11=45.25,
@@ -209,6 +212,7 @@ def test_finding_references( provenance_base, provenance_extra ):
         bgstodel.add( bg3.id )
         wcs3 = WorldCoordinates( sources_id=src3.id, provenance_id=basewcsprov.id, filepath='wcs3.fits',
                                  **reusewcskw )
+        wcs3._fill_bogus_coordinate_fields( img3 )
         wcs3.insert()
         wcsstodel.add( wcs3.id )
         zp3 = ZeroPoint( wcs_id=wcs3.id, provenance_id=basezpprov.id, **reusezpkw )
@@ -219,7 +223,7 @@ def test_finding_references( provenance_base, provenance_extra ):
         refstodel.add( ref3.id )
 
         # Offset, but also rotated by 45°
-        img4 = Image( provenance_id=provenance_base.id, ra=20.2121, dec=45.15,
+        img4 = Image( provenance_id=provenance_base.id, width=2048, height=2048, ra=20.2121, dec=45.15,
                       minra=20.0121, maxra=20.4121, mindec=45.0086, maxdec=45.2914,
                       ra_corner_00=20.0121, ra_corner_01=20.2121, ra_corner_11=20.4121, ra_corner_10=20.2121,
                       dec_corner_00=45.15, dec_corner_01=45.2914, dec_corner_11=45.15, dec_corner_10=45.0086,
@@ -235,6 +239,7 @@ def test_finding_references( provenance_base, provenance_extra ):
         bgstodel.add( bg4.id )
         wcs4 = WorldCoordinates( sources_id=src4.id, provenance_id=basewcsprov.id, filepath='wcs4.fits',
                                  **reusewcskw )
+        wcs4._fill_bogus_coordinate_fields( img4 )
         wcs4.insert()
         wcsstodel.add( wcs4.id )
         zp4 = ZeroPoint( wcs_id=wcs4.id, provenance_id=basezpprov.id, **reusezpkw )
@@ -245,7 +250,7 @@ def test_finding_references( provenance_base, provenance_extra ):
         refstodel.add( ref4.id )
 
         # At 0 ra
-        img5 = Image( provenance_id=provenance_base.id, ra=0.02, dec=0.,
+        img5 = Image( provenance_id=provenance_base.id, width=2048, height=2048, ra=0.02, dec=0.,
                       minra=359.92, maxra=0.12, mindec=-0.1, maxdec=0.1,
                       ra_corner_00=359.92, ra_corner_01=359.92, ra_corner_10=0.12, ra_corner_11=0.12,
                       dec_corner_00=-0.1, dec_corner_10=-0.1, dec_corner_01=0.1, dec_corner_11=0.1,
@@ -261,6 +266,7 @@ def test_finding_references( provenance_base, provenance_extra ):
         bgstodel.add( bg5.id )
         wcs5 = WorldCoordinates( sources_id=src5.id, provenance_id=basewcsprov.id, filepath='wcs5.fits',
                                  **reusewcskw )
+        wcs5._fill_bogus_coordinate_fields( img5 )
         wcs5.insert()
         wcsstodel.add( wcs5.id )
         zp5 = ZeroPoint( wcs_id=wcs5.id, provenance_id=basezpprov.id, **reusezpkw )
@@ -271,7 +277,8 @@ def test_finding_references( provenance_base, provenance_extra ):
         refstodel.add( ref5.id )
 
         # Test bad parameters
-        with pytest.raises( ValueError, match="Must give one of target.*or image" ):
+        with pytest.raises( ValueError, match=( r"Specify exactly one of \( target/section_id, ra/dec, "
+                                                r"minra/maxra/mindec/maxdec, wcs, or image \)" ) ):
             _, _ = Reference.get_references()
         for kws in [ { 'ra': 20., 'minra': 19. },
                      { 'ra': 20., 'target': 'foo' },
@@ -279,7 +286,7 @@ def test_finding_references( provenance_base, provenance_extra ):
                      { 'image': img5, 'ra': 20. },
                      { 'image': img5, 'target': 'foo' }
                     ]:
-            with pytest.raises( ValueError, match="Specify only one of" ):
+            with pytest.raises( ValueError, match="Specify exactly one of" ):
                 _, _ = Reference.get_references( **kws )
         for kws in [ { 'target': 'foo' }, { 'section_id': '1' } ]:
             with pytest.raises( ValueError, match="Must give both target and section_id" ):
@@ -287,7 +294,7 @@ def test_finding_references( provenance_base, provenance_extra ):
         for kws in [ { 'ra': 20.}, { 'dec': 45. } ]:
             with pytest.raises( ValueError, match="Must give both ra and dec" ):
                 _, _ = Reference.get_references( **kws )
-        with pytest.raises( ValueError, match="Specify either image or minra/maxra/mindec/maxdec" ):
+        with pytest.raises( ValueError, match="Specify only one of image, wcs, or minra/maxra/mindec/maxdec" ):
             _, _ = Reference.get_references( image=img5, minra=19. )
         # TODO : write clever for loops to test all possibly combinations of minra/maxra/mindec/maxdec
         #   that are missing one or more.  For now, just test a few
@@ -474,10 +481,7 @@ def test_make_refset():
 
         maker = RefMaker( maker={ 'name': rsname, 'instrument': 'PTF', 'zp_prov_id': zpprov.id },
                           coaddition={ 'method': 'zogy' } )
-        assert maker.coadd_im_prov is None
-        assert maker.coadd_ex_prov is None
-        assert maker.coadd_wcs_prov is None
-        assert maker.coadd_zp_prov is None
+        assert maker.coadd_provs is None
         assert maker.ref_prov is None
         assert maker.refset is None
 
@@ -487,11 +491,11 @@ def test_make_refset():
         # Make sure we can create a new refset, and that it sets up the provenances
         maker.make_refset()
         assert maker.ref_prov is not None
-        assert [ p.id for p in maker.ref_prov.upstreams ] == [ maker.coadd_zp_prov.id ]
+        assert maker.ref_prov.upstreams == []
         provstodel.add( maker.ref_prov )
-        assert isinstance( maker.coadd_im_prov, Provenance )
-        assert [ p.id for p in maker.coadd_im_prov.upstreams ] == [ zpprov.id ]
-        assert isinstance( maker.coadd_ex_prov, Provenance )
+        assert set( maker.coadd_provs.keys() ) == { 'starting_point', 'extraction', 'astrocal', 'photocal' }
+        assert all( isinstance( i, Provenance ) for i in maker.coadd_provs.values() )
+        assert set( p.id for p in maker.coadd_provs['starting_point'].upstreams ) == { zpprov.id, maker.ref_prov.id }
         rs = RefSet.get_by_name( rsname )
         assert isinstance( rs, RefSet )
 
@@ -520,33 +524,34 @@ def test_making_refsets_in_run():
     zpprov = Provenance( process='photocal', parameters={}, upstreams=[] )
     zpprov.insert_if_needed()
 
+    makerpars = {'name': '_',
+                 'instrument': 'PTF',
+                 'corner_distance': None,
+                 'overlap_fraction': None,
+                 'zp_prov_id': zpprov.id
+                 }
+
     # make a new refset with a new name
     name = uuid.uuid4().hex
-    maker = RefMaker(maker={'name': name,
-                            'instrument': 'PTF',
-                            'corner_distance': None,
-                            'overlap_fraction': None,
-                            'zp_prov_id': zpprov.id
-                            })
+    makerpars['name'] = name
+    maker = RefMaker(maker=makerpars)
+    maker.subtraction_minovfrac = None
     min_number = maker.pars.min_number
     max_number = maker.pars.max_number
 
     # we still haven't run the maker, so everything is empty
-    assert maker.coadd_im_prov is None
-    assert maker.coadd_ex_prov is None
-    assert maker.coadd_wcs_prov is None
-    assert maker.coadd_zp_prov is None
+    assert maker.coadd_provs is None
 
     # Make sure we can create a fresh refset
+    maker.pars.overlap_fraction = None
+    maker.subtraction_minovfrac = None
     new_ref = maker.run(ra=0, dec=0, filter='R')
     assert new_ref is None  # cannot find a specific reference here
     refset = maker.refset
 
     assert refset is not None  # can produce a reference set without finding a reference
-    assert isinstance(maker.coadd_im_prov, Provenance)
-    assert isinstance(maker.coadd_ex_prov, Provenance)
-    assert isinstance(maker.coadd_wcs_prov, Provenance)
-    assert isinstance(maker.coadd_zp_prov, Provenance)
+    assert set( maker.coadd_provs.keys() ) == { 'starting_point', 'extraction', 'astrocal', 'photocal' }
+    assert all( isinstance( i, Provenance ) for i in maker.coadd_provs.values() )
 
     assert refset.provenance.parameters['min_number'] == min_number
     assert refset.provenance.parameters['max_number'] == max_number
@@ -565,8 +570,10 @@ def test_making_refsets_in_run():
     new_ref = maker.run(ra=0, dec=0, filter='R')
     assert new_ref is None  # still can't find images there
 
-    # now try to append with different data parameters:
-    maker.coadd_pipeline.coadder.pars['method'] = 'swarp'
+    # now try to append with different data parameters
+    # To accomplish this, we need to make a new maker, because it's the only way to alter
+    #   the coadd pipeline parameters.  (The coadd pipeline gets remade inside the maker all the time.)
+    maker = RefMaker( maker=makerpars, coaddition={ 'method': 'swarp' } )
 
     with pytest.raises( ValueError, match="Refset .* already exists with provenance .*, which does not match" ):
         new_ref = maker.run(ra=0, dec=0, filter='R')
@@ -613,6 +620,8 @@ def test_identify_images_to_coadd( provenance_base, provenance_extra ):
         _id = uuid.uuid4()
         kwargs = { 'ra': ra,
                    'dec': dec,
+                   'width': 2048,
+                   'height': 2048,
                    'provenance_id': provenance_base.id,
                    'zp_provenance_id': provenance_extra.id,
                    'mjd': 59000.,
@@ -673,6 +682,7 @@ def test_identify_images_to_coadd( provenance_base, provenance_extra ):
         bgstodel.add( bg.id )
         wcs = WorldCoordinates( sources_id=src.id, filepath=f'{filepath}_wcs.fits', md5sum=uuid.uuid4(),
                                 provenance_id=provenance_base.id )
+        wcs._fill_bogus_coordinate_fields( img )
         wcs.insert()
         wcsstodel.add( wcs.id )
         zp = ZeroPoint( wcs_id=wcs.id, zp=25., dzp=0.1, provenance_id=kwargs['zp_provenance_id'] )
@@ -694,7 +704,7 @@ def test_identify_images_to_coadd( provenance_base, provenance_extra ):
         img_shift_up = imagemaker( 'img_shift_up.fits', 20., 40.03 )
         img_shift_upright = imagemaker( 'img_shift_upright.fits', 20 + 0.03 / np.cos( 20. * np.pi/180. ), 40.03 )
 
-        imgs, poses, nums = refmaker.identify_reference_images_to_coadd( image=img_base, filter=['r'] )
+        ( imgs, poses, nums, _imgs ) = refmaker.identify_reference_images_to_coadd( image=img_base, filter='r' )
         assert poses.shape == (9, 2)
         assert len( nums ) == 9
         # numbers below based on the known order of poses.
@@ -722,19 +732,18 @@ def test_making_references( ptf_reference_image_datastores ):
 
     refsetstodel = set( name )
 
+    makerpars = { 'name': name,
+                  'instrument': 'PTF',
+                  'min_number': 4,
+                  'max_number': 10,
+                  'end_time': '2010-01-01',
+                  'corner_distance': None,
+                  'overlap_fraction': None,
+                  'zp_prov_id': ptf_reference_image_datastores[0].zp.provenance_id
+                 }
     try:
-        maker = RefMaker(
-            maker={
-                'name': name,
-                'instrument': 'PTF',
-                'min_number': 4,
-                'max_number': 10,
-                'end_time': '2010-01-01',
-                'corner_distance': None,
-                'overlap_fraction': None,
-                'zp_prov_id': ptf_reference_image_datastores[0].zp.provenance_id
-            }
-        )
+        maker = RefMaker( maker=makerpars )
+        maker.subtraction_minovfrac = None
         refsetstodel.add( maker.pars.name )
 
         t0 = time.perf_counter()
@@ -780,8 +789,11 @@ def test_making_references( ptf_reference_image_datastores ):
             _ = maker.run(ra=188, dec=4.5, filter='R')
 
         # now make the coadd image again with a different parameter for the data production
-        maker.coadd_pipeline.coadder.pars.flag_fwhm_factor *= 1.2
-        maker.pars.name = uuid.uuid4().hex  # MUST give a new name, otherwise it will not allow the new data parameters
+        # (Must give it a new refset name, to allow new data parameters.)
+        makerpars['name'] = uuid.uuid4().hex
+        fac = maker._coadd_pipeline.coadder.pars.flag_fwhm_factor * 1.2
+        maker = RefMaker( maker=makerpars, coaddition={ 'flag_fwhm_factor': fac } )
+        maker.subtraction_minovfrac = None
         refsetstodel.add( maker.pars.name )
         t0 = time.perf_counter()
         ref5 = maker.run(ra=188, dec=4.5, filter='R')
