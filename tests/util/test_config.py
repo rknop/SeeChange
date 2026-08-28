@@ -14,6 +14,7 @@ _rundir = pathlib.Path(__file__).parent
 
 class TestConfig:
     @pytest.fixture(scope='class')
+    @classmethod
     def cfg(self):
         # We don't want to set the default config, because the config
         #   here is just for these tests.  All the other tests need
