@@ -69,6 +69,8 @@ def ztf_datastore_uncommitted( ztf_filepaths_image_sources_psf ):
     with fits.open( image ) as hdul:
         ds.image._data = hdul[0].data
         ds.image._header = hdul[0].header
+        ds.image.width = hdul[0].data.shape[1]
+        ds.image.height = hdul[0].data.shape[0]
     with fits.open( weight ) as hdul:
         ds.image._weight = hdul[0].data
     with fits.open( flags ) as hdul:
