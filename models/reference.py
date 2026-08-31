@@ -530,7 +530,7 @@ class Reference(Base, UUIDMixin, HasBitFlagBadness):
 
             # Get the Reference objects
             rows = pgdb.execute( q )
-            references = [ Reference(**r) for r in rows ]
+            references = [ Reference(**r, from_db=True) for r in rows ]
 
             if len(references) > 0:
                 # Get the image and worldcoordinates objects

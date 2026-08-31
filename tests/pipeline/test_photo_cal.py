@@ -75,6 +75,7 @@ def test_decam_photo_cal( decam_datastore_through_wcs, blocking_plots ):
     # Verify that it will rerun if a parameter is changed
     ds.zp = None
     ds._provtag = None
+    photometor.pars.subconfigs['subconfigs']['extragalactic']['min_catalog_stars'] += 1
     ds.edit_prov_tree( 'photocal', params_dict=photometor.pars.get_critical_pars() )
     photometor.run(ds)
     assert photometor.has_recalculated

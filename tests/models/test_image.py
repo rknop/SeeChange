@@ -669,6 +669,10 @@ def test_image_from_exposure( provenance_base, sim_exposure1 ):
     assert im.coadd_alignment_target is None
     assert im.filepath is None  # need to save file to generate a filename
     assert np.array_equal(im.raw_data, sim_exposure1.data[0])
+    assert im.width == 512
+    assert im.height == 1024
+    assert im.width == im.raw_data.shape[1]
+    assert im.height == im.raw_data.shape[0]
     assert im.data is None
     assert im.flags is None
     assert im.weight is None

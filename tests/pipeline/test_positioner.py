@@ -69,6 +69,8 @@ def fake_data_for_position_tests( provenance_base ):
                              provenance_id=provenance_base.id,
                              format="fits",
                              type="Diff",
+                             width=1024,
+                             height=2048,
                              mjd=60000. + i,
                              end_mjd=60000.000694 + i,
                              exp_time=60.,

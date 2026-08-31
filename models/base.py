@@ -2352,7 +2352,9 @@ class UUIDMixin:
             else:
                 kwargs = kwargs.copy()
                 kwargs.update( rows[0] )
-                return cls( **kwargs )
+                obj = cls( **kwargs )
+                obj.from_db = True
+                return obj
 
 
     @classmethod
