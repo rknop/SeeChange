@@ -85,29 +85,30 @@ def test_webap_provinfo( webap_rkauth_client, provenance_base, provenance_extra 
 def test_webap_clone_provtag( webap_admin_client, provenance_base, provenance_extra, provenance_tags_loaded ):
     try:
         # Make sure we can clone to a non-existent current
-        res = webap_admin_client.send( '/cloneprovtag/xyzzy/current' )
+        res = webap_admin_client.send( '/cloneprovtag/xyzzy/current_tempnotcurrent' )
         assert 'status' in res and res['status'] == 'ok'
 
         with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( "SELECT tag, provenance_id FROM provenance_tags "
-                            "WHERE tag=ANY( ARRAY['xyzzy', 'current'] )" )
+                            "WHERE tag=ANY( ARRAY['xyzzy', 'current_tempnotcurrent'] )" )
             rows = cursor.fetchall()
-            assert set( r[0] for r in rows ) == { 'xyzzy', 'current' }
+            assert set( r[0] for r in rows ) == { 'xyzzy', 'current_tempnotcurrent' }
             assert all( r[1] == provenance_base.id for r in rows )
 
         # Make sure that we can't clone to an existing provenance if we don't ask to
-        with pytest.raises( RuntimeError, match="Got response 500: Tag current already exists and clobber was False" ):
-            res = webap_admin_client.send( '/cloneprovtag/plugh/current' )
+        with pytest.raises( RuntimeError, match=( "Got response 500: Tag current_tempnotcurrent already exists "
+                                                  "and clobber was False" ) ):
+            res = webap_admin_client.send( '/cloneprovtag/plugh/current_tempnotcurrent' )
 
         # Make sure we can clone an existing provenance if we ask to
-        res = webap_admin_client.send( '/cloneprovtag/plugh/current/1' )
+        res = webap_admin_client.send( '/cloneprovtag/plugh/current_tempnotcurrent/1' )
         assert 'status' in res and res['status'] == 'ok'
 
         with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( "SELECT tag, provenance_id FROM provenance_tags "
-                            "WHERE tag=ANY( ARRAY['xyzzy', 'plugh', 'current'] )" )
+                            "WHERE tag=ANY( ARRAY['xyzzy', 'plugh', 'current_tempnotcurrent'] )" )
             rows = cursor.fetchall()
             foundtags = {}
             for row in rows:
@@ -115,15 +116,15 @@ def test_webap_clone_provtag( webap_admin_client, provenance_base, provenance_ex
                     foundtags[row[0]].add( row[1] )
                 else:
                     foundtags[row[0]] = { row[1] }
-            assert set( foundtags.keys() ) ==  { 'xyzzy', 'plugh', 'current' }
+            assert set( foundtags.keys() ) ==  { 'xyzzy', 'plugh', 'current_tempnotcurrent' }
             assert len( foundtags['xyzzy'] ) == 1
             assert len( foundtags['plugh'] ) == 2
-            assert foundtags['plugh'] == foundtags['current']
+            assert foundtags['plugh'] == foundtags['current_tempnotcurrent']
 
     finally:
         with PsycopgConnection() as conn:
             cursor = conn.cursor()
-            cursor.execute( "DELETE FROM provenance_tags WHERE tag='current'" )
+            cursor.execute( "DELETE FROM provenance_tags WHERE tag='current_tempnotcurrent'" )
             conn.commit()
 
 
@@ -288,10 +289,11 @@ def test_webap( webap_browser_logged_in, webap_url, decam_datastore, admin_user 
         cols = rows[1].find_elements( By.XPATH, "./*" )
         assert cols[0].text == 'c4d_211025_044847_ori.fits.fz'
         assert cols[1].text == '2021B-0149'
-        assert cols[3].text == 'ELAIS-E1'
-        assert cols[6].text == '1'    # n_images
-        assert cols[7].text == '260'  # detections
-        assert cols[8].text == '10'    # sources
+        assert cols[3].text == 'Sci'
+        assert cols[4].text == 'ELAIS-E1'
+        assert cols[7].text == '1'    # n_images
+        assert cols[8].text == '258'  # detections
+        assert cols[9].text == '13'    # sources
 
         # ======================================================================
         # ======================================================================
@@ -324,7 +326,7 @@ def test_webap( webap_browser_logged_in, webap_url, decam_datastore, admin_user 
         imagesdiv = subcontentdiv.find_element( By.XPATH, "./div" )
         assert imagesdiv.get_attribute('id') == 'exposureimagesdiv'
         assert re.search( r"^Exposure has 1 images and 1 completed subtractions.*"
-                          r"\s10 out of 260 detections pass preliminary cuts",
+                          r"\s13 \(13 good\) out of 258 detections pass preliminary cuts",
                           imagesdiv.text, re.DOTALL ) is not None
         imagestab = imagesdiv.find_element( By.TAG_NAME, 'table' )
         rows = imagestab.find_elements( By.TAG_NAME, 'tr' )
@@ -348,7 +350,7 @@ def test_webap( webap_browser_logged_in, webap_url, decam_datastore, admin_user 
         assert sourcesdiv.get_attribute('id') == "exposurecutoutsdiv"
         sourcestable = sourcesdiv.find_element( By.TAG_NAME, 'table' )
         rows = sourcestable.find_elements( By.TAG_NAME, 'tr' )
-        assert len(rows) == 11
+        assert len(rows) == 14
 
         # OMG writing these tests is exhausting.  There is still lots more to do:
         # * actually look at the rows of the sources table

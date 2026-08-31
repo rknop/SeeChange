@@ -387,12 +387,11 @@ class FakeSet(Base, UUIDMixin, FileOnDiskMixin):
         return imagedata, weight
 
 
-    def get_upstreams( self, session=None ):
-        """Get the zp that was the basis of this fake set."""
-        with SmartSession( session ) as session:
-            return session.scalars( sa.select( ZeroPoint ).where( ZeroPoint._id == self.zp_id ) ).all()
+    def get_upstream_ids( self, pgdb=None ):
+        """Get the id of the zp that was the basis of this fake set."""
+        return [ ( ZeroPoint, self.zp_id ) ]
 
-    def get_downstreams( self, sesson=None ):
+    def get_downstream_ids( self, pgdb=None ):
         """fakeset has no downstreams; difference images with fakes should not be saved to the database.  I hope."""
         return []
 
@@ -543,11 +542,8 @@ class FakeAnalysis( Base, UUIDMixin, FileOnDiskMixin ):
             for prop in self.arrayprops:
                 setattr( self, prop, h5f[f"fakeanal/{prop}"][:] )
 
-    def get_upstreams( self, session=None ):
-        with SmartSession( session ) as session:
-            return session.scalars( sa.select( DeepScoreSet )
-                                    .where( DeepScoreSet._id == self.orig_deepscore_set_id )
-                                   ).all()
+    def get_upstream_ids( self, pgdb=None ):
+        return [ ( DeepScoreSet, self.orig_deepscore_set_id ) ]
 
-    def get_downstreams( self, session=None ):
+    def get_downstream_ids( self, session=None ):
         return []

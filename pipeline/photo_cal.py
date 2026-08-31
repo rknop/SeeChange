@@ -23,44 +23,79 @@ from util.logger import SCLogger
 class ParsPhotCalibrator(Parameters):
     def __init__(self, **kwargs):
         super().__init__()
+
+        # IMPORTANT
+        # Notice that many of the parameters critical=False that really probably ought
+        #   to be critical=True.  Reason: the subconfig_update system in parameters.py.
+        #   See comment in detection.py
+
         self.cross_match_catalog = self.add_par(
-            'cross_match_catalog',
-            'gaia_dr3',
-            str,
-            'Which catalog should be used for cross matching for photometric calibration. '
+            name = 'cross_match_catalog',
+            default = 'gaia_dr3',
+            par_types = str,
+            docstring = 'Which catalog should be used for cross matching for photometric calibration. ',
+            critical = False
         )
         self.add_alias('catalog', 'cross_match_catalog')
 
         self.max_catalog_mag = self.add_par(
-            'max_catalog_mag',
-            [22.],
-            list,
-            ( 'Maximum (dimmest) magnitudes to try requesting for the matching catalog (list of float).  It will '
-              'try these in order until it gets a catalog excerpt with at least catalog_min_stars. (Cached '
-              'catalog excerpts will be considered a match if their max mag is within 0.1 mag of the one '
-              'specified here.) ' ),
-            critical=True
+            name = 'max_catalog_mag',
+            default = [22.],
+            par_types = list,
+            docstring = ( 'Maximum (dimmest) magnitudes to try requesting for the matching catalog (list of float).  '
+                          'It will try these in order until it gets a catalog excerpt with at least '
+                          'catalog_min_stars. (Cached catalog excerpts will be considered a match if their max mag is '
+                          'within 0.1 mag of the one specified here.) ' ),
+            critical = False
         )
         self.add_alias( 'max_mag', 'max_catalog_mag' )
 
         self.mag_range_catalog = self.add_par(
-            'mag_range_catalog',
-            6.,
-            ( float, None ),
-            ( 'Range between maximum and minimum magnitudes to request for the catalog. '
-              'Make this None to have no lower (bright) limit.' ),
-            critical=True
+            name = 'mag_range_catalog',
+            default = 6.,
+            par_types = ( float, None ),
+            docstring = ( 'Range between maximum and minimum magnitudes to request for the catalog. '
+                          'Make this None to have no lower (bright) limit.' ),
+            critical = False
         )
         self.add_alias( 'mag_range', 'mag_range_catalog' )
 
         self.min_catalog_stars = self.add_par(
-            'min_catalog_stars',
-            50,
-            int,
-            'Minimum number of stars the catalog must have',
-            critical=True
+            name = 'min_catalog_stars',
+            default = 50,
+            par_types = int,
+            docstring = 'Minimum number of stars the catalog must have',
+            critical = False
         )
         self.add_alias( 'min_stars', 'min_catalog_stars' )
+
+        self.subconfigs = self.add_par(
+            name = 'subconfigs',
+            default = {
+                'choice_algorithm': 'star_density',
+                'choice_params': {
+                    'star_mag_cutoff': 20,
+                    'star_density_cutoff': 1e5,
+                },
+                'default_subconfig': 'extragalactic',
+                'subconfigs': {
+                    'extragalactic': {
+                        'cross_match_catalog': 'gaia_dr3',
+                        'max_catalog_mag': [22.],
+                        'mag_range_catalog': 6.,
+                        'min_catalog_stars': 50,
+                    },
+                    'galactic': {
+                        'mag_catalog_mag': [17., 18., 19.],
+                        'mag_range_catalog': 3.0
+                    }
+                }
+            },
+            par_types = dict,
+            docstring = ( "Algorithm for choosing all the config parameters, and replacements for all the "
+                          "config paramters based on that choice." ),
+            critical = True
+        )
 
         self._enforce_no_new_attrs = True
 
@@ -218,7 +253,7 @@ class PhotCalibrator:
 
         return zpval, dzpval
 
-    def run(self, *args, **kwargs):
+    def run(self, *args, do_not_load=False, **kwargs):
         """Perform the photometric calibration.
 
         Gets the image sources, finds a catalog Excerpt (using code in
@@ -236,6 +271,8 @@ class PhotCalibrator:
 
         try:
             ds = DataStore.from_args(*args, **kwargs)
+            self.pars.subconfig_update( ds )
+
             t_start = time.perf_counter()
             if ds.update_memory_usages:
                 import tracemalloc
@@ -263,7 +300,7 @@ class PhotCalibrator:
                 raise ValueError(f'Cannot find a wcs for image {image.filepath}')
 
             # try to find the world coordinates in memory or in the database:
-            zp = ds.get_zp( provenance=prov )
+            zp = None if do_not_load else ds.get_zp( provenance=prov )
 
             if zp is None:  # must create a new ZeroPoint object
                 self.has_recalculated = True

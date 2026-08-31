@@ -3,6 +3,7 @@ import pathlib
 import random
 import time
 import subprocess
+import types
 
 import numpy as np
 
@@ -183,8 +184,8 @@ class ImageAligner:
 
         return warpedim
 
-    def get_swarp_fodder_wcs( self, source_image, source_sources, source_wcs, source_zp, target_sources,
-                               fall_back_wcs=None ):
+    def get_swarp_fodder_wcs( self, source_image, source_sources, source_wcs, source_zp,
+                              target_image, target_sources, target_wcs, fall_back_wcs=None ):
         """Get a WCS for an image-to-image alignment.
 
         Get a WCS for target_sources that uses source_sources as a
@@ -203,10 +204,10 @@ class ImageAligner:
         Parameters
         ----------
           source_image : Image
-             The image that we will eventually want to align to target_image.
+             The image we are going to eventually want to align to target_image.
 
           source_sources : SourceList
-             A SourceList from source_image.
+             A SourceList from the source_image.
 
           source_wcs : WorldCoordinates
              A WorldCoordinates from source_image.
@@ -214,13 +215,21 @@ class ImageAligner:
           source_zp : ZeroPoint
              A ZeroPoint from source_image.
 
+          target_image: Image
+             The image we are going to want to align source_image to.
+
           target_sources: SourceList
-             A SourceList from target_image.  target_image isn't
-             actually a parameter of this method, because it's not
-             needed, but it's the image to which source_image is going
-             to be aligned.  If it seems perverse that we're returning a
-             new WCS for target_image and not source_image, see the
-             massive comment in the _align_swarp method.
+             A SourceList from target_image.  If it seems perverse that
+             we're returning a new WCS for target_image and not
+             source_image, see the massive comment in the _align_swarp
+             method.
+
+          target_wcs: SourceList
+            A WorldCoordinates from target_image.  Although this is what
+            we're trying to find (only one that is designed for the best
+            possible alignment with the source image, not one that's
+            aligned to an external catalog), have this in hopes that
+            scamp will use it to get started.
 
           fall_back_wcs : WorldCoordinates or None
              If not None, and the scamp fails (e.g. because the two
@@ -240,6 +249,9 @@ class ImageAligner:
         tmpname = ''.join( random.choices( 'abcdefghijklmnopqrstuvwzyz', k=10 ) )
         tmpimagecat = tmppath / f'{tmpname}_image.sources.fits'
         tmptargetcat = tmppath / f'{tmpname}_target.sources.fits'
+        # A debugging output DS9 region file with residuals
+        # residfile = tmppath / f'{tmpname}_resid.reg'
+        residfile = None
 
         try:
             # For everything to work as in the massive comment below in
@@ -270,9 +282,15 @@ class ImageAligner:
             # Convert from numpy convention to FITS convention and write
             # out LDAC files for scamp to chew on.
             datatab = SourceList._convert_to_sextractor_for_saving( datatab )
+            source_header = source_image.header.copy()
+            improc.tools.strip_wcs_keywords( source_header )
+            source_header.extend( source_wcs.wcs.to_header(relax=True) )
+            ldac.save_table_as_ldac( datatab, tmpimagecat, imghdr=source_header, overwrite=True )
             targetdat = astropy.table.Table( SourceList._convert_to_sextractor_for_saving( target_sources.data ) )
-            ldac.save_table_as_ldac( datatab, tmpimagecat, imghdr=source_sources.info, overwrite=True )
-            ldac.save_table_as_ldac( targetdat, tmptargetcat, imghdr=target_sources.info, overwrite=True )
+            target_header = target_image.header.copy()
+            improc.tools.strip_wcs_keywords( target_header )
+            target_header.extend( target_wcs.wcs.to_header(relax=True) )
+            ldac.save_table_as_ldac( targetdat, tmptargetcat, imghdr=target_header, overwrite=True )
 
             # Scamp it up
             try:
@@ -286,6 +304,7 @@ class ImageAligner:
                     min_frac_matched=self.pars.min_frac_matched,
                     min_matched=self.pars.min_matched,
                     max_arcsec_residual=self.pars.max_arcsec_residual,
+                    residfile=residfile,
                     timeout=self.pars.scamp_timeout,
                 )
             except ( BadMatchException, subprocess.TimeoutExpired ) as ex:
@@ -298,10 +317,12 @@ class ImageAligner:
         finally:
             tmpimagecat.unlink( missing_ok=True )
             tmptargetcat.unlink( missing_ok=True )
+            if residfile is not None:
+                residfile.unlink( missing_ok=True )
 
     def _align_swarp( self, source_image, source_sources, source_bg, source_psf, source_wcs, source_zp,
-                      target_image, target_sources, warped_prov, warped_sources_prov ):
-        """Use scamp and swarp to align image to target.
+                      target_image, target_sources, target_wcs, warped_prov, warped_sources_prov ):
+        """Use scamp and swarp to align source_image to target_image.
 
         Parameters
         ---------
@@ -344,6 +365,8 @@ class ImageAligner:
             x/y values here for its solution; see massive comment in the
             bdy of the function.)  Assumed to be in sextrfits format.
 
+          target_wcs: WorldCorrdinates
+            WorldCoordiantes for target image.
 
           warped_prov: Provenance
             The provenance to assign to the warped image
@@ -424,10 +447,10 @@ class ImageAligner:
         try:
 
             swarp_fodder_wcs = self.get_swarp_fodder_wcs( source_image, source_sources, source_wcs, source_zp,
-                                                          target_sources )
+                                                          target_image, target_sources, target_wcs )
 
             # Write out the .head file that swarp will use to figure out what to do
-            hdr = swarp_fodder_wcs.to_header()
+            hdr = swarp_fodder_wcs.to_header( relax=True )
             hdr['NAXIS'] = 2
             hdr['NAXIS1'] = target_image.data.shape[1]
             hdr['NAXIS2'] = target_image.data.shape[0]
@@ -461,7 +484,7 @@ class ImageAligner:
 
             hdr = source_image.header.copy()
             improc.tools.strip_wcs_keywords(hdr)
-            hdr.update(source_wcs.wcs.to_header())
+            hdr.update(source_wcs.wcs.to_header( relax=True ))
             data = source_bg.subtract_me( source_image.data )
 
             save_fits_image_file(tmpim, data, hdr, extname=None, single_file=False)
@@ -523,7 +546,7 @@ class ImageAligner:
 
             warpedim.weight = read_fits_image(outwt)
             warpedim.flags = read_fits_image(outfl)
-            warpedim.flags = np.rint(warpedim.flags).astype(np.uint16)  # convert back to integers
+            warpedim.flags = np.rint(warpedim.flags).astype(np.int16)  # convert back to integers
 
             warpedim.md5sum = None
             # warpedim.md5sum_components = [ None, None, None ]
@@ -572,6 +595,10 @@ class ImageAligner:
             source_sources_prov = Provenance.get( source_sources.provenance_id )
             extractor = Detector()
             extractor.pars.override(source_sources_prov.parameters, ignore_addons=True)
+            # OMG this is an ugly hack, but I guess this is what we get for doing anything
+            #   other than calling the "run" method of one of these pipeline objects.
+            fakeds = types.SimpleNamespace( wcs=target_wcs )
+            extractor.pars.subconfig_update( fakeds )
             warpedsources, warpedpsf, _, _ = extractor.extract_sources( warpedim, warpedbg )
 
             prov = Provenance(
@@ -587,7 +614,7 @@ class ImageAligner:
             # expand bad pixel mask to allow for warping that smears the badness
             warpedim.flags = dilate_bitflag(warpedim.flags, iterations=1)  # use the default structure
 
-            # warpedim.flags = np.zeros( warpedim.weight.shape, dtype=np.uint16 )  # Do I want int16 or uint16?
+            # warpedim.flags = np.zeros( warpedim.weight.shape, dtype=np.int16 )
             # TODO : a good cutoff for this weight
             #  For most images I've seen, no image
             #  will have a pixel with noise above 100000,
@@ -674,7 +701,7 @@ class ImageAligner:
     # TODO : pass a DataStore for source and target instead of all these parameters
     def run( self,
              source_image, source_sources, source_bg, source_psf, source_wcs, source_zp,
-             target_image, target_sources ):
+             target_image, target_sources, target_wcs ):
         """Warp source image so that it is aligned with target image.
 
         If the source_image and target_image are the same, will just create
@@ -705,6 +732,9 @@ class ImageAligner:
 
           target_sources: SourceList
              corresponding to target_image
+
+          target_wcs: WorldCoordiantes
+             corresponding to target_sources
 
         Returns
         -------
@@ -786,6 +816,7 @@ class ImageAligner:
                                                                source_zp,
                                                                target_image,
                                                                target_sources,
+                                                               target_wcs,
                                                                warped_prov,
                                                                warped_sources_prov )
             else:

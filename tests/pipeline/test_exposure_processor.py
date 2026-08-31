@@ -4,10 +4,9 @@ import logging
 
 import psycopg
 
-from models.base import PsycopgConnection, SmartSession
+from models.base import PsycopgConnection
 from models.enums_and_bitflags import KnownExposureStateConverter
 from models.exposure import Exposure
-from models.knownexposure import KnownExposure
 from pipeline.exposure_processor import ExposureProcessor
 
 
@@ -20,6 +19,7 @@ def test_exposure_processor( decam_default_calibrators,
 
     exposureid = None
     zpid = None
+
     try:
         # Make sure that the exposure is currently held
         with PsycopgConnection() as conn:
@@ -38,7 +38,8 @@ def test_exposure_processor( decam_default_calibrators,
 
         # Set up an exposure processor that will run through photocal
         processor = ExposureProcessor( 'DECam', decam_exposure_name, 1, 'test', 'test', machine_name='test',
-                                       onlychips=['S2'], through_step='photocal', worker_log_level=logging.DEBUG )
+                                       onlychips=['S2'], through_step='photocal', provtag='test_exposure_processor',
+                                       worker_log_level=logging.DEBUG )
 
         # Make sure it yells at us if we don't assume_claimed and the exposure is claimed by somebody else
         with PsycopgConnection() as conn:
@@ -140,9 +141,12 @@ def test_exposure_processor( decam_default_calibrators,
             rows = cursor.fetchall()
             assert len(rows) == 0
 
+            # TODO : check that the right provenance tags got created
+
         # Make a new processor that will pick up where this one left off
         processor = ExposureProcessor( 'DECam', decam_exposure_name, 1, 'test', 'test', machine_name='test',
-                                       onlychips=['S2'], worker_log_level=logging.DEBUG )
+                                       onlychips=['S2'], provtag='test_exposure_processor',
+                                       worker_log_level=logging.DEBUG )
         with pytest.raises( ValueError, match="There's already an exposure associated.*but cont is False" ):
             processor.secure_exposure( cont=False )
 
@@ -189,18 +193,31 @@ def test_exposure_processor( decam_default_calibrators,
             assert ke['release_time'] > ke['start_time']
             assert ke['release_time'] < datetime.datetime.now( tz=datetime.UTC )
 
-            cursor.execute( "SELECT ds._id, ds.created_at, z._id AS zpid, z.created_at as zpcreated, e._id AS expid "
+            cursor.execute( "SELECT ds._id, ds.created_at, z._id AS zpid, z.created_at as zpcreated, e._id AS expid, "
+                            "       e.provenance_id AS acquire_exposure_prov, "
+                            "       i.provenance_id AS preprocessing_prov, "
+                            "       s.provenance_id AS extraction_prov, "
+                            "       w.provenance_id AS astrocal_prov, "
+                            "       z.provenance_id AS photocal_prov, "
+                            "       r.provenance_id AS referencing_prov, "
+                            "       sub.provenance_id AS subtraction_prov, "
+                            "       subsrc.provenance_id AS detection_prov, "
+                            "       cu.provenance_id AS cutting_prov, "
+                            "       ms.provenance_id AS measuring_prov, "
+                            "       ds.provenance_id AS scoring_prov "
                             "FROM deepscore_sets ds "
                             "INNER JOIN measurement_sets ms ON ds.measurementset_id=ms._id "
                             "INNER JOIN cutouts cu ON ms.cutouts_id=cu._id "
                             "INNER JOIN source_lists subsrc ON cu.sources_id=subsrc._id "
                             "INNER JOIN images sub ON subsrc.image_id=sub._id "
                             "INNER JOIN image_subtraction_components isc ON isc.image_id=sub._id "
+                            "INNER JOIN refs r ON isc.ref_id=r._id "
                             "INNER JOIN zero_points z ON isc.new_zp_id=z._id "
                             "INNER JOIN world_coordinates w ON z.wcs_id=w._id "
                             "INNER JOIN source_lists s ON w.sources_id=s._id "
                             "INNER JOIN images i ON s.image_id=i._id "
-                            "INNER JOIN exposures e ON e._id=%(expid)s",
+                            "INNER JOIN exposures e ON e._id=i.exposure_id "
+                            "WHERE e._id=%(expid)s",
                             { 'expid': exposureid } )
             rows = cursor.fetchall()
             assert len(rows) == 1
@@ -208,14 +225,32 @@ def test_exposure_processor( decam_default_calibrators,
             assert rows[0]['zpcreated'] < t0
             assert rows[0]['zpid'] == zpid
             assert rows[0]['expid'] == exposureid
+            provs = { k: rows[0][f'{k}_prov'] for k in [ 'acquire_exposure', 'preprocessing', 'extraction',
+                                                         'astrocal', 'photocal', 'referencing', 'subtraction',
+                                                         'detection', 'cutting', 'measuring', 'scoring' ] }
+
+            # Make sure the provenance tags are right
+
+            cursor.execute( "SELECT p.process, t.provenance_id, t.tag "
+                            "FROM provenance_tags t "
+                            "INNER JOIN provenances p ON t.provenance_id=p._id "
+                            "WHERE t.tag='test_exposure_processor'" )
+            pts = cursor.fetchall()
+            assert set( p['process'] for p in pts ) == set( provs.keys() ).union( { 'alerting' } )
+            assert all( ( p['provenance_id'] == provs[p['process']] ) for p in pts if p['process'] != 'alerting' )
 
         # NOTE -- we haven't tested "delete"
 
     finally:
-        if exposureid is not None:
-            with SmartSession() as sess:
-                ke = sess.query( KnownExposure ).filter( KnownExposure.exposure_id==exposureid ).first()
-                ke.exposure_id = None
-                sess.commit()
-                exp = Exposure.get_by_id( exposureid, session=sess )
-            exp.delete_from_disk_and_database()
+        with PsycopgConnection() as con:
+            cursor = con.cursor()
+
+            if exposureid is not None:
+                cursor.execute( "UPDATE knownexposures SET exposure_id=NULL WHERE exposure_id=%(expid)s",
+                                { 'expid': exposureid } )
+                con.commit()
+                exp = Exposure.get_by_id( exposureid, session=con )
+                exp.delete_from_disk_and_database()
+
+            cursor.execute( "DELETE FROM provenance_tags WHERE tag='test_exposure_processor'" )
+            con.commit()

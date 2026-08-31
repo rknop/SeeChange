@@ -1,10 +1,15 @@
+import pytz
+import textwrap
 from uuid import UUID
 
+from psycopg import sql
 import sqlalchemy as sa
 from sqlalchemy import orm
 from sqlalchemy.dialects.postgresql import UUID as sqlUUID
 
-from models.base import Base, SeeChangeBase, HasBitFlagBadness, FourCorners, UUIDMixin, SmartSession
+import astropy.time
+
+from models.base import Base, SeeChangeBase, HasBitFlagBadness, FourCorners, UUIDMixin, PGDB
 from models.enums_and_bitflags import reference_badness_inverse
 from models.provenance import Provenance
 from models.image import Image
@@ -75,6 +80,22 @@ class Reference(Base, UUIDMixin, HasBitFlagBadness):
         )
     )
 
+    validity_start = sa.Column(
+        sa.DateTime(timezone=True),
+        nullable=True,
+        server_default=None,
+        index=True,
+        doc="This reference can be used for images starting at this time; NULL=no limit."
+    )
+
+    validity_end = sa.Column(
+        sa.DateTime(timezone=True),
+        nullable=True,
+        server_default=None,
+        index=True,
+        doc="This reference can be used for images no later than this time; NULL=no limit."
+    )
+
 
     @property
     def image( self ):
@@ -138,35 +159,48 @@ class Reference(Base, UUIDMixin, HasBitFlagBadness):
 
 
     def _load_ref_data_products(self, session=None):
-        """Load the (SourceList, Background, PSF, WorldCoordiantes, Zeropoint) assocated with self.image_id
+        """Load the (SourceList, Background, PSF, WorldCoordinates, Zeropoint) assocated with self.image_id
 
         Only works if the all of the upstream dataproducts (image,
-        sources, bg, wcs, zp) have been committed ot the database (or
-        are in the session, but, brrrr.).
+        sources, bg, wcs, zp) have been committed ot the database.
 
         """
 
-        with SmartSession( session ) as sess:
+        with PGDB( session, dictcursor=True ) as sess:
             self._zp = ZeroPoint.get_by_id( self.zp_id, session=sess )
             self._wcs = WorldCoordinates.get_by_id( self._zp.wcs_id, session=sess )
             self._sources = SourceList.get_by_id( self._wcs.sources_id, session=sess )
             self._image = Image.get_by_id( self._sources.image_id, session=sess)
-            self._psf = sess.query( PSF ).filter( PSF.sources_id==self._sources.id ).first()
-            self._bg = sess.query( Background ).filter( Background.sources_id==self._sources.id ).first()
+
+            self._psf = PSF.get_by_field_value( "sources_id", self._sources.id, pgdb=sess )
+            if len(self._psf) == 0:
+                # ...is this allowed?
+                self._psf = None
+            elif len(self._psf) > 1:
+                raise RuntimeError( "This should never happen" )
+            else:
+                self._psf = self._psf[0]
+
+            self._bg = Background.get_by_field_value( "sources_id", self._sources.id, pgdb=sess )
+            if len(self._bg) == 0:
+                # ... is this allowed?
+                self._bg = None
+            elif len(self._bg) > 1:
+                raise RuntimeError( "This should nevner happen" )
+            else:
+                self._bg = self._bg[0]
 
 
-    def get_upstreams( self, session=None ):
-        """Get upstreams of this Reference.  That is the ZeroPoint of the reference."""
-        with SmartSession( session ) as sess:
-            return [ ZeroPoint.get_by_id( self.zp_id, session=sess ) ]
+    def get_upstream_ids( self, pgdb=None ):
+        """Get ids upstreams of this Reference.  That is the ZeroPoint of the reference."""
+        return [ ( ZeroPoint, self.zp_id ) ]
 
-    def get_downstreams( self, session=None ):
-        """Get downstreams of this Reference.  That is all subtraction images that use this as a reference."""
-        with SmartSession( session ) as sess:
-            return list( sess.query( Image )
-                         .join( image_subtraction_components, image_subtraction_components.c.image_id==Image._id )
-                         .filter( image_subtraction_components.c.ref_id==self.id )
-                         .all() )
+    def get_downstream_ids( self, pgdb=None ):
+        """Get ids of downstreams of this Reference.  That is all subtraction images that use this as a reference."""
+        with PGDB( pgdb ) as pgdb:
+            q = sql.SQL( "SELECT image_id FROM image_subtraction_components WHERE ref_id={me}" ).format( me=self.id )
+            rows, _cols = pgdb.execute( q )
+            return ( [ ( Image, row[0] ) for row in rows ] )
 
 
     @classmethod
@@ -179,14 +213,17 @@ class Reference(Base, UUIDMixin, HasBitFlagBadness):
             mindec=None,
             maxdec=None,
             image=None,
+            wcs=None,
             overlapfrac=None,
             target=None,
             section_id=None,
             instrument=None,
             filter=None,
-            skip_bad=True,
+            for_image_mjd=None,
             refset=None,
             provenance_ids=None,
+            skip_bad=True,
+            pgdb=None,
             session=None
     ):
         """Find all references in the specified part of the sky, with the given filter.
@@ -221,7 +258,13 @@ class Reference(Base, UUIDMixin, HasBitFlagBadness):
         image: Image, optional
            If specified, minra/maxra/mindec/maxdec will be pulled from
            this Image (or any other type of object that inherits from
-           FourCorners).
+           FourCorners).  Can't give this together with min/max ra/dec.
+
+        wcs: WorldCoordinates, optional
+           If specified, minra/maxra/mindec/maxdec will be pulled from the
+           "good" four corners of this WorldCoordinates (or any other
+           type of object that inherits from FourCornersWithGood).
+           Can't give this together with image or min/max ra/dec.
 
         overlapfrac: float, default None
            If minra/maxra/mindec/maxdec or image is not None, then only
@@ -247,6 +290,11 @@ class Reference(Base, UUIDMixin, HasBitFlagBadness):
             Filter of the reference image.
             If not given, will return references with any filter.
 
+        for_image_mjd: float, optional
+            MJD of the image that this is to be a reference for.  If
+            given, only find references where this mjd is between
+            validity_start and validity_end.
+
         refset: string, list of String, or None
             If not None, will only find references that have a
             provenance included in this refset, or in these refsets.
@@ -260,9 +308,13 @@ class Reference(Base, UUIDMixin, HasBitFlagBadness):
         skip_bad: bool
             Whether to skip bad references. Default is True.
 
-        session: Session, optional
+        pgdb: PGDB, psycopg.Connection, psycopg.Cursor, or sa Session, optional
             The database session to use.
             If not given, will open a session and close it at end of function.
+
+        session: PGDB, psycopg.Connection, psycopg.Cursor, or sa Session, optional
+            Synonym for pgdb.  If you give both, will use pgdb if it's not None, else
+            session.
 
         Returns
         -------
@@ -270,41 +322,44 @@ class Reference(Base, UUIDMixin, HasBitFlagBadness):
 
         """
 
+        pgdb = pgdb if pgdb is not None else session
+
         radecgiven = ( ra is not None ) or ( dec is not None )
-        areagiven = ( image is not None ) or any( i is not None for i in [ minra, maxra, mindec, maxdec ] )
+        areagiven = ( ( image is not None ) or ( wcs is not None )
+                      or any( i is not None for i in [ minra, maxra, mindec, maxdec ] ) )
         targetgiven = ( target is not None ) or ( section_id is not None )
-        if ( ( radecgiven and ( areagiven or targetgiven ) ) or
-             ( areagiven and ( radecgiven or targetgiven ) ) or
-             ( targetgiven and ( radecgiven or areagiven ) )
-            ):
-            raise ValueError( "Specify only one of ( target/section_id, "
-                              "ra/dec, minra/maxra/mindec/maxdec, or image )" )
+        if sum( [ radecgiven, areagiven, targetgiven ] ) != 1:
+            raise ValueError( "Specify exactly one of ( target/section_id, "
+                              "ra/dec, minra/maxra/mindec/maxdec, wcs, or image )" )
 
         if ( provenance_ids is not None ) and ( refset is not None ):
             raise ValueError( "Specify at most one of provenance_ids or refset" )
 
         fcobj = None
 
-        with SmartSession( session ) as sess:
+        with PGDB( session, dictcursor=True ) as pgdb:
             # Mode 1 : target / section_id
 
-            if ( ( target is not None ) or ( section_id is not None ) ):
+            if targetgiven:
                 if ( target is None ) or (section_id is None ):
                     raise ValueError( "Must give both target and section_id" )
                 if overlapfrac is not None:
                     raise ValueError( "Can't give overlapfrac with target/section_id" )
 
-                q = ( "SELECT r.* FROM refs r "
-                      "INNER JOIN zero_points z ON r.zp_id=z._id "
-                      "INNER JOIN world_coordinates w ON z.wcs_id=w._id "
-                      "INNER JOIN source_lists s ON w.sources_id=s._id "
-                      "INNER JOIN images i ON S.image_id=i._id "
-                      "WHERE i.target=:target AND i.section_id=:section_id " )
-                subdict = { 'target': target, 'section_id': section_id }
+                q = sql.SQL( textwrap.dedent(
+                    """\
+                    SELECT r.* FROM refs r
+                    INNER JOIN zero_points z ON r.zp_id=z._id
+                    INNER JOIN world_coordinates w ON z.wcs_id=w._id
+                    INNER JOIN source_lists s ON w.sources_id=s._id
+                    INNER JOIN images i ON S.image_id=i._id
+                    WHERE i.target={targ} AND i.section_id={sec} " )
+                    """
+                ) ).format( targ=target, sec=section_id )
 
             # Mode 2 : ra/dec
 
-            elif ( ( ra is not None ) or ( dec is not None ) ):
+            elif radecgiven:
                 if ( ra is None ) or ( dec is None ):
                     raise ValueError( "Must give both ra and dec" )
                 if overlapfrac is not None:
@@ -322,45 +377,59 @@ class Reference(Base, UUIDMixin, HasBitFlagBadness):
                 #   that because Reference isn't a FourCorners, and we
                 #   have to join Reference to Image
 
-                q = ( "CREATE TEMPORARY TABLE temp_find_containing_ref AS "
-                      "( SELECT r.*, i.ra_corner_00, i.ra_corner_01, i.ra_corner_10, i.ra_corner_11, "
-                      "         i.dec_corner_00, i.dec_corner_01, i.dec_corner_10, i.dec_corner_11 "
-                      "  FROM refs r "
-                      "  INNER JOIN zero_points z ON r.zp_id=z._id "
-                      "  INNER JOIN world_coordinates w ON z.wcs_id=w._id "
-                      "  INNER JOIN source_lists s ON w.sources_id=s._id "
-                      "  INNER JOIN images i ON s.image_id=i._id "
-                      "  WHERE ( "
-                      "    ( i.maxdec >= :dec AND i.mindec <= :dec ) "
-                      "    AND ( "
-                      "      ( ( i.maxra > i.minra ) AND "
-                      "        ( i.maxra >= :ra AND i.minra <= :ra ) )"
-                      "      OR "
-                      "      ( ( i.maxra < i.minra ) AND "
-                      "        ( ( i.maxra >= :ra OR :ra > 180. ) AND ( i.minra <= :ra OR :ra <= 180. ) ) )"
-                      "    )"
-                      "  )"
-                      ")"
-                     )
-                subdict = { "ra": ra, "dec": dec }
-                sess.execute( sa.text(q), subdict )
+                q = sql.SQL( textwrap.dedent(
+                    """\
+                    CREATE TEMPORARY TABLE temp_find_containing_ref AS
+                    ( SELECT r.*, i.ra_corner_00, i.ra_corner_01, i.ra_corner_10, i.ra_corner_11,
+                             i.dec_corner_00, i.dec_corner_01, i.dec_corner_10, i.dec_corner_11
+                      FROM refs r
+                      INNER JOIN zero_points z ON r.zp_id=z._id
+                      INNER JOIN world_coordinates w ON z.wcs_id=w._id
+                      INNER JOIN source_lists s ON w.sources_id=s._id
+                      INNER JOIN images i ON s.image_id=i._id
+                      WHERE (
+                        ( i.maxdec >= {dec} AND i.mindec <= {dec} )
+                        AND (
+                          ( ( i.maxra > i.minra ) AND
+                            ( i.maxra >= {ra} AND i.minra <= {ra} ) )
+                          OR
+                          ( ( i.maxra < i.minra ) AND
+                            ( ( i.maxra >= {ra} OR {ra} > 180. ) AND ( i.minra <= {ra} OR {ra} <= 180. ) ) )
+                        )
+                      )
+                    )
+                    """
+                ) ).format( ra=ra, dec=dec )
+                pgdb.execute_nofetch( q )
 
-                q = ( "SELECT r.* FROM refs r INNER JOIN temp_find_containing_ref t ON r._id=t._id "
-                      "INNER JOIN zero_points z ON r.zp_id=z._id "
-                      "INNER JOIN world_coordinates w ON z.wcs_id=w._id "
-                      "INNER JOIN source_lists s ON w.sources_id=s._id "
-                      "INNER JOIN images i ON s.image_id=i._id "
-                      "WHERE q3c_poly_query( :ra, :dec, ARRAY[ t.ra_corner_00, t.dec_corner_00, "
-                      "                                        t.ra_corner_01, t.dec_corner_01, "
-                      "                                        t.ra_corner_11, t.dec_corner_11, "
-                      "                                        t.ra_corner_10, t.dec_corner_10 ] ) " )
+                q = sql.SQL( textwrap.dedent(
+                    """\
+                    SELECT r.* FROM refs r INNER JOIN temp_find_containing_ref t ON r._id=t._id
+                    INNER JOIN zero_points z ON r.zp_id=z._id
+                    INNER JOIN world_coordinates w ON z.wcs_id=w._id
+                    INNER JOIN source_lists s ON w.sources_id=s._id
+                    INNER JOIN images i ON s.image_id=i._id
+                    WHERE q3c_poly_query( {ra}, {dec}, ARRAY[ t.ra_corner_00, t.dec_corner_00,
+                                                              t.ra_corner_01, t.dec_corner_01,
+                                                              t.ra_corner_11, t.dec_corner_11,
+                                                              t.ra_corner_10, t.dec_corner_10 ] )
+                    """
+                ) ).format( ra=ra, dec=dec )
 
             # Mode 3 : overlapping area
 
-            elif ( image is not None ) or any( i is not None for i in [ minra, maxra, mindec, maxdec ] ):
-                if image is not None:
+            elif areagiven:
+                if wcs is not None:
+                    if any( i is not None for i in [ image, minra, maxra, mindec, maxdec ] ):
+                        raise ValueError( "Specify only one of image, wcs, or minra/maxra/mindec/maxdec" )
+                    minra = wcs.good_minra
+                    maxra = wcs.good_maxra
+                    mindec = wcs.good_mindec
+                    maxdec = wcs.good_maxdec
+                    fcobj = wcs
+                elif image is not None:
                     if any( i is not None for i in [ minra, maxra, mindec, maxdec ] ):
-                        raise ValueError( "Specify either image or minra/maxra/mindec/maxdec, not both" )
+                        raise ValueError( "Specify only one of image, wcs, or minra/maxra/mindec/maxdec" )
                     minra = image.minra
                     maxra = image.maxra
                     mindec = image.mindec
@@ -388,34 +457,37 @@ class Reference(Base, UUIDMixin, HasBitFlagBadness):
                 # Sort of redundant code from FourCorners._find_potential_overlapping_temptable,
                 #  but we can't just use that because Reference isn't a FourCorners and
                 #  we have to do the refs/images join.
+                #
+                # Perhaps I should put a function in FourCorners that returns the WHERE part
+                #  of this query....
 
-                q = ( "SELECT r.* FROM refs r "
-                      "INNER JOIN zero_points z ON r.zp_id=z._id "
-                      "INNER JOIN world_coordinates w ON z.wcs_id=w._id "
-                      "INNER JOIN source_lists s ON w.sources_id=s._id "
-                      "INNER JOIN images i ON s.image_id=i._id "
-                      "WHERE ( "
-                      "  ( i.maxdec >= :mindec AND i.mindec <= :maxdec ) "
-                      "  AND "
-                      "  ( ( ( i.maxra >= i.minra AND :maxra >= :minra ) AND "
-                      "      i.maxra >= :minra AND i.minra <= :maxra ) "
-                      "    OR "
-                      "    ( i.maxra < i.minra AND :maxra < :minra ) "   # both include RA=0, will overlap in RA
-                      "    OR "
-                      "    ( ( i.maxra < i.minra AND :maxra >= :minra AND :minra <= 180. ) AND "
-                      "      i.maxra >= :minra ) "
-                      "    OR "
-                      "    ( ( i.maxra < i.minra AND :maxra >= :minra AND :minra > 180. ) AND "
-                      "      i.minra <= :maxra ) "
-                      "    OR "
-                      "    ( ( i.maxra >= i.minra AND :maxra < :minra AND i.maxra <= 180. ) AND "
-                      "      i.minra <= :maxra ) "
-                      "    OR "
-                      "    ( ( i.maxra >= i.minra AND :maxra < :minra AND i.maxra > 180. ) AND "
-                      "      i.maxra >= :minra ) "
-                      "  )"
-                      ") " )
-                subdict = { 'minra': minra, 'maxra': maxra, 'mindec': mindec, 'maxdec': maxdec }
+                q = sql.SQL( textwrap.dedent(
+                    """\
+                    SELECT r.* FROM refs r
+                    INNER JOIN zero_points z ON r.zp_id=z._id
+                    INNER JOIN world_coordinates w ON z.wcs_id=w._id
+                    INNER JOIN source_lists s ON w.sources_id=s._id
+                    INNER JOIN images i ON s.image_id=i._id
+                    WHERE ( i.maxdec >= {mindec} AND i.mindec <= {maxdec} )
+                      AND ( ( ( i.maxra >= i.minra AND {maxra} >= {minra} ) AND
+                               i.maxra >= {minra} AND i.minra <= {maxra} )
+                              OR
+                              ( i.maxra < i.minra AND {maxra} < {minra} )
+                              OR
+                              ( ( i.maxra < i.minra AND {maxra} >= {minra} AND {minra} <= 180. ) AND
+                                i.maxra >= {minra} )
+                              OR
+                              ( ( i.maxra < i.minra AND {maxra} >= {minra} AND {minra} > 180. ) AND
+                                i.minra <= {maxra} )
+                              OR
+                              ( ( i.maxra >= i.minra AND {maxra} < {minra} AND i.maxra <= 180. ) AND
+                                i.minra <= {maxra} )
+                              OR
+                              ( ( i.maxra >= i.minra AND {maxra} < {minra} AND i.maxra > 180. ) AND
+                                i.maxra >= {minra} )
+                            )
+                    """
+                ) ).format( minra=minra, maxra=maxra, mindec=mindec, maxdec=maxdec )
 
             else:
                 raise ValueError( "Must give one of target/section_id, ra/dec, or minra/maxra/mindec/maxdec or image" )
@@ -423,58 +495,64 @@ class Reference(Base, UUIDMixin, HasBitFlagBadness):
             # Additional criteria
 
             if refset is not None:
-                q += " AND r.provenance_id=ANY( "
-                q += "   SELECT rs.provenance_id FROM refsets rs "
+                q += sql.SQL( "  AND r.provenance_id=ANY(\n        SELECT rs.provenance_id FROM refsets rs\n" )
                 # TODO : be fancier with collections.abc.Sequence or something
                 if isinstance( refset, list ):
-                    q += "  WHERE rs.name=ANY(:refsets) ) "
-                    subdict['refsets'] = refset
+                    q += sql.SQL( "                                     WHERE rs.name=ANY(ARRAY[{refsets}]) )\n"
+                                  ).format( refsets=sql.SQL(",").join(refset) )
                 else:
-                    q += "  WHERE rs.name=:refset ) "
-                    subdict['refset'] = refset
+                    q += sql.SQL( "                                     WHERE rs.name={refset} )\n"
+                                 ).format( refset=refset )
 
             elif provenance_ids is not None:
-                if isinstance( provenance_ids, str ) or isinstance( provenance_ids, UUID ):
-                    q += " AND r.provenance_id=:prov"
-                    subdict['prov'] = provenance_ids
+                if isinstance( provenance_ids, (str, UUID ) ):
+                    q += sql.SQL( "  AND r.provenance_id={prov}\n" ).format( prov=provenance_ids )
                 elif isinstance( provenance_ids, Provenance ):
-                    q += " AND r.provenance_id=:prov"
-                    subdict['prov'] = provenance_ids.id
+                    q += sql.SQL( "  AND r.provenance_id={prov}\n" ).format( prov=provenance_ids.id )
                 elif isinstance( provenance_ids, list ):
-                    q += " AND r.provenance_id=ANY(:provs)"
-                    subdict['provs'] = []
-                    for pid in provenance_ids:
-                        subdict['provs'].append( pid if isinstance( pid, str ) or isinstance( pid, UUID )
-                                                 else pid.id )
+                    q += sql.SQL( "  AND r.provenance_id=ANY(ARRAY[{provs}])\n"
+                                 ).format( provs=sql.SQL(",").join( pid.id if isinstance( pid, Provenance ) else pid
+                                                                    for pid in provenance_ids ) )
 
             if instrument is not None:
-                q += " AND i.instrument=:instrument "
-                subdict['instrument'] = instrument
+                q += sql.SQL( "  AND i.instrument={instr}\n" ).format( instr=instrument )
 
             if filter is not None:
-                q += " AND i.filter=:filter "
-                subdict['filter'] = filter
+                q += sql.SQL( "  AND i.filter={filter}\n" ).format( filter=filter )
 
+            if for_image_mjd is not None:
+                q += sql.SQL( "  AND ( r.validity_start IS NULL OR {t}>=validity_start )\n"
+                              "  AND ( r.validity_end IS NULL OR {t}<=validity_end )\n"
+                             ).format( t=pytz.utc.localize( astropy.time.Time( for_image_mjd,
+                                                                               format='mjd' ).datetime ) )
             if skip_bad:
-                q += " AND r._bitflag=0 AND r._upstream_bitflag=0 "
+                q += sql.SQL( "  AND r._bitflag=0 AND r._upstream_bitflag=0" )
 
             # Get the Reference objects
-            references = list( sess.scalars( sa.select( Reference )
-                                             .from_statement( sa.text(q).bindparams(**subdict) )
-                                            ).all() )
+            rows = pgdb.execute( q )
+            references = [ Reference(**r, from_db=True) for r in rows ]
 
-            # Get the image and zeropoint objects
-            things = list( sess.query( Image, ZeroPoint )
-                           .join( SourceList, Image._id==SourceList.image_id )
-                           .join( WorldCoordinates, SourceList._id==WorldCoordinates.sources_id )
-                           .join( ZeroPoint, WorldCoordinates._id==ZeroPoint.wcs_id )
-                           .filter( ZeroPoint._id.in_( r.zp_id for r in references ) )
-                           .all() )
-            images = [ t[0] for t in things ]
-            zeropoints = [ t[1] for t in things ]
+            if len(references) > 0:
+                # Get the image and worldcoordinates objects
+                q = sql.SQL( textwrap.dedent(
+                    """\
+                    SELECT z._id AS zpid, i.* FROM images i
+                    INNER JOIN source_lists s ON s.image_id=i._id
+                    INNER JOIN world_coordinates w ON w.sources_id=s._id
+                    INNER JOIN zero_points z ON z.wcs_id=w._id
+                    WHERE z._id=ANY(ARRAY[{zpids}])
+                    """
+                ) ).format( zpids=sql.SQL(",").join( r.zp_id for r in references ) )
+                rows = pgdb.execute( q )
+                imdict = {}
+                for row in rows:
+                    zpid = row['zpid']
+                    if zpid in imdict:
+                        raise RuntimeError( "This should never happen." )
+                    del row['zpid']
+                    imdict[zpid] = Image(**row)
 
         # Make sure the images are sorted right
-        imdict = { z._id : i for i, z in zip(images, zeropoints) }
         if not all( r.zp_id in imdict.keys() for r in references ):
             raise RuntimeError( "Didn't get back the images expected; this should not happen!" )
         images = [ imdict[r.zp_id] for r in references ]

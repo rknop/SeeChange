@@ -1,0 +1,196 @@
+# site_config has the stuff that might be different between one cluster
+# and another when they're running on the same database.
+#
+# This is the default one, used for extragalactic fields.  For galactic
+# fields, some stuff may be overriden
+
+overrides:
+  - site_config_local.yaml
+
+# ======================================================================
+# Paths
+
+path:
+  data_root: null
+  data_temp: null
+
+# ======================================================================
+# Database
+#
+# sa_connect_timeout is a SQLAlchemy thing.
+#
+# sleept, sleepmin, sleepfac, sleepfuzz, and maxsleep are used by *one*
+# of the ways we connect to the database (models/base.py::PGDB).
+# (Ideally, we are refactoring the code so that's the only way we
+# connect to the database.)  If a psycopg connection fails with a
+# psycopg.OperationalError, it will retry the connection.  This might
+# happen, e.g, if there are too many current connections.  Ideally,
+# after a short sleep, connections will open up, and we'll succesfully
+# connect.
+#
+#   sleept : the nominal time to sleep, in seconds, after a first failure
+#   sleepmin : the minimum time ever to sleep
+#   sleepfac : after each sleep, increase sleept by this factor
+#              (an exponential backoff)
+#   sleepfuzz : randomize sleept by a normal distribution with σ=sleepfuz*sleept.
+#               (This is so that if lots of processes are all sleeping, they
+#               don't all synchronize their attempts.)
+#   maxsleep : Once the sleepfac exponential increase is bigger than this
+#              value, fail for good.
+#
+# To disable the retry behavior, set maxsleep=0
+#
+# echoqueries, alwaysexplain, and alwaysanalze are used by
+# modesl/base.py::PGDB.  If echoqueries is True, it will log (with level
+# DEBUG) queries before they are executed.  (The configured value be
+# overriden by setting echo=Ture or echo=False in a call to PGDB.execute
+# or PGDB.execute_nofetch.)  If alwaysexplain is True, it will log (with
+# level debug) the results of EXPLAIN on the query before the query is
+# executed.  (Overriden with explain=True or explain=False.)  If
+# alwaysanalyze is True, it will run queries with EXPLAIN ANALYZE in
+# execute_nofetch() (overridden with analyze=True or analyze=False.)
+# (It will never analyze queries when just execute() is called.  Reason:
+# when you do EXPLAIN ANALYZE, it actually runs the query, but you don't
+# get back the results of the query, you get back the results of the
+# ANALYZE.  To get back the results, you'd have to run the query a
+# second time, and because queries may modify the database, we do NOT
+# want to run them twice.  If you really must do this, you will have to
+# do something manually to EXPLAIN ANALYZE.  (Or just pass it to
+# execute_nofetch.)
+#
+# WARNING.  Use of explain or analyze makes you subject to SQL injection
+# attacks!  Only use it if you are running on a database whose utter
+# destruction doesn't bother you (i.e. a test database), or if you're
+# very confident in where all your SQL came from.  (Of course, since
+# we're sending SQL directly to execute() or execute_nofetch(), it's
+# by definition SQL injection already, so of course you should be
+# careful about your SQL!  It's just that use of explain introduces
+# other surprising subtleties that might allow SQL injection that you
+# think you've projected yourself from.)
+#
+# Usually you want to default these to false, as at the very least they
+# will spam the database.  Turn them on for debugging and when you need
+# performance diagnostics.
+
+db:
+  sa_connect_timeout: 10
+  echoqueries: False
+  alwaysexplain: False
+  alwaysanalyze: False
+  sleept: 0.25
+  sleepmin: 0.125
+  sleepfac: 2
+  sleepfuzz: 0.1
+  sleepmax: 4
+
+# ======================================================================
+# Archive
+#
+# This is in the site_config because it may well be that different
+# systems have different ways of accessing the same archive.  (E.g., LS4
+# runs at NERSC, so compute jobs at NERSC can just use the local_*dir
+# configs, but jobs run elsewhere have to go through the server.)  Make
+# sure that every system using the archive is using the actual same
+# files!  That is, use the same server, and if you don't use the same
+# server, make sure you've pointed the directories at the right place!
+#
+# Set to null if there is no archive; otherwise, a dict
+#
+# Fields of the dict:
+#
+#   archive_url: string or null
+#     The URL of the archive server, or null if archive is on the filesystem
+#
+#   verify_cert: bool
+#     Should we verify the SSL cert of the archive server?  You usually
+#     want this to be true, but at least for testing we set this to
+#     false so we don't have to deal with getting certificates for
+#     our internally contained docker environment.
+#
+#   path_base: string
+#     The base of the collection on the archive server (a string unique
+#     to this dataset).  (This is not a full path, but relative to the
+#     base of the overall archive, and will usually just be a single
+#     word.)
+#
+#   token : string or null
+#     The token necessary to authenticate on the server.
+#
+#   token_file : string
+#     If token is null, read the token from this file
+#
+#   local_read_dir: string or null
+#     The directory to read from if the archive is on the local
+#     filesystem, or null.  Different from local_write_dir in case
+#     the system has a faster read-only method of accessing the same
+#     files (which is the case on NERSC).  If null, then the archive
+#     is not accessible locally, and the archive_url server will be
+#     used instead.  May be the same as local_write_dir.
+#
+#   local_write_dir: string or null
+#     The directory to write to if the archive is on the local
+#     filesystem, or null if we need to use archive_url.
+
+
+archive: null
+
+
+# ======================================================================
+# ======================================================================
+# ======================================================================
+# Pipeline components
+#
+
+# ======================================================================
+# Overall pipeline
+#
+# Also configed in pipeline_config.yaml; see comments there
+
+pipeline:
+  save_before_subtraction: true
+  save_at_finish: true
+
+# ======================================================================
+# Extraction, Backgrounding, and PSF are done in one step.
+
+extraction:
+  subconfigs_noncritical:
+    subconfigs:
+      extragalactic:
+        psf_timeout: 240.
+
+
+# ======================================================================
+# World Coordinates
+
+# astrocal:
+#   # This is what the tests want, but is not a good default.
+#   #   "None" is maybe a good default, as that tells astrometry.net
+#   #   to look in its own directories.
+#   # This value is set in tests/seechange_test_site_config.yaml
+#   # astrometry_net_indexdir: /seechange/tests/astronomy_net_data
+
+
+# ======================================================================
+# Scoring
+
+scoring:
+  rbbot_model_dir: /seechange/share/RBbot_models
+
+
+# ======================================================================
+# ======================================================================
+# ======================================================================
+# Astromatic utility config (sextractor, scamp, swarp, psfex)
+#
+# config_dir: string or null
+#    An absolute path to the base of the path where astromatic config
+#    files are.  If null, will use $CODE_ROOT.
+#
+# config_subdir: string or null
+#   A path relative to config_dir where the astromatic config files are.
+#   Can't be null.
+
+astromatic:
+  config_dir: null
+  config_subdir: share/astromatic

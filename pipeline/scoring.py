@@ -125,7 +125,7 @@ class Scorer:
         return scorelist
 
 
-    def run(self, *args, **kwargs):
+    def run(self, *args, do_not_load=False, **kwargs):
         """Assign deepscores to measurements.
 
         Look at the measurements and assign scores based
@@ -154,7 +154,7 @@ class Scorer:
             measurements = measurement_set.measurements
 
             # find if these deepscores have already been made
-            deepscore_set = ds.get_deepscore_set( prov, reload=True )
+            deepscore_set = None if do_not_load else ds.get_deepscore_set( prov, reload=True )
 
             if deepscore_set is not None:
                 scores = deepscore_set.deepscores

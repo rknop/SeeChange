@@ -1,5 +1,14 @@
+import io
 import time
 import pathlib
+import shutil
+import random
+import subprocess
+
+import numpy as np
+from astropy.io import fits
+from astropy.wcs import WCS
+from astropy.table import Table
 
 import improc.scamp
 
@@ -7,6 +16,7 @@ from util.exceptions import CatalogNotFoundError, SubprocessFailure, BadMatchExc
 from util.logger import SCLogger
 
 from models.world_coordinates import WorldCoordinates
+from models.base import FileOnDiskMixin
 
 from pipeline.parameters import Parameters
 from pipeline.data_store import DataStore
@@ -16,111 +26,222 @@ from pipeline.catalog_tools import fetch_gaia_dr3_excerpt
 class ParsAstroCalibrator(Parameters):
     def __init__(self, **kwargs):
         super().__init__()
+
+        # IMPORTANT
+        # Notice that many of the parameters critical=False that really probably ought
+        #   to be critical=True.  Reason: the subconfig_update system in parameters.py.
+        #   See comment in detection.py
+
         self.cross_match_catalog = self.add_par(
-            'cross_match_catalog',
-            'gaia_dr3',
-            str,
-            'Which catalog should be used for cross matching for astrometry. ',
-            critical=True
+            name = 'cross_match_catalog',
+            default = 'gaia_dr3',
+            par_types = str,
+            docstring = ( 'Which catalog should be used for cross matching for astrometry.  '
+                          'For method "astrometry.net", this must also be "astrometry.net".' ),
+            critical = False
         )
         self.add_alias('catalog', 'cross_match_catalog')
 
         self.solution_method = self.add_par(
-            'solution_method',
-            'scamp',
-            str,
-            'Method/algorithm to use to match the catalog to the image source list. ',
-            critical=True
+            name = 'solution_method',
+            default = 'scamp',
+            par_types = str,
+            docstring = ( 'Method/algorithm to use to match the catalog to the image source list.  '
+                          'Currently suported: scamp, astrometry.net' ),
+            critical = False
         )
         self.add_alias( 'method', 'solution_method' )
 
         self.max_catalog_mag = self.add_par(
-            'max_catalog_mag',
-            [22.],
-            list,
-            ( 'Maximum (dimmest) magnitudes to try requesting for the matching catalog (list of float).  It will '
-              'try these in order until it gets a catalog excerpt with at least catalog_min_stars, '
-              'and until it gets a succesful WCS solution.  (Cached catalog excerpts will be considered a match '
-              'if their max mag is within 0.1 mag of the one specified here.) ' ),
-            critical=True
+            name = 'max_catalog_mag',
+            default = [22.],
+            par_types = list,
+            docstring = ( 'Maximum (dimmest) magnitudes to try requesting for the matching catalog (list of float).  '
+                          'It will try these in order until it gets a catalog excerpt with at least '
+                          'catalog_min_stars, and until it gets a succesful WCS solution.  (Cached catalog excerpts '
+                          'will be considered a match if their max mag is within 0.1 mag of the one specified here.)  '
+                          'Not used by all methods.' ),
+            critical = False
         )
         self.add_alias( 'max_mag', 'max_catalog_mag' )
 
         self.mag_range_catalog = self.add_par(
-            'mag_range_catalog',
-            4.,
-            ( float, None ),
-            ( 'Range between maximum and minimum magnitudes to request for the catalog. '
-              'Make this None to have no lower (bright) limit.' ),
-            critical=True
+            name = 'mag_range_catalog',
+            default = 4.,
+            par_types = ( float, None ),
+            docstring = ( 'Range between maximum and minimum magnitudes to request for the catalog. '
+                          'Make this None to have no lower (bright) limit.  Not used by all methods.' ),
+            critical = False
         )
         self.add_alias( 'mag_range', 'mag_range_catalog' )
 
         self.min_catalog_stars = self.add_par(
-            'min_catalog_stars',
-            50,
-            int,
-            'Minimum number of stars the catalog must have',
-            critical=True
+            name = 'min_catalog_stars',
+            default = 50,
+            par_types = int,
+            docstring = 'Minimum number of stars the catalog must have.  Not used by all methods.',
+            critical = False
         )
         self.add_alias( 'min_stars', 'min_catalog_stars' )
 
         self.max_arcsec_residual = self.add_par(
-            'max_arcsec_residual',
-            0.15,
-            float,
-            ( 'Maximum residual in arcseconds for a WCS solution to be considered succesful.  The exact '
-              'meaning of this depends on the method, but it should be something reasonable.'
-             ),
-            critical=True
+            name = 'max_arcsec_residual',
+            default = 0.15,
+            par_types = float,
+            docstring = ( 'Maximum residual in arcseconds for a WCS solution to be considered succesful.  The exact '
+                          'meaning of this depends on the method, but it should be something reasonable.' ),
+            critical = False
         )
         self.add_alias( 'max_resid', 'max_arcsec_residual' )
 
         self.crossid_radii = self.add_par(
-            'crossid_radii',
-            [2.0],
-            list,
-            'List of initial radius in arcsec for cross-identifications to match; this is a scamp-specific parameter, '
-            'passed to scamp via -CROSSID_RADIUS.  Pass the ones to try in order; the algorithm will try '
-            'these (inside the mag_range_catalog loop) until it gets a successful WCS solution.',
-            critical=True
+            name = 'crossid_radii',
+            default = [2.0],
+            par_types = list,
+            docstring = ( 'List of initial radius in arcsec for cross-identifications to match; this is a '
+                          'scamp-specific parameter, passed to scamp via -CROSSID_RADIUS.  Pass the ones to try in '
+                          'order; the algorithm will try these (inside the mag_range_catalog loop) until it gets a '
+                          'successful WCS solution.  Not used by all methods.' ),
+            critical = False
         )
 
         self.min_frac_matched = self.add_par(
-            'min_frac_matched',
-            0.1,
-            float,
-            ( 'At least this fraction of the smaller of (image source list length, catalog excerpt lenght) '
-              'must have been matched between the two for a WCS solution to be considered successful.' ),
-            critical=True
+            name = 'min_frac_matched',
+            default = 0.1,
+            par_types = float,
+            docstring = ( 'At least this fraction of the smaller of (image source list length, catalog excerpt length) '
+                          'must have been matched between the two for a WCS solution to be considered successful.' ),
+            critical = False
         )
         self.add_alias( 'min_frac', 'min_frac_matched' )
 
         self.min_matched_stars = self.add_par(
-            'min_matched_stars',
-            10,
-            int,
-            ( 'At least this many stars must be matched between the source list and the catalog excerpt. '
-              'Set this to 0 to not use this criterion.  (Both this and min_frac_matched are checked.) ' ),
-            critical=True
+            name = 'min_matched_stars',
+            default = 10,
+            par_types = int,
+            docstring = ( 'At least this many stars must be matched between the source list and the catalog excerpt. '
+                          'Set this to 0 to not use this criterion.  (Both this and min_frac_matched are checked.)' ),
+            critical = False
         )
         self.add_alias( 'min_matches', 'min_matched_stars' )
 
         self.max_sources_to_use = self.add_par(
-            'max_sources_to_use',
-            2000,
-            ( int, list ),
-            ( 'If there are more than this many sources on the source list, crop it down this many, '
-              'keeping the brightest sources.' ),
-            critical=True
+            name = 'max_sources_to_use',
+            default = 2000,
+            par_types = ( int, list ),
+            docstring = ( 'If there are more than this many sources on the source list, crop it down this many, '
+                          'keeping the brightest sources.  Not used by all methods.' ),
+            critical = False
         )
 
-        self.scamp_timeout = self.add_par(
-            'scamp_timeout',
-            300,
-            int,
-            'Timeout in seconds for scamp to run',
-            critical=False
+        self.subproc_timeout = self.add_par(
+            name = 'subproc_timeout',
+            default = 300,
+            par_types = int,
+            docstring = 'Timeout in seconds for a subprocess to run.',
+            critical = False
+        )
+
+        self.astrometry_net_bindir = self.add_par(
+            name = 'astrometry_net_bindir',
+            default = '/astrometry.net/bin',
+            par_types = str,
+            docstring = 'Directory where the astrometry.net binaries are.',
+            critical = False
+        )
+
+        self.astrometry_net_indexdir = self.add_par(
+            name = 'astrometry_net_indexdir',
+            default = None,
+            par_types = ( str, type(None) ),
+            docstring = ( 'Directory where astrometry.net should find index files.  If not given, use the '
+                          'astrometry.net default (which, I think, is ../data relative to astrometry_net_bindir' ),
+            critical = False
+        )
+
+        # TODO : these could also be used in the scamp method!
+        self.astrometry_net_exposure_radec = self.add_par(
+            name = 'astrometry_net_exposure_radec',
+            default = False,
+            par_types = bool,
+            docstring = ( "Tell astrometry.net to look within astrometry_net_radius times the "
+                          "nominal instrument field radius of the supposed exposure's ra and dec.  "
+                          "(Normally, it starts without preconceptions (I think).)" ),
+            critical = False
+        )
+
+        self.astrometry_net_image_radec = self.add_par(
+            name = 'astrometry_net_image_radec',
+            default = False,
+            par_types = bool,
+            docstring = ( "Tell astrometry.net to look within astrometry_net_raidus times the "
+                          "nominal instrument field radius of the supposed image's ra and dec.  "
+                          "This takes precenece over astrometry_net_exposure_radec if both are set.  "
+                          "Normally, astrometry.net starts without preconception... I think." ),
+            critical = False
+        )
+
+        self.astrometry_net_radius = self.add_par(
+            name = 'astrometry_net_radius',
+            default = 2.0,                            # a generous default
+            par_types = float,
+            docstring = ( "Fraction of the nominal field (if astrometry_net_radec is True) or image "
+                          "(if astrometry_net_image_radec is True) radius to pull cata logs stars from." ),
+            critical = False
+        )
+
+        self.subconfigs = self.add_par(
+            name = 'subconfigs',
+            default = {
+                'choice_algorithm': 'star_density',
+                'choice_params': {
+                    'star_mag_cutoff': 20,
+                    'star_density_cutoff': 1e5,
+                },
+                'default_subconfig': 'extragalactic',
+                'subconfigs': {
+                    'extragalactic': {
+                        'cross_match_catalog': 'gaia_dr3',
+                        'solution_method': 'scamp',
+                        'max_catalog_mag': [22.],
+                        'mag_range_catalog': 4.,
+                        'min_catalog_stars': 50,
+                        'max_arcsec_residual': 0.15,
+                        'crossid_radii': [2.0],
+                        'min_frac_matched': 0.1,
+                        'min_matched_stars': 10,
+                        'max_sources_to_use': 2000,
+                        'astrometry_net_exposure_radec': False,
+                        'astrometry_net_image_radec': False,
+                        'astrometry_net_radius': 2.0,
+                    },
+                    'galactic': {
+                        'max_catalog_mag': [15., 16., 17.],
+                        'mag_range_catalog': 2.0
+                    }
+                }
+            },
+            par_types = dict,
+            docstring = ( "Algorithm for choosing all the config parameters, and replacements for all the "
+                          "config paramters based on that choice." ),
+            critical = True
+        )
+
+        self.subconfigs_noncritical = self.add_par(
+            name = 'subconfigs_noncritical',
+            default = {
+                'subconfigs': {
+                    'extragalactic': {
+                        'subproc_timeout': 300,
+                        'astrometry_net_bindir': '/astrometry.net/bin',
+                        'astrometry_net_indexdir': None
+                    },
+                    'galactic': {}
+                }
+            },
+            par_types = dict,
+            docstring = "Substitutions fro self.subconfigs that shouldn't go in the provenance.",
+            critical = False
         )
 
         self._enforce_no_new_attrs = True
@@ -192,12 +313,12 @@ class AstroCalibrator:
             min_matched=self.pars.min_matched_stars,
             max_arcsec_residual=self.pars.max_arcsec_residual,
             magkey='MAG_G', magerrkey='MAGERR_G',
-            timeout=self.pars.scamp_timeout,
+            timeout=self.pars.subproc_timeout,
         )
 
         # Update image.header with the new wcs.  Process this
         # through astropy.wcs.WCS to make sure everything is copacetic.
-        image.header.extend( wcs.to_header(), update=True )
+        image.header.extend( wcs.to_header( relax=True ), update=True )
 
         return wcs
 
@@ -264,7 +385,187 @@ class AstroCalibrator:
 
     # ----------------------------------------------------------------------
 
-    def run(self, *args, **kwargs):
+    def _run_astrometry_net( self, ds, prov, session=None ):
+        if self.pars.cross_match_catalog != 'astrometry.net':
+            raise ValueError( f'cross_match_catalog is "{self.pars.cross_match_catalog}", but needs to be '
+                              f'"astrometry.net" for method astrometry.net' )
+
+        # OK.  With some though, this could almost certainly be made
+        # more efficient.  Most importantly, we already have a source
+        # catalog, so we could use that instead of feeding the image
+        # into astrometry.net and making it extract it's own catalog!
+        #
+        # If our instrument classes have halfway decent scales, then the
+        # 0.8 - 1.2 range we feed to solve-field is probably too generous,
+        # but whatevs.
+        #
+        # I *think* a substantial fraction of the time is in I/O.  We might improve
+        # things by parallelizing less, though that's hard to figure out without
+        # changing the structure of top_level.py
+
+        barf = ''.join( random.choices( "abcdefghijklmnopqrstuvwxyz", k=10 ) )
+        tmpdir = pathlib.Path( FileOnDiskMixin.temp_path ) / barf
+        tmpdir.mkdir( parents=True )
+        tmptmpdir = tmpdir / "tmp"
+        tmptmpdir.mkdir()
+        image = ds.get_image( session=session )
+        sources = ds.get_sources( session=session )
+        if sources is None:
+            raise ValueError( f'Cannot find a source list corresponding to the datastore inputs: {ds.inputs_str}' )
+
+        # Write an xyls file for astrometry.net to eat.  (It could eat
+        # an image, but then it would be running sextractor itself,
+        # which is a waste of time since we've already done it.)
+        #
+        # THOUGHT REQUIRED.  Should we only write the good sources, or all of them?
+        #   If the positions of the saturated stars are good, then they are actually
+        #   providing it useful information.
+        #
+        # astrometry.net coordinates are 1-offset, so we have to convert
+        xyls = Table( { 'X': sources.x + 1.,
+                        'Y': sources.y + 1.,
+                        'FLUX': sources.apfluxadu()[0] } )
+        # Sort by descending flux because that's what astrometry.net wants
+        xyls = xyls[ xyls.argsort( 'FLUX', reverse=True ) ]
+        # Remove flux <= 0; not sure what sextrator is telling us there
+        #  (Generally this doesn't happen for aperture fluxes, but it was happening for psf fluxes.)
+        xyls = xyls[ xyls['FLUX'] > 0 ]
+        # Remove flux column
+        xyls.remove_column( 'FLUX' )
+        if len( xyls ) > 2000:
+            # Empirically, astrometry.net sometimes fails when there are lots of stars, but does
+            #   better if there are fewer.  It's also faster when there are fewer.
+            SCLogger.debug( f"Cutting {len(xyls)} sources down to 2000 to feed to astrometry.net" )
+            xyls = xyls[:2000]
+        # ...
+        inputpath = tmpdir / 'input_xyls.fits'
+        xyls.write( inputpath, format='fits' )
+
+        try:
+            SCLogger.debug( f"Starting astrometry.net on {ds.image.filepath}" )
+            # If I did this right, it won't write any files anywhere other than into tmpdir.
+            # I'm *trying* to only write 'solved' and 'wcs.fits', but it doesn't seem that
+            # --axy none stops it from writing hte axy file.  (It's probably useful, anyway....)
+            com = [ str( pathlib.Path( self.pars.astrometry_net_bindir ) / "solve-field" ),
+                    '--dir', tmpdir,
+                    '-m', tmptmpdir,
+                    '--x-column', 'X',
+                    '--y-column', 'Y',
+                    # '--sort-column', 'FLUX',
+                    '--width', str( image.data.shape[1] ),
+                    '--height', str( image.data.shape[0] ),
+                    '-p',                               # png images; -p disables them
+                    '-S', tmpdir / 'solved',
+                    '-W', tmpdir / 'wcs.fits',
+                    # '--axy', tmpdir / 'axyls.fits',     # sources extracted
+                    '-U', tmpdir / 'index_xyls.fits',   # x/y of sources from index
+                    '-R', tmpdir / 'rdls.fits',         # RA/Dec of sources from index
+                    '-B', tmpdir / 'corr.fits',         # stars that match between catalog and image
+                    '-M', 'none',
+                    '-N', 'none',
+                    '-O',
+                    '-L', str( 0.8 * image.instrument_object.pixel_scale ),
+                    '-H', str( 1.2 * image.instrument_object.pixel_scale ),
+                    '-u', 'arcsecperpix',
+                    '-t', '3',
+                    # '-v', '-v', '-v', '-v',             # verbose for debugging
+                   ]
+
+            if self.pars.astrometry_net_indexdir is not None:
+                com.extend( [ '--index-dir', self.pars.astrometry_net_indexdir ] )
+
+            if self.pars.astrometry_net_image_radec:
+                # hmm... this will trigger a read of the data, if it hasn't been read already.
+                # Should we just not worry about it, since often it will have been read earlier
+                # in the pipeline?  Or should we be keeping image width and height in the database?
+                imrad = ( image.instrument_object.pixel_scale / 3600. *
+                          np.sqrt( image.data.shape[0]**2 + image.data.shape[1]**2 ) / 2. )
+                imrad *= self.pars.astrometry_net_radius
+                SCLogger.debug( f"astrometry.net starting within {imrad:.2f}° of "
+                                f"({image.ra:.4f}, {image.dec:.4f})" )
+                com.extend( [ '--ra', str( image.ra ),
+                              '--dec', str( image.dec ),
+                              '--radius', str( imrad ) ] )
+            elif self.pars.astrometry_net_exposure_radec:
+                if ds.exposure_id is None:
+                    raise RuntimeError( "Didn't start with an exposure, don't have exposure ra/dec" )
+                exprad = image.instrument_object.max_rad_degree * self.pars.astrometry_net_radius
+                SCLogger.debug( f"astrometry.net starting within {exprad:.2f}° of "
+                                f"({ds.exposure.ra}:.4f, {ds.exposure.dec:.4f})" )
+                com.extend( [ '--ra', str( ds.exposure.ra ),
+                              '--dec', str( ds.exposure.dec ),
+                              '--radius', str( exprad ) ] )
+
+            com.append( str(inputpath) )
+
+            t0 = time.perf_counter()
+            try:
+                _anetcom = " ".join( f'"{str(i)}"' if ' ' in str(i) else str(i) for i in com )
+                SCLogger.debug( f"Sending to subprocess.run: {_anetcom}" )
+                res = subprocess.run( com, capture_output=True, timeout=self.pars.subproc_timeout )
+            except Exception:
+                strstr = io.StringIO()
+                strstr.write( "Exception trying to subprocess.run; contents of com are:\n" )
+                for val in com:
+                    strstr.write( f"    {val} (type {type(val)})\n" )
+                SCLogger.exception( strstr.getvalue() )
+                raise
+            t1 = time.perf_counter()
+            SCLogger.debug( f"astrometry.net/solve-field ran in {t1-t0:.2f} seconds" )
+            if res.returncode != 0:
+                raise SubprocessFailure( res )
+            if not ( tmpdir/'solved' ).is_file():
+                raise SubprocessFailure( res, premessage="astrometry.net/solve-field worked but solved file missing" )
+
+            # Read the diagnostic files, do some match checks
+            # axyls = Table.read( tmpdir / 'axyls.fits' )
+            index_xyls = Table.read( tmpdir / 'index_xyls.fits' )
+            corr = Table.read( tmpdir / 'corr.fits' )
+
+            ncat = len(index_xyls)
+            # nsrc = len(axyls)
+            nsrc = len(xyls)
+            nmatch = len(corr)
+
+            if ( self.pars.min_matched_stars > 0 ) and ( nmatch < self.pars.min_matched_stars ):
+                raise RuntimeError( f"astrometry.net didn't get a good enough match, only matched "
+                                    f"{len(corr)} stars (which is less than {self.pars.min_matched_stars})" )
+            if ( nmatch < self.pars.min_frac_match * min( ncat, nsrc ) ):
+                raise RuntimeError( f"astrometry.net matched {nmatch} stars out of {nsrc} sources "
+                                    f"and {ncat} catalog objects, which isn't enough." )
+
+            dx = corr['field_x'] - corr['index_x']
+            dy = corr['field_y'] - corr['index_y']
+            resid = np.median( np.sqrt( dx*dx + dy*dy ) )
+            resid *= image.instrument_object.pixel_scale
+            if resid > self.pars.max_arcsec_residual:
+                raise RuntimeError( f"Median residual of astrometry.net matches is {resid:.2f}\", which is more "
+                                    f"than the configured limit of {self.pars.max_arcsec_residual}\"" )
+
+            # Extract the wcs
+
+            with fits.open( tmpdir / 'wcs.fits' ) as wcshdu:
+                astropy_wcs = WCS( wcshdu[0].header )
+
+            # Update the image header... I'm not fully sure if that actually goes anywhere or not,
+            #  but scamp does it, so I'm cargo-culting my earlier self.
+            image.header.extend( astropy_wcs.to_header( relax=True ), update=True )
+
+            ds.wcs = WorldCoordinates( sources_id=sources.id, provenance_id=prov.id )
+            ds.wcs.wcs = astropy_wcs
+
+        # except Exception as ex:
+        #     import remote_pdb; remote_pdb.RemotePdb('127.0.0.1', random.randint(1000,60000)).set_trace()
+        #     pass
+
+        finally:
+            # import remote_pdb; remote_pdb.RemotePdb('127.0.0.1', random.randint(1000,60000)).set_trace()
+            shutil.rmtree( tmpdir )
+
+
+    # ----------------------------------------------------------------------
+
+    def run(self, *args, do_not_load=False, **kwargs):
         """Extract sources and use their positions to calculate the astrometric solution.
 
         Arguments are parsed by the DataStore.parse_args() method.
@@ -273,7 +574,9 @@ class AstroCalibrator:
         self.has_recalculated = False
 
         try:
-            ds = DataStore.from_args(*args, **kwargs)
+            ds = DataStore.from_args( *args, **kwargs )
+            self.pars.subconfig_update( ds )
+
             t_start = time.perf_counter()
             if ds.update_memory_usages:
                 import tracemalloc
@@ -285,7 +588,7 @@ class AstroCalibrator:
             prov = ds.get_provenance('astrocal', self.pars.get_critical_pars())
 
             # try to find the world coordinates in memory or in the database:
-            wcs = ds.get_wcs( provenance=prov )
+            wcs = None if do_not_load else ds.get_wcs( provenance=prov )
 
             if wcs is None:  # must create a new WorldCoordinate object
                 self.has_recalculated = True
@@ -299,8 +602,13 @@ class AstroCalibrator:
 
                 if self.pars.solution_method == 'scamp':
                     self._run_scamp( ds, prov )
+                elif self.pars.solution_method == 'astrometry.net':
+                    self._run_astrometry_net( ds, prov )
                 else:
                     raise ValueError( f'Unknown solution method {self.pars.solution_method}' )
+
+                # Update the four corners for this WCS object
+                ds.wcs.set_corners_from_wcs( setradec=True, mask=ds.image.flags )
 
                 # If an astro cal wasn't previously run on this image,
                 # update the image's ra/dec and corners attributes based on this new wcs

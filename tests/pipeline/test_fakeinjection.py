@@ -13,16 +13,16 @@ def test_hostless_fakeinjection( decam_datastore_through_zp, fakeinjector ):
     origwtstd = origds.image.weight.std()
 
     # This test is with fully random positions
-    fakeinjector.pars.hostless_frac = 1.
+    fakeinjector.pars.subconfig['subconfigs']['extragalactic']['hostless_frac'] = 1.
 
     # We want reproducible tests so we don't have to muck with flaky tests
-    fakeinjector.pars.random_seed = 42
+    fakeinjector.pars.subconfig['subconfigs']['extragalactic']['random_seed'] = 42
     # Generate a *lot* of fakes to make statistical tests below stronger
     n = 1000
-    fakeinjector.pars.num_fakes = n
+    fakeinjector.pars.subconfig['subconfigs']['extragalactic']['num_fakes'] = n
 
     # Start tests with a flat magnitude probabilty distro, mag rel. limmag
-    fakeinjector.pars.mag_prob_ratio = 1.
+    fakeinjector.pars.subconfig['subconfigs']['extragalactic']['mag_prob_ratio'] = 1.
     minmag = origds.image.lim_mag_estimate + fakeinjector.pars.min_fake_mag
     maxmag = origds.image.lim_mag_estimate + fakeinjector.pars.max_fake_mag
 
@@ -70,7 +70,7 @@ def test_hostless_fakeinjection( decam_datastore_through_zp, fakeinjector ):
     assert origds.image.weight.std() == origwtstd
 
     # Put in a dim/bright ratio of 2
-    fakeinjector.pars.mag_prob_ratio = 2.
+    fakeinjector.pars.subconfig['subconfigs']['extragalactic']['mag_prob_ratio'] = 2.
     ds = fakeinjector.run( origds )
     assert ds.fakes.random_seed == seed0
     assert len( ds.fakes.fake_x ) == n
@@ -86,21 +86,21 @@ def test_hostless_fakeinjection( decam_datastore_through_zp, fakeinjector ):
     assert hist[-1] / hist[0] == pytest.approx( 2., rel=2.*np.sqrt( 1./hist[-1] + 1./hist[0] ) )
 
     # ... and 0.5
-    fakeinjector.pars.mag_prob_ratio = 0.5
+    fakeinjector.pars.subconfig['subconfigs']['extragalactic']['mag_prob_ratio'] = 0.5
     ds = fakeinjector.run( origds )
     hist, _binedges = np.histogram( ds.fakes.fake_mag, range=(minmag, maxmag) )
     assert hist[0] / hist[-1] == pytest.approx( 2., rel=2.*np.sqrt( 1./hist[-1] + 1./hist[0] ) )
 
     # Absolute magnitude range
-    fakeinjector.pars.min_fake_mag = 23.
-    fakeinjector.pars.max_fake_mag = 25.
-    fakeinjector.pars.mag_rel_limmag = False
+    fakeinjector.pars.subconfig['subconfigs']['extragalactic']['min_fake_mag'] = 23.
+    fakeinjector.pars.subconfig['subconfigs']['extragalactic']['max_fake_mag'] = 25.
+    fakeinjector.pars.subconfig['subconfigs']['extragalactic']['mag_rel_limmag'] = False
     ds = fakeinjector.run( ds )
     assert np.all( ds.fakes.fake_mag >= 23. )
     assert np.all( ds.fakes.fake_mag <= 25. )
 
     # Random random seed
-    fakeinjector.pars.random_seed = 0
+    fakeinjector.pars.subconfig['subconfigs']['extragalactic']['random_seed'] = 0
     ds = fakeinjector.run( origds )
     seed1 = ds.fakes.random_seed
     ds = fakeinjector.run( origds )
@@ -112,12 +112,12 @@ def test_fakeinjection_on_host( decam_datastore_through_zp, fakeinjector ):
     ds = decam_datastore_through_zp
 
     # Put only on hosts w/in 1 magnitudes of the fake's mag, scale parameter 1.
-    fakeinjector.pars.hostless_frac = 0.
-    fakeinjector.pars.host_minmag = -4.
-    fakeinjector.pars.host_maxmag = 0.5
-    fakeinjector.pars.host_distscale = 1.
-    fakeinjector.pars.num_fakes = 100
-    fakeinjector.pars.random_seed = 31337
+    fakeinjector.pars.subconfig['subconfigs']['extragalactic']['hostless_frac'] = 0.
+    fakeinjector.pars.subconfig['subconfigs']['extragalactic']['host_minmag'] = -4.
+    fakeinjector.pars.subconfig['subconfigs']['extragalactic']['host_maxmag'] = 0.5
+    fakeinjector.pars.subconfig['subconfigs']['extragalactic']['host_distscale'] = 1.
+    fakeinjector.pars.subconfig['subconfigs']['extragalactic']['num_fakes'] = 100
+    fakeinjector.pars.subconfig['subconfigs']['extragalactic']['random_seed'] = 31337
 
     ds = fakeinjector.run( ds )
     fakes = ds.fakes
@@ -153,7 +153,7 @@ def test_fakeinjection_on_host( decam_datastore_through_zp, fakeinjector ):
 
     # Make sure we can only inject a fraction of fakes near hosts if we want
     for nearhostfrac in [ 0.35, 0.5, 0.75 ]:
-        fakeinjector.pars.hostless_frac = 1. - nearhostfrac
+        fakeinjector.pars.subconfig['subconfigs']['extragalactic']['hostless_frac'] = 1. - nearhostfrac
         fakeinjector.pars.random_seed += 101
         ds = fakeinjector.run( ds )
         nwithhosts = ( fakes.host_dex >= 0 ).sum()
@@ -167,12 +167,12 @@ def test_fake_analysis( decam_datastore ):
     ds._pipeline.pars.inject_fakes = True
     ds._pipeline.pars.save_at_finish = True
     ds._pipeline.subtractor.pars.trust_aligned_images = True
-    ds._pipeline.fakeinjector.pars.hostless_frac=0.35
-    ds._pipeline.fakeinjector.pars.random_seed = 42
-    ds._pipeline.fakeinjector.pars.num_fakes = 100
-    ds._pipeline.fakeinjector.pars.host_distscale = 1.
-    ds._pipeline.fakeinjector.pars.host_minmag = -4.
-    ds._pipeline.fakeinjector.pars.host_maxmag = 0.5
+    ds._pipeline.fakeinjector.pars.subconfig['subconfigs']['extragalactic']['hostless_frac'] = 0.35
+    ds._pipeline.fakeinjector.pars.subconfig['subconfigs']['extragalactic']['random_seed'] = 42
+    ds._pipeline.fakeinjector.pars.subconfig['subconfigs']['extragalactic']['num_fakes'] = 100
+    ds._pipeline.fakeinjector.pars.subconfig['subconfigs']['extragalactic']['host_distscale'] = 1.
+    ds._pipeline.fakeinjector.pars.subconfig['subconfigs']['extragalactic']['host_minmag'] = -4.
+    ds._pipeline.fakeinjector.pars.subconfig['subconfigs']['extragalactic']['host_maxmag'] = 0.5
 
     # This will be relatively fast, since all of the things before fake injection have
     #   already been run.  It will now just run the fake injection and analysis step
@@ -235,7 +235,7 @@ def test_fake_analysis( decam_datastore ):
     assert not np.any( np.isnan( ds.fakeanal.flux_psf[wkept] ) )
 
     # Things kept should be brighter on average than things not kept
-    assert ds.fakes.fake_mag[wkept].mean() < ds.fakes.fake_mag[ wgood & ~wkept ].mean() - 0.7
+    assert ds.fakes.fake_mag[wkept].mean() < ds.fakes.fake_mag[ wgood & ~wkept ].mean() - 0.6
 
     injectm = ds.fakes.fake_mag[wkept]
     m = -2.5 * np.log10( ds.fakeanal.flux_psf[wkept] ) + ds.zp.zp

@@ -1,8 +1,8 @@
-import time
-import random
+import functools
 import requests
 
 from util.logger import SCLogger
+from util.util import retry_with_sleep
 
 
 def retry_post( url, json={}, returnjson=True, retries=5, timeout0=1.0, timeoutfac=2.0, timeoutjitter=0.1,
@@ -62,37 +62,17 @@ def retry_post( url, json={}, returnjson=True, retries=5, timeout0=1.0, timeoutf
       depending on whether returnjson is False or True
 
     """
+    raise NotImplementedError( "retry_post is deprecated" )
 
-    meansleeptime = timeout0
-    for currenttry in range( retries ):
-        try:
-            res = requests.post( url, json=json )
-            if res.status_code == 200:
-                if returnjson:
-                    return res.json()
-                else:
-                    return res
-        except Exception as ex:
-            msg = f"{currenttry+1} failure contacting {url}: Exception: {str(ex)}.  "
-        else:
-            msg = f"{currenttry+1} failure contacting {url}; got HTTP status {res.status_code}: \""
-            errmsg = res.text if len(res.text) < 240 else res.text[:240]
-            msg += f"{errmsg}\".  "
+    maxsleep = timeout0 * ( 2 ** (retries-1) )
+    do_the_thing = functools.partial( requests.post, url, json=json )
 
-        if currenttry < retries-1:
-            sleeptime = meansleeptime
-            if timeoutjitter > 0:
-                sleeptime += random.gauss( 0., sigma=meansleeptime*timeoutjitter )
-                sleeptime = max( sleeptime, meansleeptime/4. )
-            msg += "  Sleeping {sleeptime:.2f} seconds and trying again."
-            if failwarn:
-                SCLogger.warning( msg )
-            else:
-                SCLogger.debug( msg )
+    def _errmsg( res ):
+        SCLogger.errror( f"Failed to contact {url}; got HTTP status {res.status_code}: \""
+                         f"{res.text if len(res.text) < 240 else res.text[:240]}\"." )
 
-            time.sleep( sleeptime )
-            meansleeptime *= timeoutfac
-
-    msg += "Too many failures, giving up."
-    SCLogger.error( msg )
-    raise RuntimeError( msg )
+    res = retry_with_sleep( do_the_thing, sleepmin=timeout0/2., sleept=timeout0, sleepfac=timeoutfac,
+                            sleepfuzz=timeoutjitter, sleepmax=maxsleep,
+                            failmessage=f"contacting {url}",
+                            good_returns=[ 200 ], return_attr='status_code', badreturn_handler=_errmsg )
+    return res.json()

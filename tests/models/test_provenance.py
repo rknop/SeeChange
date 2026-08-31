@@ -108,9 +108,8 @@ def test_unique_provenance_hash():
         )
         assert p2.id == hash
 
-        with pytest.raises(sa.exc.IntegrityError) as e:
+        with pytest.raises(RuntimeError, match=r"^Provenance .* already exists in the database.$" ) as e:
             p2.insert()
-        assert 'duplicate key value violates unique constraint "provenances_pkey"' in str(e)
 
         p2.insert( _exists_ok=True )
 
@@ -140,7 +139,7 @@ def test_upstream_relationship( provenance_base, provenance_extra ):
                 upstreams=[provenance_base],
                 is_testing=True,
             )
-            p1.insert()
+            p1.insert( session=session )
 
             pid1 = p1.id
             new_ids.append(pid1)
@@ -156,7 +155,7 @@ def test_upstream_relationship( provenance_base, provenance_extra ):
                 upstreams=[provenance_base, provenance_extra],
                 is_testing=True,
             )
-            p2.insert()
+            p2.insert( session=session )
 
             pid2 = p2.id
             assert pid2 is not None

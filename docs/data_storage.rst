@@ -2,7 +2,7 @@
 Data storage
 ************
 
-Data is stored in three main places: 
+Data is stored in three main places:
 
 * The database
 * The local filesystem
@@ -27,7 +27,7 @@ Provenance Tags
 
 In practice, provenances are treated as (mostly) opaque objects, and are a field of objects of classes associated with data products.  Every Provenance has a simple string id which can be used to refer to it, and to use when searching for objects.  These strings are hashes, so are unpleasant for humans to use.  The database also allows for the definition of "provenance tags", which are human readable strings that point to a provenacne for each process.  You might, for instance, use the "DR1" provenance tag to get all of the provenacne ids for all processes, and then use those provenance ids to get all the data products associated with "data release 1".  It's up to the managers of the pipeline to maintain which provenance tags exist and to keep track of what they mean.
 
-  
+
 Database
 ========
 
@@ -85,11 +85,11 @@ This is particularly useful in nested functions::
 
   # call the function with a self-contained session
   my_function()  # session opens and closes inside the function scope
-        
+
   # call the function with an externally created session
   with SmartSession() as session:
       my_function(session)
-      # session will be closed here, not in the function 
+      # session will be closed here, not in the function
 
 **Make sure not to hold open connections for a long time.**  In normal operation of the pipeline, many processes are running in parallel.  If they all hold connections open at once, they may exhaust database resources.  There is some overhead in creating a databse connection, so if you're going to do several fast operations in a row, do them within one connection.  But, if you're going to do substantial computations between two calls to the database, make sure to close the database connection in between.  This usually means exiting the ``with`` block that started the connection.  Additionally, be careful about passing a session nested functions that do substantial computation, as that will hold the database connection open throughout the running of the nested function.
 
@@ -132,7 +132,7 @@ The ``__init__()`` method of each mapped class can define other attributes that 
   class MyObject:
       def __init__(self):
           self.my_attribute = None
-        
+
       @reconstructor
       def init_on_load(self):
           self.my_attribute = None

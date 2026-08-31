@@ -6,6 +6,7 @@ import shutil
 import base64
 import hashlib
 import requests
+import requests_file
 
 import numpy as np
 
@@ -15,7 +16,6 @@ from datetime import datetime
 from astropy.io import fits
 
 from models.base import SmartSession
-from models.ptf import PTF  # noqa: F401  # need this import to make sure PTF is added to the Instrument list
 from models.provenance import Provenance
 from models.exposure import Exposure
 from models.image import Image
@@ -31,6 +31,7 @@ from improc.alignment import ImageAligner
 
 from pipeline.data_store import DataStore
 from pipeline.coaddition import Coadder
+from pipeline.ref_maker import RefMaker
 
 from util.retrydownload import retry_download
 from util.logger import SCLogger
@@ -79,7 +80,7 @@ def ptf_bad_pixel_map(download_url, data_dir, ptf_cache_dir):
             shutil.copy2(cache_path, data_path)
 
     with fits.open(data_path) as hdul:
-        data = (hdul[0].data == 0).astype('uint16')  # invert the mask (good is False, bad is True)
+        data = (hdul[0].data == 0).astype('int16')  # invert the mask (good is False, bad is True)
 
     data = np.roll(data, -1, axis=0)  # shift the mask by one pixel (to match the PTF data)
     data[-1, :] = 0  # the last row that got rolled seems to be wrong
@@ -142,6 +143,7 @@ def ptf_downloader(provenance_preprocessing, download_url, data_dir, ptf_cache_d
             md5sum.update( ifp.read() )
         exposure = Exposure( filepath=filename,
                              md5sum=uuid.UUID(md5sum.hexdigest()),
+                             instrument='PTF',
                              format='fits' )
 
         return exposure
@@ -152,12 +154,24 @@ def ptf_downloader(provenance_preprocessing, download_url, data_dir, ptf_cache_d
 @pytest.fixture
 def ptf_exposure(ptf_downloader):
 
-    exposure = ptf_downloader()
-    exposure.upsert()
 
-    yield exposure
+    exp = ptf_downloader()
 
-    exposure.delete_from_disk_and_database()
+    # Fill in non-null fields
+    for field in [ 'mjd', 'exp_time', 'ra', 'dec' ]:
+        if getattr( exp, field ) is None:
+            setattr( exp, field, 0. )
+    for field in [ 'project', 'target' ]:
+        if getattr( exp, field ) is None:
+            setattr( exp, field, 'unknown' )
+    if ( exp._filter is None ) and ( exp.filter_array is None ):
+        exp._filter = "R"
+
+    exp.upsert()
+
+    yield exp
+
+    exp.delete_from_disk_and_database()
 
 
 @pytest.fixture
@@ -167,8 +181,8 @@ def ptf_datastore_through_cutouts( datastore_factory, ptf_exposure, ptf_ref, ptf
         ptf_exposure,
         11,
         cache_dir=ptf_cache_dir,
-        cache_base_name='187/PTF_20110429_040004_11_R_Sci_NJXSRT',
-        overrides={'extraction': {'threshold': 5}, 'subtraction': {'refset': 'test_refset_ptf'}},
+        cache_base_name='187/PTF_20110429_040004_11_R_Sci_7GP3ZI',
+        overrides={'extraction': {'snr_threshold': 5}, 'subtraction': {'refset': 'test_refset_ptf'}},
         bad_pixel_map=ptf_bad_pixel_map,
         provtag='ptf_datastore',
         through_step='cutting'
@@ -197,8 +211,8 @@ def ptf_datastore_through_zp( datastore_factory, ptf_exposure, ptf_ref, ptf_cach
         ptf_exposure,
         11,
         cache_dir=ptf_cache_dir,
-        cache_base_name='187/PTF_20110429_040004_11_R_Sci_NJXSRT',
-        overrides={'extraction': {'threshold': 5}, 'subtraction': {'refset': 'test_refset_ptf'}},
+        cache_base_name='187/PTF_20110429_040004_11_R_Sci_7GP3ZI',
+        overrides={'extraction': {'snr_threshold': 5}, 'subtraction': {'refset': 'test_refset_ptf'}},
         bad_pixel_map=ptf_bad_pixel_map,
         provtag='ptf_datastore',
         through_step='photocal'
@@ -227,8 +241,8 @@ def ptf_datastore(datastore_factory, ptf_exposure, ptf_ref, ptf_cache_dir, ptf_b
         ptf_exposure,
         11,
         cache_dir=ptf_cache_dir,
-        cache_base_name='187/PTF_20110429_040004_11_R_Sci_NJSXRT',
-        overrides={'extraction': {'threshold': 5}, 'subtraction': {'refset': 'test_refset_ptf'}},
+        cache_base_name='187/PTF_20110429_040004_11_R_Sci_7GP3ZI',
+        overrides={'extraction': {'snr_threshold': 5}, 'subtraction': {'refset': 'test_refset_ptf'}},
         bad_pixel_map=ptf_bad_pixel_map,
         provtag='ptf_datastore'
     )
@@ -247,7 +261,9 @@ def ptf_datastore(datastore_factory, ptf_exposure, ptf_ref, ptf_cache_dir, ptf_b
 def ptf_urls(download_url):
     # base_url = 'https://portal.nersc.gov/project/m2218/pipeline/test_images/'
     base_url = os.path.join(download_url, 'PTF/10cwm')
-    r = requests.get(base_url)
+    reqsess = requests.Session()
+    reqsess.mount( "file://", requests_file.FileAdapter() )
+    r = reqsess.get(base_url)
     soup = BeautifulSoup(r.text, 'html.parser')
     links = soup.find_all('a')
     filenames = [
@@ -270,7 +286,7 @@ def ptf_images_datastore_factory(ptf_urls, ptf_downloader, datastore_factory, pt
 
     def factory( start_date='2009-04-04', end_date='2013-03-03',
                  max_images=None, provtag='ptf_images_factory',
-                 overrides={'extraction': {'threshold': 5}} ):
+                 overrides={'extraction': {'snr_threshold': 5}} ):
         # translate the strings into datetime objects
         start_time = datetime.strptime(start_date, '%Y-%m-%d') if start_date is not None else datetime(1, 1, 1)
         end_time = datetime.strptime(end_date, '%Y-%m-%d') if end_date is not None else datetime(3000, 1, 1)
@@ -288,6 +304,16 @@ def ptf_images_datastore_factory(ptf_urls, ptf_downloader, datastore_factory, pt
         dses = []
         for url in urls:
             exp = ptf_downloader(url)
+            # Fill in non-null fields
+            for field in [ 'mjd', 'exp_time', 'ra', 'dec' ]:
+                if getattr( exp, field ) is None:
+                    setattr( exp, field, 0. )
+            for field in [ 'project', 'target' ]:
+                if getattr( exp, field ) is None:
+                    setattr( exp, field, 'unknown' )
+            if ( exp._filter is None ) and ( exp.filter_array is None ):
+                exp._filter = "R"
+
             exp.insert()
             exp.instrument_object.fetch_sections()
             exp.md5sum = uuid.uuid4()  # this will save some memory as the exposures are not saved to archive
@@ -451,7 +477,6 @@ def ptf_aligned_image_datastores(request, ptf_reference_image_datastores, ptf_ca
 # the fixture too.
 @pytest.fixture
 def ptf_ref(
-        refmaker_factory,
         ptf_reference_image_datastores,
         ptf_aligned_image_datastores,
         ptf_cache_dir,
@@ -459,10 +484,14 @@ def ptf_ref(
 ):
     SCLogger.debug( f"Making ptf_ref from {[i.image.filepath for i in ptf_reference_image_datastores]}" )
     SCLogger.debug( f"zp ids are { [ i.zp.id for i in ptf_reference_image_datastores ] } " )
-    refmaker = refmaker_factory('test_ref_ptf', 'PTF', ptf_reference_image_datastores[0].zp.provenance_id,
-                                provtag='ptf_ref')
+    if not all( i.zp.provenance_id == ptf_reference_image_datastores[0].zp.provenance_id
+                for i in ptf_reference_image_datastores ):
+        raise RuntimeError( "Fundamental assumptions about the nature of the Universe have been violated." )
+    refmaker = RefMaker( maker={ 'name': 'test_ptf_ref',
+                                 'instrument': 'PTF',
+                                 'zp_prov_id': ptf_reference_image_datastores[0].zp.provenance_id } )
     refmaker.setup_provenances()
-    pipe = refmaker.coadd_pipeline
+    pipe = refmaker._coadd_pipeline
 
     # Copying code from Image.invent_filepath so that
     #   we know what the filenames will be
@@ -474,14 +503,14 @@ def ptf_ref(
     utag = base64.b32encode(utag.digest()).decode().lower()
     utag = f'u-{utag[:6]}'
 
-    cache_base_name = f'187/PTF_20090405_073932_11_R_ComSci_{refmaker.coadd_im_prov.id[:6]}_{utag}'
+    cache_base_name = f'187/PTF_20090405_073932_11_R_ComSci_{refmaker.coadd_provs["starting_point"].id[:6]}_{utag}'
 
     extensions = [
         '',
-        f'.sources_{refmaker.coadd_ex_prov.id[:6]}.fits',
-        f'.psf_{refmaker.coadd_ex_prov.id[:6]}',
-        f'.bg_{refmaker.coadd_ex_prov.id[:6]}.h5',
-        f'.wcs_{refmaker.coadd_wcs_prov.id[:6]}.txt',
+        f'.sources_{refmaker.coadd_provs["extraction"].id[:6]}.fits',
+        f'.psf_{refmaker.coadd_provs["extraction"].id[:6]}',
+        f'.bg_{refmaker.coadd_provs["extraction"].id[:6]}.h5',
+        f'.wcs_{refmaker.coadd_provs["astrocal"].id[:6]}.txt',
         '.zp'
     ]
     filenames = [os.path.join(ptf_cache_dir, cache_base_name) + f'{ext}.json' for ext in extensions]
@@ -510,15 +539,19 @@ def ptf_ref(
             coadd_datastore = DataStore( coadd_image )
 
             coadd_datastore.sources = copy_from_cache(
-                SourceList, ptf_cache_dir, cache_base_name + f'.sources_{refmaker.coadd_ex_prov.id[:6]}.fits'
+                SourceList, ptf_cache_dir,
+                cache_base_name + f'.sources_{refmaker.coadd_provs["extraction"].id[:6]}.fits'
             )
-            coadd_datastore.psf = copy_from_cache( PSFExPSF, ptf_cache_dir,
-                                                   cache_base_name + f'.psf_{refmaker.coadd_ex_prov.id[:6]}' )
-            coadd_datastore.bg = copy_from_cache( Background, ptf_cache_dir,
-                                                  cache_base_name + f'.bg_{refmaker.coadd_ex_prov.id[:6]}.h5',
-                                                  add_to_dict={ 'image_shape': coadd_datastore.image.data.shape } )
-            coadd_datastore.wcs = copy_from_cache( WorldCoordinates, ptf_cache_dir,
-                                                   cache_base_name + f'.wcs_{refmaker.coadd_wcs_prov.id[:6]}.txt' )
+            coadd_datastore.psf = copy_from_cache(
+                PSFExPSF, ptf_cache_dir,
+                cache_base_name + f'.psf_{refmaker.coadd_provs["extraction"].id[:6]}' )
+            coadd_datastore.bg = copy_from_cache(
+                Background, ptf_cache_dir,
+                cache_base_name + f'.bg_{refmaker.coadd_provs["extraction"].id[:6]}.h5',
+                add_to_dict={ 'image_shape': coadd_datastore.image.data.shape } )
+            coadd_datastore.wcs = copy_from_cache(
+                WorldCoordinates, ptf_cache_dir,
+                cache_base_name + f'.wcs_{refmaker.coadd_provs["astrocal"].id[:6]}.txt' )
             coadd_datastore.zp = copy_from_cache( ZeroPoint, ptf_cache_dir, cache_base_name + '.zp' )
 
             # Make sure it's all in the database
@@ -526,7 +559,9 @@ def ptf_ref(
 
     if must_run_coadd:
         SCLogger.debug( "Running coadd for ptf_ref" )
-        coadd_datastore = pipe.run( ptf_reference_image_datastores, aligned_datastores=ptf_aligned_image_datastores )
+        coadd_datastore = pipe.run( ptf_reference_image_datastores,
+                                    aligned_datastores=ptf_aligned_image_datastores,
+                                    prov_tree=pipe.datastore.prov_tree )
         coadd_datastore.save_and_commit()
 
         # Check that the filename came out what we expected above
@@ -551,7 +586,7 @@ def ptf_ref(
     )
     ref.insert()
 
-    # Since we didn't actually run the RefMaker we got from refmaker_factory, we may still need
+    # Since we didn't actually run the RefMaker we made, just the coadd pipelinedirectly, we may still need
     #   to create the reference set and tag the reference we built.
     # (Not bothering with locking here because we know our tests are single-threaded.)
     must_delete_refset = False
@@ -647,8 +682,10 @@ def ptf_ref_offset(ptf_ref):
 
 
 @pytest.fixture(scope='session')
-def ptf_refset(refmaker_factory, provenance_base):
-    refmaker = refmaker_factory('test_refset_ptf', 'PTF', provenance_base.id, 'ptf_refset')
+def ptf_refset(provenance_base):
+    refmaker = RefMaker( maker={ 'name': 'test_refset_ptf',
+                                 'instrument': 'PTF',
+                                 'zp_prov_id': provenance_base.id } )
     refmaker.pars.save_new_refs = True
 
     refmaker.make_refset()  # this makes a refset without making any references
@@ -667,7 +704,7 @@ def ptf_refset(refmaker_factory, provenance_base):
 
         session.commit()
 
-    # Clean out the provenance tag that may have been created by the refmaker_factory
+    # Clean out the provenance tag that may have been created by the refmaker
     with SmartSession() as session:
         session.execute( sa.text( "DELETE FROM provenance_tags WHERE tag=:tag" ), {'tag': 'ptf_refset' } )
         session.commit()

@@ -8,7 +8,12 @@ import sep
 from models.base import SmartSession
 from models.image import Image
 from models.datafile import DataFile
-from models.enums_and_bitflags import image_preprocessing_inverse, string_to_bitflag, flag_image_bits_inverse
+from models.enums_and_bitflags import (
+    image_preprocessing_inverse,
+    string_to_bitflag,
+    flag_image_bits_inverse,
+    BitFlagConverter )
+
 
 from pipeline.parameters import Parameters
 from pipeline.data_store import DataStore
@@ -31,13 +36,89 @@ class ParsPreprocessor(Parameters):
                       "in already-preprocessed images.",
                       critical=True )
 
+        self.add_par( 'overscan_method',
+                      'median',
+                      str,
+                      ( "Method used for overscan.  Can median or polymedrej (see "
+                        "instrument.py::Instrument.overscan_and_trim); possible that other instruments may "
+                        "support other methods." ),
+                      critical=True
+                     )
+
+        self.add_par( 'overscan_kwargs',
+                      {},
+                      dict,
+                      ( "Additional keywords passed to Instrument.overscan_and_trim.  Meanings depend on "
+                        "overscan_method" ),
+                      critical=True
+                     )
+
+        self.add_par( 'use_base_mask',
+                      True,
+                      bool,
+                      "Use the instrument's base mask when building the image mask.",
+                      critical=True
+                     )
+
+        self.add_par( 'use_zero_mask',
+                      True,
+                      bool,
+                      "If the bias subtraction step is applied, add masked pixels in the bias image to image mask",
+                      critical=True
+                     )
+
+        self.add_par( 'use_flat_mask',
+                      True,
+                      bool,
+                      "If flatfielding is performed, add masked pixels in the flat image to image mask",
+                      critical=True
+                     )
+
+        self.add_par( 'masked_pixels_to_replace',
+                      [],
+                      list,
+                      "Complicated",
+                      critical=True
+                     )
+
+        self.add_par( 'masked_pixel_replacement',
+                      {},
+                      dict,
+                      "Complicated",
+                      critical=True
+                     )
+
         self.add_par( 'calibset', 'externally_supplied', str,
                       "The calibrator set to use.  Choose one of the CalibratorSetConverter enum. ",
                       critical=True )
         self.add_alias( 'calibrator_set', 'calibset' )
 
+        self.add_par( 'zero_provtag',
+                      None,
+                      ( str, type(None) ),
+                      ( "If given, then when searching for a zero for bias subtraction, only accept "
+                        "zero images that have a provenance tagged with this provenance tag.  "
+                        "Do not use with externally_supplied, or you will probably regret it." ),
+                      critical=True )
+
         self.add_par( 'flattype', 'externally_supplied', str,
                       "One of the FlatTypeConverter enum. ",
+                      critical=True )
+
+        self.add_par( 'flat_provtag',
+                      None,
+                      ( str, type(None) ),
+                      ( "If given, when searching for a flat for flatfielding, only accept "
+                        "flat images that have a provenance tagged with this provenance tag.  "
+                        "Do not use with externally_supplied, or will will probably regret it." ),
+                      critical=True )
+
+        self.add_par( 'fringe_provtag',
+                      None,
+                      ( str, type(None) ),
+                      ( "If given, when searching for a fringe image for fringe correction, only accept "
+                        "fringe images that have a provenance tagged with this provenance tag.  "
+                        "Do not use with externally_supplied, or will will probably regret it." ),
                       critical=True )
 
         self.add_par( 'purge_raw_data',
@@ -92,7 +173,7 @@ class Preprocessor:
         return string_to_bitflag( strng, image_preprocessing_inverse )
 
 
-    def run( self, *args, **kwargs ):
+    def run( self, *args, do_not_load=False, **kwargs ):
         """Run preprocessing for a given exposure and section_identifier.
 
         Parameters are passed to the data_store constructor (see
@@ -111,6 +192,8 @@ class Preprocessor:
         """
         self.has_recalculated = False
 
+        made_image = False
+        made_flags = False
         ds = None
         try:
             ds = DataStore.from_args( *args, **kwargs )
@@ -136,34 +219,42 @@ class Preprocessor:
             known_steps = self.instrument.preprocessing_steps_available
             known_steps += self.instrument.preprocessing_steps_done
             known_steps = set(known_steps)
-            needed_steps = set(self.pars.steps_required)
-            if not needed_steps.issubset(known_steps):
+            steps_to_do = set(self.pars.steps_required)
+            needed_steps = steps_to_do - set( self.instrument.preprocessing_steps_done )
+            if not steps_to_do.issubset(known_steps):
                 raise ValueError(
-                    f'Missing some preprocessing steps {needed_steps - known_steps} '
+                    f'Missing some preprocessing steps {steps_to_do - known_steps} '
                     f'for instrument {self.instrument.name}'
                 )
 
             # Get the calibrator files
-            SCLogger.debug("preprocessing: getting calibrator files")
-            preprocparam = self.instrument.preprocessing_calibrator_files( self.pars.calibset,
-                                                                           self.pars.flattype,
-                                                                           ds.section_id,
-                                                                           baseobj.filter,
-                                                                           baseobj.mjd )
-
-            SCLogger.debug("preprocessing: got calibrator files")
+            if not all( step in self.instrument.preprocessing_nofile_steps for step in needed_steps ):
+                SCLogger.debug("preprocessing: getting calibrator files")
+                preprocparam = self.instrument.preprocessing_calibrator_files( self.pars.calibset,
+                                                                               self.pars.flattype,
+                                                                               ds.section_id,
+                                                                               baseobj.filter,
+                                                                               baseobj.mjd,
+                                                                               zero_provtag=self.pars.zero_provtag,
+                                                                               flat_provtag=self.pars.flat_provtag,
+                                                                               fringe_provtag=self.pars.fringe_provtag
+                                                                              )
+                SCLogger.debug("preprocessing: got calibrator files")
+            else:
+                preprocparam = {}
 
             # get the provenance for this step, using the current parameters:
             prov = ds.get_provenance('preprocessing', self.pars.get_critical_pars())
 
             # check if the image already exists in memory or in the database:
-            image = ds.get_image(prov)
+            image = None if do_not_load else ds.get_image( prov )
 
             image_was_from_exposure = False
             if image is None:  # need to make new image
                 # get the single-chip image from the exposure
                 image = Image.from_exposure( ds.exposure, ds.section_id )
                 image_was_from_exposure = True
+                made_image = True
 
             if image is None:
                 raise ValueError('Image cannot be None at this point!')
@@ -171,18 +262,19 @@ class Preprocessor:
             if image.preproc_bitflag is None:
                 image.preproc_bitflag = 0
 
-            # Figure out what steps are generally needed.
-            # Needed steps started above at set(self.pars.steps_required).
-            # Subtract off what is *always* done by this instrument.
-            needed_steps -= set(self.instrument.preprocessing_steps_done)
+            # Figure out how many steps we need to keep based on image type
+            if image.type in self.instrument.preprocessing_steps_by_type:
+                needed_steps = needed_steps.intersection( self.instrument.preprocessing_steps_by_type[ image.type ] )
+
+            # Figure out if we skip any steps based on filter
             filter_skips = self.instrument.preprocessing_step_skip_by_filter.get(baseobj.filter, [])
             if not isinstance(filter_skips, list):
                 raise ValueError(f'Filter skips parameter for {baseobj.filter} must be a list')
             filter_skips = set(filter_skips)
             needed_steps -= filter_skips
 
-            # in case we skip all preprocessing steps
             if image._data is None:
+                # in case we skip all preprocessing steps
                 image.data = image.raw_data
                 # Make sure the Exposure won't cache data we aren't using any more.
                 if image_was_from_exposure:
@@ -198,25 +290,44 @@ class Preprocessor:
             #   instrument's preprocessing_step_skip_by_filter).
             already_done = set( image.preprocessing_done.split(', ') if image.preprocessing_done else [] )
 
+            stilltodo = needed_steps - already_done
             # If self.pars.preprocessing is anything other than
             #   'internal', there should be nothing left to do except
             #   set the image provenance, and maybe calculate the weight
             #   and flags.  Verify that.
             if self.pars.preprocessing != 'internal':
-                if len( needed_steps - already_done ) > 0:
+                if len( stilltodo ) > 0:
                     raise ValueError( f"Preprocessing error: self.pars.preprocessing is {self.pars.preprocessing}, "
-                                      f"but we still need to do steps {needed_steps-already_done} "
+                                      f"but we still need to do steps {stilltodo} "
                                       f"(needed_steps={needed_steps}, preproc_bitflag={image.preproc_bitflag})" )
 
-            if not needed_steps.issubset(already_done):  # still things to do here
+            if len( stilltodo ) == 0:
+                SCLogger.debug( "Image has already been preprocessed." )
+
+            else:
+                # Still stuff to do!
                 self.has_recalculated = True
                 # Overscan is always first (as it reshapes the image)
-                if 'overscan' in needed_steps:
+                if 'overscan' in stilltodo:
                     SCLogger.debug('preprocessing: overscan and trim')
-                    image.data = self.instrument.overscan_and_trim( image )
+                    image.data = self.instrument.overscan_and_trim( image, method=self.pars.overscan_method,
+                                                                    **self.pars.overscan_kwargs )
+                    image.flags = np.zeros( image.data.shape, dtype=np.int16 )
+                    made_flags = True
                     # Update the header ra/dec calculations now that we know the real width/height
-                    image.set_corners_from_header_wcs(setradec=True)
+                    try:
+                        image.set_corners_from_header_wcs(setradec=True)
+                    except Exception as ex:
+                        # No header WCS.  (Probably that's why there's an exception.)
+                        SCLogger.warning( f"No header WCS, not setting corners for {image.filepath}" )
+                        SCLogger.debug( str(ex) )
                     image.preproc_bitflag |= string_to_bitflag( 'overscan', image_preprocessing_inverse )
+                    image.header['HISTORY'] = 'overscan corrected and trimmed by SeeChange'
+
+                # If, for some reason, we don't yet have a  flags array, make sure we now do
+                if image.flags is None:
+                    image.flags = np.zeros( image.data.shape, dtype=np.int16 )
+                    made_flags = True
 
                 # At this point, we won't use image.raw_data again.  Set it
                 #   to None so the memory will be freed if it's not also
@@ -226,7 +337,7 @@ class Preprocessor:
 
                 # Apply steps in the order expected by the instrument
                 for step in self.pars.steps_required:
-                    if step not in needed_steps:
+                    if step not in stilltodo:
                         continue
                     if step == 'overscan':
                         continue
@@ -241,11 +352,8 @@ class Preprocessor:
                         raise RuntimeError( f"Can't find calibration file for preprocessing step {step}" )
 
                     if stepfileid is None:
-                        SCLogger.info(f"Skipping step {step} for filter {baseobj.filter} "
-                                         f"because there is no calibration file (this may be normal)")
-                        # should we also mark it as having "done" this step? otherwise it will not know it's done
-                        image.preproc_bitflag |= string_to_bitflag( step, image_preprocessing_inverse )
-                        continue
+                        raise FileNotFoundError( f"Failed to find a {step} calibrator for filter "
+                                                 f"section {image.section_id}, filter {baseobj.filter}" )
 
                     # Use the cached calibrator file for this step if it's the right one; otherwise, grab it
                     if ( stepfileid in self.stepfilesids ) and ( self.stepfilesids[step] == stepfileid ):
@@ -271,18 +379,28 @@ class Preprocessor:
                     if step in [ 'zero', 'dark' ]:
                         # Subtract zeros and darks
                         image.data -= calibfile.data
+                        if ( step == 'zero' ) and ( self.pars.use_zero_mask ) and ( calibfile.flags is not None ):
+                            image.flags = np.bitwise_or( image.flags, calibfile.flags )
+                        image.header['HISTORY'] = f'{step} subtracted by SeeChange with {calibfile.id}'
+                        image.header['HISTORY'] = f'{step}: {calibfile.filepath}'
 
                     elif step in [ 'flat', 'illumination' ]:
                         # Divide flats and illuminations
                         image.data /= calibfile.data
+                        if ( step == 'flat' ) and ( self.pars.use_flat_mask ) and ( calibfile.flags is not None ):
+                            image.flags = np.bitwise_or( image.flags, calibfile.flags )
+                        image.header['HISTORY'] = f'{step} divided by SeeChange with {calibfile.id}'
+                        image.header['HISTORY'] = f'{step}: {calibfile.filepath}'
 
                     elif step == 'fringe':
                         # TODO FRINGE CORRECTION
-                        SCLogger.info( "Fringe correction not implemented" )
+                        SCLogger.warning( "Fringe correction not implemented" )
 
                     elif step == 'linearity':
                         # Linearity is instrument-specific
                         self.instrument.linearity_correct( image, linearitydata=calibfile )
+                        image.header['HISTORY'] = f'linearity corrected by SeeChange with {calibfile.id}'
+                        image.header['HISTORY'] = f'linearity: {calibfile.filepath}'
 
                     else:
                         # TODO: Replace this with a call into an instrument method?
@@ -301,11 +419,18 @@ class Preprocessor:
                     if yeet in image.header:
                         del image.header[yeet]
 
-            # Build the weight and flags images (if necessary)
-            if image._flags is None or image._weight is None:
-                # Start with the Instrument standard bad pixel mask for this image
-                image._flags = self.instrument.get_standard_flags_image( ds.section_id )
+            # If we STILL don't have a flags image, by golly, we need one
+            if image.flags is None:
+                image.flags = np.zeros( image.data.shape, dtype=np.int16 )
+                made_flags = True
 
+            # OR in the standard instrument mask if we're supposed to
+            if made_flags and self.pars.use_base_mask:
+                basemask = self.instrument.get_standard_flags_image( ds.section_id )
+                image.flags |= basemask
+
+            # Build the weight images (if necessary)
+            if image.weight is None:
                 # Estimate the background rms with sep
                 boxsize = self.instrument.background_box_size
                 filtsize = self.instrument.background_filt_size
@@ -318,30 +443,53 @@ class Preprocessor:
                 backgrounder = sep.Background( image.data, mask=fmask,
                                                bw=boxsize, bh=boxsize, fw=filtsize, fh=filtsize )
                 del fmask
-                rms = backgrounder.rms()
+                variance = backgrounder.rms()   # It's not variance yet, but it will be
                 sky = backgrounder.back()
                 subim = image.data - sky
                 SCLogger.debug( "Building weight image and augmenting flags image" )
 
-                wbad = np.where( rms <= 0 )
-                wgood = np.where( rms > 0 )
-                rms = rms ** 2
+                # Anywhere the rms given by the sep backgrounder is <=0, set the 'zero weight'
+                #   bit in the flags image
+                image.flags[ variance <= 0 ] &= ( np.int16(1) << BitFlagConverter.to_int('zero weight') )
+
+                variance = variance ** 2        # see?
                 subim[ subim < 0 ] = 0
                 gain = self.instrument.average_gain( image )
                 gain = gain if gain is not None else 1.
                 # Shot noise from image above background
-                rms += subim / gain
-                image._weight = np.zeros( image.data.shape, dtype=np.float32 )
-                image._weight[ wgood ] = 1. / rms[ wgood ]
-                image._flags[ wbad ] |= string_to_bitflag( "zero weight", flag_image_bits_inverse )
-                # Now make the weight zero on the bad pixels too
-                image._weight[ image._flags != 0 ] = 0.
+                # THOUGHT REQUIRED.  Where the sky fluctuates high, this will add
+                #   additional noise that isn't real.  My instinct is that it's so
+                #   piddly that we shouldn't worry about it, but in a very low-sky
+                #   (e.g. short exposure?) situation, it could be non-piddly.
+                variance += subim / gain
+                wgood = ( image.flags == 0 )
+                image.weight = np.zeros( image.data.shape, dtype=np.float32 )
+                image.weight[ wgood ] = 1. / variance[ wgood ]
                 # Figure out saturated pixels
                 satlevel = self.instrument.average_saturation_limit( image )
                 if satlevel is not None:
+                    # WORRY.  We should really do this on *raw* data.  Hopefully doing it on
+                    #   flatfielded data is not *that* big a deal.  (It's not sky-subtracted; that's subim.)
                     wsat = image.data >= satlevel
-                    image._flags[ wsat ] |= string_to_bitflag( "saturated", flag_image_bits_inverse )
-                    image._weight[ wsat ] = 0.
+                    image.flags[ wsat ] |= string_to_bitflag( "saturated", flag_image_bits_inverse )
+                    image.weight[ wsat ] = 0.
+
+            # Replace some flagged pixels in the image if we were told to,
+            #   and if we did anything to the image.  (Otherwise, don't touch it.)
+            if ( made_image or ( len(stilltodo) > 0 ) ) and ( len(self.pars.masked_pixels_to_replace) > 0 ):
+                SCLogger.debug( "Replacing some flagged pixels in image" )
+                didmask = np.int16(0)
+                for pixname in self.pars.masked_pixels_to_replace:
+                    bitmask = np.int16(1) << BitFlagConverter.to_int( pixname )
+                    try:
+                        repval = float( self.pars.masked_pixel_replacement[ pixname ] )
+                        w = ( image.flags & bitmask != 0 ) & ( image.flags & didmask == 0 )
+                        image.data[w] = repval
+                        image.header['HISTORY'] = f'{pixname} flagged pixels replaced with {repval}'
+                    except ValueError:
+                        # TODO : support things like inpainting, image median
+                        raise RuntimeError( "Currently only support floats for masked_pixel_replacmeent" )
+                    didmask |= bitmask
 
             if image.provenance_id is None:
                 image.provenance_id = prov.id

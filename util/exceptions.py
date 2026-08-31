@@ -13,8 +13,10 @@ class CatalogNotFoundError( RuntimeError ):
 class SubprocessFailure( RuntimeError ):
     """A subprocess didn't return success."""
 
-    def __init__( self, response, *args, **kwargs ):
+    def __init__( self, response, premessage=None, *args, **kwargs ):
         strio = io.StringIO()
+        if premessage is not None:
+            strio.write( f"{premessage}\n" )
         strio.write( f"Subprocess {response.args[0] if isinstance(response.args,list) else response.args} "
                      f"returned {response.returncode}\n" )
         strio.write( f"arguments: {response.args}\n" )

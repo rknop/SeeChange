@@ -1,11 +1,13 @@
 import io
 import datetime
+import pytz
 import pathlib
 import uuid
 # import traceback
 
 import sqlalchemy as sa
 import psycopg
+import astropy.time
 
 from util.util import listify, asUUID, env_as_bool
 from util.logger import SCLogger
@@ -581,7 +583,7 @@ class DataStore:
         args: list
             A list of arguments to parse.
             Possible argument combinations are:
-             - DataStore: makes a copy of the other DataStore's __dict__
+             - DataStore: makes a copy of the other DataStore's __dict__.  WARNING : shallow copy!
              - exposure_id, section_id: a uuid and a string
              - Exposure, section_id: an Exposure object, and a string
              - Image: an Image object.
@@ -842,7 +844,7 @@ class DataStore:
 
 
     def make_prov_tree( self, pars, steps=None, provtag=None, ok_no_ref_prov=False, upstream_steps=None,
-                        starting_point=None ):
+                        starting_point=None, pgdb=None ):
         """Create the DataStore's provenance tree.
 
         Also creates provenances and saves them to the database if
@@ -976,6 +978,10 @@ class DataStore:
              don't specify this, then the 'starting_point' provenance in
              the ProvenanceTree will be figured out based on what's in
              the datastore as described above.
+
+          pgdb : PGDB, psycopg.Connection, psycopg.Cursor, or sa Session, default None
+             Databse connection.  If not given, will open and close a
+             new one (maybe more than once).  Warning : commits.
 
         Returns
         -------
@@ -1137,13 +1143,13 @@ class DataStore:
                                       parameters=pars[step],
                                       upstreams=upstream_provs,
                                       is_testing=is_testing )
-            provs[step].insert_if_needed()
+            provs[step].insert_if_needed( session=pgdb )
 
             # Set the provenance tag if requested.
             # (Chances are it's already set, but somebody will be first.)
             self._provtag = provtag
             if self._provtag is not None:
-                ProvenanceTag.addtag( self._provtag, provs.values(), add_missing_processes_to_provtag=True )
+                ProvenanceTag.addtag( self._provtag, provs.values(), add_missing_processes_to_provtag=True, pgdb=pgdb )
 
         self.prov_tree = provs
 
@@ -1788,10 +1794,25 @@ class DataStore:
                   ):
                 self.reference = None
 
+            elif ( ( self.reference.validity_start is not None ) and
+                   ( pytz.utc.localize( astropy.time.Time(self.image.mjd, format='mjd').datetime )
+                     < self.reference.validity_start )
+                  ):
+                self.reference = None
+
+            elif ( ( self.reference.validity_end is not None ) and
+                   ( pytz.utc.localize( astropy.time.Time(self.image.mjd, format='mjd').datetime )
+                     > self.reference.validity_end )
+                  ):
+                self.reference = None
+
             elif ( min_overlap is not None ) and ( min_overlap > 0 ):
+                # Make sure this one is last since it has an if inside it!
+                SCLogger.warning( "I think this next line of code needs to be rethought given good sections!" )
                 ovfrac = FourCorners.get_overlap_frac(image, self.reference.image)
                 if ovfrac < min_overlap:
                     self.reference = None
+
 
             # if we have survived this long without losing the reference, can return it here:
             if self.reference is not None:
@@ -1840,6 +1861,7 @@ class DataStore:
             # For image search, Reference.get_references() will
             #  already have filtered by min_overlap if relevant.
             if search_by != 'image':
+                SCLogger.warning( "I think this next line needs to be rethought given 'good' sections" )
                 if ( ( min_overlap is not None ) and
                      ( min_overlap > 0 ) and
                      ( FourCorners.get_overlap_frac( image, imgs[0] ) < min_overlap )
@@ -1852,6 +1874,7 @@ class DataStore:
             # Multiple references found; deal with it.
 
             # Sort references by overlap fraction descending
+            SCLogger.warning( "I think this next line needs to be rethought given 'good' sections" )
             ovfrac = [ FourCorners.get_overlap_frac( image, i ) for i in imgs ]
             sortdex = list( range( len(refs) ) )
             sortdex.sort( key=lambda x: -ovfrac[x] )

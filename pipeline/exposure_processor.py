@@ -14,33 +14,26 @@ from util.config import Config
 
 from models.base import PsycopgConnection
 from models.enums_and_bitflags import KnownExposureStateConverter
-from models.instrument import get_instrument_instance
+from models.instrument import Instrument
 from models.exposure import Exposure
-
-# Importing this because otherwise when I try to do something completly
-# unrelated to Object or Measurements, sqlalchemy starts objecting about
-# relationships between those two that aren't defined.
-# import models.object
-
-# Gotta import the instruments we might use before instrument fills up
-# its cache of known instrument instances
-import models.decam  # noqa: F401
 
 from pipeline.data_store import DataStore
 from pipeline.top_level import Pipeline
-from pipeline.configchooser import ConfigChooser
 
 
 class ExposureProcessor:
     def __init__( self, instrument, identifier, numprocs, cluster_id,
                   node_id, machine_name=None, onlychips=None,
-                  through_step=None, worker_log_level=logging.WARNING ):
+                  through_step=None, ignore_known_exposures=False,
+                  nosave=False, do_not_load=False, start_step=None,
+                  provtag=False, worker_log_level=logging.WARNING ):
         """A class that processes all images in a single exposure, potentially using multiprocessing.
 
         It's sort of a wrapper around top_level.py::Pipeline, but
         handles downloading exposures, some updates of the
-        knownexposures table, and running lots of processes each
-        of which run a single Pipeline (on one chip).
+        knownexposures table (unless ignore_known_exposures is True),
+        and running lots of processes each of which run a single
+        Pipeline (on one chip).
 
         This is used internally by ExposureLauncher; normally, you would not use it directly.
 
@@ -65,11 +58,35 @@ class ExposureProcessor:
         onlychips : list, default None
           If not None, will only process the sensor sections whose names
           match something in this list.  If None, will process all
-          sensor sections returned by the instrument's get_section_ids()
-          class method.
+          sensor sections returned by the instrument's fetch_sections(),
+          skipping chips marked as defective.
 
         through_step : str or None
           Passed on to top_level.py::Pipeline
+
+        ignore_known_exposures : bool, default False
+          If this is True, then there must be an Exposure with the given
+          origin identifier for the given instrument already in the
+          database.  (Hence, it doesn't make to use this if you don't
+          pass cont=True to secure_exposure().)  It will not try to
+          read or update the known exposures table.
+
+        nosave : bool, default False
+          If True, then nothing is saved (...except maybe provenances?
+          and provenance tags? TODO CHECK THIS), and the knownexposures
+          table won't be updated. Useful, possibly, for testing.
+
+        do_not_load : bool, default False
+          If data products already exist in the database, ignore them
+          and rerun stuff.  Useful for testing/debugging.  You will get
+          exceptions if you don't also set nosave=True.  TODO : make this
+          finer grained so we can start at a later step.
+
+        provtag : str or None or False
+          If False, use the config's value for the Pipeline
+          provenance_tag parameter.  Otherwise, pass this value.  (The
+          default is not None because None is something you might use to
+          override what's in the config.)
 
         worker_log_level : log level, default logging.WARNING
           The log level for the worker processes.  Here so that you can
@@ -77,7 +94,7 @@ class ExposureProcessor:
           than in the individual processes that run the actual pipeline.
 
         """
-        self.instrument = get_instrument_instance( instrument )
+        self.instrument = Instrument.get_instrument_instance( instrument )
         self.identifier = identifier
         self.cluster_id = cluster_id
         self.node_id = node_id
@@ -85,8 +102,12 @@ class ExposureProcessor:
         self.numprocs = numprocs
         self.onlychips = onlychips
         self.through_step = through_step
+        self.ignore_known_exposures = ignore_known_exposures
+        self.nosave = nosave
+        self.do_not_load = do_not_load
+        self.start_step = start_step
         self.worker_log_level = worker_log_level
-        self.provtag = Config.get().value( 'pipeline.provenance_tag' )
+        self.provtag = provtag
 
     def cleanup( self ):
         """Do our best to free memory."""
@@ -95,39 +116,42 @@ class ExposureProcessor:
 
 
     def finish_work( self ):
-        with PsycopgConnection() as conn:
-            cursor = conn.cursor()
-            cursor.execute( "LOCK TABLE knownexposures" )
-            cursor.execute( "SELECT cluster_id, start_time FROM knownexposures "
-                            "WHERE instrument=%(inst)s AND identifier=%(ident)s",
-                            { 'inst': self.instrument.name, 'ident': self.identifier } )
-            rows = cursor.fetchall()
-            if len(rows) == 0:
-                raise ValueError ( f"Error, unknown known exposure with instrument {self.instrument} "
-                                   f"and identifier {self.identifier}" )
-            if len(rows) > 1:
-                raise RuntimeError ( f"Error, multiple known exposures with instrument {self.instrument} "
-                                     f"and identifier {self.identifier}; this should not happen" )
-            if rows[0][0] != self.cluster_id:
-                raise ValueError( f"Error, known exposure with instrument {self.instrument.name} and identifier "
-                                  f"{self.identifier} is claimed by cluster {rows[0][0]}, not {self.cluster_id}" )
-            if rows[0][1] is None:
-                raise ValueError( f"Error, known exposure with instrument {self.instrument.name} and identifier "
-                                  f"{self.identifier} has a null start time" )
+        if ( not self.ignore_known_exposures ) and ( not self.nosave ):
+            with PsycopgConnection() as conn:
+                cursor = conn.cursor()
+                cursor.execute( "LOCK TABLE knownexposures" )
+                cursor.execute( "SELECT cluster_id, start_time FROM knownexposures "
+                                "WHERE instrument=%(inst)s AND identifier=%(ident)s",
+                                { 'inst': self.instrument.name, 'ident': self.identifier } )
+                rows = cursor.fetchall()
+                if len(rows) == 0:
+                    raise ValueError ( f"Error, unknown known exposure with instrument {self.instrument} "
+                                       f"and identifier {self.identifier}" )
+                if len(rows) > 1:
+                    raise RuntimeError ( f"Error, multiple known exposures with instrument {self.instrument} "
+                                         f"and identifier {self.identifier}; this should not happen" )
+                if rows[0][0] != self.cluster_id:
+                    raise ValueError( f"Error, known exposure with instrument {self.instrument.name} and identifier "
+                                      f"{self.identifier} is claimed by cluster {rows[0][0]}, not {self.cluster_id}" )
+                if rows[0][1] is None:
+                    raise ValueError( f"Error, known exposure with instrument {self.instrument.name} and identifier "
+                                      f"{self.identifier} has a null start time" )
 
-            cursor.execute( "UPDATE knownexposures SET release_time=%(t)s, _state=%(state)s "
-                            "WHERE instrument=%(inst)s AND identifier=%(ident)s",
-                            { 'inst': self.instrument.name, 'ident': self.identifier,
-                              't': datetime.datetime.now( tz=datetime.UTC ),
-                              'state': KnownExposureStateConverter.to_int('done') } )
-            conn.commit()
+                cursor.execute( "UPDATE knownexposures SET release_time=%(t)s, _state=%(state)s "
+                                "WHERE instrument=%(inst)s AND identifier=%(ident)s",
+                                { 'inst': self.instrument.name, 'ident': self.identifier,
+                                  't': datetime.datetime.now( tz=datetime.UTC ),
+                                  'state': KnownExposureStateConverter.to_int('done') } )
+                conn.commit()
 
 
     def secure_exposure( self, assume_claimed=False, cont=True, delete=False ):
         """Make sure the exposure is downloaded and in the database and archive.
 
         Also updates the knownexposures table to indicate that this
-        exposure is running on this cluster, node, and machine.
+        exposure is running on this cluster, node, and machine (unless
+        the ExposureProcessor was initialized with ignore_kn
+        own_exposures=True).
 
         If it's not yet in the database, use the Instrument subclass to download and load it.
 
@@ -145,13 +169,16 @@ class ExposureProcessor:
              knownexposures state is "claimed", raise an exception
              unless the cluster_id, node_id, and machine_name in the
              knownexposures table all match this object's values.
+             Irrelevant if ExposureProcessor was initialized with
+             ignore_known_exposures=True.
 
           cont : bool, default False
              If this is False, and an exposure already exists in the
              database, raise an exception.  If this is True, then don't
              raise an exception, make sure that the known exposure table
-             has the right exposure id, and proceed, trusting the
-             pipeline to pick up where it left off.
+             has the right exposure id (unless ignore_known_exposures is
+             True), and proceed, trusting the pipeline to pick up where
+             it left off.
 
           delete : bool, default False
              OMG, don't use this.  Unless you're testing and developing,
@@ -159,9 +186,36 @@ class ExposureProcessor:
              exists in the database, *blow it away* (and any derived
              data products) and start it over.  The design of the
              pipeline is such that this isn't supposed to happen, but,
-             well, development has needs.
+             well, development has needs.  delete cannot be True if the
+             ExposureProcessor was initialized with
+             ignore_known_exposures=False.
 
         """
+
+        if delete and ( self.ignore_known_exposures or self.nosave ):
+            raise ValueError( "Cannot use delete with ignore_known_exposures or no_save" )
+
+        if self.ignore_known_exposures:
+            with PsycopgConnection() as conn:
+                cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
+                cursor.execute( "SELECT _id FROM exposures WHERE instrument=%(inst)s AND origin_identifier=%(iden)s",
+                                { 'inst': self.instrument.name, 'iden': self.identifier } )
+                exps = cursor.fetchall()
+                if len( exps ) > 1:
+                    raise RuntimeError( f"Database corruption, multiple exposures with instrument "
+                                        f"{self.instrument.name} and identifier {self.identifier}" )
+                if len(exps) == 0:
+                    raise RuntimeError( f"No exposure in the database for instrument {self.instrument.name} "
+                                        f"with identifier {self.identifier}" )
+                exposureid = exps[0]['_id']
+            self.exposure = Exposure.get_by_id( exposureid )
+            if self.exposure is None:
+                raise ValueError( f"Unknown exposure {exposureid}.  This should never happen." )
+            SCLogger.info( f"Found exposure {self.identifier}" )
+
+            return
+
+        # If we get here, then self.ignore_known_exposures is false
 
         SCLogger.info( f"Securing exposure {self.identifier}..." )
         exposureid = None
@@ -224,19 +278,20 @@ class ExposureProcessor:
                     raise ValueError( f"There's already an exposure associated with instrument {self.instrument.name} "
                                       f"and identifier {self.identifier}, but cont is False" )
 
-            q = ( "UPDATE knownexposures SET cluster_id=%(clust)s, node_id=%(node)s, machine_name=%(mach)s, "
-                  "claim_time=%(t)s, start_time=NULL, release_time=NULL, _state=%(state)s, exposure_id=%(expid)s "
-                  "WHERE instrument=%(inst)s AND identifier=%(iden)s" )
-            cursor.execute( q, { 'inst': self.instrument.name,
-                                 'iden': self.identifier,
-                                 'clust': self.cluster_id,
-                                 'node': self.node_id,
-                                 'mach': self.machine_name,
-                                 't': claim_time,
-                                 'state': KnownExposureStateConverter.to_int( 'running' ),
-                                 'expid': None if exposureid is None else str(exposureid)
-                                } )
-            conn.commit()
+            if not self.nosave:
+                q = ( "UPDATE knownexposures SET cluster_id=%(clust)s, node_id=%(node)s, machine_name=%(mach)s, "
+                      "claim_time=%(t)s, start_time=NULL, release_time=NULL, _state=%(state)s, exposure_id=%(expid)s "
+                      "WHERE instrument=%(inst)s AND identifier=%(iden)s" )
+                cursor.execute( q, { 'inst': self.instrument.name,
+                                     'iden': self.identifier,
+                                     'clust': self.cluster_id,
+                                     'node': self.node_id,
+                                     'mach': self.machine_name,
+                                     't': claim_time,
+                                     'state': KnownExposureStateConverter.to_int( 'running' ),
+                                     'expid': None if exposureid is None else str(exposureid)
+                                    } )
+                conn.commit()
 
         # If we're supposed to delete an exposure, do that...
         if exposure_to_delete is not None:
@@ -251,13 +306,14 @@ class ExposureProcessor:
             SCLogger.info( f"Downloading exposure {self.identifier}..." )
             self.exposure = self.instrument.acquire_and_commit_origin_exposure( self.identifier, params )
             SCLogger.info( "...downloaded." )
-            with PsycopgConnection() as conn:
-                cursor = conn.cursor()
-                cursor.execute( "UPDATE knownexposures SET exposure_id=%(expid)s "
-                                "WHERE instrument=%(inst)s AND identifier=%(iden)s",
-                                { "inst": self.instrument.name, "iden": self.identifier,
-                                  "expid": str(self.exposure.id) } )
-                conn.commit()
+            if not self.nosave:
+                with PsycopgConnection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute( "UPDATE knownexposures SET exposure_id=%(expid)s "
+                                    "WHERE instrument=%(inst)s AND identifier=%(iden)s",
+                                    { "inst": self.instrument.name, "iden": self.identifier,
+                                      "expid": str(self.exposure.id) } )
+                    conn.commit()
         else:
             self.exposure = Exposure.get_by_id( exposureid )
             if self.exposure is None:
@@ -292,14 +348,24 @@ class ExposureProcessor:
             SCLogger.replace( midformat=me.name, level=self.worker_log_level )
             SCLogger.info( f"Processing chip {chip} in process {me.name} PID {me.pid}..." )
             SCLogger.setLevel( self.worker_log_level )
-            pipeline = Pipeline()
+            pipelineargs = {}
+            if self.nosave:
+                pipelineargs['do_not_save'] = True
+            if self.do_not_load:
+                pipelineargs['do_not_load'] = True
+            if self.start_step is not None:
+                pipelineargs['start_step'] = self.start_step
+            if self.provtag is not False:
+                pipelineargs['provenance_tag'] = self.provtag
             if ( self.through_step is not None ) and ( self.through_step != 'exposure' ):
-                pipeline.pars.through_step = self.through_step
+                pipelineargs['through_step'] = self.through_step
+            pipeline = Pipeline( pipeline=pipelineargs )
             ds = DataStore.from_args( self.exposure, chip )
             ds.cluster_id = self.cluster_id
             ds.node_id = self.node_id
             ds = pipeline.run( ds )
-            ds.save_and_commit()
+            if not self.nosave:
+                ds.save_and_commit()
             SCLogger.setLevel( origloglevel )
             SCLogger.info( f"...done processing chip {chip} in process {me.name} PID {me.pid}." )
             return ( chip, True )
@@ -322,29 +388,26 @@ class ExposureProcessor:
 
         if self.through_step == 'exposure':
             SCLogger.info( "Only running through exposure, not launching any image processes" )
+            self.finish_work()
             return
 
         origconfig = Config._default
         try:
-            with PsycopgConnection() as conn:
-                cursor = conn.cursor()
-                cursor.execute( "UPDATE knownexposures SET start_time=%(t)s "
-                                "WHERE instrument=%(inst)s AND identifier=%(iden)s",
-                                { 'inst': self.instrument.name, 'iden': self.identifier,
-                                  't': datetime.datetime.now( tz=datetime.UTC ) } )
-                conn.commit()
+            if not ( self.ignore_known_exposures or self.nosave ):
+                with PsycopgConnection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute( "UPDATE knownexposures SET start_time=%(t)s "
+                                    "WHERE instrument=%(inst)s AND identifier=%(iden)s",
+                                    { 'inst': self.instrument.name, 'iden': self.identifier,
+                                      't': datetime.datetime.now( tz=datetime.UTC ) } )
+                    conn.commit()
 
-            # Update the config if necessary.  This changes the global
-            #   config cache, which is scary, because we're changing it
-            #   based on the needs of the current exposure.  So, in
-            #   the finally block below, we try to restore the original
-            #   config.
-            config_chooser = ConfigChooser()
-            config_chooser.run( self.exposure )
-
-            chips = self.instrument.get_section_ids()
+            chips = [ c.identifier for c in self.instrument.fetch_sections().values() if not c.defective ]
             if self.onlychips is not None:
                 chips = [ c for c in chips if c in self.onlychips ]
+                if set(chips) != set(self.onlychips):
+                    SCLogger.warning( f"Asked for some chips that are not non-defective known chips; "
+                                      f"will not be doing: {set(self.onlychips)-set(chips)}" )
             self.results = {}
 
             if self.numprocs > 1:
@@ -421,7 +484,7 @@ variables are actually used in SeeChange, but it won't hurt to set the
 environment variable anyway.)
 
 TODO: provide a mechanism to run an exposure that's *not* in the
-knownexpsoures table.
+knownexpsoures table.  (...done?  cf:--ignore-known-exposures)
 
 Warning: be careful.  exposure_processor does not contact the conductor,
 nor does it entirely verify that another process isn't already working
@@ -440,52 +503,83 @@ to start it.
     parser.add_argument( 'instrument', help='Name of the instrument of the known exposure' )
     parser.add_argument( 'identifier', help='Identifier of the known exposure' )
     parser.add_argument( '-c', '--cluster-id', default="manual",
-                         help="Cluster ID to mark as claiming the exposure in the knownexposures table" )
+                         help=( "Cluster ID to mark as claiming the exposure in the knownexposures table.  "
+                                "Ignored if ignore-known-exposures is set." ) )
     parser.add_argument( '--node', '--node-id', default="manual",
-                         help="Node ID to mark as claiming the exposure in the knownexposures table" )
+                         help=( "Node ID to mark as claiming the exposure in the knownexposures table.  "
+                                "Ignored if ignore-known-exposures is set." ) )
     parser.add_argument( '-m', '--machine', default="manual",
-                         help="Machine name to mark as claiming the exposure in the knownexposures table" )
+                         help=( "Machine name to mark as claiming the exposure in the knownexposures table.  "
+                                "Ignored if ignore-known-exposures is set." ) )
     parser.add_argument( '-n', '--numprocs', default=None, type=int,
                          help=( "Number of chip processors to run (defaults to number of physical "
                                 "system CPUs minus 1)" ) )
     parser.add_argument( '-t', '--through-step', default=None, help="Process through this step" )
+    parser.add_argument( '--just-download', default=False, action='store_true',
+                         help=( "Just secure the exposure and load it into the database, don't process it. "
+                                "Many other options, e.g. --through-step, are ignored if this is set." ) )
     parser.add_argument( '--chips', default=None, nargs='+', help="Only do these sensor sections (defaults to all)" )
     parser.add_argument( '--cont', '--continue', default=False, action='store_true',
                          help="If exposure already exists, try continuing it." )
     parser.add_argument( '-d', '--delete', default=False, action='store_true',
-                         help="Delete exposure from disk and database before starting if it exists." )
+                         help=( "Delete exposure from disk and database before starting if it exists.  "
+                                "Can't be used with --ignore-known-exposures." ) )
     parser.add_argument( '--really-delete', default=False, action='store_true',
                          help="Must be specified if -d or --delete is specified for it to do its dirty work." )
-    parser.add_argument( '-l', '--log-level', default='info',
-                         help="Log level (error, warning, info, or debug) (defaults to info)" )
-    parser.add_argument( '-w', '--worker-log-level', default='warning',
-                         help="Log level for the chip worker subprocesses (defaults to warning)" )
+    parser.add_argument( '-l', '--log-level', default='INFO',
+                         help="Log level (ERROR, WARNING, INFO, or DEBUG) (defaults to INFO)" )
+    parser.add_argument( '-w', '--worker-log-level', default='WARNING',
+                         help="Log level for the chip worker subprocesses (defaults to WARNING)" )
     parser.add_argument( '--assume-claimed', default=False, action='store_true',
                          help=( "Normally, will object if the exposure is in the claimed or running state, "
                                 "and it is not claimed by the cluster given in --cluster-id. Set "
-                                "this flag to True to ignore claims in the knownexposures table." ) )
+                                "this flag to True to ignore claims in the knownexposures table.  "
+                                "Irrelevant if --ingore-known-exposures is set" ) )
+    parser.add_argument( '--provtag', default=argparse.SUPPRESS, type=str,
+                         help=( "Provenance tag to save data products to.  Will create it if it does not "
+                                "exist.  If you don't specify this, then whatever is in the config will be "
+                                "used.  If you give it the special string \"None\", then no provenance "
+                                "tag will be created.  (If there already is a provenance tag pointing "
+                                "to the provenance, it won't be deleted." ) )
+    parser.add_argument( '--ignore-known-exposures', default=False, action='store_true',
+                         help=( "Normally, reads and writes to the knownexposures table.  Set this to "
+                                "skip that.  You need this if you're running exposures outside of the "
+                                "context of a conductor." ) )
+    parser.add_argument( '--do-not-load', default=False, action='store_true',
+                         help=( "Always rerun everything, don't load existing products from the database. "
+                                "You will get an exception if you don't also pass --do-not-save. "
+                                "For testing/debugging purposes." ) )
+    parser.add_argument( '--start-step', default=None,
+                         help=( "Ignored if do-not-load is not given.  If do-not-load is not given, "
+                                "only start with do-not-load at this step." ) )
+    parser.add_argument( '--do-not-save', default=False, action='store_true',
+                         help=( "Set to run the pipeline but not save anything.  (Well, provenances "
+                                "might get saved, unsure.)  For testing/debugging purposes." ) )
 
     args = parser.parse_args()
 
-    loglookup = { 'error': logging.ERROR,
-                  'warning': logging.WARNING,
-                  'info': logging.INFO,
-                  'debug': logging.DEBUG }
-    if args.log_level.lower() not in loglookup.keys():
-        raise ValueError( f"Unknown log level {args.log_level}" )
-    SCLogger.setLevel( loglookup[ args.log_level.lower() ] )
+    SCLogger.setLevel( args.log_level )
 
     reallydelete = args.delete and args.really_delete
     numprocs = args.numprocs if args.numprocs is not None else ( psutil.cpu_count( logical=False ) -1  )
     SCLogger.info( f"Running with {numprocs} chip processors" )
 
-    processor = ExposureProcessor( args.instrument, args.identifier, numprocs,
-                                   args.cluster_id, args.node, machine_name=args.machine,
-                                   onlychips=args.chips, through_step=args.through_step,
-                                   worker_log_level=loglookup[args.worker_log_level.lower()] )
+    posargs = [ args.instrument, args.identifier, numprocs, args.cluster_id, args.node ]
+    kwargs = { 'machine_name': args.machine,
+               'onlychips': args.chips,
+               'through_step': args.through_step,
+               'ignore_known_exposures': args.ignore_known_exposures,
+               'nosave': args.do_not_save,
+               'do_not_load': args.do_not_load,
+               'start_step': args.start_step,
+               'worker_log_level': args.worker_log_level }
+    if 'provtag' in vars( args ):
+        kwargs['provtag'] = None if args.provtag == "None" else args.provtag
 
+    processor = ExposureProcessor( *posargs, **kwargs )
     processor.secure_exposure( assume_claimed=args.assume_claimed, cont=args.cont, delete=reallydelete )
-    processor()
+    if not args.just_download:
+        processor()
 
     SCLogger.info( "All done" )
 

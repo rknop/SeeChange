@@ -1,7 +1,9 @@
 import pytest
+import types
 
 import numpy as np
 from pipeline.parameters import Parameters, ParsDemoSubclass
+from pipeline.data_store import DataStore
 
 
 def test_parameters_override_augment():
@@ -206,3 +208,152 @@ def test_parameter_name_matches():
         "_allow_shorthands",
         "_ignore_case",
     ]
+
+
+
+class ParameterTestClass( Parameters ):
+    def __init__( self, **kwargs ):
+        super().__init__()
+
+        self.a = self.add_par(
+            name = 'a',
+            default = 'A',
+            par_types = str,
+            docstring = "",
+            critical = False
+        )
+
+        self.b = self.add_par(
+            name = 'b',
+            default = None,
+            par_types = (int, None),
+            docstring = "",
+            critical = False
+        )
+
+        self.c = self.add_par(
+            name = 'c',
+            default = { 'cdefault': True },
+            par_types = dict,
+            docstring = "",
+            critical = False
+        )
+
+        self.gratuitous = self.add_par(
+            name = 'gratuitous',
+            default = "There is a tide in the affairs of men",
+            par_types = str,
+            docstring = "",
+            critical=False
+        )
+
+        self.subconfigs = self.add_par(
+            name = 'subconfigs',
+            default = {
+                'choice_algorithm': 'star_density',
+                'choice_params': {
+                    'star_mag_cutoff': 20,
+                    'star_density_cutoff': 1e5
+                },
+                'default_subconfig': 'extragalactic',
+                'subconfigs': {
+                    'extragalactic': {
+                        'a': 'alpha',
+                        'b': 42,
+                        'c': { 'cat1': 'Antonin', 'cat2': 'Guiseppe' },
+                    },
+                    'galactic': {
+                        'b': 181,
+                        'c': { 'answer': 42 }
+                    }
+                }
+            },
+            par_types = dict,
+            docstring = "",
+            critical = True
+        )
+
+        self.subconfigs_noncritical = self.add_par(
+            name = 'subconfigs_noncritical',
+            default = {
+                'choice_params': {
+                    'config_dir': '/seechange',
+                    'gaia_density_catalog': 'share/gaia_density/gaia_healpix_density.pq',
+                },
+                'subconfigs': {
+                    'extragalactic': {
+                        'gratuitous': 'Tomorrow, and tomorrow, and tomorrow creeps at this petty pace'
+                    },
+                    'galactic': {
+                        'gratuitous': 'Friends!  Romans!  Countrymen!  Lend me your ears'
+                    }
+                }
+            },
+            par_types = dict,
+            docstring = "",
+            critical = False
+        )
+
+
+def test_subconfig():
+    # Make fake DataStores with just the fields we know subconfig_update will use
+    dsgal = DataStore()
+    dsgal._exposure = types.SimpleNamespace( ra=266., dec=-29. )
+    dsgal._image = types.SimpleNamespace( ra=266., dec=-29. )
+    dsgal._wcs = types.SimpleNamespace( good_minra=265.9, good_maxra=266.1, good_mindec=-29.1, good_maxdec=-28.9 )
+    dsexgal = DataStore()
+    dsexgal._exposure = types.SimpleNamespace( ra=345., dec=-30. )
+    dsexgal._image = types.SimpleNamespace( ra=345., dec=-30. )
+    dsexgal._wcs = types.SimpleNamespace( good_minra=344.9, good_maxra=345.1, good_mindec=-30.1, good_maxdec=-29.9 )
+
+    expected_crits = {
+        'subconfigs': {
+            'choice_algorithm': 'star_density',
+            'choice_params': {
+                'star_density_cutoff': 100000.0,
+                'star_mag_cutoff': 20
+            },
+            'default_subconfig': 'extragalactic',
+            'subconfigs': {
+                'extragalactic': {
+                    'a': 'alpha',
+                    'b': 42,
+                    'c': { 'cat1': 'Antonin', 'cat2': 'Guiseppe'}
+                },
+                'galactic': {
+                    'b': 181,
+                    'c': { 'answer': 42}
+                }
+            }
+        }
+    }
+
+    for yank in [ None, '_wcs', '_image' ]:
+        if yank is not None:
+            setattr( dsgal, yank, None )
+            setattr( dsexgal, yank, None )
+
+        params = ParameterTestClass()
+        params.subconfig_update( dsexgal )
+        assert params.a == 'alpha'
+        assert params.b == 42
+        assert params.c == { 'cat1': 'Antonin', 'cat2': 'Guiseppe' }
+        assert params.gratuitous  == 'Tomorrow, and tomorrow, and tomorrow creeps at this petty pace'
+
+        params.get_critical_pars() == expected_crits
+
+        params = ParameterTestClass()
+        params.subconfig_update( dsgal )
+        assert params.a == 'alpha'
+        assert params.b == 181
+        assert params.c == { 'answer': 42 }
+        assert params.gratuitous == "Friends!  Romans!  Countrymen!  Lend me your ears"
+
+        params.get_critical_pars() == expected_crits
+
+    for ds in [ dsgal, dsexgal ]:
+        setattr( ds, '_exposure', None )
+        params = ParameterTestClass()
+        with pytest.raises( RuntimeError, match=( "^Couldn't find a WorldCoordinates, Image, or Exposure in "
+                                                  "passed DataStore." ) ):
+            params.subconfig_update( ds )

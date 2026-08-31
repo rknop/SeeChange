@@ -7,12 +7,7 @@ import datetime
 import logging
 import json
 
-# Have to manually import any instrument modules
-#  we want to be able to find.  (Otherwise, they
-#  won't be found when models.instrument  is
-#  initialized.)  See Issue #465.
-import models.decam   # noqa: F401
-from models.instrument import get_instrument_instance
+from models.instrument import Instrument
 
 _logger = logging.getLogger("main")
 if not _logger.hasHandlers():
@@ -165,7 +160,7 @@ class Updater:
                             try:
                                 self.configchangetime = now()
                                 if self.instrument_name is not None:
-                                    self.instrument = get_instrument_instance( self.instrument_name )
+                                    self.instrument = Instrument.get_instrument_instance( self.instrument_name )
                                     if self.instrument is None:
                                         raise RuntimeError( "Unknown instrument" )
                             except Exception:

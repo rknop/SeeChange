@@ -1,6 +1,6 @@
-import pathlib
 from collections import defaultdict
 
+from psycopg import sql
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB, ARRAY
 from sqlalchemy.schema import CheckConstraint
@@ -16,15 +16,16 @@ from util.fits import read_fits_image
 from util.radec import parse_ra_hms_to_deg, parse_dec_dms_to_deg
 
 from models.base import (
+    PGDB,
     Base,
     SeeChangeBase,
     UUIDMixin,
     FileOnDiskMixin,
     SpatiallyIndexed,
     SmartSession,
-    HasBitFlagBadness,
+    HasBitFlagBadnessButNoUpstream,
 )
-from models.instrument import guess_instrument, get_instrument_instance
+from models.instrument import Instrument
 
 from models.enums_and_bitflags import (
     ImageFormatConverter,
@@ -140,7 +141,7 @@ class ExposureImageIterator:
     def __iter__( self, exposure ):
         self.exposure = exposure
 
-        self.instrument = get_instrument_instance( self.exposure.instrument )
+        self.instrument = Instrument.get_instrument_instance( self.exposure.instrument )
         self.section_ids = self.instrument.get_section_ids()
         self.dex = 0
         return self
@@ -155,7 +156,7 @@ class ExposureImageIterator:
             raise StopIteration
 
 
-class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBadness):
+class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBadnessButNoUpstream):
     """Encapsulates one exposure, which includes many images each on different sensor sections (chips).
 
     Access to the data is through the data, weight, and flags
@@ -188,10 +189,10 @@ class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBad
         doc=(
             "Type of image. One of: Sci, Diff, Bias, Dark, DomeFlat, SkyFlat, TwiFlat, "
             "or any of the above types prepended with 'Com' for combined "
-            "(e.g., a ComSci image is a science image combined from multiple exposures)."
-            "The value is saved as SMALLINT but translated to a string when read. "
+            "(e.g., a ComSci image is a science image combined from multiple exposures). "
+            "The value is saved as SMALLINT; can be read as text with the type property. "
+            "The conversion is found in enums_and_bitflags.py::ImageTypeConverter." )
         )
-    )
 
     @hybrid_property
     def type(self):
@@ -345,7 +346,7 @@ class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBad
         doc='Opaque string used by InstrumentOriginExposures to identify this exposure remotely'
     )
 
-    def __init__(self, current_file=None, invent_filepath=True, **kwargs):
+    def __init__(self, current_file=None, invent_filepath=True, nofile=False, **kwargs):
         """Initialize the exposure object.
 
         If the filepath is given (as a keyword argument), it will parse the instrument name
@@ -370,9 +371,13 @@ class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBad
            unless the global property Exposure.nofile is True (but you
            really shouldn't be playing around with that).
 
+        nofile: bool, default False
+           Set this to True if there is no actual exposure file.  This
+           should probably only be used in specific tests.
+
         """
-        FileOnDiskMixin.__init__(self, **kwargs)
-        HasBitFlagBadness.__init__(self)
+        FileOnDiskMixin.__init__(self, nofile=nofile, **kwargs)
+        HasBitFlagBadnessButNoUpstream.__init__(self)
         SeeChangeBase.__init__(self)  # don't pass kwargs as they could contain non-column key-values
 
         self._data = None  # the underlying image data for each section
@@ -419,7 +424,7 @@ class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBad
                 raise ValueError("Exposure.__init__: must give a filepath to initialize an Exposure object. ")
 
         if self.instrument is None:
-            self.instrument = guess_instrument(self.filepath)
+            self.instrument = Instrument.guess_instrument(self.filepath)
 
         # ensure we are working with short filter from here and below
         self.filter = self.instrument_object.get_short_filter_name( self.filter )
@@ -429,12 +434,15 @@ class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBad
             prov = self.make_provenance(self.instrument)  # a default provenance for exposures
             self.provenance_id = prov.id
 
-
         # instrument_obj is lazy loaded when first getting it
-        if current_file is None:
-            current_file = pathlib.Path( FileOnDiskMixin.local_path ) / self.filepath
-        if self.instrument_object is not None:
-            self.use_instrument_to_read_header_data( fromfile=current_file )
+        if self.instrument_object is None:
+            raise RuntimeError( "I don't know how to cope." )
+
+        if not nofile:
+            if current_file is not None:
+                self.use_instrument_to_read_header_data( fromfile=current_file )
+            else:
+                self.use_instrument_to_read_header_data()
 
         # Allow passed keywords to override what's detected from the header
         self.set_attributes_from_dict( kwargs )
@@ -448,7 +456,7 @@ class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBad
 
         Just calls the instrument's get_exposure_provenance() method.
         """
-        return get_instrument_instance( instrument ).get_exposure_provenance()
+        return Instrument.get_instrument_instance( instrument ).get_exposure_provenance()
 
 
     @sa.orm.reconstructor
@@ -537,7 +545,7 @@ class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBad
     def instrument_object(self):
         if self.instrument is not None:
             if self._instrument_object is None or self._instrument_object.name != self.instrument:
-                self._instrument_object = get_instrument_instance(self.instrument)
+                self._instrument_object = Instrument.get_instrument_instance(self.instrument)
 
         return self._instrument_object
 
@@ -655,10 +663,7 @@ class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBad
         )
 
         if self.components is None:
-            if self.format == 'fits':
-                filepath += ".fits"
-            else:
-                raise ValueError( f"Unknown format for exposures: {self.format}" )
+            filepath += self._file_suffix()
 
         return filepath
 
@@ -733,7 +738,7 @@ class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBad
             section_ids = [section_ids]
 
         if not all([isinstance(sec_id, (str, int)) for sec_id in section_ids]):
-            raise ValueError("section_ids must be a list of integers. ")
+            raise ValueError("section_ids must be a list of strings or integers. ")
 
         if self.filepath is not None:
             # Putting this error in to catch if we actually ever actually call this.
@@ -901,15 +906,15 @@ class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBad
         """
         return False
 
-    def get_upstreams(self, session=None):
+    def get_upstream_ids(self, pgdb=None):
         """An exposure does not have any upstreams. """
         return []
 
-    def get_downstreams(self, session=None):
+    def get_downstream_ids(self, pgdb=None):
         """An exposure has only Image objects as direct downstreams. """
         from models.image import Image
 
-        with SmartSession(session) as session:
-            images = session.scalars(sa.select(Image).where(Image.exposure_id == self.id)).all()
-
-        return images
+        with PGDB( pgdb ) as pgdb:
+            q = sql.SQL( "SELECT _id FROM images WHERE exposure_id={me}" ).format( me=self.id )
+            rows, _cols = pgdb.execute( q )
+            return [ ( Image, row[0] ) for row in rows ]

@@ -16,7 +16,6 @@ from models.source_list import SourceList
 from models.enums_and_bitflags import BackgroundFormatConverter, BackgroundMethodConverter, bg_badness_inverse
 
 # from util.logger import SCLogger
-import warnings
 
 
 class Background(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
@@ -188,15 +187,7 @@ class Background(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
                     raise RuntimeError( "Error, can't figure out background image_shape.  Either explicitly pass "
                                         "image_shape, or make sure that sources_id is set, and the SourceList and "
                                         "Image are already saved to the database." )
-                # I don't like this; we're reading the image data just
-                # to get its shape.  Perhaps we should add width and
-                # height fields to the Image model?
-                # (Or, really, when making a background, pass an image_shape!)
-                wrnmsg = ( "Getting background shape from associated image.  This is inefficient. "
-                           "Pass image_shape when constructing a background." )
-                warnings.warn( wrnmsg )
-                # SCLogger.warning( wrnmsg )
-                self._image_shape = image.data.shape
+                self._image_shape = ( image.height, image.width )
 
         # Manually set all properties ( columns or not )
         for key, value in kwargs.items():
@@ -466,12 +457,11 @@ class Background(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         return newbg
 
 
-    def get_upstreams(self, session=None):
-        """Get the source list that was used to make this background"""
-        with SmartSession(session) as session:
-            return session.scalars( sa.select(SourceList).where( SourceList._id == self.sources_id ) ).all()
+    def get_upstream_ids( self, pgdb=None ):
+        """Get the source list id that was used to make this background"""
+        return [ ( SourceList, self.sources_id ) ]
 
-    def get_downstreams(self, session=None):
+    def get_downstream_ids( self, pgdb=None ):
         """Background has no downstreams."""
         return []
 

@@ -1,8 +1,11 @@
 import os
 import base64
 import hashlib
+import textwrap
+import random
 
 import numpy as np
+from psycopg import sql
 
 import sqlalchemy as sa
 from sqlalchemy import orm
@@ -16,8 +19,6 @@ from sqlalchemy.schema import CheckConstraint
 from astropy.time import Time
 from astropy.wcs import WCS
 from astropy.io import fits
-import astropy.coordinates
-import astropy.units as u
 
 from util.util import parse_dateobs, listify, asUUID
 from util.fits import read_fits_image, save_fits_image_file
@@ -27,6 +28,7 @@ from util.logger import SCLogger
 from models.base import (
     Base,
     SeeChangeBase,
+    PGDB,
     SmartSession,
     PsycopgConnection,
     UUIDMixin,
@@ -37,7 +39,7 @@ from models.base import (
 )
 from models.provenance import Provenance
 from models.exposure import Exposure
-from models.instrument import get_instrument_instance
+from models.instrument import Instrument
 from models.enums_and_bitflags import (
     ImageFormatConverter,
     ImageTypeConverter,
@@ -108,7 +110,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         sa.ForeignKey('images._id', ondelete="RESTRICT", name="images_coadd_alignment_target_fkey" ),
         nullable=True,
         index=True,
-        doc=( "ID of the image that was the alignment target for this coadd image." )
+        doc=( "ID of the image that was the alignment target for this coadd image, if appropriate." )
     )
 
     def _load_coadd_component_zp_ids( self, session=None ):
@@ -222,6 +224,18 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             "Only keep a subset of the header keywords, "
             "and re-key them to be more consistent. "
         )
+    )
+
+    width = sa.Column(
+        sa.SmallInteger,
+        nullable=False,
+        doc="Width of the image"
+    )
+
+    height = sa.Column(
+        sa.SmallInteger,
+        nullable=False,
+        doc="Height of the image"
     )
 
     mjd = sa.Column(
@@ -567,7 +581,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                 sess.commit()
 
 
-    def set_corners_from_header_wcs( self, wcs=None, setradec=False ):
+    def set_corners_from_header_wcs( self, wcs=None, setradec=False, width=None, height=None ):
         """Update the image's four corners (and, optionally, RA/Dec) from a WCS.
 
         Parameters
@@ -581,6 +595,12 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
            as the things calculated from it (galactic, ecliptic
            coordinates).
 
+        width : int, default self.width
+           Width (x-size) of the image
+
+        height : int, default self.height
+           Height (y-size) of the image
+
         """
         if wcs is None:
             wcs = WCS( self._header )
@@ -588,46 +608,11 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         if ( wcs.axis_type_names == ['', ''] ):
             raise ValueError( "Could not find a good WCS" )
 
-        ras = []
-        decs = []
-        # Note: this used to prefer raw_data; changed it to prefer
-        #  data, because we believe that's what we want to prefer,
-        #  but left this note here in case things go haywire.
-        # data = self.raw_data if self.raw_data is not None else self.data
-        data = self.data if self.data is not None else self.raw_data
-        width = data.shape[1]
-        height = data.shape[0]
-        xs = [ 0., width-1., 0., width-1. ]
-        ys = [ 0., height-1., height-1., 0. ]
-        scs = wcs.pixel_to_world( xs, ys )
-        if isinstance( scs[0].ra, astropy.coordinates.Longitude ):
-            ras = [ i.ra.to_value() for i in scs ]
-            decs = [ i.dec.to_value() for i in scs ]
-        else:
-            ras = [ i.ra.value_in(u.deg).value for i in scs ]
-            decs = [ i.dec.value_in(u.deg).value for i in scs ]
-        ras, decs = FourCorners.sort_radec( ras, decs )
-        self.ra_corner_00 = ras[0]
-        self.ra_corner_01 = ras[1]
-        self.ra_corner_10 = ras[2]
-        self.ra_corner_11 = ras[3]
-        self.minra = min( ras )
-        self.maxra = max( ras )
-        self.dec_corner_00 = decs[0]
-        self.dec_corner_01 = decs[1]
-        self.dec_corner_10 = decs[2]
-        self.dec_corner_11 = decs[3]
-        self.mindec = min( decs )
-        self.maxdec = max( decs )
+        width = self.width if width is None else width
+        height = self.height if height is None else height
 
-        if setradec:
-            sc = wcs.pixel_to_world( data.shape[1] / 2., data.shape[0] / 2. )
-            self.ra = sc.ra.to(u.deg).value
-            self.dec = sc.dec.to(u.deg).value
-            self.gallat = sc.galactic.b.deg
-            self.gallon = sc.galactic.l.deg
-            self.ecllat = sc.barycentrictrueecliptic.lat.deg
-            self.ecllon = sc.barycentrictrueecliptic.lon.deg
+        FourCorners.set_corners_from_wcs( self, wcs, width, height, setradec=setradec )
+
 
     @classmethod
     def from_exposure(cls, exposure, section_id):
@@ -712,8 +697,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                 del new.header[delkw]
 
         # numpy array axis ordering is backwards from FITS ordering
-        width = new.raw_data.shape[1]
-        height = new.raw_data.shape[0]
+        new.width = new.raw_data.shape[1]
+        new.height = new.raw_data.shape[0]
 
         names = ['ra', 'dec'] + new.instrument_object.get_auxiliary_exposure_header_keys()
         header_info = new.instrument_object.extract_header_info(new._header, names)
@@ -746,8 +731,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             new.calculate_coordinates()  # galactic and ecliptic coordinates
 
             # Set the corners
-            halfwid = new.instrument_object.pixel_scale * width / 2. / np.cos( new.dec * np.pi / 180. ) / 3600.
-            halfhei = new.instrument_object.pixel_scale * height / 2. / 3600.
+            halfwid = new.instrument_object.pixel_scale * new.width / 2. / np.cos( new.dec * np.pi / 180. ) / 3600.
+            halfhei = new.instrument_object.pixel_scale * new.height / 2. / 3600.
             ra0 = new.ra - halfwid
             ra1 = new.ra + halfwid
             dec0 = new.dec - halfhei
@@ -855,7 +840,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         return new
 
     @classmethod
-    def from_image_zps(cls, zps, index=0, images=None, alignment_target=None, set_is_coadd=True):
+    def from_image_zps(cls, zps, width=None, height=None, index=0, images=None, alignment_target=None,
+                       ra_corners=None, dec_corners=None, set_is_coadd=True):
         """Create a new Image object from a list of other ZeroPoint objects
 
         This is the first step in making a coadd image.  You will be
@@ -880,11 +866,20 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         zps: list of ZeroPoint objects
             The ZeroPoints of the images to combine into a new Image object.
 
+        width: int
+            Width of the summed image.  You must set this if you aren't
+            going to later set the .data property of the created Image.
+
+        height: int
+            Height of the summed image.  You must set this if you aren't
+            going to later set the .data property of the created Image.
+
         index: int, default 0
             The image index in the (mjd sorted) list of upstream images
             that is used to set several attributes of the output image.
             If alignment_target is None, this includes coordinate
-            information (ra, dec, minra, maxdec, etc.).
+            information (ra, dec, minra, maxdec, etc.) unless ra_corners
+            and dec_corners are given.
 
         images: list of Image or None
             A list of Image objects.  If you pass this, it must have the
@@ -900,6 +895,12 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             will be taken from this image's header.  Use this when you want
             the alignment target of the coadded images to be an image
             that isn't one of the images you're coadding.
+
+        ra_corners, dec_corners : array of Float or None
+            If these aren't None, then totally ignore alignment_target.
+            This means that the image didn't *have* an alignment target,
+            but was aligned to a manually created WCS covering this
+            rectangle on the sky.
 
         set_is_coadd: bool, default True
             Set the is_coadd field of the new image.  This is usually
@@ -917,34 +918,34 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         if len(zps) < 1:
             raise ValueError("Must provide at least one image to combine.")
 
+        if ( ra_corners is not None ) or ( dec_corners is not None ):
+            if ( ra_corners is None ) or ( dec_corners is None ):
+                raise ValueError( "If you give ra_corners or dec_corners, you must give both" )
+            if alignment_target is not None:
+                raise ValueError( "Can't pass an alignment_target when you ra_corners and dec_corners" )
+
         if images is not None:
             if len(images) != len(zps):
                 raise ValueError( "If you pass images, it must match the length of zps" )
         else:
-            # I couldn't figure out how to write this query in SA.
-            # (I mean, I thought I did, but SA kept telling me it
-            # couldn't figure out how to SQLize it. The supposed advantages
-            # of an ORM seem very thin when constructing a query with the ORM
-            # is just as byzantine, if not more so, than writing it in SQL.)
-            with PsycopgConnection() as conn:
-                cursor = conn.cursor()
-                cursor.execute( "SELECT i._id,z._id "
-                                "FROM images i "
-                                "INNER JOIN source_lists s ON s.image_id=i._id "
-                                "INNER JOIN world_coordinates w ON w.sources_id=s._id "
-                                "INNER JOIN zero_points z ON z.wcs_id=w._id "
-                                "WHERE z._id=ANY(%(zpids)s)",
-                                { 'zpids': [ z.id for z in zps ] } )
-                rows = cursor.fetchall()
-            # ...and now we use SA to get the Image objects.  Not very
-            # efficient, we've made two connections.  But, oh well.
+            q = sql.SQL( textwrap.dedent(
+                """\
+                SELECT i.*,z._id AS zpid
+                FROM images i
+                INNER JOIN source_lists s ON s.image_id=i._id
+                INNER JOIN world_coordinates w ON w.sources_id=s._id
+                INNER JOIN zero_points z ON z.wcs_id=w._id
+                WHERE z._id=ANY(ARRAY[{zpids}])
+                """
+            ) ) .format( zpids=sql.SQL(",").join( z.id for z in zps ) )
+            with PGDB( dictcursor=True ) as conn:
+                rows = conn.execute( q )
             imzpdict = {}
-            with SmartSession() as sess:
-                for row in rows:
-                    imzpdict[asUUID(row[1])] = Image.get_by_id( row[0], session=sess )
-            if len(imzpdict) != len(zps):
-                raise RuntimeError( "Failed to get all the images for the zeropoints!" )
-            images = [ imzpdict[z.id] for z in zps ]
+            for row in rows:
+                zpid = row['zpid']
+                del row['zpid']
+                imzpdict[ asUUID(zpid) ] = Image( **row )
+            images = list( imzpdict.values() )
 
         # sort component images by mjd:
         dexen = list( range( len(zps) ) )
@@ -966,30 +967,38 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         #   control this.
         upstream_ids = [ z.id for z in zps ]
 
-        if alignment_target is None:
-            alignment_target = images[index]
-
-        output = Image( nofile=True, is_coadd=set_is_coadd )
+        output = Image( nofile=True, is_coadd=set_is_coadd, width=width, height=height )
 
         fail_if_not_consistent_attributes = ['filter']
         copy_if_consistent_attributes = ['section_id', 'instrument', 'telescope', 'project', 'target', 'filter']
-
-        copy_target_attributes = ['gallon', 'gallat', 'ecllon', 'ecllat', 'target']
-        for att in ['ra', 'dec']:
-            copy_target_attributes.append(att)
-            for corner in ['00', '01', '10', '11']:
-                copy_target_attributes.append(f'{att}_corner_{corner}')
-            copy_target_attributes.append( f'min{att}' )
-            copy_target_attributes.append( f'max{att}' )
 
         for att in fail_if_not_consistent_attributes:
             if len(set([getattr(image, att) for image in images])) > 1:
                 raise ValueError(f"Cannot combine images with different {att} values: "
                                  f"{[getattr(image, att) for image in images]}")
 
-        # Copy target image position information
-        for att in copy_target_attributes:
-            setattr(output, att, getattr(alignment_target, att))
+        if ra_corners is not None:
+            output.set_corners_minmax( ra_corners, dec_corners )
+            if ( output.maxra < output.minra ):
+                output.ra = ( output.maxra + output.minra - 360. ) / 2.
+                output.ra = output.ra + 360. if output.ra < 0. else output.ra
+            else:
+                output.ra = ( output.minra + output.maxra ) / 2.
+            output.dec = ( output.maxdec + output.mindec ) / 2.
+            output.calculate_coordinates()
+        else:
+            # Copy target image position information
+            if alignment_target is None:
+                alignment_target = images[index]
+            copy_target_attributes = ['gallon', 'gallat', 'ecllon', 'ecllat', 'target']
+            for att in ['ra', 'dec']:
+                copy_target_attributes.append(att)
+                for corner in ['00', '01', '10', '11']:
+                    copy_target_attributes.append(f'{att}_corner_{corner}')
+                copy_target_attributes.append( f'min{att}' )
+                copy_target_attributes.append( f'max{att}' )
+            for att in copy_target_attributes:
+                setattr(output, att, getattr(alignment_target, att))
 
         # only copy if attribute is consistent across upstreams, otherwise leave as None
         for att in copy_if_consistent_attributes:
@@ -1002,7 +1011,10 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         # start MJD and end MJD
         output.mjd = images[0].mjd
         output.end_mjd = max([image.end_mjd for image in images])  # exposure ends are not necessarily sorted
+                                                                   # ...but that only matters in pathological cases
 
+        # ...not obvious this is the right thing to do.
+        # (In fact, I want to get rid of Image.inf -- see Issue #542
         output.info = images[index].info
         # TODO? : this next one is woeful.  Coordinates should be updated
         #   to come from the alignment target image, but lots of
@@ -1013,6 +1025,11 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         #   and the other methods use an index, so probably we don't
         #   really need to worry about it.)
         output.header = images[index].header
+        #
+        # ...in fact, let's just set an empty header.  That way, we don't have to
+        #   read image, and this will work in tests where there are Image
+        #   objects without associated files.
+        # output.header = fits.Header()
 
         output.format = config.Config.get().value( 'storage.images.format' )
 
@@ -1021,7 +1038,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             output.type = 'Com' + base_type
 
         output._coadd_component_zp_ids = upstream_ids
-        output.coadd_alignment_target = alignment_target.id
+        output.coadd_alignment_target = alignment_target.id if alignment_target is not None else None
 
         output._upstream_bitflag = 0
         for z in zps:
@@ -1035,7 +1052,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         return cls.from_new_and_ref(new_image, ref)
 
     @classmethod
-    def from_new_and_ref(cls, new_image_zp, ref, new_image=None):
+    def from_new_and_ref(cls, new_image_zp, ref, new_image=None, width=None, height=None):
         """Create a new Image object from a Reference object and a new Image object.
         This is the first step in making a difference image.
 
@@ -1058,6 +1075,10 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             If you pass this, then it must be the Image that goes along
             with ZeroPoint.  Normally, this function will search the
             database to find the right Image.
+
+        width, height: int, default None
+            You probably never want to set these, because they will
+            default to the size of new_image.
 
         Returns
         -------
@@ -1105,7 +1126,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         #   the sub image to the new image here (which is the
         #   default).
         for att in ['instrument', 'telescope', 'project', 'section_id', 'filter', 'target',
-                    'exp_time', 'airmass', 'mjd', 'end_mjd', 'info', 'header',
+                    'exp_time', 'airmass', 'mjd', 'end_mjd', 'info', 'header', 'width', 'height',
                     'gallon', 'gallat', 'ecllon', 'ecllat', 'ra', 'dec',
                     'ra_corner_00', 'ra_corner_01', 'ra_corner_10', 'ra_corner_11',
                     'dec_corner_00', 'dec_corner_01', 'dec_corner_10', 'dec_corner_11',
@@ -1135,6 +1156,18 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         return output
 
 
+    def set_corners_from_wcs( self, wcs=None, width=None, height=None, setradec=False ):
+        if wcs is None:
+            raise ValueError( "Must provide a wcs" )
+        if ( ( ( width is not None ) and ( width != self.width ) ) or
+             ( ( height is not None ) and ( height != self.height ) ) ):
+            raise ValueError( f"You passed width={width} and height={height}, but this is an image "
+                              f"of dimensions {self.width}×{self.height}" )
+        width = self.width if width is None else width
+        height = self.height if height is None else height
+        super().set_corners_from_wcs( wcs, width, height, setradec=setradec )
+
+
     def set_coordinates_to_match_target( self, target ):
         """Make sure the coordinates (RA,dec, corners and WCS) all match the alignment target image. """
 
@@ -1149,7 +1182,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
     def instrument_object(self):
         if self.instrument is not None:
             if self._instrument_object is None or self._instrument_object.name != self.instrument:
-                self._instrument_object = get_instrument_instance(self.instrument)
+                self._instrument_object = Instrument.get_instrument_instance(self.instrument)
 
         return self._instrument_object
 
@@ -1182,7 +1215,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
     def __str__(self):
         return self.__repr__()
 
-    def invent_filepath(self):
+    def invent_filepath(self, name_convention=None ):
         """Create a relative file path for the object.
 
         Create a file path relative to data root for the object based on its
@@ -1242,7 +1275,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
 
         cfg = config.Config.get()
         default_convention = "{inst_name}_{date}_{time}_{section_id}_{filter}_{im_type}_{prov_hash:.6s}"
-        name_convention = cfg.value('storage.images.name_convention', default=None)
+        if name_convention is None:
+            name_convention = cfg.value('storage.images.name_convention', default=None)
         if name_convention is None:
             name_convention = default_convention
 
@@ -1376,9 +1410,9 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             fpack = ( self.format == 'fitsfz' )
             # save the imaging data
             extensions.append('image')
-            imgpath = save_fits_image_file( full_path, self.data, self.header,
-                                            extname='image', single_file=single_file, fpack=fpack,
-                                            just_update_header=just_update_header )
+            imgpath, self.header = save_fits_image_file( full_path, self.data, self.header,
+                                                         extname='image', single_file=single_file, fpack=fpack,
+                                                         just_update_header=just_update_header )
             files_written['image'] = imgpath
 
             # save the other extensions
@@ -1391,15 +1425,14 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                         continue
                     array = getattr(self, array_name)
                     if array is not None:
-                        extpath = save_fits_image_file(
-                            full_path,
-                            array,
-                            fits.Header(),
-                            extname=array_name,
-                            single_file=single_file,
-                            fpack=fpack,
-                            lossless=(array_name in self.lossless_components)
-                        )
+                        extpath, _nullhdr = save_fits_image_file( full_path,
+                                                                  array,
+                                                                  fits.Header(),
+                                                                  extname=array_name,
+                                                                  single_file=single_file,
+                                                                  fpack=fpack,
+                                                                  lossless=(array_name in self.lossless_components)
+                                                                 )
                         extensions.append(array_name)
                         if not single_file:
                             files_written[array_name] = extpath
@@ -1450,6 +1483,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             if not os.path.isfile(filename):
                 raise FileNotFoundError(f"Could not find the image file: {filename}")
             self._data, self._header = read_fits_image(filename, ext='image', output='both')
+            self.width = self._data.shape[1]
+            self.height = self._data.shape[0]
             for att in self.saved_components:
                 if att == 'image':
                     continue
@@ -1459,6 +1494,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         else:  # load each data array from a separate file
             if self.components is None:
                 self._data, self._header = read_fits_image( self.get_fullpath(nofile=False), output='both' )
+                self.width = self._data.shape[1]
+                self.height = self._data.shape[0]
             else:
                 gotim = False
                 gotweight = False
@@ -1468,6 +1505,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                         raise FileNotFoundError(f"Could not find the image component file: {filename}")
                     if comp == 'image':
                         self._data, self._header = read_fits_image( filename, output='both' )
+                        self.width = self._data.shape[1]
+                        self.height = self._data.shape[0]
                     else:
                         setattr( self, f'_{comp}', read_fits_image( filename, output='data' ) )
 
@@ -1524,8 +1563,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                 setattr( self, f'_{prop}', None )
 
 
-    def get_upstreams(self, session=None):
-        """Get the immediate upstreams of this image.
+    def get_upstream_ids(self, pgdb=None):
+        """Get the ids immediate upstreams of this image.
 
         This may include an exposure (for most images), zeropoints (if
         this is subtraction or coadd image), and/or a reference (if this
@@ -1533,7 +1572,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
 
         Returns
         -------
-        upstreams: list of objects
+        upstreams: list of [ ( class, id ) ]
             The upstream Exposure, ZeroPoint, and Reference objects that
             were used to create this image.  For most images, it will be
             (at most) a single Exposure.  For coadds, it will be a bunch
@@ -1543,42 +1582,34 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         """
 
         # Avoid circular imports
-        from models.zero_point import ZeroPoint, image_coadd_component_table
-        from models.reference import Reference, image_subtraction_components as isc
+        from models.zero_point import ZeroPoint
+        from models.reference import Reference
 
-        upstreams = []
-        with SmartSession(session) as session:
-            # Load the exposure if there is one
-            if self.exposure_id is not None:
-                upstreams.append( session.query( Exposure ).filter( self.exposure_id == Exposure._id ).first() )
+        if self.exposure_id is None:
+            upstreams = []
+        else:
+            upstreams = [ ( Exposure, self.exposure_id ) ]
 
-            if ( not self.is_coadd ) and ( not self.is_sub ):
-                # We're done!  That wasn't so bad.
-                return upstreams
-
+        with PGDB( pgdb ) as pgdb:
             if self.is_sub:
                 if self.is_coadd:
-                    raise ValueError( f"Databse corruption, image {self.id} is both a sub and a coadd!!!!!" )
-                # Zeropoint
-                upstreams.append( session.query( ZeroPoint )
-                                  .join( isc, isc.c.new_zp_id==ZeroPoint._id )
-                                  .filter( isc.c.image_id==self.id ).first() )
-                # Reference
-                upstreams.append( session.query( Reference )
-                                  .join( isc, isc.c.ref_id==Reference._id )
-                                  .filter( isc.c.image_id==self.id ).first() )
+                    raise ValueError( f"Database corruption, image {self.id} is both a sub and a coadd!!!!!" )
+                q = sql.SQL( "SELECT new_zp_id, ref_id FROM image_subtraction_components WHERE image_id={me}"
+                             ).format( me=self.id )
+                rows, _cols = pgdb.execute( q )
+                upstreams.extend( [ ( ZeroPoint, row[0] ) for row in rows ] )
+                upstreams.extend( [ ( Reference, row[1] ) for row in rows ] )
 
-            if self.is_coadd:
-                # Zeropoints
-                upstreams.extend( list( session.query( ZeroPoint )
-                                        .join( image_coadd_component_table,
-                                               image_coadd_component_table.c.coadd_image_id==self.id )
-                                        .filter( image_coadd_component_table.c.zp_id==ZeroPoint._id ).all() ) )
+            elif self.is_coadd:
+                q = sql.SQL( "SELECT zp_id FROM image_coadd_component WHERE coadd_image_id={me}" ).format( me=self.id )
+                rows, _cols = pgdb.execute( q )
+                upstreams.extend( [ ( ZeroPoint, row[0] ) for row in rows ] )
 
         return upstreams
 
-    def get_downstreams(self, session=None):
-        """Get all the data products that were created based on this image.
+
+    def get_downstream_ids(self, pgdb=None):
+        """Get ids all the data products that were created based on this image.
 
         This will just be SourceLists.
 
@@ -1587,8 +1618,10 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         # avoids circular import
         from models.source_list import SourceList
 
-        with SmartSession(session) as session:
-            return session.query( SourceList ).filter( SourceList.image_id==self.id ).all()
+        with PGDB( pgdb ) as pgdb:
+            q = sql.SQL( "SELECT _id FROM source_lists WHERE image_id={me}" ).format( me=self.id )
+            rows, _cols = pgdb.execute( q )
+            return [ ( SourceList, row[0] ) for row in rows ]
 
 
     @staticmethod
@@ -1603,6 +1636,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             overlapfrac=None,
             provenance_ids=None,
             provenance_ids_are_zp=False,
+            provenance_ids_are_wcs=False,
+            use_good=True,
             type=[1,2,3,4],
             target=None,
             section_id=None,
@@ -1628,7 +1663,9 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             order_by=None,
             seeing_quality_factor=3.0,
             max_number=None,
-            # return_zeropoints=False
+            return_zeropoints=False,
+            return_wcs=False,
+            pgdb=None
     ):
         """Return a list of images that match criteria.
 
@@ -1673,17 +1710,33 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             doesn't do real overlap fractions of images!  Rather, it
             does the overlap fraction of the NS/EW-aligned bounding
             boxes of images!  See docstring for
-            FourCorners.get_overlap_frac().  If that is fixed, this should
-            be too.
+            FourCorners.get_overlap_frac().  If that is fixed, this
+            should be too.  If you don't specify anything, a default of
+            0.95 will be used.
 
         provenance_ids: str or list of strings
-            Find images with these provenance IDs, unless
-            provenace_ids_are_zp, in which case find images who have
-            ZeroPoint objectds in the database with these provenance
-            IDs.
+            Provenance ids to search on.  By default, it searches on
+            Image provenances; if provenance_ids_are_zp is True, then
+            search for images with zps with this provenance, or if
+            provenance_ds_are_wcs is True, then search for images with
+            wcses with this provenacne.
+
+            If either provenance_ids_are_zp or provenance_ids_are_wcs is
+            True, then position searches are on WCS corners rather than
+            image corners.
 
         provenance_ids_are_zp: bool, default False
             See provenance_ids
+
+        provenance_ids_are_wcs: bool, default False
+            See provenance_ids
+
+        use_good: bool, default True
+            Ignored unelss wcs_provenance_ids is not None, or
+            provenacne_ids_are_zp is True.  If this is True, then look
+            at the ra_good_xx and dec_good_xx fields in the WCS instead
+            of the ra_corner_xx and dec_corner_xx fields in the WCS
+            and/or image.
 
         type: integer or string or list of integers or strings, None
             List of image types to search for; see
@@ -1776,23 +1829,46 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             first max_number returned from the database, ordered as
             specified in order_by.
 
-        # return_zeropoints: bool, default False
-        #     If True, return ZeroPoints of the images in addition to the
-        #     Images.  This requires provenance_ids_are_zp to be True.
-        #     (NOT CURRENTLY SUPPORTED.)
+        return_zeropoints: bool, default False
+
+        return_wcs: bool, default False
+
+        pgdb: PGDB, psycopg.Connection, psycopg.Cursor, or sa Session, default None
+            Database connection to use.  If not given, will open and close a new one.
 
         Returns
         -------
-          list of Image # or ( list of Image, list of ZeroPoint )
+          One of:
+           * list of Image
+           * ( list of Image, dict of image_id: WorldCoordinates )
+           * ( list of Image, dict of image_id: ZeroPoint )
+           * ( list of Image, dict of image_id: WorldCoordinates, dict of image_id: ZeroPoint )
 
         """
 
-        # Name of the table we're going to search after position searches are done
+        if provenance_ids_are_zp and provenance_ids_are_wcs:
+            raise ValueError( "Can't give both provenance_ids_are_zp and provenance_ids_are_wcs" )
+
+        if provenance_ids is None:
+            raise ValueError( "Must specify provenance(s) to search" )
+        provenance_ids = listify( provenance_ids, require_string=True )
+
+        if return_zeropoints and ( not provenance_ids_are_zp ):
+            raise ValueError( "return_zeropoints requires provenance_ids_are_zp" )
+
+        if return_wcs and ( not ( provenance_ids_are_zp or provenance_ids_are_wcs ) ):
+            raise ValueError( "return_wcs requires provenance_ids_are_wcs or provenance_ids_are_zp" )
+
+        # Avoid circular imports
+        from models.world_coordinates import WorldCoordinates
+
+        barf = "".join( random.choices( "abcdefghijklmnopqrstuvwxyz", k=6 ) )
+        searchcontaining = False
+        searchoverlapping = False
         searchtable = None
         fcobj = None
 
-        with SmartSession() as sess:
-
+        with PGDB( pgdb, dictcursor=True ) as pgdb:
             # First: position filter (but not including overlapfrac).  This may involve
             #   calling a FourCorners routine to build a temporary table.
 
@@ -1810,20 +1886,45 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                 if isinstance( dec, str ):
                     dec = parse_dec_dms_to_deg( dec )
 
-                if provenance_ids_are_zp:
-                    Image._find_possibly_containing_temptable(
-                        ra, dec,
-                        session=sess,
-                        prov_id=provenance_ids,
-                        fromclause=( "FROM images i "
-                                     "INNER JOIN source_lists s ON s.image_id=i._id "
-                                     "INNER JOIN world_coordinates w ON w.sources_id=s._id "
-                                     "INNER JOIN zero_points z ON z.wcs_id=w._id " ),
-                        provtable='z'
+                searchcontaining = True
+
+                if provenance_ids_are_zp or provenance_ids_are_wcs:
+                    corner = "good" if use_good else "corner"
+                    limprefix = "good_" if use_good else ""
+
+                    if provenance_ids_are_zp:
+                        WorldCoordinates._find_possibly_containing_temptable(
+                            ra, dec, session=pgdb, prov_id=provenance_ids, corner=corner, limprefix=limprefix,
+                            fromclause=( "FROM world_coordinates i\n"
+                                         "INNER JOIN zero_points z ON z.wcs_id=i._id" ),
+                            provtable='z',
+                            temptable=f"temp_find_containing_{barf}"
+                        )
+                    else:
+                        WorldCoordinates._find_possibly_containing_temptable(
+                            ra, dec, session=pgdb, prov_id=provenance_ids, corner=corner, limprefix=limprefix,
+                            temptable=f"temp_find_containing_{barf}" )
+
+                    pgdb.execute_nofetch(
+                        sql.SQL( textwrap.dedent(
+                            """\
+                            SELECT i._id,
+                            t.ra_corner_00, t.ra_corner_01, t.ra_corner_10, t.ra_corner_11,
+                            t.dec_corner_00, t.dec_corner_01, t.dec_corner_10, t.dec_corner_11
+                            INTO TEMP TABLE temp_find_image_1_{barf}
+                            FROM images i
+                            INNER JOIN source_lists s ON i._id=s.image_id
+                            INNER JOIN world_coordinates w ON s._id=w.sources_id
+                            INNER JOIN temp_find_containing_{barf} t ON t._id=w._id
+                            """
+                        ) ).format( barf=sql.SQL(barf) )
                     )
+                    searchtable = f"temp_find_image_1_{barf}"
+
                 else:
-                    Image._find_possibly_containing_temptable( ra, dec, session=sess, prov_id=provenance_ids )
-                searchtable = "temp_find_containing"
+                    Image._find_possibly_containing_temptable( ra, dec, session=pgdb, prov_id=provenance_ids,
+                                                               temptable=f"temp_find_containing_{barf}" )
+                    searchtable = f"temp_find_containing_{barf}"
 
             elif any( i is not None for i in [ image, minra, maxra, mindec, maxdec ] ):
                 # Filter by rectangle
@@ -1861,20 +1962,46 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                 fcobj.dec_corner_11 = maxdec
                 fcobj.maxdec = maxdec
 
-                if provenance_ids_are_zp:
-                    Image._find_potential_overlapping_temptable(
-                        fcobj,
-                        session=sess,
-                        prov_id=provenance_ids,
-                        fromclause=( "FROM images i "
-                                     "INNER JOIN source_lists s ON s.image_id=i._id "
-                                     "INNER JOIN world_coordinates w ON w.sources_id=s._id "
-                                     "INNER JOIN zero_points z ON z.wcs_id=w._id " ),
-                        provtable='z'
+                searchoverlapping = True
+                overlapfrac = overlapfrac if overlapfrac is not None else 0.95
+
+                if provenance_ids_are_zp or provenance_ids_are_wcs:
+                    corner = "good" if use_good else "corner"
+                    limprefix = "good_" if use_good else ""
+
+                    if provenance_ids_are_zp:
+                        WorldCoordinates._find_potential_overlapping_temptable(
+                            fcobj, session=pgdb, prov_id=provenance_ids, corner=corner, limprefix=limprefix,
+                            fromclause=( "FROM world_coordinates i\n"
+                                         "INNER JOIN zero_points z ON z.wcs_id=i._id" ),
+                            provtable='z',
+                            temptable=f"temp_find_overlapping_{barf}"
+                        )
+                    else:
+                        WorldCoordinates._find_possibly_containing_temptable(
+                            fcobj, session=pgdb, prov_id=provenance_ids, corner=corner, limprefix=limprefix,
+                            temptable=f"temp_find_overlapping_{barf}" )
+
+                    pgdb.execute_nofetch(
+                        sql.SQL( textwrap.dedent(
+                            """\
+                            SELECT i._id,
+                            t.ra_corner_00, t.ra_corner_01, t.ra_corner_10, t.ra_corner_11,
+                            t.dec_corner_00, t.dec_corner_01, t.dec_corner_10, t.dec_corner_11
+                            INTO TEMP TABLE temp_find_image_2_{barf}
+                            FROM images i
+                            INNER JOIN source_lists s ON i._id=s.image_id
+                            INNER JOIN world_coordinates w ON s._id=w.sources_id
+                            INNER JOIN temp_find_overlapping_{barf} t ON t._id=w._id
+                            """
+                        ) ).format( barf=sql.SQL(barf) )
                     )
+                    searchtable = f"temp_find_image_2_{barf}"
+
                 else:
-                    Image._find_potential_overlapping_temptable( fcobj, session=sess, prov_id=provenance_ids )
-                searchtable = "temp_find_overlapping"
+                    Image._find_potential_overlapping_temptable( fcobj, session=pgdb, prov_id=provenance_ids,
+                                                                 temptable=f"temp_find_overlapping_{barf}" )
+                    searchtable = f"temp_find_overlapping_{barf}"
             else:
                 if overlapfrac is not None:
                     raise ValueError( "overlapfrac only makes sense with image or min/max ra/dec" )
@@ -1892,20 +2019,48 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             # it's not worth the effort of trying to figure out the
             # syntax.)
 
-            subdict = {}
-            andtxt = "WHERE "
+            imgid_temptable = sql.Identifier( f"temp_find_images_image_ids_{barf}" )
+            pgdb.execute_nofetch( sql.SQL( "DROP TABLE IF EXISTS {temptable}" )
+                                  .format( temptable=imgid_temptable ) )
             if searchtable is None:
-                q = "SELECT i.* FROM images i "
+                q = sql.SQL( "SELECT i.* INTO TEMP TABLE {temptable} FROM images i\n"
+                             ).format( temptable=imgid_temptable )
+
+                if provenance_ids_are_wcs or provenance_ids_are_zp:
+                    q += sql.SQL( "INNER JOIN source_lists s ON s.image_id=i._id\n"
+                                  "INNER JOIN world_coordinates w ON w.sources_id=s._id\n" )
+                    if provenance_ids_are_wcs:
+                        subq = sql.SQL( "WHERE w.provenance_id=ANY(ARRAY[{provs}])\n" )
+                    else:
+                        subq = sql.SQL( "INNER JOIN zero_points z ON z.wcs_id=w._id\n"
+                                        "WHERE z.provenance_id=ANY(ARRAY[{provs}])\n" )
+                else:
+                    subq = sql.SQL( "WHERE i.provenance_id=ANY(ARRAY[{provs}])\n" )
+
+                q += subq.format( provs=sql.SQL(",").join( provenance_ids ) )
+
             else:
-                q = f"SELECT i.* FROM {searchtable} t INNER JOIN images i ON t._id=i._id "
-                if searchtable == "temp_find_containing":
-                    q += ( "WHERE q3c_poly_query(:ra, :dec, ARRAY[ i.ra_corner_00, i.dec_corner_00, "
-                           "                                       i.ra_corner_01, i.dec_corner_01, "
-                           "                                       i.ra_corner_11, i.dec_corner_11, "
-                           "                                       i.ra_corner_10, i.dec_corner_10 ]) " )
-                    subdict[ 'ra' ] = ra
-                    subdict[ 'dec' ] = dec
-                    andtxt = " AND "
+                # Don't have to filter on provenance because that will have happened
+                #  in the building of the temp table above
+                q = sql.SQL( textwrap.dedent(
+                    """\
+                    SELECT i._id
+                    INTO TEMP TABLE {temptable}
+                    FROM {searchtable} t
+                    INNER JOIN images i ON t._id=i._id
+                    """
+                ) ).format( searchtable=sql.Identifier(searchtable), temptable=imgid_temptable )
+                if searchcontaining:
+                    # Refine the search from the broad overlap in the temp table
+                    #   to a real poly search.
+                    q += sql.SQL( textwrap.dedent(
+                        """\
+                        WHERE q3c_poly_query({ra}, {dec}, ARRAY[ t.ra_corner_00, t.dec_corner_00,
+                                                                 t.ra_corner_01, t.dec_corner_01,
+                                                                 t.ra_corner_11, t.dec_corner_11,
+                                                                 t.ra_corner_10, t.dec_corner_10 ])
+                        """
+                    ) ).format( ra=ra, dec=dec )
 
             # A few fields need preprocessing before feeding into the code below
             min_dateobs = None if min_dateobs is None else parse_dateobs(min_dateobs, output='mjd')
@@ -1936,75 +2091,147 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                        { 'field': 'zero_point_estimate', 'val': max_zero_point, 'type': 'le' },
                        { 'field': 'bkg_rms_estimate',    'val': min_background, 'type': 'ge' },
                        { 'field': 'bkg_rms_estimate',    'val': max_background, 'type': 'le' } ]
-            paramn = 0
             for field in fields:
                 if field['val'] is not None:
                     val = field['val']
-                    q += f"{andtxt} i.{field['field']} "
+                    q += sql.SQL( "  AND i.{field}" ).format( field=sql.Identifier(field['field']) )
                     if field['type'] == 'list':
-                        q += f" = ANY(:param{paramn})"
                         val = listify( val )
+                        q += sql.SQL( " = ANY(ARRAY[{mess}])\n" ).format( mess=sql.SQL(",").join( val ) )
                     elif field['type'] == 'ge':
-                        q += f" >= :param{paramn}"
+                        q += sql.SQL( " >= {val}\n" ).format( val=val )
                     elif field['type'] == 'le':
-                        q += f" <= :param{paramn}"
+                        q += sql.SQL( " <= {val}\n" ).format( val=val )
                     else:
                         raise RuntimeError( f"Unknown field type {field['type']}; this should never happen." )
-                    subdict[ f"param{paramn}" ] = val
-                    paramn += 1
-                    andtxt = " AND "
 
             # Third: Sort
 
             if order_by == 'earliest':
-                q += " ORDER BY i.mjd "
+                q += sql.SQL( "ORDER BY i.mjd\n" )
             elif order_by == 'latest':
-                q += " ORDER BY i.mjd DESC "
+                q += sql.SQL( "ORDER BY i.mjd DESC\n" )
             elif order_by == 'quality':
-                q += f" ORDER BY i.lim_mag_estimate - ({np.abs(seeing_quality_factor)}*i.fwhm_estimate) DESC "
+                q += sql.SQL( "ORDER BY i.lim_mag_estimate - {qf}*i.fwhm_estimate DESC NULLS LAST\n"
+                             ).format( qf=np.abs(seeing_quality_factor) )
             elif order_by is not None:
                 raise ValueError(f'Unknown order_by parameter: {order_by}. Use "earliest", "latest" or "quality".')
 
-            # Get the Image records
-            images = sess.scalars( sa.select( Image ).from_statement( sa.text( q ).bindparams( **subdict ) ) ).all()
+            # Run it to identify image ids of interest
+            pgdb.execute_nofetch( q )
 
-            # Should we delete temp tables?  They ought to get dropped automatically when the session closes.
+            # Get the images
+            rows = pgdb.execute( sql.SQL( "SELECT i.* FROM images i "
+                                          "INNER JOIN {temptable} t ON i._id=t._id" )
+                                 .format( temptable=imgid_temptable ) )
+            images = [ Image(**r) for r in rows ]
+
+            # Get the WCSen if necessary
+            if return_wcs:
+                if provenance_ids_are_wcs:
+                    q = sql.SQL( textwrap.dedent(
+                        """\
+                        SELECT s.image_id, w.* FROM world_coordinates w
+                        INNER JOIN source_lists s ON w.sources_id=s._id
+                        INNER JOIN {temptable} t ON s.image_id=t._id
+                        WHERE w.provenance_id=ANY(ARRAY[{provs}])
+                        """
+                    ) ).format( provs=sql.SQL(",").join( provenance_ids ), temptable=imgid_temptable )
+                elif provenance_ids_are_zp:
+                    q = sql.SQL( textwrap.dedent(
+                        """\
+                        SELECT s.image_id, z.provenance_id AS zpprov, w.* FROM world_coordinates w
+                        INNER JOIN zero_points z ON z.wcs_id=w._id
+                        INNER JOIN source_lists s ON w.sources_id=s._id
+                        INNER JOIN {temptable} t ON s.image_id=t._id
+                        WHERE z.provenance_id=ANY(ARRAY[{provs}])
+                        """
+                    ) ).format( provs=sql.SQL(",").join( provenance_ids ), temptable=imgid_temptable )
+                rows = pgdb.execute( q )
+                wcsen = {}
+                for row in rows:
+                    # Gonna treat provenance_ids as a rank-ordered list
+                    mustsave = False
+                    if row['image_id'] in wcsen:
+                        mustsave = ( ( provenance_ids_are_zp and
+                                       ( provenance_ids.index( row['zpprov'] )
+                                         < provenance_ids.index( wcsen[row['image_id']]['zpprov'] ) ) )
+                                     or
+                                     ( provenance_ids_are_wcs and
+                                       ( provenance_ids.index( row['provenance_id'] )
+                                         < provenance_ids.index( wcsen[row['image_id']]['provenance_id'] ) ) )
+                                    )
+                    else:
+                        mustsave = True
+
+                    if mustsave:
+                        wcsen[row['image_id']] = row
+                        del wcsen[row['image_id']]['image_id']
+
+                if provenance_ids_are_zp:
+                    for v in wcsen.values():
+                        del v['zpprov']
+
+                # Just in case; avoid circular imports
+                from models.world_coordinates import WorldCoordinates
+                wcsen = { k: WorldCoordinates(**v) for k, v in wcsen.items() }
+
+            if return_zeropoints:
+                q = sql.SQL( textwrap.dedent(
+                    """\
+                    SELECT s.image_id, z.* FROM zero_points z
+                    INNER JOIN world_coordinates w ON z.wcs_id=w._id
+                    INNER JOIN source_lists s ON w.sources_id=s._id
+                    INNER JOIN {temptable} t ON s.image_id=t._id
+                    WHERE z.provenance_id=ANY(ARRAY[{provs}])
+                    """
+                ) ).format( provs=sql.SQL(",").join( provenance_ids ), temptable=imgid_temptable )
+                rows = pgdb.execute( q )
+                zps = {}
+                for row in rows:
+                    # Again, treat provenance_ids as a rank-ordered list
+                    mustsave = False
+                    if row['image_id'] in zps:
+                        mustsave = ( provenance_ids.index( row['provenance_id'] )
+                                     < provenance_ids.index( zps[row['image_id']]['provenance_id'] ) )
+                    else:
+                        mustsave = True
+
+                    if mustsave:
+                        zps[row['image_id']] = row
+                        del zps[row['image_id']]['image_id']
+
+                # Just in case; avoid circular imports
+                from models.zero_point import ZeroPoint
+                zps = { k: ZeroPoint(**v) for k, v in zps.items() }
+
+        # Should we delete temp tables?  They ought to get dropped automatically when the session closes.
 
         # Fourth: remove things with too small overlap fraction if relevant
 
-        if overlapfrac is not None:
+        if searchoverlapping:
             retimages = []
+            retimgids = set()
             for im in images:
                 if FourCorners.get_overlap_frac( fcobj, im ) >= overlapfrac:
                     retimages.append( im )
+                    retimgids.add( im._id )
+            if return_wcs:
+                wcsen = { k: v for k, v in wcsen.items() if k in retimgids }
+            if return_zeropoints:
+                zps = { k: v for k, v in zps.items() if k in retimgids }
         else:
-            retimages = list( images )
+            retimages = images
 
-        # if return_zeropoints:
-        #     if not provenance_ids_are_zp:
-        #         raise ValueError( "return_zeropoints requires provenance_ids_are_zp" )
-        #     import SourceList
-        #     import WorldCoordinates
-        #     import ZeroPooint
-
-        #     with SmartSession() as sess:
-        #         if not isinstance( provenance_ids, list ):
-        #             provenace_ids = list( provenance_ids )
-        #         retzps = ( sess.query( ZeroPoint, Image._id )
-        #                    .join( WorldCoordinates, WorldCoordinates._id=ZeroPoint.wcs_id )
-        #                    .join( SourceList, SourceList._id=WorldCoordinates.sources_id )
-        #                    .join( Image, Image._id=SourceList.image_id )
-        #                    .filter( Image._id.in_( [ i.id for i in retimages ] ) )
-        #                    .filter( ZeroPoint.provenance_id.in_( provenance_ids ) ) ).all()
-        #         if len( retzps ) != len( retimages ):
-        #             raise ValueError( "Didn't find exactly one zeropoint for each found image" )
-        #         retimageids = [ i.id for i in retimages ]
-        #         zpdex = [ retimageids.index(r[1]) for r in retzps ]
-        #         retzps = [ retzps[i] for i in zpdex ]
-
-        #     return retimages, retzps
-
-        return retimages
+        if return_zeropoints:
+            if return_wcs:
+                return retimages, wcsen, zps
+            else:
+                return retimages, zps
+        elif return_wcs:
+            return retimages, wcsen
+        else:
+            return retimages
 
 
     @staticmethod
@@ -2086,6 +2313,15 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
     def data(self, value):
         self._nandata = None
         self._data = value
+        if value is not None:
+            self.width = value.shape[1]
+            self.height = value.shape[0]
+            # zero out inconsistent weight and flags.  This isn't obviously
+            # the right thing to do, but doing nothing is obviously wrong.
+            if ( self._weight is not None ) and ( self._weight.shape != value.shape ):
+                self._weight = None
+            if ( self._flags is not None ) and ( self._flags.shape != value.shape ):
+                self._flags = None
 
     @property
     def header(self):
@@ -2116,6 +2352,9 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
 
     @flags.setter
     def flags(self, value):
+        if ( self._data is not None ) and ( value is not None ) and ( self._data.shape != value.shape ):
+            raise ValueError( f"Tried to set flags array of shape {value.shape} "
+                              f"for image with shape {self._data.shape}" )
         self._nandata = None
         self._nanscore = None
         self._flags = value
@@ -2129,6 +2368,9 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
 
     @weight.setter
     def weight(self, value):
+        if ( self._data is not None ) and ( value is not None ) and ( self._data.shape != value.shape ):
+            raise ValueError( f"Tried to set weight array of shape {value.shape} "
+                              f"for image with shape {self._data.shape}" )
         self._weight = value
 
     @property

@@ -87,12 +87,63 @@ class ParsPipeline(Parameters):
             critical=False,
         )
 
+        self.save_after_each_step = self.add_par(
+            'save_after_each_step',
+            False,
+            bool,
+            "Normally, the data products are only saved at the end of the whole pipeline, "
+            "(and, if save_before_subtraction is set, just before subtraction).  Set this "
+            "to save after every step.  This is probably not very I/O efficient, though it "
+            "might be worth thinking about that, as maybe it's not that big a deal.",
+            critical=False
+        )
+
+        self.save_after_steps = self.add_par(
+            'save_after_steps',
+            [],
+            list,
+            "If you don't want to save after every step, but want to save more often than "
+            "after the subtraction and at the end of the whole thing, then list the steps "
+            "here you want to save after.  Steps include preprocessing, extraction, astrocal, "
+            "photocal, subtraction, detection, cutting, measuring, scoring, alerting",
+            critical=False
+        )
+
         self.save_at_finish = self.add_par(
             'save_at_finish',
             True,
             bool,
             'Save the final products to the database and disk',
             critical=False,
+        )
+
+        self.do_not_save = self.add_par(
+            'do_not_save',
+            False,
+            bool,
+            ( 'Set true to disable all saving.  (Well, most saving; provenances will probably still '
+              'get saved.)  If True, overrides all other save flags, effectively setting them all to False.' ),
+            critical=False,
+        )
+
+        self.do_not_load = self.add_par(
+            'do_not_load',
+            False,
+            bool,
+            ( 'Set to True to force all pipeline steps (well, the ones that have implemented this) to always '
+              'rerun, even if the product already exists in the database.  Will throw an exception if '
+              'do_not_save is not also set.  This is useful for debugging.' ),
+            critical=False
+        )
+
+
+        self.start_step = self.add_par(
+            'start_step',
+            None,
+            ( None, str ),
+            ( "Only make sense in combination with do_not_load.  If do_not_load is True, "
+              "then for steps before this step, actually do load." ),
+            critical=False
         )
 
         self.provenance_tag = self.add_par(
@@ -134,7 +185,7 @@ class ParsPipeline(Parameters):
             "If True, generate a report object if the pipeline starts from an Exposure.  "
             "(Reports are linked to exposures, so it's not possible to generate a report "
             "when starting from an image.)  If False, don't generate a report or a report "
-            "provenance.",
+            "provenance.  Ignored if do_not_save is True.",
             critical=False
         )
 
@@ -246,6 +297,19 @@ class Pipeline:
 
         # Other initialization
         self._generate_report = self.pars.generate_report
+        if self.pars.do_not_save:
+            if self._generate_report:
+                SCLogger.warning( "Not generating report because do_not_save is set" )
+                self._generate_report = False
+            save_flags = [ 'save_before_subtraction', 'save_before_alerting',
+                           'save_on_exception', 'save_after_each_step',
+                           'save_at_finish' ]
+            if any( getattr( self.pars, i ) for i in save_flags ):
+                SCLogger.warning( "Turning off all save flags because do_not_save is set" )
+            for i in save_flags:
+                setattr( self.pars, i, False )
+            self.pars.save_after_steps = []
+
 
     def override_parameters(self, **kwargs):
         """Override some of the parameters for this object and its sub-objects, using Parameters.override(). """
@@ -464,6 +528,10 @@ class Pipeline:
 
 
     def save_data_products( self, step, ds ):
+        if self.pars.do_not_save:
+            SCLogger.info( f"Not saving at {step} because do_not_save is set" )
+            return
+
         t_start = time.perf_counter()
         try:
             SCLogger.info(f"Saving at step {step} for image id {ds.image.id}")
@@ -501,6 +569,13 @@ class Pipeline:
         ds = None
         step = None
         try:
+            if self.pars.do_not_load and ( not self.pars.do_not_save ):
+                raise RuntimeError( "Setting do_not_load also requires setting do_not_save." )
+
+            if ( self.pars.start_step is not None ) and ( not self.pars.do_not_load ):
+                SCLogger.warning( f"do_not_load is False, but start_step is {self.pars.start_step}; "
+                                  f"ignoring start_step" )
+
             ds = self.setup_datastore(*args, **kwargs)
             stepstodo = self._get_stepstodo()
             SCLogger.debug( f"Pipeline going to do steps: {stepstodo}" )
@@ -539,6 +614,7 @@ class Pipeline:
                 # ...counting on python dictionaries being ordered...
                 steps = list( process_objects.keys() )
                 everything_saved = True
+                alldone = False
 
                 # SPECIAL CASE.  If preprocessing is done, then we don't
                 #   need to call the preprocessor.  This will be the
@@ -556,18 +632,57 @@ class Pipeline:
                     if ( ds.image.preproc_bitflag & ppbf ) == ppbf:
                         if 'preprocessing' in stepstodo:
                             stepstodo.remove( 'preprocessing' )
-                        SCLogger.info( 'Image is already preprocessed, not doing preprocessing' )
+                            SCLogger.info( 'Image is already preprocessed, not doing preprocessing' )
 
+                if ( ( 'preprocessing' not in stepstodo ) and
+                     ( ds.image.type in [ 'Bias', 'ComBias', 'Dark', 'ComDark',
+                                          'DomeFlat', 'ComDomeFlat', 'SkyFlat', 'ComSkyFlat',
+                                          'TwiFlat', 'ComTwiFlat', 'Fringe' ] )
+                    ):
+                    SCLogger.info( f'Nothing to do for image of type {ds.image.type}' )
+                    alldone = True
+
+                # Special case handling for do_not_load
+                do_not_load = self.pars.do_not_load
+                start_step = None
+                if do_not_load and ( self.pars.start_step is not None ):
+                    if self.pars.start_step not in process_objects.keys():
+                        raise ValueError( f"Unknown start step {self.pars.start_step}, "
+                                          f"known steps are {process_objects.keys()}" )
+                    start_step = self.pars.start_step
+                    do_not_load = False
 
                 for stepi, (step, procobj) in enumerate( process_objects.items() ):
+                    if alldone:
+                        break
+
+                    # Special case handling for do_not_load
+                    if start_step is not None:
+                        if step == start_step:
+                            do_not_load = True
+                            start_step = None
+
                     if step in stepstodo:
+                        # Don't do alerting if do_not_save is True
+                        if ( step == 'alerting' ) and ( self.pars.do_not_save ):
+                            SCLogger.warning( "do_not_save is true, skipping step alerting" )
+                            continue
+
                         SCLogger.info( f'Pipeline starting {step}' )
-                        ds = procobj.run( ds )
+                        ds = procobj.run( ds, do_not_load=do_not_load )
                         ds.update_report( step )
 
                         if step == 'preprocessing':
                             SCLogger.info( f"preprocessing complete: image id={ds.image.id}, "
                                            f"filepath={ds.image.filepath}" )
+                            # Some images never go past preprocessing
+                            if ds.image.type in [ 'Bias', 'ComBias', 'Dark', 'ComDark',
+                                                  'DomeFlat', 'ComDomeFlat', 'SkyFlat', 'ComSkyFlat',
+                                                  'TwiFlat', 'ComTwiFlat', 'Fringe' ]:
+                                SCLogger.info( f"Stopping after preprocessing for image of type "
+                                               f"{ds.image.type}" )
+                                alldone = True
+
                         else:
                             SCLogger.info( f"{step} complete for image {ds.image.id}" )
 
@@ -578,23 +693,31 @@ class Pipeline:
                         # There are a couple of steps where we might want to save
                         #   before being completely finished
                         if ( not everything_saved ) and ( stepi < len(steps)-1 ):
-                            if self.pars.save_before_subtraction and ( steps[stepi+1] == 'subtraction' ):
+                            if self.pars.save_after_each_step or ( step in self.pars.save_after_steps ):
+                                self.save_data_products( f'save_after_{step}', ds )
+                                everything_saved = True
+
+                            elif self.pars.save_before_subtraction and ( steps[stepi+1] == 'subtraction' ):
                                 self.save_data_products( 'save_before_subtraction', ds )
                                 everything_saved = True
 
-                            if self.pars.save_before_alerting and ( steps[stepi+1] == 'alerting' ):
+                            elif self.pars.save_before_alerting and ( steps[stepi+1] == 'alerting' ):
                                 self.save_data_products( 'save_before_alerting', ds )
                                 everything_saved = True
 
                 if self.pars.save_at_finish and ( not everything_saved ):
                     self.save_data_products( 'final', ds )
 
-
                 # Parallel pipeline path for fake injection
-                if ( all( s in stepstodo
-                          for s in [ 'subtraction', 'detection', 'cutting', 'measuring', 'scoring' ] )
-                     and ( self.pars.inject_fakes )
-                    ):
+                mustdofakes = ( all( s in stepstodo
+                                     for s in [ 'subtraction', 'detection', 'cutting',
+                                                'measuring', 'scoring' ] )
+                                and ( self.pars.inject_fakes ) )
+                if mustdofakes and ( self.pars.do_not_load or self.pars.do_not_save ):
+                    SCLogger.warning( "Skipping fake injection when either do_not_load "
+                                      "or do_not_save is set.  (TODO: think about this.)" )
+
+                elif mustdofakes:
                     # Try to free up some memory of stuff we don't need any more in the datastore,
                     #   to reduce overall memory usage.  (We're gonna create new copies of all of
                     #   this with the fake subtraction.)
@@ -641,7 +764,7 @@ class Pipeline:
                                                   [ self.subtractor, self.detector, self.cutter,
                                                     self.measurer, self.scorer ] ):
                             SCLogger.info( f"Running {step} with fake-injected image id {ds.image.id}" )
-                            fakeds = procobj.run( fakeds )
+                            fakeds = procobj.run( fakeds, do_not_load=self.pars.do_not_load )
 
                         SCLogger.info( f"Looking to see which fakes are detected on fake-injected subtraction "
                                        f"of image id {ds.image.id}" )

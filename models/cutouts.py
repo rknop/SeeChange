@@ -1,6 +1,7 @@
 import os
 import numpy as np
 
+from psycopg import sql
 import sqlalchemy as sa
 from sqlalchemy import orm
 from sqlalchemy.ext.declarative import declared_attr
@@ -10,7 +11,7 @@ from sqlalchemy.schema import UniqueConstraint, CheckConstraint
 import h5py
 
 from models.base import (
-    SmartSession,
+    PGDB,
     Base,
     SeeChangeBase,
     UUIDMixin,
@@ -421,16 +422,15 @@ class Cutouts(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
                         self.co_dict[groupname] = self._load_dataset_dict_from_hdf5(file, groupname)
 
 
-    def get_upstreams( self, session=None ):
-        """Return upstreams of this cutouts object.
+    def get_upstream_ids( self, pgdb=None ):
+        """Return ids upstreams of this cutouts object.
 
         This will be the SourceList that is the detections from which this cutout was made.
         """
 
-        with SmartSession( session ) as session:
-            return session.scalars( sa.Select( SourceList ).where( SourceList._id == self.sources_id ) ).all()
+        return [ ( SourceList, self.sources_id ) ]
 
-    def get_downstreams( self, session=None):
+    def get_downstream_ids( self, pgdb=None):
         """Return downstreams of this cutouts object, which will be MeasurentSet objects.
 
         Only gets immediate downstreams; does not recurse.  (As per the
@@ -441,7 +441,7 @@ class Cutouts(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         # Avoid circular imports
         from models.measurements import MeasurementSet
 
-        with SmartSession( session ) as sess:
-            msets = sess.query( MeasurementSet ).filter( MeasurementSet.cutouts_id==self.id )
-
-        return list( msets )
+        with PGDB( pgdb ) as pgdb:
+            q = sql.SQL( "SELECT _id FROM measurement_sets WHERE cutouts_id={me}" ).format( me=self.id )
+            rows, _cols = pgdb.execute( q )
+            return [ ( MeasurementSet, row[0] ) for row in rows ]

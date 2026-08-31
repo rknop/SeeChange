@@ -1,24 +1,9 @@
-FROM debian:trixie-20251229 AS base
-LABEL maintainer="Rob Knop <raknop@lbl.gov>"
-SHELL ["/bin/bash", "-c"]
+FROM apache/kafka:4.2.0
 
-RUN apt-get -y update \
-   && apt-get -y upgrade \
-   && apt-get -y install openjdk-21-jre curl netcat-openbsd \
-   && apt-get clean \
-   && rm -rf /var/lib/apt/lists/*
+USER root
 
-RUN mkdir /kafka
-WORKDIR /kafka
+# Install netcat for the docker compose health check
+RUN apk update \
+  && apk add netcat-openbsd
 
-ARG KAFKA_CODEVERSION=3.8.0
-ARG KAFKA_VERSION=2.13
-RUN echo "Downloading https://dlcdn.apache.org/kafka/${KAFKA_CODEVERSION}/kafka_${KAFKA_VERSION}-${KAFKA_CODEVERSION}.tgz"
-RUN curl -L https://dlcdn.apache.org/kafka/${KAFKA_CODEVERSION}/kafka_${KAFKA_VERSION}-${KAFKA_CODEVERSION}.tgz -O \
-  && tar xvf kafka_${KAFKA_VERSION}-${KAFKA_CODEVERSION}.tgz \
-  && rm kafka_${KAFKA_VERSION}-${KAFKA_CODEVERSION}.tgz
-
-COPY docker/test_kafka/server.properties kafka_${KAFKA_VERSION}-${KAFKA_CODEVERSION}/config/
-COPY docker/test_kafka/zookeeper.properties kafka_${KAFKA_VERSION}-${KAFKA_CODEVERSION}/config/
-
-WORKDIR /kafka/kafka_${KAFKA_VERSION}-${KAFKA_CODEVERSION}
+USER appuser

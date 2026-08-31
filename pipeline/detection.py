@@ -14,6 +14,7 @@ import sep
 from astropy.io import fits, votable
 
 from util.logger import SCLogger
+from util.config import Config
 
 from pipeline.parameters import Parameters
 from pipeline.data_store import DataStore
@@ -32,130 +33,274 @@ class ParsDetector(Parameters):
     def __init__(self, **kwargs):
         super().__init__()
 
+        # IMPORTANT
+        # Notice that many of the parameters critical=False that really probably ought
+        #   to be critical=True.  Reason: the subconfig_update system in parameters.py.
+        # The massive subconfigs parameter, which IS critical, holds values that will
+        #   be set into the parameters at runtime.
+        # This *does* break the whole "critical" system of parameters a bit.  However,
+        #   we were facing the problem of wanting to have a *single* provenacne that
+        #   had *different* configs for galactic and extragalactic fields.
+        # This also means that the defaults configured in most of the "add_par" commands below
+        #   are never seen; they will be overwritten by the values from the default
+        #   in subconfigs and subconfigs_noncritical
+
         self.method = self.add_par(
-            'method', 'sextractor', str, 'Method to use (sextractor, sep, filter)', critical=True
+            name = 'method',
+            default = 'sextractor',
+            par_types = str,
+            docstring = 'Method to use (sextractor, sep, filter)',
+            critical = False
         )
 
         self.measure_psf = self.add_par(
-            'measure_psf',
-            False,
-            bool,
-            ( 'Measure PSF?  If false, will use existing image PSF.  If true, '
-              'will measure PSF and put it in image object; will also iterate '
-              'on source extraction to get PSF photometry with the returned PSF.' ),
-            critical=True
+            name = 'measure_psf',
+            default = False,
+            par_types = bool,
+            docstring = ( 'Measure PSF?  If false, will use existing image PSF.  If true, '
+                          'will measure PSF and put it in image object; will also iterate '
+                          'on source extraction to get PSF photometry with the returned PSF.' ),
+            critical = False
         )
 
         self.apers = self.add_par(
-            'apers',
-            [1.0, 2.0, 3.0, 5.0],
-            list,
-            'Apertures in which to measure photometry; a list of floats. ',
-            critical=True
+            name = 'apers',
+            default = [1.0, 2.0, 3.0, 5.0],
+            par_types = list,
+            docstring = 'Apertures in which to measure photometry; a list of floats. ',
+            critical = False
         )
         self.add_alias( 'apertures', 'apers' )
 
         self.inf_aper_num = self.add_par(
-            'inf_aper_num',
-            -1,
-            int,
-            'Which of apers is the one to use as the "infinite" aperture for aperture corrections. '
-            'If -1, will use the last aperture, not the PSF flux! ',
-            critical=True
+            name = 'inf_aper_num',
+            default = -1,
+            par_types = int,
+            docstring = ( 'Which of apers is the one to use as the "infinite" aperture for aperture corrections. '
+                          'If -1, will use the last aperture, not the PSF flux! ' ),
+            critical = False
         )
 
         self.best_aper_num = self.add_par(
-            'best_aper_num',
-            0,
-            int,
-            'Which of apers is the one to use as the "best" aperture, for things like plotting or calculating'
-            'the limiting magnitude. Note that -1 will use the PSF flux, not the last aperture on the list. '
+            name = 'best_aper_num',
+            default = 0,
+            par_types = int,
+            docstring = ( 'Which of apers is the one to use as the "best" aperture, for things like plotting '
+                          'or calculating the limiting magnitude. Note that -1 will use the PSF flux, not the '
+                          'last aperture on the list. ' ),
+            critical = False
         )
 
         self.aperunit = self.add_par(
-            'aperunit',
-            'fwhm',
-            str,
-            'Units of the apertures in the apers parameters; one of "fwhm" or "pixel"',
-            critical=True
+            name = 'aperunit',
+            default = 'fwhm',
+            par_types = str,
+            docstring = 'Units of the apertures in the apers parameters; one of "fwhm" or "pixel"',
+            critical = False
         )
         self.add_alias( 'aperture_unit', 'aperunit' )
 
         self.separation_fwhms = self.add_par(
-            'separation_fwhms',
-            1.0,
-            float,
-            'Minimum separation between sources in units of FWHM',
-            critical=True
+            name = 'separation_fwhms',
+            default = 1.0,
+            par_types = float,
+            docstring = 'Minimum separation between sources in units of FWHM',
+            critical = False
         )
 
-        self.threshold = self.add_par(
-            'threshold',
-            3.0,
-            [float, int],
-            'The number of standard deviations above the background '
-            'to use as the threshold for detecting a source. ',
-            critical=True
+        self.initial_threshold = self.add_par(
+            name = 'initial_threshold',
+            default = 1.5,
+            par_types = [float, int],
+            docstring = ( 'Like sextr_threshold, but used for the initial sextractor run before psf determination. '
+                          'You want this to be higher so that only decent detections are passed on to psfex.' ),
+            critical = False
+        )
+
+        self.sextr_threshold = self.add_par(
+            name = 'sextr_threshold',
+            default = 1.5,
+            par_types = [float, int],
+            docstring = ( 'The number of standard deviations above the background to use as the threshold '
+                        'for detecting a source.  Passed to sextractor DETECT_THRESH and ANALYSIS_THRDSH '
+                        'on the second pass when the psf is known.' ),
+            critical = False
+        )
+
+
+        self.snr_threshold = self.add_par(
+            name = 'snr_threshold',
+            default = 3.0,
+            par_types = [float, int],
+            docstring = 'Only keep things whose S/N is at least this high.',
+            critical = False
         )
 
         self.subtraction = self.add_par(
-            'subtraction',
-            False,
-            bool,
-            'Whether this is expected to run on a subtraction image or a regular image. ',
-            critical=True
+            name = 'subtraction',
+            default = False,
+            par_types = bool,
+            docstring = 'Whether this is expected to run on a subtraction image or a regular image. ',
+            critical = False
         )
 
         self.sextractor_timeout = self.add_par(
-            'sextractor_timeout',
-            120,
-            int,
-            'Timeout for SExtractor, in seconds. ',
-            critical=False,
+            name = 'sextractor_timeout',
+            default = 120,
+            par_types = int,
+            docstring = 'Timeout for SExtractor, in seconds. ',
+            critical = False
         )
 
         self.sextractor_back_type = self.add_par(
-            'sextractor_back_type',
-            'MANUAL',
-            str,
-            ( "-BACK_TYPE parameter for sextractor: AUTO or MANUAL.  You usually want this to be MANUAL ",
-              "(with sextractor_back_value=0) because background subtraction is run separately from sextractor" ),
-            critical=True
+            name = 'sextractor_back_type',
+            default = 'MANUAL',
+            par_types = str,
+            docstring = ( "-BACK_TYPE parameter for sextractor: AUTO or MANUAL.  You usually want this to be "
+                          "MANUAL (with sextractor_back_value=0) because background subtraction is run separately "
+                          "from sextractor" ),
+            critical = False
         )
 
         self.sextractor_back_value = self.add_par(
-            'sextractor_back_value',
-            0,
-            float,
-            "-BACK_VALUE parameter for sextractor.  Ignored if sextractor_back_type is AUTO",
-            critical=True
+            name = 'sextractor_back_value',
+            default = 0,
+            par_types = float,
+            docstring = "-BACK_VALUE parameter for sextractor.  Ignored if sextractor_back_type is AUTO",
+            critical = False
         )
 
         self.sextractor_back_size = self.add_par(
-            'sextractor_back_size',
-            None,
-            ( int, None ),
-            ( "-BACK_SIZE parameter for sextractor.  Ignored if sextractor_back_type is MANUAL.  "
-              "Defaults to the Instrument's background_box_size" ),
-            critical=True
+            name = 'sextractor_back_size',
+            default = None,
+            par_types = ( int, None ),
+            docstring = ( "-BACK_SIZE parameter for sextractor.  Ignored if sextractor_back_type is MANUAL.  "
+                          "Defaults to the Instrument's background_box_size" ),
+            critical = False
         )
 
         self.sextractor_back_filtersize = self.add_par(
-            'sextractor_back_filtersize',
-            None,
-            ( int, None ),
-            ( "-BACK_FILTERSIZE parameter for sextractor.  Ignored if sextractor_back_type is MANUAL.  "
-              "Defaults to the Instrument's background_filt_size" ),
-            critical=True
+            name = 'sextractor_back_filtersize',
+            default = None,
+            par_types = ( int, None ),
+            docstring = ( "-BACK_FILTERSIZE parameter for sextractor.  Ignored if sextractor_back_type is MANUAL.  "
+                          "Defaults to the Instrument's background_filt_size" ),
+            critical = False
         )
 
         self.backgrounding = self.add_par(
-            'backgrounding',
-            { 'format': 'scalar', 'method': 'zero' },
-            dict,
-            ( "Parameters for background subtraction; see backgrounding.py.  If subtraction is True, "
-              "then backgrounding.method must be zero" ),
-            critical=True
+            name = 'backgrounding',
+            default = { 'format': 'scalar', 'method': 'zero' },
+            par_types = dict,
+            docstring = ( "Parameters for background subtraction; see backgrounding.py.  If subtraction is True, "
+                          "then backgrounding.method must be zero" ),
+            critical = False
+        )
+
+        self.psf_method = self.add_par(
+            name = 'psf_method',
+            default = 'psfex',
+            par_types = str,
+            docstring = ( "Which PSF method to use.  (Currently only psfex is supported.)  If subtraction is "
+                          "True, no PSF fitting is done, so all psf_* parameters are ignored" ),
+            critical = False
+        )
+
+        self.psf_timeout = self.add_par(
+            name = 'psf_timeout',
+            default = 240,
+            par_types = ( float, int ),
+            docstring = "How many seconds to try fitting the PSF before assuming the process is hung",
+            critical = False
+        )
+
+        self.psf_params = self.add_par(
+            name = 'psf_params',
+            default = { 'fwhm_min': 0.5,
+                        'fwhm_max_to_try': [ 10.0, 15.0, 20.0, 25.0 ],
+                        'psf_init_size': 25,
+                        'psf_final_size': None
+                       },
+            par_types = dict,
+            docstring = "Parameters for PSF extraction; details depend on psf_method.",
+            critical = False
+        )
+
+        self.subconfigs = self.add_par(
+            name = 'subconfigs',
+            default = {
+                'choice_algorithm': 'star_density',
+                'choice_params': {
+                    # Magnitude cutoff to look at star density
+                    'star_mag_cutoff': 20,
+                    # For healpix(32,nest=True), each healpix is about 100' (1.8°) on a side,
+                    #   so each healpix is roughly 3.4 square degrees
+                    'star_density_cutoff': 1e5,
+                },
+                'default_subconfig': 'extragalactic',
+                'subconfigs': {
+                    'extragalactic': {
+                        'method': 'sextractor',
+                        'measure_psf': False,
+                        'apers': [ 1.0, 2.0, 3.0, 5.0 ],
+                        'inf_aper_num': -1,
+                        'best_aper_num': 0,
+                        'aperunit': 'fwhm',
+                        'separation_fwhms': 1.0,
+                        'initial_threshold': 1.5,
+                        'sextr_threshold': 1.5,
+                        'snr_threshold': 3.0,
+                        'subtraction': False,
+                        'subtractor_back_type': 'MANUAL',
+                        'sextractor_back_value': 0.,
+                        'sextractor_back_size': None,
+                        'sextractor_back_filtersize': None,
+                        'backgrounding': { 'format': 'scalar', 'method': 'zero' },
+                        # So, yeah, you're wondering why there are values for psf_method and
+                        #   psf_params when measure_psf is False.
+                        # We need measure_psf to default to False because there are places in the
+                        #   pipeline that depend on that.  However, we do want to have some defaults
+                        #   so that if somebody sets measure_psf to True, there will be defaults
+                        #   there for them.
+                        'psf_method': 'psfex',
+                        'psf_params': { 'fwhm_min': 0.5,
+                                        'fwhm_max_to_try': [ 10.0, 15.0, 20.0, 25.0 ],
+                                        'psf_init_size': 25,
+                                        'psf_final_size': None }
+                    },
+                    'galactic': {
+                        'snr_threshold': 10.0,
+                    }
+                }
+            },
+            par_types = dict,
+            docstring = ( "Algoirthm for choosing all the config parameters, and replacments for all the config "
+                          "parameters based on that choice." ),
+            critical = True
+        )
+
+        self.subconfigs_noncritical = self.add_par(
+            name = 'subconfigs_noncritical',
+            default = {
+                'choice_params': {
+                    # Parent directory to look for config files and tables. If None, uses CODE_ROOT
+                    'config_dir': None,
+                    'gaia_density_catalog': 'share/gaia_density/gaia_healpix_density.pq'
+                },
+                'subconfigs': {
+                    'extragalactic': {
+                        'sextractor_timeout': 240,
+                        'psf_timeout': 300.,
+                    },
+                    'galactic': {
+                        'sextractor_timeout': 120,
+                        'psf_timeout': 180.,
+                    }
+                }
+            },
+            par_types = dict,
+            docstring = "Substitutions for self.subconfigs that shouldn't go in the provenance",
+            critical = False
         )
 
         self._enforce_no_new_attrs = True
@@ -202,49 +347,9 @@ class Detector:
     """
 
     def __init__(self, **kwargs):
-        """Initialize Detector.
-
-        NOTE : if you change self.pars.backgrounding, call make_backgrounder to
-        get an updated backgrounding object!
-
-        Parmameters
-        -----------
-          method: str, default sextractor
-            sextractor or sep.  sep is not fully supported
-
-          measure_psf: bool, default False
-            Measure the psf?  Does not make sense to set this True for
-            subtraction images; for subtraction images, you must pass a
-            psf using the psf parameter.
-
-          psf: PSF, default None
-            A PSF object.  Ignored if measure_psf is True.  If passed,
-            will be used to determine the image FWHM to set aperture
-            sizes, and will be used for PSF photometry.
-
-          apers: list of float, default None
-            Apertures in which to do aperture photometry.  If None, will
-            use a default set of apertures that is (1, 2, 3, 4, 5, 7,
-            10) times the FWHM.  (If this is None and no psf is measured
-            or passed, then the apertures will be fixed at (2, 4, 6, 8,
-            10, 14, 20) pixels.)  The "primary" aperture should be the
-            first one on the list.
-
-          aperunit: str, default fwhm
-            The unit (fwhm or pixel) apers is given in; ignored if apers
-            is None.
-
-          threshold: float, default 5.0
-            Threshold for finding sources in units of sigma.
-
-          subtraction: bool, default False
-            Is this Detector intended to find sources on a subtraction?
-            If False, it's for finding sources on a regular image.
-
-        """
+        """Initialize Detector."""
 
         self.pars = ParsDetector(**kwargs)
-        self.make_backgrounder()
 
         # this is useful for tests, where we can know if
         # the object did any work or just loaded from DB or datastore
@@ -255,7 +360,7 @@ class Detector:
         self.backgrounder = Backgrounder( **(self.pars.backgrounding) )
 
 
-    def run(self, *args, input_psf=None, **kwargs):
+    def run(self, *args, input_psf=None, do_not_load=False, **kwargs):
         """Extract sources (and possibly a psf) from a regular image or a subtraction image.
 
         Paramters
@@ -286,10 +391,13 @@ class Detector:
         self.has_recalculated = False
 
         if self.pars.subtraction:
-            if  self.backgrounder.pars.method != 'zero':
-                raise ValueError( "Running detection on a subtraction requires backgrounding.method=zero" )
             try:
-                ds = DataStore.from_args(*args, **kwargs)
+                ds = DataStore.from_args( *args, **kwargs )
+                self.pars.subconfig_update( ds )
+                self.make_backgrounder()
+                if  self.backgrounder.pars.method != 'zero':
+                    raise ValueError( "Running detection on a subtraction requires backgrounding.method=zero" )
+
                 t_start = time.perf_counter()
                 if ds.update_memory_usages:
                     import tracemalloc
@@ -313,7 +421,7 @@ class Detector:
                 prov = ds.get_provenance('detection', self.pars.get_critical_pars())
 
                 # try to find the sources/detections in memory or in the database:
-                detections = ds.get_detections(prov)
+                detections = None if do_not_load else ds.get_detections( prov )
 
                 if detections is None:
                     self.has_recalculated = True
@@ -334,6 +442,15 @@ class Detector:
                                                                 wcs=ds.wcs,
                                                                 score=getattr( ds, 'zogy_score', None  ),
                                                                 zogy_alpha=getattr( ds, 'zogy_alpha', None ) )
+                    # ****** OMG ROB LOOK AT THIS ******
+                    # _imname = pathlib.Path( ds.image.filepath ).name
+                    # wcshdr = ds.wcs.wcs.to_header()
+                    # fits.writeto( f'temp-{_imname}.fits', ds.image.data, wcshdr, overwrite=True )
+                    # fits.writeto( f'temp-{_imname}_sub.fits', ds.sub_image.data, wcshdr, overwrite=True )
+                    # fits.writeto( f'temp-{_imname}_zogyscore.fits', ds.zogy_score, wcshdr, overwrite=True )
+                    # fits.writeto( f'temp-{_imname}_zogyalpha.fits', ds.zogy_alpha, wcshdr, overwrite=True )
+                    # detections.ds9_regfile( f'temp-{_imname}.reg', radcolor=None )
+                    # ****** OMG ROB LOOK AT THIS ******
                     detections.image_id = ds.sub_image.id
                     if detections.provenance_id is None:
                         detections.provenance_id = prov.id
@@ -359,14 +476,22 @@ class Detector:
 
         else:  # regular image
             try:
-                ds = DataStore.from_args(*args, **kwargs)
+                ds = DataStore.from_args( *args, **kwargs )
+                self.pars.subconfig_update( ds )
+                self.make_backgrounder()
                 prov = ds.get_provenance('extraction', self.pars.get_critical_pars())
 
-                sources = ds.get_sources(provenance=prov)
-                psf = ds.get_psf(provenance=prov)
-                bg = ds.get_background()
+                if do_not_load:
+                    sources = None
+                    psf = None
+                    bg = None
+                else:
+                    sources = ds.get_sources(provenance=prov)
+                    psf = ds.get_psf(provenance=prov)
+                    bg = ds.get_background()
 
-                bg = self.backgrounder.run( ds )
+                if bg is None:
+                    bg = self.backgrounder.run( ds )
 
                 t_start = time.perf_counter()
                 if ds.update_memory_usages:
@@ -408,6 +533,7 @@ class Detector:
                 ds.psf = psf
                 if ds.image.fwhm_estimate is None:
                     ds.image.fwhm_estimate = psf.fwhm_pixels * ds.image.instrument_object.pixel_scale
+                    SCLogger.debug( f"FWHM estimate = {ds.image.fwhm_estimate:.02f} arcsec" )
 
                 if ds.update_runtimes:
                     ds.runtimes['extraction'] = time.perf_counter() - t_start
@@ -450,7 +576,7 @@ class Detector:
           self.pars.measure_psf is False, then for method=sextractor
           this is needed.
 
-        wcs: WorldCoordiantes or None
+        wcs: WorldCoordinates or None
           Needed if self.pars.method is 'filter'.  If self.pars.method
           is 'sextractor', this will be used in place of the one in the
           image header to get RA and Dec.
@@ -534,12 +660,25 @@ class Detector:
                 sources, _, _ = self._run_sextractor_once( image, bg, apers=[aperrad],
                                                            psffile=None, wcs=wcs, tempname=tempnamebase )
 
+                # ****
+                # sources.ds9_regfile( 'them.reg', radcolor={'star': (2,'yellow'), 'nonstar': (2,'blue'),
+                #                                            'bad': (2.4, 'red'), 'flagged': (2.8,'orange'),
+                #                                            'highsn': (3.0, 'green') } )
+                # import pdb; pdb.set_trace()
+                # ****
+
                 # Get the PSF
-                SCLogger.debug( "detection: determining psf" )
-                psf = self._run_psfex( tempnamebase, image, do_not_cleanup=True )
-                psfpath = pathlib.Path( FileOnDiskMixin.temp_path ) / f'{tempnamebase}.sources.psf'
-                _psfxmlpath = pathlib.Path( FileOnDiskMixin.temp_path ) / f'{tempnamebase}.sources.psf.xml'
-                delfiles.extend( [ psfpath, _psfxmlpath ] )
+                SCLogger.debug( "detection: determining psf..." )
+                cfg = Config.get()
+                if self.pars.psf_method == 'psfex':
+                    psf = self._run_psfex( tempnamebase, image, do_not_cleanup=True )
+                    SCLogger.debug( f"...psf done, got FWHM = "
+                                    f"{psf.fwhm_pixels*image.instrument_object.pixel_scale:.03f} arcsec" )
+                    psfpath = pathlib.Path( FileOnDiskMixin.temp_path ) / f'{tempnamebase}.sources.psf'
+                    _psfxmlpath = pathlib.Path( FileOnDiskMixin.temp_path ) / f'{tempnamebase}.sources.psf.xml'
+                    delfiles.extend( [ psfpath, _psfxmlpath ] )
+                else:
+                    raise ValueError( f"Unknown psf method {cfg.value('psf_method')}; only psfex is supported." )
 
             elif psf is not None:
                 # Make a copy of the psf and wipe out the id and the sources id so that
@@ -573,6 +712,7 @@ class Detector:
             SCLogger.debug( "detection: running sextractor with psf to get final source list" )
 
             psf_clip = psf.get_clip()
+            # NOTE -- at the moment, _run_sextractor_once doesnt' use this next value
             psf_norm = 1 / np.sqrt(np.sum(psf_clip ** 2))  # normalization factor for the sextractor thresholds
 
             sources, bkg, bkgsig = self._run_sextractor_once(
@@ -588,9 +728,11 @@ class Detector:
             SCLogger.debug( f"detection: sextractor found {len(sources.data)} sources on image {image.filepath}" )
 
             snr = sources.apfluxadu()[0] / sources.apfluxadu()[1]
-            if snr.min() > self.pars.threshold:
+            if snr.min() > 0.75 * self.pars.snr_threshold:
                 warnings.warn( "SExtractor may not have detected everything down to your threshold." )
-            w = np.where( snr >= self.pars.threshold )
+            w = np.where( snr >= self.pars.snr_threshold )
+            SCLogger.debug( f"{len(w[0])} out of {len(sources.data)} sources abuve the SNR cut of "
+                            f"{self.pars.snr_threshold}" )
             sources.data = sources.data[w]
             sources.num_sources = len( sources.data )
             sources.inf_aper_num = self.pars.inf_aper_num
@@ -629,11 +771,15 @@ class Detector:
             File that has the PSF to use for PSF photometry.  If None,
             won't do psf photometry.
 
-          psfnorm: float
-            The normalization of the PSF image (i.e., the sqrt of the
-            sum of squares of the psf values).  This is used to set the
-            threshold for sextractor.  When the PSF is not known, we
-            will use a rough approximation and set this value to 3.0.
+          psfnorm: float, default 3.0
+            This is complicated. SExtractor detect_thresh and
+            analysis_thresh are the thresholds, respectively, for
+            finding something in the first place to look at, and for
+            including in an object's isophotal area.
+
+            OMG I'M SO CONFUSED.  See Issue #536.
+
+            FOR NOW THIS IS NOT USED AT ALL.
 
           wcs: WorldCoordinates or None
             If passed, will replace the WCS in the image header with the
@@ -688,14 +834,16 @@ class Detector:
                 tempname = pathlib.Path( FileOnDiskMixin.temp_path ) / tempname
 
             imgdata = image.data if bg is None else bg.subtract_me( image.data )
+            thresh = self.pars.initial_threshold if psffile is None else self.pars.sextr_threshold
+            # thresh /= psfnorm
             sextr_res = run_sextractor(
                 image.header,
                 imgdata,
                 image.weight,
                 maskdata = image.flags,
                 outbase = tempname,
-                detect_thresh = self.pars.threshold / psfnorm,
-                analysis_thresh = self.pars.threshold / psfnorm,
+                detect_thresh = thresh,
+                analysis_thresh = thresh,
                 apers = apers,
                 psffile = psffile,
                 wcs = wcs,
@@ -740,18 +888,17 @@ class Detector:
                 sextr_res[ 'sources' ].unlink( missing_ok=True )
 
 
-    def _run_psfex( self, tempname, image, psf_size=None, do_not_cleanup=False ):
+    def _run_psfex( self, tempname, image, do_not_cleanup=False ):
         """Create a PSF from a SExtractor catalog file.
 
         Will run psfex twice, to make sure it has the right data size.
         The first pass, it will use a resampled PSF data array size of
-        psf_size in x and y (or 25, if psf_size is None).  The second
-        pass, it will use a resampled PSF data array size
-        psf_size/psfsamp, where psfsamp is the psf sampling determined
-        in the first pass.  In the second pass, psf_size will be what
-        was passed; if None was passed, then it will be 5 times the
-        measured FWHM (using the "FWHM" determined from the half-light
-        radius) in the first pass.
+        psf__init_size in x and y.  The second pass, it will use a
+        resampled PSF data array size psf_final_size/psfsamp, where
+        psfsamp is the psf sampling determined in the first pass.  In
+        the second pass, if psf_final_size is None, then it will be 5
+        times the measured FWHM (using the "FWHM" determined from the
+        half-light radius) in the first pass.
 
         Parameters
         ----------
@@ -761,11 +908,6 @@ class Detector:
 
           image: Image
             The Image that the sources were extracted from.
-
-          psf_size: int or None
-            The size of one side of the thumbnail of the PSF, in pixels.
-            Should be odd; if it's not, 1 will be added to it.
-            If None, will be determined automatically.
 
           do_not_cleanup: bool, default False
             If True, don't delete the psf and psfxml files that will be
@@ -786,31 +928,48 @@ class Detector:
         psffile = pathlib.Path( FileOnDiskMixin.temp_path ) / f'{tempname}.sources.psf'
         psfxmlfile = pathlib.Path( FileOnDiskMixin.temp_path ) / f'{tempname}.sources.psf.xml'
 
-        if psf_size is not None:
-            psf_size = int( psf_size )
-            if psf_size % 2 == 0:
-                psf_size += 1
+        psf_init_size = self.pars.psf_params['psf_init_size']
+        psf_final_size = self.pars.psf_params['psf_final_size']
+
+        psf_init_size = int( psf_init_size )
+        if psf_init_size % 2 == 0:
+            psf_init_size += 1
+
+        if psf_final_size is not None:
+            psf_final_size = int( psf_final_size )
+            if psf_final_size % 2 == 0:
+                psf_final_size += 1
+
         psf_sampling = 1.
 
         try:
-            usepsfsize = psf_size if psf_size is not None else 25
+            found_fwhm = None
             for i in range(2):
+                if i == 0:
+                    usepsfsize = psf_init_size
+                    minfwhm = self.pars.psf_params['fwhm_min']
+                    #  (This is just a range of things to try to see if we can
+                    #  get psfex to succeed; it will stop after the first one that does.)
+                    fwhmmaxtotry = self.pars.psf_params['fwhm_max_to_try']
+                else:
+                    if psf_final_size is None:
+                        usepsfsize = int( np.ceil( 5.0 * found_fwhm ) )
+                    else:
+                        usepsfsize = psf_final_size
+                    minfwhm = 0.75 * found_fwhm
+                    fwhmmaxtotry = [ 1.5 * found_fwhm ]
+
                 psfdatasize = int( usepsfsize / psf_sampling + 0.5 )
                 if psfdatasize % 2 == 0:
                     psfdatasize += 1
 
-                # TODO: make the fwhmmax tried configurable
-                #  (This is just a range of things to try to see if we can
-                #  get psfex to succeed; it will stop after the first one that does.)
-                fwhmmaxtotry = [ 10.0, 15.0, 20.0, 25.0 ]
-                #
                 # TODO: make -XML_URL configurable.  (The default there is what
                 #  is installed if you install the psfex package on a
                 #  debian-based distro, which is what the Dockerfile is built from.)
                 for fwhmmaxdex, fwhmmax in enumerate( fwhmmaxtotry ):
                     command = [ 'psfex',
                                 '-PSF_SIZE', f'{psfdatasize},{psfdatasize}',
-                                '-SAMPLE_FWHMRANGE', f'0.5,{fwhmmax}',
+                                '-SAMPLE_FWHMRANGE', f'{minfwhm},{fwhmmax}',
                                 '-SAMPLE_VARIABILITY', "0.2",   # Allowed FWHM variability (1.0 = 100%)
                                 '-SAMPLE_IMAFLAGMASK', "0xff",
                                 '-SAMPLE_MINSN', '5',  # Minimum S/N for sampling
@@ -822,11 +981,13 @@ class Detector:
                                 '-XML_URL', 'file:///usr/share/psfex/psfex.xsl',
                                 # '-PSFVAR_DEGREES', '4',  # polynomial order for PSF fitting across image
                                 sourcefile ]
+                    _psfcom = " ".join( f'"{str(i)}"' if ' ' in str(i) else str(i) for i in command )
+                    SCLogger.debug( f"Running command {_psfcom}" )
                     res = subprocess.run(
                         command,
                         cwd=sourcefile.parent,
                         capture_output=True,
-                        timeout=self.pars.sextractor_timeout
+                        timeout=self.pars.psf_timeout
                     )
                     if res.returncode == 0:
                         success = True
@@ -837,16 +998,11 @@ class Detector:
                         if psf_sampling <= 0:
                             psf_sampling = last_psf_sampling
                             success = False
-                        if success and ( psf_size is None ):
-                            last_usepsfsize = usepsfsize
-                            usepsfsize = int( np.ceil( psfstats.array['FWHM_FromFluxRadius_Mean'][0] * 5. ) )
-                            if usepsfsize <= 0:
-                                success = False
-                                usepsfsize = last_usepsfsize
-                            elif usepsfsize % 2 == 0:
-                                usepsfsize += 1
                         if success:
-                            fwhmmaxtotry = [ fwhmmax ]
+                            found_fwhm = psfstats.array['FWHM_FromFluxRadius_Mean'][0]
+                            if found_fwhm <= 0:
+                                success = False
+                                found_fwhm = None
                     if success:
                         break
                     else:
@@ -858,7 +1014,7 @@ class Detector:
                         SCLogger.warning( f"psfex failed with fwhmmax={fwhmmax}, trying {fwhmmaxtotry[fwhmmaxdex+1]}" )
 
 
-            psf = PSFExPSF( fwhm_pixels=float(psfstats.array['FWHM_FromFluxRadius_Mean'][0]) )
+            psf = PSFExPSF( fwhm_pixels=float(found_fwhm) )
             psf.load( psfpath=psffile, psfxmlpath=psfxmlfile )
             psf.header['IMAXIS1'] = image.data.shape[1]
             psf.header['IMAXIS2'] = image.data.shape[0]
@@ -907,7 +1063,7 @@ class Detector:
 
         data_sub = data - b.back()
 
-        objects = sep.extract(data_sub, self.pars.threshold, err=b.rms())
+        objects = sep.extract(data_sub, self.pars.snr_threshold, err=b.rms())
 
         # get the radius containing half the flux for each source
         r, _ = sep.flux_radius(data_sub, objects['x'], objects['y'], 6.0 * objects['a'], 0.5, subpix=5)
@@ -986,7 +1142,7 @@ class Detector:
         # TODO: we should check if we still need this after b/g subtraction on the input images
         mu, sigma = sigma_clipping(score)
         score = (score - mu) / sigma
-        det_map = abs(score) > self.pars.threshold  # catch negative peaks too (can get rid of them later)
+        det_map = abs(score) > self.pars.snr_threshold  # catch negative peaks too (can get rid of them later)
 
         # dilate the map to merge nearby peaks
         struc = np.zeros((3, 3), dtype=bool)
@@ -1028,7 +1184,7 @@ class Detector:
         tab = astropy.table.Table(
             [ra, dec, x, y, label_fluxes, fluxes, region_sizes, num_flagged, scores],
             names=('ra', 'dec', 'x', 'y', 'flux', 'psf_flux', 'num_pixels', 'num_flagged', 'score'),
-            meta={'fwhm': fwhm, 'threshold': self.pars.threshold}
+            meta={'fwhm': fwhm, 'threshold': self.pars.snr_threshold}
         )
 
         sources = SourceList(data=tab, format='filter', num_sources=num_sources)

@@ -106,9 +106,11 @@ class Subtractor:
         self.pars = ParsSubtractor(**kwargs)
         inpainter = Inpainter(**self.pars.inpainting)
         self.pars.inpainting = inpainter.pars.get_critical_pars()  # add Inpainter defaults into this dictionary
+        self.parameters_to_initialize_inpainting = inpainter.pars.to_dict()
         del inpainter
         aligner = ImageAligner(**self.pars.alignment)
         self.pars.alignment = aligner.pars.get_critical_pars()  # add ImageAligner defaults into this dictionary
+        self.parameters_to_initialize_alignment = aligner.pars.to_dict()
 
         # this is useful for tests, where we can know if
         # the object did any work or just loaded from DB or datastore
@@ -231,7 +233,7 @@ class Subtractor:
         ref_image_flux_zp = 10 ** (0.4 * ref_zp.zp)
         # TODO: consider adding an estimate for the astrometric uncertainty dx, dy
 
-        inpainter = Inpainter(**self.pars.inpainting)
+        inpainter = Inpainter(**self.parameters_to_initialize_inpainting)
         new_image_data = inpainter.run(new_image_data, new_image.flags, new_image.weight)
         del inpainter
 
@@ -394,10 +396,10 @@ class Subtractor:
             # use higher orders, and worry and fret a lot.
             nominalsigpix = nominalfwhm / trtlt / pixscale
             if nominalsigpix < 0.6:
-                self.logger.warning( f'Seeings were close enough '
-                                     f'(new={new_psf.fwhm_pixels:.2f}, ref={ref_psf.fwhm_pixels:.2f}) '
-                                     f'that nominalsigpix was < 0.6.  Going to use higher orders in case there needs '
-                                     f'to be sharpening scariness (brrr...)' )
+                SCLogger.warning( f'Seeings were close enough '
+                                  f'(new={new_psf.fwhm_pixels:.2f}, ref={ref_psf.fwhm_pixels:.2f}) '
+                                  f'that nominalsigpix was < 0.6.  Going to use higher orders in case there needs '
+                                  f'to be sharpening scariness (brrr...)' )
                 nominalsigpix = 1.0
                 hotgaussorders = [6, 4, 2]
                 hotgaussfactors = [0.5, 1., 2]
@@ -414,9 +416,9 @@ class Subtractor:
             # save us extra writes, but right now I'm being lazy and just sticking
             # everything in the temp directory.  We don't in general expect
             # the aligned ref to be on disk, so we will have to do some writes.)
-            save_fits_image_file( newim, new_image.data, new_image.header )
+            _path, new_image.header = save_fits_image_file( newim, new_image.data, new_image.header )
             save_fits_image_file( newflags, new_image.flags, new_image.header )
-            save_fits_image_file( refim, ref_image.data, ref_image.header )
+            _path, ref_image.header = save_fits_image_file( refim, ref_image.data, ref_image.header )
             save_fits_image_file( refflags, ref_image.flags, ref_image.header )
 
             # hotpants needs noise images not 1/σ² weight images, so do that:
@@ -559,7 +561,7 @@ class Subtractor:
                 shutil.rmtree( tmpdir )
 
 
-    def run(self, *args, **kwargs):
+    def run(self, *args, do_not_load=True, **kwargs):
         """Get a reference image and subtract it from the new image.
 
         Arguments are parsed by the DataStore.parse_args() method.
@@ -600,8 +602,8 @@ class Subtractor:
                     )
 
                 prov = ds.get_provenance('subtraction', self.pars.get_critical_pars())
-
-                if ds.get_sub_image( prov, session=session ) is None:
+                sub_image = None if do_not_load else ds.get_sub_image( prov, session=session )
+                if sub_image is None:
                     self.has_recalculated = True
                     image = ds.get_image(session=session)
                     zp = ds.get_zp(session=session)
@@ -610,7 +612,8 @@ class Subtractor:
                                          f'{ds.inputs_str}')
 
                     SCLogger.debug( f"Making new subtraction from image {image.id} path {image.filepath} , "
-                                    f"reference {ds.ref_image.id} path {ds.ref_image.filepath}" )
+                                    f"reference {ds.reference.id} refimage {ds.ref_image.id} "
+                                    f"path {ds.ref_image.filepath}" )
                     sub_image = Image.from_ref_and_new(ds.reference, zp)
                     sub_image.is_sub = True
                     sub_image.provenance_id = prov.id
@@ -635,7 +638,7 @@ class Subtractor:
                 else:
                     # Align the images
                     to_index = self.pars.alignment_index
-                    aligner = ImageAligner(**self.pars.alignment)
+                    aligner = ImageAligner(**self.parameters_to_initialize_alignment)
                     if to_index == 'ref':
                         # In *lots* of places the code makes the assumption that we align the ref to the new.
                         # If we ever want to be able to align the new to the ref, we have to go all the way
@@ -651,7 +654,7 @@ class Subtractor:
 
                         ( aligned_image, aligned_sources,
                           aligned_bg, aligned_psf ) = aligner.run( ds.image, ds.sources, ds.bg, ds.psf, ds.wcs, ds.zp,
-                                                                   ds.ref_image, ds.ref_sources )
+                                                                   ds.ref_image, ds.ref_sources, ds.ref_wcs )
                         ds.aligned_new_image = aligned_image
                         ds.aligned_new_sources = aligned_sources
                         ds.aligned_new_bg = aligned_bg
@@ -676,7 +679,7 @@ class Subtractor:
                         ( aligned_image, aligned_sources,
                           aligned_bg, aligned_psf ) = aligner.run( ds.ref_image, ds.ref_sources, ds.ref_bg,
                                                                    ds.ref_psf, ds.ref_wcs, ds.ref_zp,
-                                                                   ds.image, ds.sources )
+                                                                   ds.image, ds.sources, ds.wcs )
                         ds.aligned_new_image = ds.image
                         ds.aligned_new_sources = ds.get_sources()
                         ds.aligned_new_bg = ds.get_background()

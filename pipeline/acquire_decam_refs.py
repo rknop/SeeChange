@@ -8,9 +8,8 @@ import traceback
 import logging
 
 from models.base import SmartSession
-from models.instrument import get_instrument_instance
+from models.instrument import Instrument
 from models.provenance import Provenance
-from models.decam import DECam  # noqa: F401
 from models.image import Image  # noqa: F401
 from models.exposure import Exposure
 
@@ -53,7 +52,7 @@ class DECamRefFetcher:
         self.seeingfac = 1.06
         self.limmagoff = 0.5
 
-        self.decam = get_instrument_instance( 'DECam' )
+        self.decam = Instrument.get_instrument_instance( 'DECam' )
         knownchips = self.decam.get_section_ids()
         if chips is not None:
             if not isinstance( chips, list ):
@@ -111,7 +110,7 @@ class DECamRefFetcher:
                                           'min_lim_mag': min_depth,
                                           'min_exp_time': min_exptime,
                                           'min_number': min_per_chip,
-                                          'min_only_center': False,
+                                          'center_min_number': None,
                                           'zp_prov_id': str(zpprov.id)
                                          } )
         self.refmaker.setup_provenances()

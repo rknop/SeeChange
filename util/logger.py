@@ -3,8 +3,8 @@ import re
 import multiprocessing
 import logging
 
-_default_log_level = logging.INFO
-# _default_log_level = logging.DEBUG
+# _default_log_level = logging.INFO
+_default_log_level = logging.DEBUG
 
 # NOTE : tests/test_logger.py assumes this default date format is '%Y-%m-%d %H:%M:%S'
 _default_datefmt = '%Y-%m-%d %H:%M:%S'
@@ -119,8 +119,11 @@ class SCLogger:
         return cls._instance
 
     @classmethod
-    def multiprocessing_replace( cls, *args, **kwargs ):
+    def multiprocessing_replace( cls, skipifnotdef=False, *args, **kwargs ):
         """Shorthand for replace with midformat parsed from the current multiprocessing process."""
+
+        if ( not cls._instance._using_default_handler ) and skipifnotdef:
+            return
 
         if ( ( cls._instance is not None ) and ( not cls._instance._using_default_handler ) and
              ( "handler" not in kwargs ) ):

@@ -2,7 +2,8 @@ import collections.abc
 import numbers
 import os
 import pathlib
-from datetime import datetime
+import time
+from datetime import datetime, date
 import dateutil.parser
 import uuid
 import json
@@ -40,6 +41,8 @@ class NumpyAndUUIDJsonEncoder(json.JSONEncoder):
             return str(obj)
         if isinstance(obj, datetime ):
             return obj.isoformat()
+        if isinstance(obj, date ):
+            return obj.isoformat()
         return json.JSONEncoder.default(self, obj)
 
 
@@ -70,8 +73,8 @@ def ensure_file_does_not_exist( filepath, delete=False ):
 def listify( val, require_string=False ):
     """Return a list version of val.
 
-    If val is already a sequence other than a string, return list(val).
-    Otherwise, return [val].  If val is None, return None.
+    If val is None, return None.  If val is an iterable (but not a str
+    or bytes), return list(val).  Otherwise, return [val].
 
     Parameters
     ----------
@@ -87,8 +90,8 @@ def listify( val, require_string=False ):
     if val is None:
         return val
 
-    if isinstance( val, collections.abc.Sequence ):
-        if isinstance( val, str ):
+    if isinstance( val, collections.abc.Iterable ):
+        if isinstance( val, str ) or isinstance( val, bytes ):
             return [ val ]
         else:
             if require_string and ( not all( [ isinstance( i, str ) for i in val ] ) ):
@@ -154,6 +157,8 @@ def parse_dateobs(dateobs=None, output='datetime'):
             dateobs = Time( dateutil.parser.parse( dateobs ) )
     elif isinstance(dateobs, datetime):
         dateobs = Time(dateobs)
+    elif isinstance(dateobs, date):
+        dateobs = Time( datetime.combine( dateobs, datetime.min.time() ) )
     else:
         raise ValueError(f'Cannot parse dateobs of type {type(dateobs)}')
 
@@ -223,20 +228,6 @@ def parse_bool(text):
         return False
     else:
         raise ValueError(f'Cannot parse boolean value from "{text}"')
-
-
-# from: https://stackoverflow.com/a/5883218
-def get_inheritors(klass):
-    """Get all classes that inherit from klass. """
-    subclasses = set()
-    work = [klass]
-    while work:
-        parent = work.pop()
-        for child in parent.__subclasses__():
-            if child not in subclasses:
-                subclasses.add(child)
-                work.append(child)
-    return subclasses
 
 
 def as_UUID( val, canbenone=True ):
@@ -376,3 +367,80 @@ def patch_image_overlap_limits( patchwid, x, y, imageshape ):
         iy1 = imageshape[0]
 
     return ( (px0, px1, py0, py1), (ix0, ix1, iy0, iy1) )
+
+
+def retry_with_sleep( func, sleepmin=0.1, sleept=0.5, sleepfac=2, sleepfuzz=0.1, sleepmax=32,
+                      failmessage="to do the thing", exception_on_fail=True, retval_on_fail=None, randseed=None,
+                      check_result=None, return_attr=None, good_returns=None, bad_returns=None,
+                      badreturn_handler=None, accept_exceptions=Exception ):
+    if not ( ( isinstance(accept_exceptions, type) and issubclass(accept_exceptions, Exception) ) or
+             ( isinstance(accept_exceptions, tuple) and
+               all( isinstance(i, type) and issubclass(i, Exception) for i in accept_exceptions ) )
+            ):
+        raise TypeError( "accept_exceptions must be a subclass of Exception, or a tuple of same" )
+
+    failedatleastonce = False
+    succeeded = False
+    done = False
+    rng = np.random.default_rng( randseed )
+    t0 = time.monotonic()
+    tries = 0
+    while not done:
+        try:
+            tries += 1
+            result = func()
+
+            if check_result is not None:
+                if not check_result( result ):
+                    raise ValueError( "Unacceptable result.")
+
+            if ( good_returns is not None ) or ( bad_returns is not None ):
+                retval = result if return_attr is None else getattr( result, return_attr )
+                try:
+                    sretval = str(retval)
+                except Exception:
+                    sretval = ""
+                if good_returns is not None:
+                    if retval in good_returns:
+                        done = True
+                        succeeded = True
+                    else:
+                        if badreturn_handler is not None:
+                            badreturn_handler( retval )
+                        raise ValueError( f"Got return {sretval} {'that' if sretval=='' else 'which'} is not good" )
+                elif retval in bad_returns:
+                    if badreturn_handler is not None:
+                        badreturn_handler( retval )
+                    raise ValueError( f"Got bad return {sretval}" )
+
+            else:
+                done = True
+                succeeded = True
+
+            t1 = time.monotonic()
+
+        except accept_exceptions as ex:
+            t1 = time.monotonic()
+            failedatleastonce = True
+            if sleept > sleepmax:
+                SCLogger.error( f"Repeated failures {failmessage} after {t1-t0:.2f}s and {tries} tries, giving up.  "
+                                f"Last exception: {ex}" )
+                done = True
+            else:
+                actualsleept = max( sleepmin, rng.normal(sleept, sleepfuzz * sleept) )
+                SCLogger.warning( f"Failed {failmessage} after {tries} tries, "
+                                  f"will sleep {actualsleept:.2f}s (nominally {sleept:.2f}s) and try again.  "
+                                  f"Exception: {ex}" )
+                time.sleep( actualsleept )
+                sleept *= sleepfac
+
+    if succeeded:
+        if failedatleastonce:
+            SCLogger.info( f"Succeeded {failmessage} after {t1-t0:.2f}s and {tries} tries." )
+        return result
+
+    else:
+        if exception_on_fail:
+            raise RuntimeError( f"Failed {failmessage} after {t1-t0:.2f}s and {tries} tries." )
+        else:
+            return retval_on_fail

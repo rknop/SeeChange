@@ -3,6 +3,7 @@ import time
 import psutil
 import logging
 import argparse
+import urllib
 import signal
 
 from util.conductor_connector import ConductorConnector
@@ -23,7 +24,8 @@ class ExposureLauncher:
     """
 
     def __init__( self, cluster_id, node_id, numprocs=None, verify=True, onlychips=None,
-                  through_step=None, max_run_time=None, worker_log_level=logging.WARNING ):
+                  through_step=None, max_run_time=None, max_idle_time=None, types=None, instrument=None,
+                  provtag=False, just_download=False, worker_log_level=logging.WARNING ):
         """Make an ExposureLauncher.
 
         Parameters
@@ -55,8 +57,8 @@ class ExposureLauncher:
         onlychips : list, default None
           If not None, will only process the sensor sections whose names
           match something in this list.  If None, will process all
-          sensor sections returned by the instrument's get_section_ids()
-          class method.
+          sensor sections returned by the instrument's fetch_sections()
+          method, skipping the sections marked defective.
 
         through_step : str or None
           Parameter passed on to top_level.py::Pipeline, unless it is "exposure"
@@ -73,6 +75,33 @@ class ExposureLauncher:
           to see that it hasn't been running this long, and if it has,
           it will exit.
 
+        max_idle_time : float, default None
+          By default, if the conductor has nothing to do, the
+          pipeline_exposure_launcher will sleep for 2 minutes and ask
+          the conductor again.  If max_idle_time is not None, exit after
+          that many seconds have elapsed not getting something to do from
+          the conductor.
+
+        types : list of str or None
+          If not None, will ask the conductor just for images of these
+          types.  See enums_and_bitflags.py::ImageTypeConverter for
+          possibilities.
+
+        instrument : str or None
+          If not None, will ask the conductor just for images from this
+          instrument.  (If you have a conductor running handling multiple
+          different instruments, I am surprised.)
+
+        provtag : str or None or False
+          If False, use the config's value for the Pipeline
+          provenance_tag parameter.  Otherwise, pass this value.  (The
+          default is not None because None is something you might use to
+          override what's in the config.)
+
+        just_download : bool, default False
+          If True, download exposures and load them into the database, but don't
+          actually run the pipeline.
+
         worker_log_level : log level, default logging.WARNING
           The log level for the worker processes.  Here so that you can
           have a different log level for the overall control process
@@ -88,6 +117,11 @@ class ExposureLauncher:
         self.onlychips = onlychips
         self.through_step = through_step
         self.max_run_time = max_run_time
+        self.max_idle_time = max_idle_time
+        self.types = types
+        self.instrument = instrument
+        self.provtag = provtag
+        self.just_download = just_download
         self.worker_log_level = worker_log_level
         self.verify = verify
         self.conductor = ConductorConnector( verify=verify )
@@ -137,18 +171,31 @@ class ExposureLauncher:
         """
 
         start_time = time.perf_counter()
+        last_idle_time = time.perf_counter()
         done = False
         n_processed = 0
         while not done:
             try:
                 run_time = time.perf_counter() - start_time
+                idle_time = time.perf_counter() - last_idle_time
                 if ( self.max_run_time is not None ) and ( run_time > self.max_run_time ):
                     SCLogger.info( f"ExposureLauncher has been running for {run_time:.0f} seconds, returning." )
                     done = True
                     continue
+                if ( self.max_idle_time is not None ) and ( idle_time > self.max_idle_time ):
+                    SCLogger.info( f"ExposureLauncher has been idle for {idle_time:.0f} seconds, returning." )
+                    done = True
+                    continue
 
                 self.send_heartbeat()
-                data = self.conductor.send( f'conductor/requestexposure/cluster_id={self.cluster_id}' )
+                url = f'conductor/requestexposure/cluster_id={urllib.parse.quote(self.cluster_id, safe="")}'
+                if self.types is not None:
+                    url += "/types="
+                    url += urllib.parse.quote( ",".join(self.types), safe="" )
+                if self.instrument is not None:
+                    url += "/instrument="
+                    url += urllib.parse.quote( self.instrument, safe="" )
+                data = self.conductor.send( url )
 
                 if data['status'] == 'not available':
                     SCLogger.info( f'No exposures available, sleeping {self.sleeptime} s' )
@@ -209,16 +256,23 @@ class ExposureLauncher:
                                                         self.node_id,
                                                         onlychips=self.onlychips,
                                                         through_step=through_step,
+                                                        provtag=self.provtag,
                                                         worker_log_level=self.worker_log_level )
                 exposure_processor.secure_exposure()
-                SCLogger.info( 'Exposure secured.  Launching process to handle all chips.' )
-                exposure_processor()
-                SCLogger.info( f"Done processing exposure {exposure_processor.exposure.origin_identifier}" )
+                if self.just_download:
+                    SCLogger.info( 'Exposure secured.  just_download is set, so doing nothing else.' )
+                else:
+                    SCLogger.info( 'Exposure secured.  Launching process to handle all chips.' )
+                    exposure_processor()
+                    SCLogger.info( f"Done processing exposure {exposure_processor.exposure.origin_identifier}" )
 
                 n_processed += 1
                 if ( max_n_exposures is not None ) and ( n_processed >= max_n_exposures ):
                     SCLogger.info( f"Hit max {n_processed} exposures, returning." )
                     done = True
+
+                # Reset idle timer
+                last_idle_time = time.perf_counter()
 
             except Exception:
                 if die_on_exception:
@@ -279,23 +333,44 @@ environment variable anyway.)
     parser.add_argument( "--numprocs", default=None, type=int,
                          help="Number of worker processes to run at once.  (Default: # of CPUS - 1.)" )
     parser.add_argument( "-m", "--max-run-time", default=None, type=float,
-                         help=( "Maximum time to run before exiting.  If this is on a job that will get cancelled "
-                                "(e.g. one launched on a slurm queue), make sure this is less than the runtime "
-                                "of the job by an amount conservatively equal to what you'd need to process a "
-                                "single exposure." ) )
+                         help=( "Maximum time (seconds) to run before exiting.  If this is on a job that will "
+                                "get cancelled (e.g. one launched on a slurm queue), make sure this is less than "
+                                "the runtime of the job by an amount conservatively equal to what you'd need to "
+                                "process a single exposure." ) )
+    parser.add_argument( "--max-idle-time", default=None, type=float,
+                         help=( "Maximum time (seconds) to get no exposures from the conductor before existing.  "
+                                "None = keep going forever modulo max-run-time and nexp" ) )
+    parser.add_argument( "--nexp", default=None, type=int,
+                         help="Stop after running this many images." )
     parser.add_argument( "--noverify", default=False, action='store_true',
                          help="Don't verify the conductor's SSL certificate" )
     parser.add_argument( "-l", "--log-level", default="info",
                          help="Log level for the main process (error, warning, info, or debug)" )
     parser.add_argument( "-w", "--worker-log-level", default="warning",
                          help="Log level for worker processes (error, warning, info, or debug)" )
+    parser.add_argument( "-i", "--instrument", default=None, help="Just get exposures for this instrument." )
     parser.add_argument( "--chips", default=None, nargs="+",
                          help="Only do these sensor sections (for debugging purposese)" )
+    parser.add_argument( "--types", default=None, nargs='+',
+                         help=( "Just get exposures of these types.  Allowed vaues include Sci, Bias, Dark, TwiFlat. "
+                                "Although the default is none, at least as of the writing of this help string, "
+                                "the conductor defaults to only sending back Sci images." ) )
+    parser.add_argument( "-p", "--provtag", default=argparse.SUPPRESS, type=str,
+                         help=( "Provenance tag to save data products to.  Will create it if it does not "
+                                "exist.  If you don't specify this, then whatever is in the config will be "
+                                "used.  If you give it the special string \"None\", then no provenance "
+                                "tag will be created.  (If there already is a provenance tag pointing "
+                                "to the provenance, it won't be deleted." ) )
     parser.add_argument( "-t", "--through-step", default=None,
                          help=( "Only run through this step; default=run everything.  Step can be "
                                 "exposure, preprocessing, extraction, astrocal, photocal, "
                                 "subtraction, detection, cutting, measuring, scoring.  Will run "
                                 "through the earlier of this step or the through step given by the conductor." ) )
+    parser.add_argument( "--just-download", default=False, action='store_true',
+                         help=( "Just download exposures and load them into the database, don't run the pipeline. "
+                                "Many other options (including -t, --chips, -w, --numprocs) are irrelevant if "
+                                "this is set." ) )
+
     args = parser.parse_args()
 
     loglookup = { 'error': logging.ERROR,
@@ -309,9 +384,21 @@ environment variable anyway.)
         raise ValueError( f"Unknown worker log level {args.worker_log_level}" )
     worker_log_level = loglookup[ args.worker_log_level.lower() ]
 
-    elaunch = ExposureLauncher( args.cluster_id, args.node_id, numprocs=args.numprocs, onlychips=args.chips,
-                                verify=not args.noverify, through_step=args.through_step,
-                                max_run_time=args.max_run_time, worker_log_level=worker_log_level )
+    posargs = [ args.cluster_id, args.node_id ]
+    kwargs = { "numprocs": args.numprocs,
+               "onlychips": args.chips,
+               "verify": not args.noverify,
+               "through_step": args.through_step,
+               "max_run_time": args.max_run_time,
+               "max_idle_time": args.max_idle_time,
+               "worker_log_level": worker_log_level,
+               "types": args.types,
+               "instrument": args.instrument,
+               "just_download": args.just_download }
+    if 'provtag' in vars( args ):
+        kwargs['provtag'] = None if args.provtag == "None" else args.provtag
+
+    elaunch = ExposureLauncher( *posargs, **kwargs )
     elaunch.register_worker()
 
     def goodbye( signum, frame ):
@@ -322,7 +409,7 @@ environment variable anyway.)
     signal.signal( signal.SIGTERM, goodbye )
 
     try:
-        elaunch()
+        elaunch( max_n_exposures=args.nexp )
     finally:
         elaunch.unregister_worker()
 

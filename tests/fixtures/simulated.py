@@ -21,7 +21,7 @@ from models.world_coordinates import WorldCoordinates
 from models.zero_point import ZeroPoint
 from models.reference import Reference
 from models.refset import RefSet
-from models.instrument import get_instrument_instance
+from models.instrument import Instrument
 
 from pipeline.data_store import DataStore
 from pipeline.top_level import Pipeline
@@ -191,7 +191,7 @@ def generate_image_fixture(commit=True, filter=None, seed=None ):
         rng = np.random.default_rng( seed=seed )
         im = None
         exp = None
-        exp = make_sim_exposure( filter=filter, seed=rng.integers(0, 2**31) )
+        exp = make_sim_exposure( filter=filter, seed=seed-10000 )
         add_file_to_exposure(exp)
         # Have to commit the exposure even if commit=False
         #  because otherwise tests that use this fixture
@@ -203,7 +203,7 @@ def generate_image_fixture(commit=True, filter=None, seed=None ):
         im = Image.from_exposure(exp, section_id=0)
         im.provenance_id = provenance_preprocessing.id
         im.data = np.float32(im.raw_data)  # this replaces the bias/flat preprocessing
-        im.flags = rng.integers(0, 100, size=im.raw_data.shape, dtype=np.uint32)
+        im.flags = rng.integers(0, 100, size=im.raw_data.shape, dtype=np.int16)
         im.weight = np.full(im.raw_data.shape, 1.0, dtype=np.float32)
         im.format = 'fits'
 
@@ -213,7 +213,7 @@ def generate_image_fixture(commit=True, filter=None, seed=None ):
 
         yield im
 
-        # Clean up the exposure that got created; this will recusrively delete im as well
+        # Clean up the exposure that got created; this will recursively delete im as well
         if exp is not None:
             exp.delete_from_disk_and_database()
 
@@ -224,10 +224,10 @@ def generate_image_fixture(commit=True, filter=None, seed=None ):
 
 # this will inject 9 images named sim_image1, sim_image2, etc.
 for i in range(1, 10):
-    globals()[f'sim_image{i}'] = generate_image_fixture( seed=1011888316 )
+    globals()[f'sim_image{i}'] = generate_image_fixture( seed=1011888316+i )
 
 for i in range(1, 10):
-    globals()[f'sim_image_r{i}'] = generate_image_fixture( filter='r', seed=869327863 )
+    globals()[f'sim_image_r{i}'] = generate_image_fixture( filter='r', seed=869327863+i )
 
 # use this Image if you want the test to do the saving
 sim_image_uncommitted = generate_image_fixture(commit=False, seed=1093069384)
@@ -259,7 +259,7 @@ def sim_reference(provenance_preprocessing, provenance_extraction, provenance_ex
         exp.update_instrument()
         im = Image.from_exposure(exp, section_id=0)
         im.data = im.raw_data - np.median(im.raw_data)
-        im.flags = rng.integers(0, 100, size=im.raw_data.shape, dtype=np.uint32)
+        im.flags = rng.integers(0, 100, size=im.raw_data.shape, dtype=np.int16)
         im.weight = np.full(im.raw_data.shape, 1.0, dtype=np.float32)
         im.provenance_id = provenance_preprocessing.id
         im.ra = ra
@@ -283,6 +283,7 @@ def sim_reference(provenance_preprocessing, provenance_extraction, provenance_ex
         wcs.wcs.wcs.crval = np.array([ra, dec])
         wcs.provenance_id = provenance_extra.id
         wcs.sources_id = sl.id
+        wcs.set_corners_from_wcs( image=im, setradec=True )
         wcs.save( image=im )
         wcs.insert()
         zp = ZeroPoint()
@@ -322,7 +323,7 @@ def sim_reference(provenance_preprocessing, provenance_extraction, provenance_ex
     # Likewise, garbage throwaway wcs and zp
     wcs = WorldCoordinates( wcs=WCS(), provenance_id=provenance_extra.id, md5sum=uuid.uuid4(), filepath="foo",
                             sources_id=sc.id )
-    zp = ZeroPoint( wcs_id=wcs.id, zp=25., dzp=0.1, provenacne_id=provenance_extra.id )
+    zp = ZeroPoint( wcs_id=wcs.id, zp=25., dzp=0.1, provenance_id=provenance_extra.id )
 
     sc.insert()
     wcs.insert()
@@ -636,7 +637,7 @@ def diagnostic_injections():
 
 @pytest.fixture( scope='session' )
 def sim_lightcurve_image_parameters():
-    instr = get_instrument_instance( 'DemoInstrument' )
+    instr = Instrument.get_instrument_instance( 'DemoInstrument' )
     ra = 123.45678
     dec = -3.14159
     wid = 256
@@ -694,6 +695,16 @@ def sim_lightcurve_image_parameters():
         con.commit()
 
 
+@pytest.fixture
+def sim_lightcurve_rng():
+    return np.random.default_rng( seed=64738 )
+
+
+@pytest.fixture( scope="module" )
+def sim_lightcurve_rng_module():
+    return np.random.default_rng( seed=64738 )
+
+
 @pytest.fixture( scope="session" )
 def sim_lightcurve_persistent_sources():
     # These positions were chosen visually to be near galaxies on the
@@ -728,7 +739,7 @@ def sim_lightcurve_persistent_sources():
 @pytest.fixture( scope="session" )
 def sim_lightcurve_wcs_headers( sim_lightcurve_image_parameters ):
     imageinfo, imageargs = sim_lightcurve_image_parameters
-    instr = get_instrument_instance( 'DemoInstrument' )
+    instr = Instrument.get_instrument_instance( 'DemoInstrument' )
     return { 'CTYPE1': 'RA---TAN',
              'CTYPE2': 'DEC--TAN',
              'CRPIX1': imageinfo['size'] / 2. + 0.5,    # 1-offset center of image
@@ -773,7 +784,7 @@ def sim_lightcurve_reference_image_unsaved( sim_lightcurve_image_parameters, sim
     parms['provenance_tag'] = 'sim_lightcurve_reference'
     pip = Pipeline( **parms )
 
-    instr = get_instrument_instance( 'DemoInstrument' )
+    instr = Instrument.get_instrument_instance( 'DemoInstrument' )
     s = Simulator( image_size_x=imageinfo['size'],
                    gain_mean=instr.gain,
                    star_number=60,
@@ -819,6 +830,9 @@ def sim_lightcurve_reference_image_unsaved( sim_lightcurve_image_parameters, sim
     ds.wcs.sources_id = ds.sources.id
     # This is a cheat, as we didn't really use the params in the provenance, but, whatevs
     ds.wcs.provenance_id = ds.prov_tree['astrocal'].id
+    ds.wcs._fill_bogus_coordinate_fields( ra=imageargs['ra'], dec=imageargs['dec'],
+                                          minra=imageargs['minra'], maxra=imageargs['maxra'],
+                                          mindec=imageargs['mindec'], maxdec=imageargs['maxdec'] )
 
     # Likewise, make a fake zeropoint, cheating again on provenance
     # (Re: number of stars, there just aren't that many not-deblended
@@ -894,6 +908,7 @@ def sim_lightcurve_reference_module(  sim_lightcurve_reference_image_unsaved ):
 @pytest.fixture( scope='session' )
 def sim_lightcurve_image_datastore_maker_factory( sim_lightcurve_image_parameters, sim_lightcurve_pipeline_parameters,
                                                   sim_lightcurve_reference_image_unsaved ):
+    imageinfo, imageargs = sim_lightcurve_image_parameters
     refds = sim_lightcurve_reference_image_unsaved
     dsentocleanup = []
 
@@ -904,6 +919,11 @@ def sim_lightcurve_image_datastore_maker_factory( sim_lightcurve_image_parameter
         # (We also then need to pass input_psf to extractor.run.)
         pipparams['extraction'].update( { 'measure_psf': False } )
         pip = Pipeline( **pipparams )
+        # ....gah.  Because of our whole subconfigs business, we have to fix this now.
+        # Never do this in real code.  This kind of post-hoc parameter editing is
+        # a recipe for trouble; I know it works here because of the internals of the code,
+        # but will probably regret having said that later.
+        pip.extractor.pars.subconfigs['subconfigs']['extragalactic']['measure_psf'] = False
         ds.prov_tree = pip.make_provenance_tree( ds, no_provtag=True, ok_no_ref_prov=True )
 
         ds = pip.extractor.run( ds, input_psf=refds.psf )
@@ -923,6 +943,9 @@ def sim_lightcurve_image_datastore_maker_factory( sim_lightcurve_image_parameter
         ds.wcs.sources_id = ds.sources.id
         ds.wcs.provenance_id = ds.prov_tree['astrocal'].id
         ds.wcs.save( image=ds.image )
+        ds.wcs._fill_bogus_coordinate_fields( ra=imageargs['ra'], dec=imageargs['dec'],
+                                              minra=imageargs['minra'], maxra=imageargs['maxra'],
+                                              mindec=imageargs['mindec'], maxdec=imageargs['maxdec'] )
         ds.wcs.insert()
 
         # Likewise, make a fake zeropoint, cheating again on provenance
@@ -947,7 +970,7 @@ def sim_lightcurve_image_datastore_maker_factory( sim_lightcurve_image_parameter
 
 
 # This function is used by the next two fixtures
-def _do_sim_lightcurve_new_ds_factory( imageinfo, imageargs, refds, sources, wcshdrs, maker, dsentodel ):
+def _do_sim_lightcurve_new_ds_factory( imageinfo, imageargs, refds, sources, wcshdrs, maker, dsentodel, rng ):
     def add_source_to_data( data, x0, y0, flux, seesig, patchwid ):
         ix0 = int( np.floor( x0 ) )
         iy0 = int( np.floor( y0 ) )
@@ -965,10 +988,9 @@ def _do_sim_lightcurve_new_ds_factory( imageinfo, imageargs, refds, sources, wcs
         data[ ly:hy, lx:hx ] += patch[ py0:py1, px0:px1 ]
 
 
-    def make_new_ds( mjdoff, extranoise=25., extrarandsourcefluxes=[], random_seed=64738 ):
-        instr = get_instrument_instance( 'DemoInstrument' )
+    def make_new_ds( mjdoff, extranoise=25., extrarandsourcefluxes=[] ):
+        instr = Instrument.get_instrument_instance( 'DemoInstrument' )
         mjd = imageinfo['refmjd'] + mjdoff
-        rng = np.random.default_rng( seed=random_seed )
         data = refds.image.data + instr.gain * rng.normal( 0., extranoise, size=refds.image.data.shape )
         weight = 1. / ( ( 1. / refds.image.weight ) + ( instr.gain  * extranoise ) ** 2 )
         flags = refds.image.flags.copy()
@@ -1019,16 +1041,18 @@ def sim_lightcurve_new_ds_factory( sim_lightcurve_image_parameters,
                                    sim_lightcurve_wcs_headers,
                                    sim_lightcurve_reference,
                                    sim_lightcurve_image_datastore_maker_factory,
-                                   sim_lightcurve_persistent_sources
+                                   sim_lightcurve_persistent_sources,
+                                   sim_lightcurve_rng
                                   ):
     imageinfo, imageargs = sim_lightcurve_image_parameters
     _, refds = sim_lightcurve_reference
     sources = sim_lightcurve_persistent_sources
     wcshdrs = sim_lightcurve_wcs_headers
     maker = sim_lightcurve_image_datastore_maker_factory
+    rng = sim_lightcurve_rng
     dsentodel = []
 
-    yield _do_sim_lightcurve_new_ds_factory( imageinfo, imageargs, refds, sources, wcshdrs, maker, dsentodel )
+    yield _do_sim_lightcurve_new_ds_factory( imageinfo, imageargs, refds, sources, wcshdrs, maker, dsentodel, rng )
 
     for ds in dsentodel:
         ds.delete_everything()
@@ -1045,16 +1069,18 @@ def sim_lightcurve_new_ds_factory_module( sim_lightcurve_image_parameters,
                                           sim_lightcurve_wcs_headers,
                                           sim_lightcurve_reference_module,
                                           sim_lightcurve_image_datastore_maker_factory,
-                                          sim_lightcurve_persistent_sources
+                                          sim_lightcurve_persistent_sources,
+                                          sim_lightcurve_rng_module
                                          ):
     imageinfo, imageargs = sim_lightcurve_image_parameters
     _, refds = sim_lightcurve_reference_module
     sources = sim_lightcurve_persistent_sources
     wcshdrs = sim_lightcurve_wcs_headers
     maker = sim_lightcurve_image_datastore_maker_factory
+    rng = sim_lightcurve_rng_module
     dsentodel = []
 
-    yield _do_sim_lightcurve_new_ds_factory( imageinfo, imageargs, refds, sources, wcshdrs, maker, dsentodel )
+    yield _do_sim_lightcurve_new_ds_factory( imageinfo, imageargs, refds, sources, wcshdrs, maker, dsentodel, rng )
 
     for ds in dsentodel:
         ds.delete_everything()
@@ -1070,16 +1096,15 @@ def sim_lightcurve_new_ds_factory_module( sim_lightcurve_image_parameters,
 #   oh well.  Code for the general case, watch it be inefficient in
 #   a specific case.
 @pytest.fixture
-def sim_lightcurve_news( sim_lightcurve_new_ds_factory ):
-    rng = np.random.default_rng( seed=221084103 )
+def sim_lightcurve_news( sim_lightcurve_new_ds_factory, sim_lightcurve_rng ):
+    rng = sim_lightcurve_rng
 
     dses = []
     mjdoffs = np.array( [ 30., 32., 37., 40., 45., 55. ] )
     for mjdoff in mjdoffs:
         nextrafluxes = rng.integers( 1, 4 )
         extrafluxes = rng.uniform( 2000., 20000., size=nextrafluxes )
-        dses.append( sim_lightcurve_new_ds_factory( mjdoff, random_seed=rng.integers( 0, 2**31 ),
-                                                    extrarandsourcefluxes=extrafluxes ) )
+        dses.append( sim_lightcurve_new_ds_factory( mjdoff, extrarandsourcefluxes=extrafluxes ) )
 
     # sim_lightcurve_new_ds_factory handles cleanup
     return dses
@@ -1087,16 +1112,15 @@ def sim_lightcurve_news( sim_lightcurve_new_ds_factory ):
 
 # Same as previous fixture, but module scope
 @pytest.fixture( scope='module' )
-def sim_lightcurve_news_module( sim_lightcurve_new_ds_factory_module ):
-    rng = np.random.default_rng( seed=221084103 )
+def sim_lightcurve_news_module( sim_lightcurve_new_ds_factory_module, sim_lightcurve_rng_module ):
+    rng = sim_lightcurve_rng_module
 
     dses = []
     mjdoffs = np.array( [ 30., 32., 37., 40., 45., 55. ] )
     for mjdoff in mjdoffs:
         nextrafluxes = rng.integers( 1, 4 )
         extrafluxes = rng.uniform( 2000., 20000., size=nextrafluxes )
-        dses.append( sim_lightcurve_new_ds_factory_module( mjdoff, random_seed=rng.integers( 0, 2**31 ),
-                                                           extrarandsourcefluxes=extrafluxes ) )
+        dses.append( sim_lightcurve_new_ds_factory_module( mjdoff, extrarandsourcefluxes=extrafluxes ) )
 
     # sim_lightcurve_new_ds_factory handles cleanup
     return dses
@@ -1134,22 +1158,20 @@ def sim_lightcurve_complete_dses_module( sim_lightcurve_reference_module, sim_li
 
 
 @pytest.fixture
-def sim_lightcurve_one_new( sim_lightcurve_new_ds_factory ):
-    rng = np.random.default_rng( seed=1708950305 )
+def sim_lightcurve_one_new( sim_lightcurve_new_ds_factory, sim_lightcurve_rng ):
+    rng = sim_lightcurve_rng
     nextrafluxes = rng.integers( 1, 4 )
     extrafluxes = rng.uniform( 2000., 20000., size=nextrafluxes )
-    ds = sim_lightcurve_new_ds_factory( 30., random_seed=rng.integers( 0, 2**31 ),
-                                        extrarandsourcefluxes=extrafluxes )
+    ds = sim_lightcurve_new_ds_factory( 30., extrarandsourcefluxes=extrafluxes )
     return ds
 
 
 @pytest.fixture( scope="module" )
-def sim_lightcurve_one_new_module( sim_lightcurve_new_ds_factory_module ):
-    rng = np.random.default_rng( seed=1708950305 )
+def sim_lightcurve_one_new_module( sim_lightcurve_new_ds_factory_module, sim_lightcurve_rng_module ):
+    rng = sim_lightcurve_rng_module
     nextrafluxes = rng.integers( 1, 4 )
     extrafluxes = rng.uniform( 2000., 20000., size=nextrafluxes )
-    ds = sim_lightcurve_new_ds_factory_module( 30., random_seed=rng.integers( 0, 2**31 ),
-                                               extrarandsourcefluxes=extrafluxes )
+    ds = sim_lightcurve_new_ds_factory_module( 30., extrarandsourcefluxes=extrafluxes )
     return ds
 
 

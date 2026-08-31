@@ -299,7 +299,7 @@ def run_sextractor( imghdr, imagedata, weightdata, maskdata=None, outbase=None,
     try:
         hdr = imghdr.copy()
         if wcs is not None:
-            hdr.update( wcs.wcs.to_header() )
+            hdr.update( wcs.wcs.to_header( relax=True ) )
 
         # This likely to be redundant disk I/O, because for many uses of
         #   this function somebody will have *just read* that data from

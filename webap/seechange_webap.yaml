@@ -7,27 +7,27 @@
 preloads:
   - default_config.yaml
 overrides:
-  - local_overrides.yaml
+  - webap_local_overrides.yaml
+  - /secrets/local_overrides.yaml
 augments:
-  - local_augments.yaml
+  - webap_local_augments.yaml
+  - /secrets/local_augments.yaml
 
-db:
-  host: postgres
-
-# This flask secret key is what we use in your tests.  You would be advised to
+# This flask secret key is what we use in our tests.  You would be advised to
 # make it something else for your environment.  Better, leave it null,
 # and have flask_secret_key_file point to a file that's stored as a
 # kubernetes secret and that has one line with a 64-characters string of barf.
 webap:
   flask_secret_key: 'dgzd0wy04gr83pkttq9md13rl1xe0f3n9jnk5tbtpfzflfh4gcmyhjal28g4d4om'
   flask_secret_key_file: null
+  verbose: false
 
 # The webap must run where it can mount (readonly) the archive
 # directories directly.  This is how it gets cutouts.
 archive:
   archive_url: null
   local_read_dir: /archive-storage/base/test
-  
+
 # The webap will not be using these,
 #  but it has to have something because
 #  startup code that will get run upon
@@ -38,3 +38,22 @@ archive:
 path:
   data_root: /tmp
   data_temp: /tmp
+
+# ======================================================================
+# Email for Webap
+#
+# These configs are only used by the webap; their values do not matter
+# for the main pipeline.  The configs below are what's needed for our
+# test environment, and are definitely wrong for any production
+# environment.
+
+email:
+  email_from: 'Seechange <nobody@nowhere.org>'
+  email_subject: 'Seechange password reset'
+  email_system_name: 'Seechange'
+  smtp_server: 'mailhog'
+  smtp_port: 1025
+  smtp_use_ssl: false
+  smtp_username: null
+  smtp_password: null
+  smtp_password_file: null

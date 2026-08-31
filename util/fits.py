@@ -1,8 +1,10 @@
-import io
+import collections.abc
 import pathlib
-import subprocess
+import datetime
 
+import numpy as np
 from astropy.io import fits
+
 from util.logger import SCLogger
 
 
@@ -75,6 +77,83 @@ def read_fits_image(filename, ext=None, output='data'):
         raise ValueError(f'Unknown output type "{output}", use "data", "header" or "both"')
 
 
+# ======================================================================
+# These are generic fits utilities, written initially by Peter/Claude, modified by rknop
+
+def make_compressed_fits_hdu( data, header, dtype=None, quantize_method="SUBTRACTIVE_DITHER_2",
+                              quantize_level=16, compression_type="RICE_1", name=None ):
+    quantmap = { 'NO_DITHER': -1,
+                 'SUBTRACTIVE_DITHER_1': 1,
+                 'SUBTRACTIVE_DITHER_2': 2
+                }
+    if quantize_method not in quantmap:
+        raise ValueError( f"Unknown quantize_method {quantize_method}" )
+
+    header = fits.Header() if header is None else header
+    comp = fits.CompImageHDU(
+        data = ( data if dtype is None else data.astype(dtype, copy=False) ),
+        header = header,
+        name = name,
+        compression_type=compression_type,
+        quantize_method=quantmap[quantize_method],
+        quantize_level=quantize_level
+    )
+    now = datetime.datetime.now( tz=datetime.UTC ).isoformat( timespec='seconds' )
+    comp.header['HISTORY'] = f"Image compressed by SeeChange using astropy {now}"
+    comp.header['HISTORY'] = f"   {quantize_method} / pixel quantization algorith"
+    comp.header['HISTORY'] = f"   q={quantize_level} / quantized level scaling parameter"
+    comp.header['HISTORY'] = f"   {compression_type} / compression algorithm"
+    return comp
+
+
+# 16 is the astropy default quantize_level, but fpack seems to use 4.  What do we want?
+def write_compressed_fits_fz( path, data=None, header=None, hdul=None, overwrite=False, **kwargs ):
+    path = pathlib.Path( path )
+    if ( not overwrite ) and ( path.exists() ):
+        raise FileExistsError( f"Not writing {path}, file exists and overwrite is False." )
+
+    if ( data is None ) == ( hdul is None ):
+        raise ValueError( "Must specify exactly one of data or hdul" )
+
+    if not ( ( len(path.name) > 8 ) and ( path.name[-8:] == '.fits.fz' ) ):
+        SCLogger.warning( f"Writing compressed file with name {path.name}, which doesn't end in .fits.fz" )
+
+    primary = fits.PrimaryHDU()
+    hduwrite = [ primary ]
+
+    if data is None:
+        for hdu in hdul:
+            hduwrite.append( make_compressed_fits_hdu( hdu.data, hdu.header, **kwargs ) )
+    else:
+        if isinstance( data, collections.abc.Sequence ):
+            # This should never happen, but here in case something changes in numpy
+            if isinstance( data, np.ndarray ):
+                raise RuntimeError( "OMG.  np.ndarray is a collections.abc.Sequence.  This is bad." )
+
+            if header is None:
+                for d in data:
+                    hduwrite.append( make_compressed_fits_hdu( d, None, **kwargs ) )
+
+            else:
+                # Turns out a fits.Header is a sequence....
+                if not ( isinstance( header, collections.abc.Sequence )
+                         and ( not isinstance( header, fits.Header ) )
+                         and ( len(header) == len(data) )
+                        ):
+                    raise ValueError( "If you pass data as a list and also pass header, lengths must match" )
+                for d, h in zip( data, header ):
+                    hduwrite.append( make_compressed_fits_hdu( d, h, **kwargs ) )
+
+        else:
+            if not isinstance( data, np.ndarray ):
+                raise TypeError( f"data must be a numpy array, not a {type(data)}" )
+            hduwrite.append( make_compressed_fits_hdu( data, header, **kwargs ) )
+
+    fits.HDUList( hduwrite ).writeto( path, overwrite=True )
+
+
+# ======================================================================
+
 def save_fits_image_file( filename,
                           data,
                           header,
@@ -86,6 +165,11 @@ def save_fits_image_file( filename,
                           fpackq=None,
                           just_update_header=False ):
     """Save a single dataset (image data, weight, flags, etc) to a FITS file.
+
+    WARNING : this is not a generic FITS saving utiltiy.  It has stuff
+    built-in that does things to filenames based on assumptions
+    elsewhere in our pipeline.  If all you want to do is write a FITS
+    file, just use astropy.io.fits.writeto.
 
     The header should be the raw header, with some possible adjustments,
     including all the information (not just the minimal subset saved
@@ -128,22 +212,31 @@ def save_fits_image_file( filename,
         single_file=True.
 
     single_file: bool, default False
-        Whether to save each data array into a separate extension of the
-        same file.  if False (default) will save each data array into a
-        separate file.  If True, will use the extname to name the FITS
-        extension, and save each array into the same file.
+        WARNING -- THE NAME OF THIS OPTION IS POTENTIALLY CONFUSING.
+
+        If False, it means that each data arry goes into a separate
+        file.  If you are calling save_fits_image_file to save a single
+        FITS file with just one HDU and don't want to call again for
+        another HDU on the same file, then, oddly, you want
+        single_file=False.
+
+        If True, it means that multiple data arrays get saved as
+        different HDUs into the same FITS file.  It will use extname to
+        name the FITS extension, and if the file already exists, the HDU
+        built from data and header will be appended to that file.
 
     fpack: bool, default False
-        If true, will run fpack on the image after writing it.
+        If true, will write a compressed image.
 
     lossless: bool, default False
        Ignored if fpack is false.  If fpack is true, and lossless is
-       true, then will use lossless compression (fpack parameters "-q 0
-       -g2").
+       true, then will use quantize_level=0 when writing the image.
+       (...it's not clear this is *truly* lossless).  Note that
+       if the image is an integer type, it should always be lossless.
 
     fpackq: int, default None
        Ignored if fpack is false or lossless is True.  The q-factor to
-       pass to fpack.  If None, will use fpack's default (which is 4).
+       pass to fpack.  If None, will use the astropy default (which is 16).
        See
        https://heasarc.gsfc.nasa.gov/FTP/software/fitsio/c/docs/fpackguide.pdf
        for more information.
@@ -160,7 +253,8 @@ def save_fits_image_file( filename,
 
     Returns
     -------
-    The full absolute path to the file saved (or written to).
+    tuple : string, astropy.io.fits.Header
+      The full absolute path to the file saved (or written to), and the FITS header written.
 
     """
 
@@ -175,16 +269,10 @@ def save_fits_image_file( filename,
                  else filename )
 
     # Figure out output filename
-    if single_file:
-        if fpack:
-            raise NotImplementedError( "fpacking of multi-HDU files not currently supported" )
-        finalfilepath = filepath.parent / f'{filebase}.fits'
-    else:
-        filename = filebase if extname is None else filebase + '.' + extname
-        filename += '.fits'
-        finalfilename = filename + '.fz' if fpack else filename
-        intermedfilepath = direc / filename
-        finalfilepath = direc / finalfilename
+    filename = filebase if ( single_file or (extname is None) )else filebase + '.' + extname
+    filename += '.fits'
+    finalfilename = filename + '.fz' if fpack else filename
+    finalfilepath = direc / finalfilename
 
     # Build the header if necessary
     if not isinstance( header, fits.Header ):
@@ -239,71 +327,42 @@ def save_fits_image_file( filename,
                 else:
                     filehdu[ext].header[kw] = ( header[kw], header.comments[kw] )
 
-        return str( finalfilepath )
+            return str( finalfilepath ), filehdu[ext].header
 
     # Make sure the directory exists and is in a legal place
     safe_mkdir( direc )
 
     # Create the image we're gonna write
-    hdu = fits.ImageHDU( data, header, name=extname ) if single_file else fits.PrimaryHDU( data, header )
+    if fpack:
+        kwargs = {} if fpackq is None else { 'quantize_level': fpackq }
+        if lossless:
+            kwargs.update( { 'quantize_method': 'NO_DITHER', 'quantize_level': 0 } )
+        hdu = make_compressed_fits_hdu( data, header, name=extname, **kwargs )
+        header = hdu.header
 
-    # Write
+    else:
+        hdu = fits.ImageHDU( data, header, name=extname ) if single_file else fits.PrimaryHDU( data, header )
+        header = hdu.header
+
+
     if single_file:
-        # TODO: what happens if there already is an extension in an existinf file with name extname?
+        # TODO: what happens if there already is an extension in an existing file with name extname?
         with fits.open( finalfilepath, memmap=False, mode='append' ) as hdul:
             if len(hdul) == 0:
                 hdul.append( fits.PrimaryHDU() )
             hdul.append( hdu )
-        return str( finalfilepath )
+        return str( finalfilepath ), header
 
     else:
         # Single-HDU FITS file in the case where an object uses a different file for each extension
-        hdul = fits.HDUList( [hdu] )
+        hdul = fits.HDUList( [ fits.PrimaryHDU(), hdu ] if fpack else [ hdu ] )
 
         if finalfilepath.exists():
             if not overwrite:
                 raise FileExistsError( f"save_fits_image_file not overwriting {finalfilepath}" )
             else:
                 finalfilepath.unlink()
-        if intermedfilepath.exists():
-            if not overwrite:
-                raise FileExistsError( f"save_fits_image_file not overwriting {intermedfilepath}" )
-            else:
-                intermedfilepath.unlink()
 
-        hdul.writeto( intermedfilepath )
-        # If fpack is false, intermedfilepath and finalfilepath are the same
+        hdul.writeto( finalfilepath )
 
-        if fpack:
-            com = [ 'fpack' ]
-            if lossless:
-                com += [ '-q', '0', '-g2' ]
-            elif fpackq is not None:
-                com += [ '-q', 'fpackq' ]
-            com += [ str(intermedfilepath.resolve()) ]
-            try:
-                res = subprocess.run( com, capture_output=True, timeout=60 )
-            except subprocess.TimeoutExpired as ex:
-                SCLogger.error( f"fpack subprocess timed out after {ex.timeout} seconds" )
-                strio = io.StringIO()
-                strio.write( f"fpack subprocess timed out after {ex.timeout} seconds\n" )
-                strio.write( f"    Command: {' '.join(com)}\n" )
-                strio.write( f"    stdout:\n{ex.stdout}\n-----------\nstderr:\n{ex.stderr}\n" )
-                SCLogger.debug( strio.getvalue() )
-                raise RuntimeError( "FITS writing failed: timed out on fpack" )
-            except Exception as ex:
-                SCLogger.error( f"fpack subprocess raised exception: {ex}" )
-                raise
-            finally:
-                intermedfilepath.unlink()
-            if res.returncode != 0:
-                SCLogger.error( f"fpack subprocess failed: return code {res.returncode}" )
-                strio = io.StringIO()
-                strio.write( f"fpack subprocess failed: return code {res.returncode}" )
-                strio.write( f"    Command: {' '.join(com)}\n" )
-                strio.write( f"    stdout:\n{res.stdout}\n-----------\nstderr:\n{res.stderr}\n" )
-                SCLogger.debug( strio.getvalue() )
-                intermedfilepath.unlink()
-                raise RuntimeError( "FITS writing failed: fpack failed" )
-
-        return str( finalfilepath )
+        return str( finalfilepath ), header

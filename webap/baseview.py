@@ -1,16 +1,18 @@
 import re
 import copy
 import uuid
+import types
+import textwrap
 import datetime
 import simplejson
 
 import numpy as np
+from psycopg import sql
 
 import flask
 import flask.views
 
-from models.base import SmartSession
-from models.user import AuthUser
+from models.base import PGDB
 
 
 # This is just like util/util.py:NumpyAndUUIDJsonEncoder,
@@ -52,11 +54,22 @@ class BaseView( flask.views.View ):
         self.authenticated = ( 'authenticated' in flask.session ) and flask.session['authenticated']
         self.user = None
         if self.authenticated:
-            with SmartSession() as session:
-                self.user = session.query( AuthUser ).filter( AuthUser.username==self.username ).first()
-                if self.user is None:
+            with PGDB( dictcursor=True ) as pgdb:
+                q = sql.SQL( "SELECT * FROM authuser WHERE username={username}" ).format( username=self.username )
+                rows = pgdb.execute( q )
+                if len(rows) == 0:
                     self.authenticated = False
                     raise ValueError( f"Error, failed to find user {self.username} in database" )
+                self.user = types.SimpleNamespace( groups=[], **(rows[0]) )
+                q = sql.SQL( textwrap.dedent(
+                    """\
+                    SELECT g.name FROM authgroup g
+                    INNER JOIN auth_user_group aug ON aug.groupid=g.id
+                    WHERE aug.userid={uid}
+                    """
+                ) ).format( uid=self.user.id )
+                rows = pgdb.execute( q )
+                self.user.groups = [ r['name'] for r in rows ]
         return self.authenticated
 
 
@@ -99,8 +112,11 @@ class BaseView( flask.views.View ):
                 return retval, 200, { 'Content-Type': 'text/plain; charset=utf-8' }
             elif isinstance( retval, tuple ):
                 return retval
-            else:
+            elif isinstance( retval, bytes ):
                 return retval, 200, { 'Content-Type': 'application/octet-stream' }
+            else:
+                raise RuntimeError( f"I don't know how to deal with the something of type {type(retval)} "
+                                    f"in dispatch_request" )
         except BadUpdaterReturnError as ex:
             return str(ex), 500
         except Exception as ex:

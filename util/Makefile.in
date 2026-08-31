@@ -229,7 +229,7 @@ top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
 utildir = @installdir@/util
 util_SCRIPTS = __init__.py archive.py cache.py classproperty.py conductor_connector.py config.py \
-	exceptions.py fits.py githash.py ldac.py logger.py radec.py retrydownload.py retrypost.py rkauth_client.py \
+	exceptions.py fits.py ldac.py logger.py radec.py retrydownload.py retrypost.py rkauth_client.py \
 	runner.py util.py
 
 all: all-am
@@ -457,11 +457,6 @@ uninstall-am: uninstall-utilSCRIPTS
 
 .PRECIOUS: Makefile
 
-
-githash.py: FORCE
-	echo '__git_hash = "'`git rev-parse HEAD`'"' > githash.py
-
-FORCE:
 
 # Tell versions [3.59,3.63) of GNU make to not export all variables.
 # Otherwise a system limit (for SysV at least) may be exceeded.

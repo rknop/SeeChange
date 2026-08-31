@@ -1,6 +1,8 @@
 import time
+import textwrap
 import re
 
+from psycopg import sql
 import sqlalchemy as sa
 from sqlalchemy import orm
 from sqlalchemy.dialects.postgresql import JSONB
@@ -233,6 +235,9 @@ class Report(Base, UUIDMixin):
     def query_for_reports( cls, prov_tag=None, section_id=None, fields=None ):
         """Return a SQL query to find reports.
 
+        --> Queries with this in it are in fact too slow.  This needs to be revisited.
+        TRY: if you join to this query, use a hint IndexScan(re2 ix_reports_exposure_id)
+
         Returns a query that, when passed, will find all of the most
         recent reports for each section_id for a given exposure where
         all of the process provenance ids in that report match the
@@ -262,12 +267,9 @@ class Report(Base, UUIDMixin):
 
         Returns
         -------
-          str, dict
-
-          A query and a subdict.  The query is useful for adding to a
-          query string as a subquery, and the dict ius useful for
-          updating a substitution dict, to pass to psycopg's
-          cursor.execute.
+          sql.SQL
+            ...really a subclass of that.  Something that can added into
+            another sql.SQL as part of a join or something.
 
         """
 
@@ -305,7 +307,7 @@ class Report(Base, UUIDMixin):
                       'success', 'cluster_id', 'node_id', 'error_step', 'error_type', 'error_message',
                       'warnings', 'process_memory', 'process_runtime', 'progress_steps_bitflag',
                       'products_exist_bitflag', 'products_committed_bitflag' ]
-        fields = allfields if fields is None else fields
+        fields = ( allfields if fields is None else fields ).copy()
         badfields = set()
         # Make sure we aren't going to be bobble tablesed
         for f in fields:
@@ -326,47 +328,55 @@ class Report(Base, UUIDMixin):
         if any( [ f in [ disallowed_fields ] for f in fields ] ):
             raise ValueError( f"Fields selected cannot include any of {', '.join(disallowed_fields)}" )
 
-        subdict = {}
-        q = "SELECT DISTINCT ON(re.exposure_id, re.section_id) "
-        q += ",".join( [ f"re.{f}" for f in fields ] )
+        q = ( sql.SQL( "SELECT DISTINCT ON(re.exposure_id, re.section_id) {fields}\n" )
+              .format( fields=sql.SQL(",").join( sql.Identifier("re", f) for f in fields ) ) )
 
         if prov_tag is None:
-            ' FROM reports re '
+            q += sql.SQL( "FROM reports re\n" )
             if section_id is not None:
-                q += '   WHERE section)id=%(secid)s ) re '
-                subdict[ 'secid' ] = section_id
+                q += sql.SQL( "WHERE section_id={secid} re\n" ).format( secid=section_id )
         else:
             for f in [ "_id", "section_id", "start_time" ]:
                 if f not in fields:
                     fields.insert( 0, f )
-            fields1 = ",".join( [ f"re1.{f}" for f in fields ] )
-            fields2_list = list( fields )
+            fields2 = fields.copy()
             for f in [ 'exposure_id', 'section_id', 'success', 'error_message', 'start_time' ]:
-                if f not in fields2_list:
-                    fields2_list.append( f )
-            fields2 = ",".join( [ f"re2.{f}" for f in fields2_list ] )
-            fields3 = ",".join( [ f"re3.{f}" for f in fields2_list ] )
-            q += ( f' FROM ( SELECT {fields1}, array_agg(%(provtag)s=ANY(re1.tags)) AS gotem '
-                   f'        FROM ( SELECT {fields2}, array_agg(re2.tag) as tags '
-                   f'               FROM ( SELECT DISTINCT ON( re3._id, x.key, r3pt.tag ) '
-                   f'                             {fields3}, x.key AS process, r3pt.tag '
-                   f'                      FROM reports re3 '
-                   f'                      CROSS JOIN jsonb_each_text( re3.process_provid ) x '
-                   f'                      INNER JOIN provenance_tags r3pt ON x.value=r3pt.provenance_id ' )
-            if section_id is not None:
-                q += '                      WHERE section_id=%(secid)s '
-                subdict[ 'secid' ] = section_id
-            q += ( f'                      ORDER BY re3._id, r3pt.tag '
-                   f'                    ) re2 '
-                   f'               GROUP BY ( {fields2} )'
-                   f'             ) re1 '
-                   f'        GROUP BY ( {fields1} ) '
-                   f'      ) re '
-                   f'WHERE true=ALL( gotem ) ' )
-        q += 'ORDER BY re.exposure_id, re.section_id, re.start_time DESC '
-        subdict[ 'provtag' ] = prov_tag
+                if f not in fields2:
+                    fields2.append( f )
+            q += sql.SQL( textwrap.dedent(
+                """\
+                FROM ( SELECT {fields1}, array_agg({provtag}=ANY(re1.tags)) AS gotem
+                       FROM ( SELECT {fields2}, array_agg(re2.tag) as tags
+                              FROM ( SELECT DISTINCT ON( re3._id, x.key, r3pt.tag )
+                                            {fields3}, x.key AS process, r3pt.tag
+                                     FROM reports re3
+                                     CROSS JOIN jsonb_each_text( re3.process_provid ) x
+                                     INNER JOIN provenance_tags r3pt ON x.value=r3pt.provenance_id
+                """
+            ) ).format( fields1=sql.SQL(",").join( sql.Identifier("re1", f) for f in fields ),
+                        provtag=prov_tag,
+                        fields2=sql.SQL(",").join( sql.Identifier("re2", f) for f in fields2 ),
+                        fields3=sql.SQL(",").join( sql.Identifier("re3", f) for f in fields2 )
+                       )
 
-        return q, subdict
+            if section_id is not None:
+                q += sql.SQL( "                      WHERE section_id={secid}\n'" ).format( secid=section_id )
+            q += sql.SQL( textwrap.dedent(
+                """\
+                                      ORDER BY re3._id, r3pt.tag
+                                    ) re2
+                               GROUP BY ( {fields2} )
+                             ) re1
+                        GROUP BY ( {fields1} )
+                      ) re
+                WHERE true=ALL( gotem )
+                """
+            ) ).format( fields1=sql.SQL(",").join( sql.Identifier("re1", f) for f in fields ),
+                        fields2=sql.SQL(",").join( sql.Identifier("re2", f) for f in fields2 )
+                       )
+        q += sql.SQL( 'ORDER BY re.exposure_id, re.section_id, re.start_time DESC\n' )
+
+        return q
 
 
     @property
@@ -505,6 +515,8 @@ class Report(Base, UUIDMixin):
 
         return ', '.join(formatted_warnings)
 
-    def get_downstreams( self, session=None ):
+    # ...upstreams are complicated for reports, so punt.
+
+    def get_downstream_ids( self, pgdb=None ):
         """Reports have no downstreams."""
         return []

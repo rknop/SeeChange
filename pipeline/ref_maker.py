@@ -1,22 +1,23 @@
+import io
+import copy
 import datetime
+import pytz
+import textwrap
 import argparse
 
 import numpy as np
-import psycopg
+from psycopg import sql
+import astropy.time
+import astropy.wcs
 
 from pipeline.parameters import Parameters
 from pipeline.coaddition import CoaddPipeline
 from pipeline.data_store import DataStore, ProvenanceTree
 
-from models.base import SmartSession, PsycopgConnection
+from models.base import PGDB
+from models.enums_and_bitflags import ImageTypeConverter
 from models.provenance import Provenance
 from models.reference import Reference
-
-### HACK ALERT
-### Remove this (maybe?) when Issue #465 is solved
-import models.decam  # noqa: F401
-###
-
 from models.image import Image
 from models.refset import RefSet
 
@@ -38,6 +39,33 @@ class ParsRefMaker(Parameters):
             # this means multiple refsets can refer to the same Reference provenance
         )
 
+        self.ignore_config_use_config_from_refset = self.add_par(
+            name = 'ignore_config_use_config_from_refset',
+            default = False,
+            par_types = bool,
+            docstring = ( "This is a weird one.  If this is False, then, basically, it does nothing. "
+                          "If it is True, AND if a refset already exists with the name given in the name "
+                          "parameter, then ref_maker will ignore ALL of the parmeters below, and instead "
+                          "set their values from the provenance of the named refset.  This is here for "
+                          "usability, so that we can go back and do more ref_makers with a pre-existing "
+                          "configuration without having to manually reconstruct that configuration.  "
+                          "Use with care." ),
+            critical = False
+        )
+
+        self.refset_must_already_exist = self.add_par(
+            name = 'refset_must_already_exist',
+            default = False,
+            par_types = bool,
+            docstring = ( "Often you want to use this with ignore_config_use_config_from_refset.  If "
+                          "the rest of the referencing config is *different* from what you expect from "
+                          "a pre-existing refmaker config with the specified name, then you don't want "
+                          "to create that name with all the rest of the config.  This is confusing.  Used "
+                          "during rapidfire development early in a survey when moving between refsets "
+                          "a lot." ),
+            critical = False
+        )
+
         self.description = self.add_par(
             'description',
             '',
@@ -46,10 +74,19 @@ class ParsRefMaker(Parameters):
             critical=False,
         )
 
+        self.absolute_pixel_scale = self.add_par(
+            'absolute_pixel_scale',
+            1.0,
+            float,
+            ( 'Pixel scale of the coadded image in "/pixel if and only if coaddtion.alignment_index '
+              'is set to "absolute"' ),
+            critical=True
+        )
+
         self.start_time = self.add_par(
             'start_time',
             None,
-            (None, str, float, datetime.datetime),
+            (None, str, float, datetime.datetime, datetime.date),
             'Only use images taken after this time (inclusive). '
             'Time format can be MJD float, ISOT string, or datetime object. '
             'If None, will not limit the start time. ',
@@ -59,11 +96,69 @@ class ParsRefMaker(Parameters):
         self.end_time = self.add_par(
             'end_time',
             None,
-            (None, str, float, datetime.datetime),
+            (None, str, float, datetime.datetime, datetime.date),
             'Only use images taken before this time (inclusive). '
             'Time format can be MJD float, ISOT string, or datetime object. '
             'If None, will not limit the end time. ',
             critical=True,
+        )
+
+        self.fiducial_start_delta_days = self.add_par(
+            'fiducial_start_delta_days',
+            None,
+            (None, float),
+            ( 'If given a fiducial time (e.g. an image), then define a time period that is this many days '
+              'away from that fiducial time in which to search for images to combine into a reference.  Can '
+              'be negative.  None=no limit.' ),
+            critical=True
+        )
+
+        self.fiducial_end_delta_days = self.add_par(
+            'fiducial_end_delta_days',
+            None,
+            (None, float),
+            ( 'Like fiducial_start_delta_days, but defines the end of the time period in which to search for '
+              'images to combine into a reference.  None=no limit.' ),
+            critical=True
+        )
+
+        self.delta_days_validity_start = self.add_par(
+            'delta_days_validity_start',
+            None,
+            (None, float),
+            ( "When defining a reference, set the starting valid date this many days away from the times "
+              "of the images combined into the reference.  If negative, this is how many days before the mjd "
+              "of the first image that was combined into the reference; if positive, days after th emjd of the "
+              "last image that was combined into the reference.  Please don't make it 0. " ),
+            critical=True
+        )
+
+        self.delta_days_validity_end = self.add_par(
+            'delta_days_validity_end',
+            None,
+            (None, float),
+            ( 'Like delta_days_validity_start, but for the end of the reference validity period.' ),
+            critical=True
+        )
+
+        self.validity_start = self.add_par(
+            'vaidity_start_date',
+            None,
+            (None, datetime),
+            ( "When creating a reference, set its validity_start to this time.  If both this parameter "
+              "and validity_start_delta_days are non-None, this one takes precedence." ),
+            critical=True
+        )
+
+        self.validity_end = self.add_par(
+            'validity_end',
+            None,
+            (None, datetime),
+            ( "When creating a reference, set its validity_end to this time.  If both this parameter "
+              "and validity_end_delta_days are non-None, this one takes precedence.  If through these or "
+              "the *delta* parameters you end up with validity_end < validity_start, then your reference "
+              "will never be used, and you should probably re-evaluate your choices for the parameters." ),
+            critical=True
         )
 
         self.corner_distance = self.add_par(
@@ -129,28 +224,37 @@ class ParsRefMaker(Parameters):
             for min_max in ['min', 'max']:
                 self.add_limit_parameter(name, min_max)
 
+        self.__filter_based_image_query_pars__ = [ 'background', 'seeing', 'lim_mag' ]
+        for name in self.__filter_based_image_query_pars__:
+            for min_max in ['min', 'max']:
+                self.add_filter_based_limit_parameter(name, min_max)
+
+        # Because magnitudes are weird, update the docstrings
         self.__docstrings__['min_lim_mag'] = ('Only use images with lim_mag larger (fainter) than this. '
-                                             'If None, will not limit the minimal lim_mag. ')
+                                              'If None, will not limit the minimal lim_mag. ')
         self.__docstrings__['max_lim_mag'] = ('Only use images with lim_mag smaller (brighter) than this. '
-                                                'If None, will not limit the maximal lim_mag. ')
+                                              'If None, will not limit the maximal lim_mag. ')
 
         self.min_number = self.add_par(
             'min_number',
             1,
             int,
             ( 'Construct a reference only if there are at least this many images that pass all other criteria '
-              'If corner_distance is not None, then this applies to all test positions on the image unless '
-              'min_only_center is True.' ),
+              'If corner_distance is not None, then this applies to all test positions on the image. '
+              'This *can* be zero if you\'re OK with some spots not having references, but in that case make '
+              'sure that center_min_number is not 0, or things will probably go haywire.' ),
             critical=True,
         )
 
-        self.min_only_center = self.add_par(
-            'min_only_center',
-            False,
-            bool,
-            ( 'If True, then min_number only applies to the center position of the target area.  Otherwise, '
-              'every test position on the image must have at least min_number references for the construction '
-              'not to fail.  Ignored if corner_distance is None.' ),
+        self.center_min_number = self.add_par(
+            'center_min_number',
+            None,
+            ( int, type(None) ),
+            ( 'Like min_number, but specifically for the center of the image.  (Technically, the minimum '
+              'number at the cetner is actually the greater of this and min_number.)  If this is None, then '
+              'min_number is used for the center.  You might want to require more images overlapping '
+              'at the center.  If corner_distance is None, then it probably doesn\'t make sense to '
+              'make this number different from min_number, but whatevs.' ),
             critical=True,
         )
 
@@ -158,8 +262,8 @@ class ParsRefMaker(Parameters):
             'max_number',
             None,
             (None, int),
-            'If there are more than this many images, pick the ones with the highest "quality". '
-            'WARNING : currently not implemented',
+            ( 'If there are more than this many images at any position on the image, pick the ones with the '
+              'highest "quality".' ),
             critical=True,
         )
 
@@ -181,6 +285,24 @@ class ParsRefMaker(Parameters):
             critical=False,
         )
 
+        self.coadd_pipeline_config = self.add_par(
+            'coadd_pipeline_config',
+            {},
+            dict,
+            ( "Do not actually set this anywhere.  This is here so that coadd pipeline parmeters "
+              "can go into the referencing provenance.  (There's a circular dependency between "
+              "referencing and coaddition; the coaddition of a reference depends on the referencing "
+              "config, because it affects what coadd is run, but then of course the referencing provenance "
+              "should depend on the coadd configuration.  The solution we have is to make referencing "
+              "an upstream of coaddition, so that coaddition doesn't have to know about image selection "
+              "parameters.  That means we can't have the coaddition provenance as an upstream of the referencing "
+              "provenance.  Use this parameter as a place to store the full coadd pipeline "
+              "config so that the referencing provenance will be different if the coadd parameters change. "
+              "This is handled entirely internally, and any values set in referencing.coadd_pipeline_config "
+              "in a config file will get wiped out." ),
+            critical=True
+        )
+
         self._enforce_no_new_attrs = True  # lock against new parameters
 
         self.override(kwargs)
@@ -200,6 +322,25 @@ class ParsRefMaker(Parameters):
                 f'Only use images with {name} {compare} than this value. '
                 f'If None, will not limit the {min_max}imal {name}.',
                 critical=True,
+            )
+        )
+
+
+    def add_filter_based_limit_parameter( self, name, min_max='min' ):
+        if min_max not in ['min', 'max']:
+            raise ValueError('min_max must be either "min" or "max"')
+        compare = 'larger' if min_max == 'min' else 'smaller'
+        setattr(
+            self,
+            f'{min_max}_{name}_by_filter',
+            self.add_par(
+                f'{min_max}_{name}_by_filter',
+                {},
+                dict,
+                ( f"A dictionary of filter to {name} limits; only use images of each filter "
+                  f"with {name} {compare} than this value.  If the image is of a filter that's "
+                  f"not in this dictionary, will use {min_max}_{name} instead." ),
+                critical=True
             )
         )
 
@@ -244,36 +385,71 @@ class RefMaker:
         config, or pass them in kwargs['maker'].
 
         """
-        # first break off some pieces of the kwargs dict
-        maker_overrides = kwargs.pop('maker', {})  # to set the parameters of the reference maker itself
-        coadd_overrides = kwargs.pop('coaddition', {})  # to allow overriding the coaddition pipeline
 
-        if len(kwargs) > 0:
-            raise ValueError(f'Unknown parameters given to RefMaker: {kwargs.keys()}')
+        self.setup_config( **kwargs )
+        self.reset()
+
+
+    # ======================================================================
+    def setup_config( self, **kwargs ):
+        # We are going to *include* the parametrs of the coadd
+        # provenance as part of the parmeters of the referencing
+        # provenance, because coadd is no longer an upstream of the
+        # referencing.
 
         # now read the config file
         config = Config.get()
 
-        coadd_dict = config.value('referencing.coaddition', {})  # allow overrides from config's referencing.coaddition
-        coadd_dict.update(coadd_overrides)  # allow overrides from kwargs['coaddition']
-        self.coadd_pipeline = CoaddPipeline(**coadd_dict)  # coaddition parameters, overrides with coadd_dict
+        # coadd config comes from, first, coaddition config, second,
+        # updated by referencing.coaddition, finally, updated by keyword
+        # arguments.
+        coadd_dict = config.value( 'coaddition', {} )
+        for kw in [ 'coaddition', 'extraction', 'astrocal', 'photocal' ]:
+            if kw not in coadd_dict:
+                coadd_dict[kw] = {}
+        coadd_dict['coaddition'].update( config.value( 'referencing.coaddition.coaddition', {} ) )
+        coadd_dict['coaddition'].update( kwargs.pop( 'coaddition', {} ) )
+        coadd_dict['extraction'].update( config.value( 'referencing.coaddition.extraction', {} ) )
+        coadd_dict['extraction'].update( kwargs.pop( 'extraction', {} ) )
+        coadd_dict['astrocal'].update( config.value( 'referencing.coaddition.astrocal', {} ) )
+        coadd_dict['astrocal'].update( kwargs.pop( 'astrocal', {} ) )
+        coadd_dict['photocal'].update( config.value( 'referencing.coaddition.photocal', {} ) )
+        coadd_dict['photocal'].update( kwargs.pop( 'photocal', {} ) )
+        self._coadd_pipeline = CoaddPipeline( **coadd_dict )
 
         maker_dict = config.value('referencing.maker')
-        maker_dict.update(maker_overrides)  # user can provide override arguments in kwargs
-        self.pars = ParsRefMaker(**maker_dict)  # initialize without the pipeline/coaddition parameters
+        if 'maker' in kwargs:
+            maker_dict.update( kwargs.pop( 'maker', {} ) )
+
+        if len(kwargs) > 0:
+            raise ValueError(f'Unknown parameters given to RefMaker: {kwargs.keys()}')
+
+        # Include the full coaddition pipeline config, *not* just what was modified for ref_maker,
+        #   in the paremeters for ref_maker.  Reason: coadd is not an upstream of ref_maker,
+        #   so if that stuff changes, we need it here to make the ref_make provenance change.
+        # Some of this is a little circular, since the coadd provenance will include this
+        #   provenance as an upstream, but whatever.  Gotta have it like this to make sure
+        #   the referencing provenance actually changes when something material about making
+        #   the reference changes.
+        maker_dict.update( { "coadd_pipeline":
+                             { "pipeline": self._coadd_pipeline.pars.get_critical_pars(),
+                               "coaddition": self._coadd_pipeline.coadder.pars.get_critical_pars(),
+                               "extraction": self._coadd_pipeline.extractor.pars.get_critical_pars(),
+                               "astrocal": self._coadd_pipeline.astrometor.pars.get_critical_pars(),
+                               "photocal": self._coadd_pipeline.photometor.pars.get_critical_pars()
+                              }
+                            } )
+        self.pars = ParsRefMaker(**maker_dict )
 
         if ( self.pars.corner_distance is None ) != ( self.pars.overlap_fraction is None ):
             raise ValueError( "Configuration error; for RefMaker, must have a float for both of "
                               "corner_distance and overlap_fraction, or both must be None." )
 
-        self.coadd_im_prov = None
-        self.coadd_ex_prov = None
-        self.coadd_wcs_prov = None
-        self.coadd_zp_prov = None
+        self.coadd_provs = None
         self.ref_prov = None
         self.refset = None
+        self.subtraction_minovfrac = config.value( 'subtraction.reference.minovfrac' )
 
-        self.reset()
 
     # ======================================================================
 
@@ -302,27 +478,34 @@ class RefMaker:
 
         """
 
-        zpprov = Provenance.get( self.pars.zp_prov_id )
-        if zpprov is None:
-            raise RuntimeError( f"Failed to find ZeroPoint provenance {self.pars.zp_prov_id}" )
-        upstreams = [ Provenance.get( self.pars.zp_prov_id ) ]
-        self.coadd_pipeline.datastore = DataStore()
-        coadd_provs = self.coadd_pipeline.make_provenance_tree( None, upstream_provs=upstreams )
-        self.coadd_im_prov = coadd_provs['starting_point']
-        self.coadd_ex_prov = coadd_provs['extraction']
-        self.coadd_wcs_prov = coadd_provs['astrocal']
-        self.coadd_zp_prov = coadd_provs['photocal']
-
+        # Previously, we had the coadd provenance as an upstream of the referencing
+        #   provenance, but really it's the other way around: the coadd is produced
+        #   based on stuff referencing calculates.
         pars = self.pars.get_critical_pars()
-        code_version = Provenance.get_code_version(self.pars.get_process_name())
+        code_version = Provenance.get_code_version(self.pars.get_process_name(), session=session)
         self.ref_prov = Provenance(
             process=self.pars.get_process_name(),
             code_version_id=code_version.id,
             parameters=pars,
-            upstreams=[ self.coadd_zp_prov ],
-            is_testing='test_parameter' in pars,
+            upstreams=[],
         )
-        self.ref_prov.insert_if_needed()
+        self.ref_prov.insert_if_needed( session )
+
+        zpprov = Provenance.get( self.pars.zp_prov_id, session=session )
+        if zpprov is None:
+            raise RuntimeError( f"Failed to find ZeroPoint provenance {self.pars.zp_prov_id}" )
+        upstreams = [ Provenance.get( self.pars.zp_prov_id, session=session ) ]
+        # Make the referencing an upstream of the coadd, because changes made to the referencing
+        #  could change the images we chose to put into the coadd.
+        upstreams.append( self.ref_prov )
+
+        self._coadd_pipeline.datastore = DataStore()
+        abswcs = ( self._coadd_pipeline.coadder.pars.alignment_index=='absolute' )
+        self.coadd_provs = self._coadd_pipeline.make_provenance_tree( None,
+                                                                      absolute_alignment_wcs=abswcs,
+                                                                      upstream_provs=upstreams,
+                                                                      pgdb=session )
+
 
 
     # ======================================================================
@@ -333,46 +516,110 @@ class RefMaker:
         Sets self.refset.  Will also make all the required provenances
         (using the config) and load them into the database.
 
+        Parameters
+        ----------
+          session : PGDB, psycopg.Connection, psycopg.Cursor, or sa Session, default None
+             Databse connection.  Will open and close a new one if not
+             given. WARNING : will always commit or rollback!  For that
+             reason, you usually do NOT want to specify something for
+             session, but leave it at None.
+
         """
-        with SmartSession( session ) as dbsession:
+
+        with PGDB( session, dictcursor=True ) as pgdb:
+            # First, handle ignore_config_use_config_from_refset
+            if self.pars.ignore_config_use_config_from_refset:
+                rows = pgdb.execute( sql.SQL( "SELECT description, provenance_id FROM refsets WHERE name={refset}" )
+                                     .format( refset=self.pars.name ) )
+                if self.pars.refset_must_already_exist and ( len(rows) == 0 ):
+                    raise RuntimeError( f"You asked for pre-existing refset {self.pars.name}, but it doesn't exist." )
+                elif len(rows) > 0:
+                    if len(rows) > 1:
+                        raise RuntimeError( "This should never happen." )
+
+                    refprov = Provenance.get( rows[0]['provenance_id'], session=pgdb )
+
+                    # Mangle the parmaeters around to what setup_config expects
+                    kwargs = { 'maker': { k: copy.deepcopy(v)
+                                          for k, v in refprov.parameters.items()
+                                          if k != 'coadd_pipeline_config' }
+                              }
+                    kwargs['maker']['name'] = self.pars.name
+                    kwargs['maker']['description'] = rows[0]['description']
+                    if 'coadd_pipeline_config' not in refprov.parameters:
+                        raise RuntimeError( "I don't know how to cope." )
+                    for kw in [ 'coaddition', 'extraction', 'astrocal', 'photocal' ]:
+                        if kw not in refprov.parameters['coadd_pipeline_config']:
+                            raise RuntimeError( "I don't know how to cope." )
+                        kwargs[kw] = copy.deepcopy( refprov.parameters['coadd_pipeline_config'][kw] )
+
+                    # Set our config based on this provenance
+                    self.setup_config( **kwargs )
+
             # make sure all the sundry component provenances are in the database
-            self.setup_provenances( session=dbsession )
+            self.setup_provenances( session=pgdb )
+            SCLogger.debug( f"Refset {self.pars.name} ({self.pars.description}) with provenance {self.ref_prov.id}" )
 
             # make sure the ref_prov is in the database
-            self.ref_prov.insert_if_needed( session=dbsession )
+            self.ref_prov.insert_if_needed( session=pgdb )
 
-        with PsycopgConnection() as conn:
-            cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
-            # Lock the refset table so we don't have a race condition
-            cursor.execute( "LOCK TABLE refsets" )
+            def _get_refset( name ):
+                rows = pgdb.execute( sql.SQL( "SELECT * FROM refsets WHERE name={name}" ).format( name=name ) )
+                if len(rows) > 0:
+                    if len(rows) > 1:
+                        raise RuntimeError( "This should never happen." )
+                    # refset already exists, make sure the provenance is right
+                    if rows[0]['provenance_id'] != self.ref_prov.id:
+                        raise ValueError( f"Refset {self.pars.name} already exists with provenance "
+                                          f"{rows[0]['provenance_id']}, which does not match the "
+                                          f"ref provenance we're using: {self.ref_prov.id}" )
+                    return rows[0]
+                else:
+                    return None
+
             # Check to see if the refset already exists
-            cursor.execute( "SELECT * FROM refsets WHERE name=%(name)s", { 'name': self.pars.name } )
-            rows = cursor.fetchall()
-            if len(rows) > 0:
-                # refset already exists, make sure the provenance is right
-                if rows[0]['provenance_id'] != self.ref_prov.id:
-                    raise ValueError( f"Refset {self.pars.name} already exists with provenance "
-                                      f"{rows[0]['provenance_id']}, which does not match the "
-                                      f"ref provenance we're using: {self.ref_prov.id}" )
+            row = _get_refset( self.pars.name )
+
+            if row is not None:
                 self.refset = RefSet()
-                self.refset.set_attributes_from_dict( rows[0] )
+                self.refset.set_attributes_from_dict( row )
+
             else:
-                # refset doesn't exist, make it
-                self.refset = RefSet( name=self.pars.name, description=self.pars.description,
-                                      provenance_id=self.ref_prov.id )
-                cursor.execute( "INSERT INTO refsets(_id,name,description,provenance_id) "
-                                "VALUES (%(id)s,%(name)s,%(desc)s,%(prov)s)",
-                                { 'id': self.refset.id, 'name': self.refset.name,
-                                  'desc': self.refset.description, 'prov': self.refset.provenance_id } )
-                conn.commit()
+                # Gotta make it. To avoid race conditions, lock the table,
+                #   check *again* if it exists, and make it if it doesn't.
+                try:
+                    # Rollback the database connection to release all shared locks
+                    #   we have incidentally acquired, to avoid deadlocks where
+                    #   another process tries to get an exclusive lock.
+                    pgdb.rollback()
+                    # Now lock the refsets table
+                    pgdb.execute_nofetch( "LOCK TABLE refsets" )
+                    row = _get_refset( self.pars.name )
+                    if row is None:
+                        self.refset = RefSet( name=self.pars.name, description=self.pars.description,
+                                              provenance_id=self.ref_prov.id )
+                        q = sql.SQL( textwrap.dedent(
+                            """\
+                            INSERT INTO refsets(_id,name,description,provenance_id)
+                            VALUES ({_id},{name},{desc},{prov})
+                            """
+                        ) ).format( _id=self.refset.id, name=self.refset.name,
+                                    desc=self.refset.description, prov=self.refset.provenance_id )
+                        pgdb.execute_nofetch( q )
+                        pgdb.commit()
+                    else:
+                        self.refset = RefSet()
+                        self.refset.set_attributes_from_dict( row )
+                finally:
+                    # Make sure to release the lock
+                    pgdb.rollback()
 
 
     # ======================================================================
 
-    def parse_arguments( self, image=None, ra=None, dec=None,
+    def parse_arguments( self, image=None, image_zp_prov_id=None, zp_prov_id=None, ra=None, dec=None,
                              minra=None, maxra=None, mindec=None, maxdec=None,
-                             target=None, section_id=None,
-                             filter=None ):
+                             target=None, section_id=None, mjd=None, filter=None ):
         """Parse arguments for the RefMaker.
 
         There are three modes in which RefMaker can operate:
@@ -392,8 +639,17 @@ class RefMaker:
 
         Parameters
         ----------
-          image: Image or None
-            Used to get the ra/dec (if pars.corner_distance is None) or min/max ra/dec.
+          image: str or None
+            The id of the image, or a substring of the filepath of the
+            image.  If the substring is not unique (i.e. there are
+            multiple images with this substring), an exception will be
+            raised.
+
+          image_zp_prov_id: str or None
+            Ignored if image is not None.  If not None, then will search
+            for a zeropoint of this provenance that goes with iamge, and
+            then will use the WCSes "good" limits to figure out the
+            min/max ra/dec rather than the corners in the image.
 
           ra, dec: float or None
             Position to search.   Only makes sense if pars.corner_distance is None
@@ -412,9 +668,77 @@ class RefMaker:
           filter: string or None
             If given, only find images whose filter match this filter
 
+          mjd: float or None
+            Find references suitable for an image at this mjd.  If None,
+            and image is not None, will pull the mjd from teh database
+            record for the image.
+
         """
-        if ( image is not None ) and any( i is not None for i in [ ra, dec, minra, maxra, mindec, maxdec ] ):
-            raise ValueError( "If you pass image to RefMaker.run, you can't pass any coordinates." )
+
+        if image is not None:
+            if any ( i is not None for i in [ ra, dec, minra, maxra, mindec, maxdec ] ):
+                raise ValueError( "If you pass image to RefMaker.run, you can't pass any coordinates." )
+
+            if isinstance( image, Image ):
+                imgid = image.id
+                mjd = image.mjd
+                imgra = image.ra
+                imgdec = image.dec
+                imgminra = image.minra
+                imgmaxra = image.maxra
+                imgmindec = image.mindec
+                imgmaxdec = image.maxdec
+
+            else:
+                with PGDB( dictcursor=True ) as pgdb:
+                    rows = pgdb.execute( sql.SQL( textwrap.dedent(
+                        """\
+                        SELECT _id, mjd, ra, dec, minra, maxra, mindec, maxdec FROM images
+                        WHERE filepath LIKE {perimg} OR _id::text={img}
+                        """
+                    ) ).format( img=str(image), perimg=f'%%{image}%%' ) )
+                    if len(rows) == 0:
+                        raise FileNotFoundError( f"Could not find image {image}" )
+                    elif len(rows) > 1:
+                        raise RuntimeError( f"More than one image matched {image}; be more specific." )
+                    imgid = rows[0]['_id']
+                    mjd = rows[0]['mjd'] if mjd is None else mjd
+                    imgra = rows[0]['ra']
+                    imgdec = rows[0]['dec']
+                    imgminra = rows[0]['minra']
+                    imgmaxra = rows[0]['maxra']
+                    imgmindec = rows[0]['mindec']
+                    imgmaxdec = rows[0]['maxdec']
+
+            if image_zp_prov_id is not None:
+                with PGDB( dictcursor=True ) as pgdb:
+                    rows = pgdb.execute( sql.SQL( textwrap.dedent(
+                        """\
+                        SELECT w.good_minra, w.good_maxra, w.good_mindec, w.good_maxdec
+                        FROM world_coordinates w
+                        INNER JOIN zero_points z ON z.wcs_id=w._id
+                                                AND z.provenance_id={zpprov}
+                        INNER JOIN source_lists s ON w.sources_id=s._id
+                        WHERE s.image_id={imageid}
+                        """
+                    ) ).format( zpprov=image_zp_prov_id, imageid=imgid ) )
+                    if len(rows) == 0:
+                        raise RuntimeError( f"Failed to find a zeropoint for image "
+                                            f"with provenance {image_zp_prov_id}" )
+                    if len(rows) > 1:
+                        raise RuntimeError( "This should never happen." )
+                    imgminra = rows[0]['good_minra']
+                    imgmaxra = rows[0]['good_maxra']
+                    imgmindec = rows[0]['good_mindec']
+                    imgmaxdec = rows[0]['good_maxdec']
+                    if ( imgminra > imgmaxra ):
+                        # Try to deal with the "ra spanning 0" case.
+                        imgra = ( imgminra - 360. + imgmaxra ) / 2.
+                        if imgra < 0:
+                            imgra += 360.
+                    else:
+                        imgra = ( imgminra + imgmaxra )  / 2.
+                    imgdec = ( imgmindec + imgmaxdec ) / 2.
 
         if self.pars.corner_distance is None:
             if any( i is not None for i in [ minra, maxra, mindec, maxdec ] ):
@@ -422,8 +746,8 @@ class RefMaker:
             if image is not None:
                 if ( ra is not None ) or ( dec is not None ):
                     raise ValueError( "For RefMaker corner_distance None, must specify image or ra/dec, not both" )
-                ra = image.ra
-                dec = image.dec
+                ra = imgra
+                dec = imgdec
             else:
                 if ( ra is None ) or ( dec is None ):
                     raise ValueError( "For RefMaker corner_distance None, must provide either image or both ra & dec" )
@@ -434,15 +758,16 @@ class RefMaker:
                 if any( i is not None for i in [ minra, maxra, mindec, maxdec ] ):
                     raise ValueError( "For RefMaker corner_distance not None, must specify image or "
                                       "minra/maxra/mindex/maxdec, not both" )
-                minra = image.minra
-                maxra = image.maxra
-                mindec = image.mindec
-                maxdec = image.maxdec
+                minra = imgminra
+                maxra = imgmaxra
+                mindec = imgmindec
+                maxdec = imgmaxdec
             else:
                 if any ( i is None for i in [ minra, maxra, mindec, maxdec ] ):
                     raise ValueError( "For RefMaker corner_distance not None, must specify image or "
                                       "all of minra/maxra/mindec/maxdec" )
 
+        self.mjd = mjd
         self.minra = minra
         self.maxra = maxra
         self.mindec = mindec
@@ -453,19 +778,21 @@ class RefMaker:
         self.section_id = section_id
         self.filter = filter
 
+
     # ======================================================================
 
-    def identify_reference_images_to_coadd( self, *args, _do_not_parse_arguments=False, **kwargs ):
+    def identify_reference_images_to_coadd( self, *args, _do_not_parse_arguments=False, pgdb=None, **kwargs ):
         """Identify images in the database that could be used to build our reference.
 
-        See parse_arguments for a description of the arguments.
+        See parse_arguments for a description of the arguments, except
+        for pgdb, which is what it usually is.
 
         (Parameter _do_not_parse_arguments is used internally, ignore it
         if calling this from the outside.)
 
         Returns
         -------
-           images, match_pos, match_count
+           images, match_pos, match_count, match_pos_images
 
            images: list of Image
              List of images that can be included in the sum.
@@ -478,6 +805,9 @@ class RefMaker:
           match_count: list of int
              Number of images that overlap the corresponding match_pos.
 
+          match_pos_images: list of list
+             List of the ids of the images that overlap this match pos
+
         """
         if not _do_not_parse_arguments:
             self.parse_arguments( *args, **kwargs )
@@ -485,6 +815,7 @@ class RefMaker:
         if self.pars.corner_distance is None:
             match_pos = [ [ self.ra, self.dec ] ]
             match_count = [ 0 ]
+            match_pos_images = [ [] ]
             kwargs = { 'ra': self.ra, 'dec': self.dec }
         else:
             if ( self.maxra < self.minra ):
@@ -506,6 +837,11 @@ class RefMaker:
                                     [ ctrra + 0.,  ctrdec + ddec ],
                                     [ ctrra + dra, ctrdec + ddec ] ] )
             match_count = [ 0 ] * 9
+            # PYTHON VIOLATES PRINCIPLE OF LEAST SURPRISE
+            # This next line doesn't make a list of 9 empty lists.
+            # No, it makes a list of 9 references to the SAME empty list.
+            # match_pos_images = [ [] ] * 9
+            match_pos_images = [ [] for i in range(len(match_count)) ]
             kwargs = { 'minra': self.minra, 'maxra': self.maxra, 'mindec': self.mindec, 'maxdec': self.maxdec,
                        'overlapfrac': self.pars.coadd_overlap_fraction }
 
@@ -517,29 +853,98 @@ class RefMaker:
         kwargs['min_mjd'] = ( None if self.pars.start_time is None
                               else parse_dateobs( self.pars.start_time, output='mjd' ) )
         kwargs['max_mjd'] = None if self.pars.end_time is None else parse_dateobs( self.pars.end_time, output='mjd' )
-        kwargs['max_seeing'] = self.pars.max_seeing
-        kwargs['min_lim_mag'] = self.pars.min_lim_mag
-        kwargs['min_exp_time'] = self.pars.min_exp_time
-        # TODO : airmass, background
 
-        possible = Image.find_images( **kwargs )
+        for kw in self.pars.__filter_based_image_query_pars__:
+            for min_max in [ 'min', 'max' ]:
+                limitdict = getattr( self.pars, f'{min_max}_{kw}_by_filter' )
+                if self.filter in limitdict:
+                    kwargs[f'{min_max}_{kw}'] = limitdict[ self.filter ]
+                else:
+                    kwargs[f'{min_max}_{kw}'] = getattr( self.pars, f'{min_max}_{kw}' )
+
+        for kw in self.pars.__image_query_pars__:
+            for min_max in [ 'min', 'max' ]:
+                kwargs[f'{min_max}_{kw}'] = getattr( self.pars, f'{min_max}_{kw}' )
+
+        kwargs['return_wcs'] = True
+
+        possible, possible_wcs = Image.find_images( pgdb=pgdb, **kwargs )
 
         existing = []
         for image in possible:
             keep = False
             for i, pos in enumerate(match_pos):
-                if image.contains( pos[0], pos[1] ):
+                # Use wcs contains so the "good" corners wll be the criteria
+                if possible_wcs[image.id].contains( pos[0], pos[1] ):
+                    match_pos_images[i].append( image.id )
                     match_count[i] += 1
                     keep = True
             if keep:
                 existing.append( image )
 
-        return existing, match_pos, match_count
+        return existing, match_pos, match_count, match_pos_images
+
+
+    def choose_reference_images_to_coadd( self, *args, _do_not_parse_arguments=False, log_to_info=True, **kwargs ):
+        ( images, match_pos, match_count, match_pos_images
+          ) = self.identify_reference_images_to_coadd( *args,
+                                                       _do_not_parse_arguments=_do_not_parse_arguments,
+                                                       **kwargs )
+
+        infolog = SCLogger.info if log_to_info else SCLogger.debug
+
+        # Make sure we got enough
+        nrequired = [ self.pars.min_number ] * len( match_pos )
+        if self.pars.center_min_number is not None:
+            # match_count[0] is always for the center position
+            nrequired[0] = max( self.pars.min_number, self.pars.center_min_number )
+
+        if len(images) < self.pars.min_number:
+            infolog( f"RefMaker only found {len(images)} images overlapping the desired field, "
+                     f"which is less than the minimum of {self.pars.min_number}" )
+            return None, match_pos, match_count
+        if any( n < minn for n, minn in zip( match_count, nrequired ) ):
+            infolog( f"RefMaker didn't find enough references at at least one point on the image; "
+                     f"match_count={match_count}, min_number={self.pars.min_number} "
+                     f"({nrequired[0]} at center)." )
+            return None, match_pos, match_count
+
+        # If there were *too many* images, then we have to start trimming them out
+        if ( self.pars.max_number is not None ) and any( n > self.pars.max_number for n in match_count ):
+            SCLogger.debug( f"More images than max_number ({self.pars.max_number}) at some positions, trimming." )
+            # Sort images by quality factor
+            images = sorted( images, key=lambda x: ( x.lim_mag_estimate -
+                                                     self.pars.seeing_quality_factor * x.fwhm_estimate ) )
+            # Go from the lowest quality to highest quality images, and remove them if they're not needed
+            imdex = 0
+            nyank = 0
+            while any( n > self.pars.max_number for n in match_count ) and ( imdex < len(images) ):
+                # Find out of this image is an excess at any position, AND if we can remove
+                #   it without dropping another position below the min.
+                if ( any( ( ( images[imdex].id in mpi ) and ( n > self.pars.max_number ) )
+                          for n, mpi in zip( match_count, match_pos_images )
+                         )
+                     and
+                     all( ( ( images[imdex].id not in mpi ) or ( n > minn ) )
+                          for mpi, n, minn in zip( match_pos_images, match_count, nrequired )
+                         )
+                    ):
+                    for i, mpi in enumerate( match_pos_images ):
+                        if images[imdex].id in mpi:
+                            mpi.remove( images[imdex].id )
+                            match_count[ i ] -= 1
+                    del images[imdex]
+                    nyank += 1
+                else:
+                    imdex += 1
+            SCLogger.debug( f"Removed {nyank} of {len(images)+nyank} images." )
+
+        return images, match_pos, match_count
 
 
     # ======================================================================
 
-    def run(self, *args, do_not_build=False, **kwargs ):
+    def run(self, *args, do_not_build=False, identify_even_if_not_building=False, **kwargs ):
         """Look to see if there is an existing reference that matches the specs; if not, optionally build one.
 
         See parse_arguments for function call parameters.  The remaining
@@ -558,7 +963,6 @@ class RefMaker:
         """
 
         self.parse_arguments( *args, **kwargs )
-
         self.make_refset()
 
         # look for the reference at the given location in the sky (via ra/dec or target/section_id)
@@ -573,6 +977,8 @@ class RefMaker:
             section_id=self.section_id,
             filter=self.filter,
             provenance_ids=self.ref_prov.id,
+            for_image_mjd=self.mjd,
+            overlapfrac=self.subtraction_minovfrac
         )
 
         refs, _ = refsandimgs
@@ -584,29 +990,14 @@ class RefMaker:
             raise RuntimeError( f'Found multiple references with the same provenance '
                                 f'{self.ref_prov.id} and location!' )
 
-        if do_not_build:
+        if do_not_build and ( not identify_even_if_not_building ):
             return None
 
         ############### no reference found, need to build one! ################
 
-        images, _, match_count = self.identify_reference_images_to_coadd( _do_not_parse_arguments=True )
-
-        # Make sure we got enough
-
-        if len(images) < self.pars.min_number:
-            SCLogger.info( f"RefMaker only found {len(images)} images overlapping the desired field, "
-                           f"which is less than the minimum of {self.pars.min_number}" )
+        images, match_pos, match_count = self.choose_reference_images_to_coadd( _do_not_parse_arguments=True )
+        if images is None:
             return None
-        # match_count[0] is always for the center position
-        if ( self.pars.min_only_center ) and ( match_count[0] < self.pars.min_number ):
-            SCLogger.info( f"RekMaker only found {len(match_count[0])} images overlapping the center of the "
-                           f"desired field, which is less than the minimum of {self.pars.min_number}" )
-            return None
-        elif ( not self.pars.min_only_center ) and any( c < self.pars.min_number for c in match_count ):
-            SCLogger.info( f"RefMaker didn't find enough references at at least one point on the image; "
-                           f"match_count={match_count}, min_number={self.pars.min_number}" )
-            return None
-
 
         # Sort the images and create data stores for all of them
         # Have to pull out all the zeropoint upstream provenances
@@ -652,12 +1043,94 @@ class RefMaker:
                 )
             dses.append( ds )
 
-        self.coadd_pipeline.make_provenance_tree( dses )
-        coadd_ds = self.coadd_pipeline.run( dses )
+        nlsp = '\n        '
+        mess = nlsp.join( f'({p[0]:8.4f}, {p[1]:8.4f}) : {c}' for p, c in zip( match_pos, match_count ) )
+        if do_not_build:
+            # If we get here, it's because identify_even_if_not_building is True, which means
+            #   the user probably wants to see the list, so log this as info rather than debug.
+            SCLogger.info( f"Overlap statistics:{nlsp}{mess}" )
+            SCLogger.info( f"{len(dses)} images that would have been combined for the reference:{nlsp}"
+                           f"{nlsp.join( d.image.filepath for d in dses )}" )
+            return None
+        else:
+            SCLogger.debug( f"Overlap statistics:{nlsp}{mess}" )
+            SCLogger.debug( f"Combining images to make ref:\n"
+                            f"{nlsp.join( d.image.filepath for d in dses )}" )
+
+        alignment_target_datastore = None
+        alignment_wcs = None
+        if self._coadd_pipeline.coadder.pars.alignment_index == 'other':
+            raise NotImplementedError( "Gotta do this." )
+        elif self._coadd_pipeline.coadder.pars.alignment_index == 'absolute':
+            # Gotta figure out the center ra and dec of the image we build
+            # THOGUHT REQUIRED : does this align them where we want on heavily
+            #   masked images?
+            if self.minra is not None:
+                if ( self.minra > self.maxra ):
+                    self.minra -= 360.
+                ra = ( self.minra + self.maxra ) / 2.
+                if ( self.minra < 0. ):
+                    self.minra += 360.
+                dec = ( self.mindec + self.maxdec ) / 2.
+            else:
+                ra = self.ra
+                dec = self.dec
+
+            # Right... I hope I know what I'm doing.
+            alignment_wcs = astropy.wcs.WCS(
+                { 'CRPIX1': self._coadd_pipeline.coadder.pars.absolute_width / 2.,
+                  'CRPIX2': self._coadd_pipeline.coadder.pars.absolute_height / 2.,
+                  'CRVAL1': ra,
+                  'CRVAL2': dec,
+                  # 'CDELT1': -self.pars.absolute_pixel_scale / 3600.,
+                  # 'CDELT2': self.pars.absolute_pixel_scale / 3600.,
+                  # ...things came out weird.  WCS was stretched by ~1.7%,
+                  #   which perhaps coincidentally was the roughly the relative difference between the absolute pixel
+                  #   scale I specified and the pixel scale of the images I combined.
+                  # Try instead setting the CDELTs to 1 and putting the scale in a PC matrix.
+                  # ...which seemed to work better.  I don't understand what's going on.
+                  #    Either there is some subtlety in spherical trig that I'm missing
+                  #    with the WCS definition (likely), or swarp is doing something wrong.
+                  #    when I give it non-1 CDELT and no PC matrix.
+                  'CDELT1': 1.0,
+                  'CDELT2': 1.0,
+                  'PC1_1': -self.pars.absolute_pixel_scale / 3600.,
+                  'PC1_2': 0.,
+                  'PC2_1': 0.,
+                  'PC2_2': self.pars.absolute_pixel_scale / 3600.,
+                  'CTYPE1': "RA---TAN",
+                  'CTYPE2': "DEC--TAN",
+                  'CUNIT1': 'deg',
+                  'CUNIT2': 'deg' } )
+
+        coadd_ds = self._coadd_pipeline.run( dses, prov_tree=self.coadd_provs,
+                                             alignment_target_datastore=alignment_target_datastore,
+                                             alignment_wcs=alignment_wcs )
+        t0 = None
+        if self.pars.validity_start is not None:
+            t0 = self.pars.validity_start
+            if t0.tzinfo is None:
+                t0 = pytz.utc.localize( t0 )
+        elif self.pars.delta_days_validity_start is not None:
+            dt = self.pars.delta_days_validity_start
+            t0 = pytz.utc.localize( astropy.time.Time( dses[0 if dt < 0 else -1].image.mjd, format='mjd' ).datetime )
+            t0 += datetime.timedelta( days=dt )
+
+        t1 = None
+        if self.pars.validity_end is not None:
+            t1 = self.pars.validity_end
+            if t1.tzinfo is None:
+                t1 = pytz.utc.localize( t1 )
+        elif self.pars.delta_days_validity_end is not None:
+            dt = self.pars.delta_days_pars.validity_end
+            t1 = pytz.utc.localize( astropy.time.Time( dses[0 if dt < 0 else -1].image.mjd, format='mjd' ).datetime )
+            t1 += datetime.timedelta( days=dt )
 
         ref = Reference(
             zp_id = coadd_ds.zp.id,
-            provenance_id = self.ref_prov.id
+            provenance_id = self.ref_prov.id,
+            validity_start=t0,
+            validity_end=t1
         )
 
         if self.pars.save_new_refs:
@@ -685,11 +1158,24 @@ def main():
                          help="RA to make a reference for; decimal degrees.  See description above." )
     parser.add_argument( "-i", "--image", type=str, default=None,
                          help="filepath or uuid of image to make a reference for." )
+    parser.add_argument( "-z", "--image-zp-prov-id", type=str, default=None, help="See description above." )
     parser.add_argument( "--minra", type=float, default=None, help="See description above." )
     parser.add_argument( "--maxra", type=float, default=None, help="See description above." )
     parser.add_argument( "--mindec", type=float, default=None, help="See description above." )
     parser.add_argument( "--maxdec", type=float, default=None, help="See description above." )
     parser.add_argument( "-f", "--filter", type=str, required=True, help="Filter name." )
+    parser.add_argument( "-n", "--no-build", default=False, action="store_true",
+                         help="Don't build a reference if one isn't found" )
+    parser.add_argument( "-l", "--list-images", default=False, action="store_true",
+                         help=( "List the images that are combined into the ref.  If --no-build is True, "
+                                "list the images that would have been combined into the ref even if a "
+                                "ref is not built." ) )
+    parser.add_argument( "-v", "--verbose", default=False, action="store_true",
+                         help="Set log level to DEBUG (default INFO)" )
+
+    # TODO : add arugments that let us override what's in the config file?  Or just rely on config file?
+    # (Probably we want this, so we can do one-offs, but put in warnings or require a --override-config
+    # so that we don't do it willy-nilly.)
     # parser.add_argument( "-n", "--name", required=True, help="Name of refset" )
     # parser.add_argument( "-d", "--description", default="",
     #                      help="Description of refset.  Only used if the refset is newly created." )
@@ -699,46 +1185,72 @@ def main():
     # parser.add_argument( "-e", "--end-time", type=str, default=None,
     #                      help=( "YYYY-MM-DDTHH:MM:SS (may omit THH:MM:SS).  Only use images taken "
     #                             "before this time (inclusive)" ) )
-    # TODO : add arugments that let us override what's in the config file?  Or just rely on config file?
-    # (Probably we want this, so we can do one-offs, but put in warnings or require a --override-config
-    # so that we don't do it willy-nilly.)
 
     args = parser.parse_args()
+    kwargs = vars(args).copy()
 
-    # TODO : Process arguments that override the config file
+    SCLogger.setLevel( "DEBUG" if kwargs['verbose'] else "INFO" )
+    del kwargs['verbose']
 
-    if args.image is not None:
-        if any( x is not None for x in [ args.ra, args.dec, args.minra, args.maxra, args.mindec, args.maxdec ] ):
-            raise ValueError( "Cannot specify image and any of ra/dec/minra/maxra/mindec/maxdec" )
+    kwargs['do_not_build'] = kwargs['no_build']
+    kwargs['identify_even_if_not_building'] = kwargs['list_images']
+    del kwargs['no_build']
+    del kwargs['list_images']
 
-        with SmartSession() as session:
-            img = Image.get_by_id( args.image, session=session )
-            if img is None:
-                img = session.query( Image ).filter( filepath=args.image ).first()
-        if img is None:
-            raise RuntimeError( f"Cound not find image {args.image}" )
-        # TODO : pass arguments that override config arguments
-        refmaker = RefMaker()
-        refmaker.run( image=img, filter=args.filter )
+    refmaker = RefMaker()
 
-    elif args.ra is not None:
-        if args.dec is None:
-            raise ValueError( "Must give dec if giving ra" )
-        if any( x is not None for x in [ args.image, args.minra, args.maxra, args.mindec, args.maxdec ] ):
-            raise ValueError( "When specifying ra/dec, cannot specify any of image/minra/maxra/mindec/maxdec" )
-        refmaker = RefMaker()
-        refmaker.run( ra=args.ra, dec=args.dec, filter=args.filter )
+    # TODO : Process arguments that override the config file.  (See TODO above.)
 
-    elif args.minra is not None:
-        if any( x is None for x in [ args.maxra, args.mindec, args.maxdec ] ):
-            raise ValueError( "Must give all of minra, maxra, mindec, maxdec." )
-        if any( x is not None for x in [ args.image, args.ra, args.dec ] ):
-            raise ValueError( "Cannot give image or ra/dec with minra/maxra/mindec/maxdec" )
-        refmaker = RefMaker()
-        refmaker.run( minra=args.minra, maxra=args.maxra, mindec=args.mindec, maxdec=args.maxdec, filter=args.filter )
+    ref = refmaker.run( **kwargs )
+
+    if ref is None:
+        SCLogger.warning( "No ref built or returned." )
 
     else:
-        raise ValueError( "Must give one of --image, (--ra and --dec), or (--minra, --maxra, --mindec, and --maxdec)" )
+        with PGDB( dictcursor=True ) as pgdb:
+            q = sql.SQL( textwrap.dedent(
+                """\
+                SELECT i.filepath, i.filter, i.section_id, i._type, b.noise, p.fwhm_pixels, z.zp,
+                       ARRAY_AGG(subim.filepath) AS compimages
+                FROM refs r
+                INNER JOIN zero_points z ON r.zp_id=z._id
+                INNER JOIN world_coordinates w ON z.wcs_id=w._id
+                INNER JOIN source_lists s ON w.sources_id=s._id
+                INNER JOIN backgrounds b ON b.sources_id=s._id
+                INNER JOIN psfs p ON p.sources_id=s._id
+                INNER JOIN images i ON s.image_id=i._id
+                INNER JOIN image_coadd_component comp ON comp.coadd_image_id=i._id
+                INNER JOIN zero_points compz ON compz._id=comp.zp_id
+                INNER JOIN world_coordinates compw ON compw._id=compz.wcs_id
+                INNER JOIN source_lists comps ON comps._id=compw.sources_id
+                INNER JOIN images subim ON subim._id=comps.image_id
+                WHERE r._id={refid} AND z.provenance_id={zpprov}
+                GROUP BY i.filepath, i.filter, i.section_id, i._type, b.noise, p.fwhm_pixels, z.zp
+                """
+            ) ).format( refid=ref.id, zpprov=refmaker.coadd_provs['photocal'].id )
+            rows = pgdb.execute( q )
+
+        if len( rows ) != 1:
+            raise RuntimeError( "This should not happen." )
+        row = rows[0]
+
+        # Signal = 10^(zp-m)/2.5 * 0.9375 [ where 0.9375 is the fraction of a Gaussian in a 1FWHM radius ]
+        # Noise = sqrt( π * fhwm² * noise² )
+        # So m = zp - 2.5 * log10( S/N * √π * fwhm * noise / 0.9375 )
+        limag = row['zp'] - 2.5 * np.log10( 5. * np.sqrt(np.pi) * row['fwhm_pixels'] * row['noise'] / 0.9375 )
+
+        strio = io.StringIO()
+        strio.write( f"Combined reference: {row['filepath']}\n" )
+        strio.write( f"      section={row['section_id']}, filter={row['filter']}, zp={row['zp']:.2f}, "
+                     f"skyσ={row['noise']:.1f}, fwhm={row['fwhm_pixels']:.2f} pix\n" )
+        strio.write( f"      5σ limiting magnitude is, maybe, {limag:.2f}\n" )
+        nlsp = '\n        '
+        strio.write( f"      Combined {len(row['compimages'])} images:\n{nlsp.join(row['compimages'])}" )
+        SCLogger.info( strio.getvalue() )
+
+        typ = ImageTypeConverter.to_string( row['_type'] )
+        if typ != 'ComSci':
+            SCLogger.warning( f"Coadd image has type {typ}, expected ComSci." )
 
 
 # ======================================================================

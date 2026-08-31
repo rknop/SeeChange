@@ -9,26 +9,32 @@ import sys
 import math
 import io
 import re
+import datetime
 import pathlib
 import logging
 import base64
 import uuid
+import textwrap
+import itertools
 
 import numpy
 import h5py
 import PIL
 import astropy.time
 import astropy.visualization
+from astropy.io import fits
+from psycopg import sql
 
 import flask
+import flask.logging
 import flask_session
 
 from util.config import Config
 from util.util import asUUID
-from models.base import PsycopgConnection
+from models.enums_and_bitflags import ImageTypeConverter
+from models.base import PsycopgConnection, PGDB
 from models.deepscore import DeepScoreSet
 from models.fakeset import FakeSet, FakeAnalysis
-from models.report import Report
 
 sys.path.insert( 0, pathlib.Path(__name__).resolve().parent )
 from baseview import BaseView
@@ -187,169 +193,159 @@ class Projects( BaseView ):
 # ======================================================================
 
 class Exposures( BaseView ):
-    def do_the_things( self ):
-        data = { 'startdate': None,
-                 'enddate': None,
-                 'provenancetag': None,
-                 'projects': None,
-                }
-        if flask.request.is_json:
-            data.update( flask.request.json )
-
+    def do_the_things( self, provenancetag, argstr=None ):
+        data = self.argstr_to_args( argstr, { 'startdate': None,
+                                              'enddate': None,
+                                              'projects': None,
+                                             } )
         app.logger.debug( f"After parsing, data = {data}" )
         t0 = None if data['startdate'] is None else astropy.time.Time( data['startdate'], format='isot' ).mjd
         t1 = None if data['enddate'] is None else astropy.time.Time( data['enddate'], format='isot' ).mjd
         app.logger.debug( f"t0 = {t0}, t1 = {t1}" )
 
-        with PsycopgConnection() as conn:
-            cursor = conn.cursor()
-
+        with PGDB( dictcursor=True ) as pgdb:
             # Gonna do this in three steps.  First, get all the images with
             #  counts of source lists and counts of measurements in a temp
             #  table, then do the sums and things on that temp table.
-            # Filtering on provenance tags makes this more complicated, so
-            #  we'll do a different query if we're doing that.  Truthfully,
-            #  asking for all provenance tags is going to be a mess for the
-            #  user....  perhaps we should disable it?
-            subdict = {}
-            if data['provenancetag'] is None:
-                q = ( 'SELECT e._id, e.filepath, e.mjd, e.airmass, e.target, e.project, '
-                      '       e._filter, e.filter_array, e.exp_time, '
-                      '       i._id AS imgid, i.fwhm_estimate as fwhm_estimate, '
-                      '       i.lim_mag_estimate as lim_mag_estimate, '
-                      '       s._id AS subid, sl._id AS slid, ssl.num_sources, '
-                      '       COUNT(m._id) AS num_measurements '
-                      'INTO TEMP TABLE temp_imgs '
-                      'FROM exposures e '
-                      'LEFT JOIN images i ON i.exposure_id=e._id '
-                      'LEFT JOIN source_lists sl ON sl.image_id=i._id '
-                      'LEFT JOIN world_coordinates w ON w.sources_id=sl._id '
-                      'LEFT JOIN zero_points z ON z.wcs_id=w._id '
-                      'LEFT JOIN image_subtraction_components isc ON isc.zp_id=z._id '
-                      'LEFT JOIN images s ON isc.image_id=s._id '
-                      'LEFT JOIN source_lists ssl ON ssl.image_id=s._id '
-                      'LEFT JOIN cutouts cu ON cu.sources_id=sl._id '
-                      'LEFT JOIN measurement_sets ms ON ms.cutouts_id=cu._id '
-                      'LEFT JOIN measurements m ON m.measurementset_id=ms._id '
-                      'GROUP BY e._id, i._id, s._id, ssl._id '
-                     )
-            else:
-                q = ( 'SELECT e._id, e.filepath, e.mjd, e.airmass, e.target, e._filter, e.project, '
-                      '       e.filter_array, e.exp_time, '
-                      '       i._id AS imgid, i.fwhm_estimate as fwhm_estimate, '
-                      '       i.lim_mag_estimate as lim_mag_estimate, '
-                      '       s._id AS subid, ssl._id AS slid, ssl.num_sources, '
-                      '       COUNT(m._id) AS num_measurements '
-                      'INTO TEMP TABLE temp_imgs '
-                      'FROM exposures e '
-                      'LEFT JOIN ( '
-                      '  SELECT im._id, im.exposure_id, im.fwhm_estimate, im.lim_mag_estimate FROM images im '
-                      '  INNER JOIN provenance_tags impt ON impt.provenance_id=im.provenance_id '
-                      '                                  AND impt.tag=%(provtag)s '
-                      ') i ON i.exposure_id=e._id '
-                      'LEFT JOIN ( '
-                      '  SELECT sli._id, sli.image_id FROM source_lists sli '
-                      '  INNER JOIN provenance_tags slipt ON slipt.provenance_id=sli.provenance_id '
-                      '                                   AND slipt.tag=%(provtag)s '
-                      ') sl ON sl.image_id=i._id '
-                      'LEFT JOIN ('
-                      '  SELECT wc._id, wc.sources_id FROM world_coordinates wc '
-                      '  INNER JOIN provenance_tags wcpt ON wcpt.provenance_id=wc.provenance_id '
-                      '                                  AND wcpt.tag=%(provtag)s '
-                      ') w ON w.sources_id=sl._id '
-                      'LEFT JOIN ('
-                      '  SELECT zp._id, zp.wcs_id FROM zero_points zp '
-                      '  INNER JOIN provenance_tags zppt ON zppt.provenance_id=zp.provenance_id '
-                      '                                  AND zppt.tag=%(provtag)s '
-                      ') z ON z.wcs_id=w._id '
-                      'LEFT JOIN ( '
-                      '  SELECT su._id, isc.new_zp_id FROM images su '
-                      '  INNER JOIN provenance_tags supt ON supt.provenance_id=su.provenance_id '
-                      '                                  AND supt.tag=%(provtag)s '
-                      '  INNER JOIN image_subtraction_components isc ON su._id=isc.image_id '
-                      ') s ON s.new_zp_id=z._id '
-                      'LEFT JOIN ( '
-                      '  SELECT ssli._id, ssli.image_id, ssli.num_sources FROM source_lists ssli '
-                      '  INNER JOIN provenance_tags sslpt ON sslpt.provenance_id=ssli.provenance_id '
-                      '                                   AND sslpt.tag=%(provtag)s '
-                      ') ssl ON ssl.image_id=s._id '
-                      'LEFT JOIN ( '
-                      '  SELECT cu._id, cu.sources_id FROM cutouts cu '
-                      '  INNER JOIN provenance_tags cupt ON cu.provenance_id=cupt.provenance_id '
-                      '                                  AND cupt.tag=%(provtag)s '
-                      ') c ON c.sources_id=ssl._id '
-                      'LEFT JOIN ( '
-                      '  SELECT sms._id, sms.cutouts_id FROM measurement_sets sms '
-                      '  INNER JOIN provenance_tags mspt ON sms.provenance_id=mspt.provenance_id '
-                      '                                  AND mspt.tag=%(provtag)s '
-                      ') ms ON ms.cutouts_id=c._id '
-                      'LEFT JOIN measurements m ON m.measurementset_id=ms._id '
-                      'INNER JOIN provenance_tags ept ON ept.provenance_id=e.provenance_id AND ept.tag=%(provtag)s '
-                     )
-                subdict['provtag'] = data['provenancetag']
+            q = sql.SQL( textwrap.dedent(
+                """\
+                SELECT e._id, e.filepath, e.mjd, e.airmass, e.target, e._type, e._filter, e.project,
+                       e.filter_array, e.exp_time,
+                       i._id AS imgid, i.fwhm_estimate as fwhm_estimate,
+                       i.lim_mag_estimate as lim_mag_estimate,
+                       s._id AS subid, ssl._id AS slid, ssl.num_sources,
+                       ms.num_measurements
+                INTO TEMP TABLE temp_imgs
+                FROM exposures e
+                LEFT JOIN (
+                  SELECT im._id, im.exposure_id, im.fwhm_estimate, im.lim_mag_estimate FROM images im
+                  INNER JOIN provenance_tags impt ON impt.provenance_id=im.provenance_id
+                                                  AND impt.tag={provtag}
+                ) i ON i.exposure_id=e._id
+                LEFT JOIN (
+                  SELECT sli._id, sli.image_id FROM source_lists sli
+                  INNER JOIN provenance_tags slipt ON slipt.provenance_id=sli.provenance_id
+                                                   AND slipt.tag={provtag}
+                ) sl ON sl.image_id=i._id
+                LEFT JOIN (
+                  SELECT wc._id, wc.sources_id FROM world_coordinates wc
+                  INNER JOIN provenance_tags wcpt ON wcpt.provenance_id=wc.provenance_id
+                                                  AND wcpt.tag={provtag}
+                ) w ON w.sources_id=sl._id
+                LEFT JOIN (
+                  SELECT zp._id, zp.wcs_id FROM zero_points zp
+                  INNER JOIN provenance_tags zppt ON zppt.provenance_id=zp.provenance_id
+                                                  AND zppt.tag={provtag}
+                ) z ON z.wcs_id=w._id
+                LEFT JOIN (
+                  SELECT su._id, isc.new_zp_id FROM images su
+                  INNER JOIN provenance_tags supt ON supt.provenance_id=su.provenance_id
+                                                  AND supt.tag={provtag}
+                  INNER JOIN image_subtraction_components isc ON su._id=isc.image_id
+                ) s ON s.new_zp_id=z._id
+                LEFT JOIN (
+                  SELECT ssli._id, ssli.image_id, ssli.num_sources FROM source_lists ssli
+                  INNER JOIN provenance_tags sslpt ON sslpt.provenance_id=ssli.provenance_id
+                                                   AND sslpt.tag={provtag}
+                ) ssl ON ssl.image_id=s._id
+                LEFT JOIN (
+                  SELECT cu._id, cu.sources_id FROM cutouts cu
+                  INNER JOIN provenance_tags cupt ON cu.provenance_id=cupt.provenance_id
+                                                  AND cupt.tag={provtag}
+                ) c ON c.sources_id=ssl._id
+                LEFT JOIN (
+                  SELECT sms._id, sms.cutouts_id, COUNT(m._id) AS num_measurements
+                  FROM measurement_sets sms
+                  INNER JOIN provenance_tags mspt ON sms.provenance_id=mspt.provenance_id
+                                                  AND mspt.tag={provtag}
+                  INNER JOIN measurements m ON m.measurementset_id=sms._id
+                  GROUP BY sms._id, sms.cutouts_id
+                ) ms ON ms.cutouts_id=c._id
+                INNER JOIN provenance_tags ept ON ept.provenance_id=e.provenance_id AND ept.tag={provtag}
+                """
+            ) ).format( provtag=provenancetag )
             if ( data['projects'] is not None ) or ( t0 is not None ) or ( t1 is not None ):
-                q += 'WHERE '
-                _and = ''
+                _and = sql.SQL( "WHERE" )
                 if data['projects'] is not None:
-                    q += f'{_and}e.project=ANY(%(projects)s) '
-                    subdict['projects'] = data['projects']
-                    _and = 'AND '
+                    q += sql.SQL( "{_and} e.project=ANY(ARRAY[{projects}]))\n"
+                                 ).format( _and=_and, projects=sql.SQL(",".join(data['projects'])) )
+                    _and = sql.SQL ("  AND" )
                 if t0 is not None:
-                    q += f'{_and}e.mjd >= %(t0)s '
-                    subdict['t0'] = t0
-                    _and = 'AND '
+                    q += sql.SQL( "{_and} e.mjd >= {t0}\n" ).format( _and=_and, t0=t0 )
+                    _and = sql.SQL( "  AND" )
                 if t1 is not None:
-                    q += f'{_and}e.mjd <= %(t1)s '
-                    subdict['t1'] = t1
-                    _and = 'AND '
-
-            q += 'GROUP BY e._id, i._id, i.fwhm_estimate, i.lim_mag_estimate, s._id, ssl._id, ssl.num_sources '
-
-            cursor.execute( q, subdict )
+                    q += sql.SQL( "{_and} e.mjd <= {t1}\n" ).format( _and=_and, t1=t1 )
+                    _and = sql.SQL( "  AND" )
+            app.logger.debug( "Exposures getting images and counts of measurements" )
+            pgdb.execute_nofetch( q )
 
             # Now run a second query to count and sum those things
             # These numbers will be wrong (double-counts) if not filtering on a provenance tag, or if the
             #   provenance tag includes multiple provenances for a given step!
-            q = ( 'SELECT t._id, t.filepath, t.mjd, t.airmass, t.target, t.project, '
-                  '  t._filter, t.filter_array, t.exp_time, '
-                  '  AVG(t.fwhm_estimate) AS seeingavg, AVG(t.lim_mag_estimate) AS limmagavg, '
-                  '  COUNT(t.subid) AS num_subs, SUM(t.num_sources) AS num_sources, '
-                  '  SUM(t.num_measurements) AS num_measurements '
-                  'INTO TEMP TABLE temp_imgs_2 '
-                  'FROM temp_imgs t '
-                  'GROUP BY t._id, t.filepath, t.mjd, t.airmass, t.target, t.project, '
-                  '         t._filter, t.filter_array, t.exp_time'
-                 )
+            q = sql.SQL( textwrap.dedent(
+                """\
+                SELECT t._id, t.filepath, t.mjd, t.airmass, t.target, t.project,
+                       t._type, t._filter, t.filter_array, t.exp_time,
+                       AVG(t.fwhm_estimate) as seeingavg,
+                       AVG(t.lim_mag_estimate) AS limmagavg,
+                       SUM( CASE WHEN t.subid IS NULL THEN 0 ELSE 1 END ) AS num_subs,
+                       SUM( CASE WHEN t.num_sources IS NULL THEN 0 ELSE t.num_sources END ) AS num_sources,
+                       SUM( CASE WHEN t.num_measurements IS NULL THEN 0 ELSE num_measurements END )
+                         AS num_measuREMENTS
+                INTO TEMP TABLE temp_imgs_2
+                FROM temp_imgs t
+                GROUP BY t._id, t.filepath, t.mjd, t.airmass, t.target, t.project,
+                         t._type, t._filter, t.filter_array, t.exp_time
+                """
+            ) )
+            app.logger.debug( "Exposures summing images and measurements" )
+            pgdb.execute_nofetch( q )
 
-            cursor.execute( q )
+            # Previous one inserted into a temp table because we will also
+            #   need to use it to join in the reports query.  Also,
+            #   at some point in the future, we might be able to have
+            #   the reports join do everything and only need to get
+            #   results at the end of that.
+            app.logger.debug( "Exposures getting results" )
+            exposureinfo = pgdb.execute( "SELECT * FROM temp_imgs_2" )
 
-            # Run a third query to count reports.  Because there might be
-            #   lots of reports for the same exposure, we're just going to
-            #   count the latest one that matches the expected provenance tag.
-            # WORRY : all of these join shenanigans (in particular, the one
-            #   that pokes into the jsonb column) may get really slow when
-            #   tables are big.  Think about that.
-            subdict = {}
-            q = ( 'SELECT t._id, t.filepath, t.mjd, t.airmass, t.target, t.project, '
-                  '  t._filter, t.filter_array, t.exp_time, '
-                  '  t.seeingavg, t.limmagavg, t.num_subs, t.num_sources, t.num_measurements, '
-                  '  SUM( CASE WHEN r.success THEN 1 ELSE 0 END ) as n_successim, '
-                  '  SUM( CASE WHEN r.error_message IS NOT NULL THEN 1 ELSE 0 END ) AS n_errors '
-                  'FROM temp_imgs_2 t '
-                  'LEFT JOIN ( ' )
-            subq, subsubdict = Report.query_for_reports( prov_tag=data['provenancetag'],
-                                                         fields=[ 'exposure_id', 'success', 'error_message' ] )
-            q += subq
-            subdict.update( subsubdict )
-            q += ') r ON r.exposure_id=t._id '
-            # I wonder if making a primary key on the temp table would be more efficient than
-            #    all these columns in GROUP BY?  Investigate this.
-            q += ( 'GROUP BY t._id, t.filepath, t.mjd, t.airmass, t.target, t.project, t._filter, t.filter_array, '
-                   '  t.exp_time, t.seeingavg, t.limmagavg, t.num_subs, t.num_sources, t.num_measurements '
-                   'ORDER BY t.mjd, t._filter, t.filter_array ')
-
-            cursor.execute( q, subdict  )
-            columns = { cursor.description[i][0]: i for i in range(len(cursor.description)) }
+            # Run a third query to count reports.  Tried using
+            #   models/report.py::Report.query_for_reports, but it
+            #   was horribly slow as it exploded a JSON and then
+            #   sorted it all even though it wasn't necessary.
+            #   I might be able to make that better.  But, for now,
+            #   just pull down *all* reports, and filter in python.
+            #   This is still horribly slow because we fetch way too much,
+            #   at least if there have been lots of reruns for exposures,
+            #   which is the case as of this writing.
+            app.logger.debug( f"Getting provenance tags for {provenancetag}" )
+            rows = pgdb.execute( sql.SQL( "SELECT provenance_id FROM provenance_tags WHERE tag={tag}" )
+                                 .format( tag=provenancetag ) )
+            provids = set( r['provenance_id'] for r in rows )
+            app.logger.debug( "Exposures getting reports" )
+            q = sql.SQL( textwrap.dedent(
+                """\
+                SELECT r.*
+                FROM temp_imgs_2 t
+                INNER JOIN reports r ON t._id=r.exposure_id
+                ORDER BY t._id, r.section_id, r.start_time DESC
+                """
+            ) )
+            reportinfo = pgdb.execute( q )
+            # Filter the reports so that we only keep ones where all of the process
+            #   provenance ids are the right ones, keeping just the latest report
+            #   that matches for any given id and section.
+            app.logger.debug( "Exposures filtering reports" )
+            exp_errors = { e['_id']: 0 for e in exposureinfo }
+            exp_successim = { e['_id']: 0 for e in exposureinfo }
+            curid = ( None, None )
+            for row in reportinfo:
+                if ( row['exposure_id'], row['section_id'] ) == curid:
+                    continue
+                if all( v in provids for v in row['process_provid'].values() ):
+                    curid = ( row['exposure_id'], row['section_id'] )
+                    exp_errors[ row['exposure_id'] ] += 1 if row['error_message'] is not None else 0
+                    exp_successim[ row['exposure_id'] ] += 1 if row['success'] else 0
 
             ids = []
             name = []
@@ -357,6 +353,7 @@ class Exposures( BaseView ):
             airmass = []
             target = []
             project = []
+            imgtype = []
             filtername = []
             exp_time = []
             seeingavg = []
@@ -368,33 +365,35 @@ class Exposures( BaseView ):
             n_errors = []
 
             slashre = re.compile( '^.*/([^/]+)$' )
-            for row in cursor.fetchall():
-                ids.append( row[columns['_id']] )
-                match = slashre.search( row[columns['filepath']] )
+            for row in exposureinfo:
+                ids.append( row['_id'] )
+                match = slashre.search( row['filepath'] )
                 if match is None:
-                    name.append( row[columns['filepath']] )
+                    name.append( row['filepath'] )
                 else:
                     name.append( match.group(1) )
-                mjd.append( row[columns['mjd']] )
-                airmass.append( row[columns['airmass']] )
-                target.append( row[columns['target']] )
-                project.append( row[columns['project']] )
-                app.logger.debug( f"filter={row[columns['_filter']]} type {row[columns['_filter']]}; "
-                                  f"filter_array={row[columns['filter_array']]} type {row[columns['filter_array']]}" )
-                filtername.append( row[columns['_filter']] )
-                exp_time.append( row[columns['exp_time']] )
-                seeingavg.append( row[columns['seeingavg']] )
-                limmagavg.append( row[columns['limmagavg']] )
-                n_subs.append( row[columns['num_subs']] )
-                n_sources.append( row[columns['num_sources']] )
-                n_measurements.append( row[columns['num_measurements']] )
-                n_successim.append( row[columns['n_successim']] )
-                n_errors.append( row[columns['n_errors']] )
+                mjd.append( row['mjd'] )
+                airmass.append( row['airmass'] )
+                target.append( row['target'] )
+                project.append( row['project'] )
+                # app.logger.debug( f"filter={row['_filter']} type {row['_filter']}; "
+                #                   f"filter_array={row['filter_array']} type {row['filter_array']}" )
+                imgtype.append( ImageTypeConverter.to_string( row['_type'] ) )
+                filtername.append( row['_filter'] )
+                exp_time.append( row['exp_time'] )
+                seeingavg.append( row['seeingavg'] )
+                limmagavg.append( row['limmagavg'] )
+                n_subs.append( row['num_subs'] )
+                n_sources.append( row['num_sources'] )
+                n_measurements.append( row['num_measurements'] )
+                n_successim.append( exp_successim[ row['_id'] ] )
+                n_errors.append( exp_errors[ row['_id'] ] )
 
+            app.logger.debug( "Exposures returning" )
             return { 'status': 'ok',
                      'startdate': t0,
                      'enddate': t1,
-                     'provenance_tag': data['provenancetag'],
+                     'provenance_tag': provenancetag,
                      'projects': data['projects'],
                      'exposures': {
                          'id': ids,
@@ -403,6 +402,7 @@ class Exposures( BaseView ):
                          'airmass': airmass,
                          'project': project,
                          'target': target,
+                         'imgtype': imgtype,
                          'filter': filtername,
                          'exp_time': exp_time,
                          'seeingavg': seeingavg,
@@ -418,237 +418,248 @@ class Exposures( BaseView ):
 
 # ======================================================================
 
+class ImageData( BaseView ):
+    def do_the_things( self, expid, provtag, sectionid, sub=0 ):
+        q = sql.SQL( textwrap.dedent(
+            """\
+            SELECT {t}.filepath
+            FROM images i
+            INNER JOIN provenance_tags t ON i.provenance_id=t.provenance_id AND t.tag={provtag}
+            """
+        ) ).format( provtag=provtag, t=sql.Identifier('sub' if sub else 'i') )
+        if sub:
+            q += sql.SQL( textwrap.dedent(
+                """\
+                INNER JOIN (
+                   SELECT s._id, s.image_id
+                   FROM source_lists s
+                   INNER JOIN provenance_tags t ON s.provenance_id=t.provenance_id AND t.tag={provtag}
+                ) s ON s.image_id=i._id
+                INNER JOIN (
+                   SELECT w._id, w.sources_id
+                   FROM world_coordinates w
+                   INNER JOIN provenance_tags t ON w.provenance_id=t.provenance_id AND t.tag={provtag}
+                ) w ON w.sources_id=s._id
+                INNER JOIN (
+                   SELECT z._id, z.wcs_id
+                   FROM zero_points z
+                   INNER JOIN provenance_tags t ON z.provenance_id=t.provenance_id AND t.tag={provtag}
+                ) z ON z.wcs_id=w._id
+                INNER JOIN (
+                   SELECT i._id, i.filepath, isc.new_zp_id AS newzpid
+                   FROM images i
+                   INNER JOIN image_subtraction_components isc ON i._id=isc.image_id
+                   INNER JOIN provenance_tags t ON i.provenance_id=t.provenance_id AND t.tag={provtag}
+                ) sub ON sub.newzpid=z._id
+                """
+            ) ).format( expid=expid, secid=sectionid, provtag=provtag )
+        q += sql.SQL( textwrap.dedent(
+            """\
+            WHERE i.exposure_id={expid} AND i.section_id={secid}
+            """
+        ) ).format( expid=expid, secid=sectionid )
+
+        with PGDB( dictcursor=True ) as pgdb:
+            rows = pgdb.execute( q )
+            filepath = rows[0]['filepath'] if len(rows) > 0 else None
+
+        if filepath is None:
+            return f"No {'subtraction' if sub else 'image'} for exposure {expid} section {sectionid}", 422
+
+        else:
+            cfg = Config.get()
+            # We're assuming file naming convention, whereas we should probably call a function.
+            #   But, I think the only function we have right now is get_fullpath, which will
+            #   make it relative to data_dir... augh, thought required.
+            for fz, hdun in zip( [ '', '.fz' ], [ 0, 1 ] ):
+                fullpath = pathlib.Path( cfg.value( 'archive.local_read_dir' ) ) / f'{filepath}.image.fits{fz}'
+                if fullpath.is_file():
+                    with fits.open( fullpath ) as hdu:
+                        # The convention for rkWebUtil ImView is little-endian 32-bit floats
+                        data = hdu[hdun].data.astype( "<f4" )
+                    barf = bytearray( 4 * data.shape[0] * data.shape[1] + 4 )
+                    barf[0] = data.shape[0] % 256
+                    barf[1] = data.shape[0] // 256
+                    barf[2] = data.shape[1] % 256
+                    barf[3] = data.shape[1] // 256
+                    barf[4:] = data.data
+                    app.logger.debug( f"Returning {len(barf)-4} bytes for a {data.shape[0]}×{data.shape[1]} image" )
+                    return bytes(barf)
+
+            return f"Failed to find image {filepath}.image.fits[.fz]", 422
+
+
+# ======================================================================
+
 class ExposureImages( BaseView ):
     def do_the_things( self, expid, provtag ):
-        with PsycopgConnection() as conn:
-            cursor = conn.cursor()
+        with PGDB( dictcursor=True ) as pgdb:
+            q = sql.SQL( "SELECT *, substring(filepath FROM '/?([^/]+)$/') AS filename\n"
+                         "FROM exposures WHERE _id={expid}" ).format( expid=expid )
+            rows = pgdb.execute( q )
+            if len(rows) == 0:
+                raise ValueError( f"Unknown exposure {expid}" )
+            if len(rows) > 1:
+                raise RuntimeError( f"More than one exposure with id {expid}; this should never happen." )
+            exposure_info = rows[0]
 
-            # Going to do this in a few steps again.  Might be able to write one
-            # bigass query, but it's probably more efficient to use temp tables.
-            # Easier to build the queries that way too.
+            q = sql.SQL( textwrap.dedent(
+                """\
+                SELECT i._id, i.filter, i.section_id, i.filepath,
+                       i.fwhm_estimate, i.lim_mag_estimate, i.zero_point_estimate,
+                       substring( i.filepath FROM '/?([^/]+)$' ) AS filename,
+                       s._id IS NOT NULL AS has_sources,
+                       w._id IS NOT NULL AS has_wcs,
+                       z._id IS NOT NULL AS has_zp,
+                       sub._id IS NOT NULL AS has_sub,
+                       sub._id AS subid,
+                       CASE WHEN sub._id IS NULL THEN NULL
+                            ELSE substring( sub.filepath FROM '/?([^/]+)$') END AS subfilename,
+                       dets.ncutout,
+                       dets.ngoodmeas,
+                       dets.nmeas
+                FROM (
+                   SELECT i._id, i.filter, i.section_id, i.filepath,
+                          i.fwhm_estimate, i.lim_mag_estimate, i.zero_point_estimate
+                   FROM images i
+                   INNER JOIN provenance_tags t ON i.provenance_id=t.provenance_id
+                   WHERE i.exposure_id={expid}
+                     AND t.tag={provtag}
+                ) i
+                LEFT JOIN (
+                   SELECT s._id, s.image_id, s.num_sources
+                   FROM source_lists s
+                   INNER JOIN provenance_tags t ON s.provenance_id=t.provenance_id AND t.tag={provtag}
+                ) s on s.image_id=i._id
+                LEFT JOIN (
+                   SELECT w._id, w.sources_id
+                   FROM world_coordinates w
+                   INNER JOIN provenance_tags t ON w.provenance_id=t.provenance_id AND t.tag={provtag}
+                ) w ON w.sources_id=s._id
+                LEFT JOIN (
+                   SELECT z._id, z.wcs_id
+                   FROM zero_points z
+                   INNER JOIN provenance_tags t ON z.provenance_id=t.provenance_id AND t.tag={provtag}
+                ) z ON z.wcs_id=w._id
+                LEFT JOIN (
+                   SELECT i._id, i.filepath, isc.new_zp_id AS newzpid
+                   FROM images i
+                   INNER JOIN image_subtraction_components isc ON i._id=isc.image_id
+                   INNER JOIN provenance_tags t ON i.provenance_id=t.provenance_id AND t.tag={provtag}
+                ) sub ON sub.newzpid=z._id
+                LEFT JOIN (
+                   SELECT s.image_id, s.num_sources AS ncutout, ms._id,
+                          SUM( CASE WHEN m.is_bad THEN 0 ELSE 1 END ) AS ngoodmeas,
+                          COUNT( m._id ) AS nmeas
+                   FROM source_lists s
+                   INNER JOIN cutouts c ON c.sources_id=s._id
+                   INNER JOIN measurement_sets ms ON ms.cutouts_id=c._id
+                   INNER JOIN measurements m ON m.measurementset_id=ms._id
+                   INNER JOIN provenance_tags t ON ms.provenance_id=t.provenance_id AND t.tag={provtag}
+                   GROUP BY s.image_id, s.num_sources, ms._id
+                ) dets ON dets.image_id=sub._id
+                ORDER BY i.section_id
+                """
+            ) ).format( provtag=provtag, expid=expid )
+            imagerows = pgdb.execute( q )
 
-            subdict = { 'expid': str(expid), 'provtag': provtag }
+            # Get reports
+            # We want the reports were all the provenances in
+            #   process_provid are tagged with the right provenance tag.
+            #   Report.query_for_reports is supposed to be cleverl SQL
+            #   that does all this server side, but I
+            #   suspect^H^H^H^H^H^H^H know it has performance problems.
+            #   TODO look into that.  In the mean time, just pull down
+            #   ALL the reports for ALL of the epxosures, and filter in
+            #   python
+            allreports = pgdb.execute( sql.SQL( "SELECT * FROM reports WHERE exposure_id={expid}\n"
+                                                "ORDER BY modified DESC" )
+                                       .format( expid=expid ) )
 
-            # Step 0: Get exposure information
-            q = cursor.execute( "SELECT * FROM exposures WHERE _id=%(expid)s", subdict )
-            columns = { cursor.description[i][0]: i for i in range(len(cursor.description)) }
-            exposure_info = cursor.fetchone()
-            if exposure_info is None:
-                return { 'status': 'error',
-                         'error': f"Unknown exposure {str(expid)}" }
-            exposure_info = { c: exposure_info[columns[c]] for c in columns.keys() }
+            # ...aaaaand, we have to get the provenance tags for all the provenances
+            #    so we can figure out which ones are OK
+            allprovs = set( itertools.chain( *( r['process_provid'].values() for r in allreports ) ) )
+            rows = pgdb.execute( sql.SQL( "SELECT provenance_id FROM provenance_tags\n"
+                                          "WHERE tag={tag} AND provenance_id=ANY(ARRAY[{provs}])" )
+                                 .format( tag=provtag, provs=sql.SQL(",").join( allprovs ) ) )
+            okprovs = set( r['provenance_id'] for r in rows )
 
-            # Step 1: collect image info into temp_exposure_images
-            q = ( 'SELECT i._id, i.filepath, i.ra, i.dec, i.gallat, i.exposure_id, i.section_id, i.fwhm_estimate, '
-                  '       i.zero_point_estimate, i.lim_mag_estimate, i.bkg_mean_estimate, i.bkg_rms_estimate '
-                  'INTO TEMP TABLE temp_exposure_images '
-                  'FROM images i '
-                  'INNER JOIN provenance_tags ipt ON ipt.provenance_id=i.provenance_id '
-                  'WHERE i.exposure_id=%(expid)s '
-                  '  AND ipt.tag=%(provtag)s '
-                 )
-            #  app.logger.debug( f"exposure_images finding images; query: {cursor.mogrify(q,subdict)}" )
-            cursor.execute( q, subdict )
-            cursor.execute( "ALTER TABLE temp_exposure_images ADD PRIMARY KEY(_id)" )
-            # ****
-            # cursor.execute( "SELECT COUNT(*) FROM temp_exposure_images" )
-            # app.logger.debug( f"Got {cursor.fetchone()[0]} images" )
-            # ****
+            reports = [ r for r in allreports if all( v in okprovs for v in r['process_provid'].values() ) ]
 
-            # Step 2: count measurements by joining temp_exposure_images to many things.
-            q = ( 'SELECT i._id, s._id AS subid, ssl.num_sources AS numsources, COUNT(m._id) AS nummeasurements '
-                  'INTO TEMP TABLE temp_exposure_images_counts '
-                  'FROM temp_exposure_images i '
-                  'LEFT JOIN ( '
-                  '  SELECT sli._id, sli.image_id FROM source_lists sli '
-                  '  INNER JOIN provenance_tags slipt ON slipt.provenance_id=sli.provenance_id '
-                  '                                   AND slipt.tag=%(provtag)s '
-                  ') sl ON sl.image_id=i._id '
-                  'LEFT JOIN ( '
-                  '  SELECT wcsi._id, wcsi.sources_id FROM world_coordinates wcsi '
-                  '  INNER JOIN provenance_tags wcsipt ON wcsipt.provenance_id=wcsi.provenance_id '
-                  '                                    AND wcsipt.tag=%(provtag)s '
-                  ') wcs ON wcs.sources_id=sl._id '
-                  'LEFT JOIN ( '
-                  '  SELECT zpi._id, zpi.wcs_id FROM zero_points zpi '
-                  '  INNER JOIN provenance_tags zpipt ON zpipt.provenance_id=zpi.provenance_id '
-                  '                                   AND zpipt.tag=%(provtag)s '
-                  ') zp ON zp.wcs_id=wcs._id '
-                  'LEFT JOIN image_subtraction_components isc ON isc.new_zp_id=zp._id '
-                  'LEFT JOIN ( '
-                  '   SELECT si._id, si.is_sub FROM images si '
-                  '   INNER JOIN provenance_tags sipt ON sipt.provenance_id=si.provenance_id '
-                  '                                   AND sipt.tag=%(provtag)s '
-                  ') s ON s.is_sub AND s._id=isc.image_id '
-                  'LEFT JOIN ( '
-                  '  SELECT ssli._id, ssli.image_id, ssli.num_sources FROM source_lists ssli '
-                  '  INNER JOIN provenance_tags sslpt ON sslpt.provenance_id=ssli.provenance_id '
-                  '                                   AND sslpt.tag=%(provtag)s '
-                  ') ssl ON ssl.image_id=s._id '
-                  'LEFT JOIN ('
-                  '  SELECT cu._id, cu.sources_id FROM cutouts cu '
-                  '  INNER JOIN provenance_tags cupt ON cupt.provenance_id=cu.provenance_id AND cupt.tag=%(provtag)s '
-                  ') c ON c.sources_id=ssl._id '
-                  'LEFT JOIN ( '
-                  '  SELECT sms._id, sms.cutouts_id FROM measurement_sets sms '
-                  '  INNER JOIN provenance_tags mspt ON mspt.provenance_id=sms.provenance_id AND mspt.tag=%(provtag)s '
-                  ') ms ON ms.cutouts_id=c._id '
-                  'LEFT JOIN measurements m ON m.measurementset_id=ms._id '
-                  'GROUP BY i._id, s._id, ssl.num_sources '
-                 )
-            # app.logger.debug( f"exposure_images counting sources: query {cursor.mogrify(q,subdict)}" )
-            cursor.execute( q, subdict )
-            # We will get an error here if there are multiple rows for a given image.
-            # (Which is good; there shouldn't be multiple rows!  There should only be
-            # one (e.g.) source list child of the image for a given provenance tag, etc.)
-            cursor.execute( "ALTER TABLE temp_exposure_images_counts ADD PRIMARY KEY(_id)" )
-            # ****
-            # cursor.execute( "SELECT COUNT(*) FROM temp_exposure_images_counts" )
-            # app.logger.debug( f"Got {cursor.fetchone()[0]} rows with counts" )
-            # ****
+        # Attach reports to imagerows.  There could be more than one per image because we might have
+        #   stopped and started different stages, so try to merge them
+        for imagerow in imagerows:
+            myreports = [ r for r in reports if r['section_id'] == imagerow['section_id'] ]
+            if len(myreports) == 0:
+                imagerow['report'] = { 'exposure_id': None,
+                                       'section_id': None,
+                                       'start_time': datetime.datetime( 1970, 1, 1 ),
+                                       'finish_time': None,
+                                       'success': False,
+                                       'node_id': None,
+                                       'cluster_id': None,
+                                       'error_type': None,
+                                       'error_step': None,
+                                       'error_message': None,
+                                       'warnings': None,
+                                       'process_memory': {},
+                                       'process_runtime': {},
+                                       'progress_steps_bitflag': 0,
+                                       'products_exist_bitflag': 0,
+                                       'products_committed_bitflag': 0,
+                                       'created_at': datetime.datetime( 1970, 1, 1 ),
+                                       'modiifed': datetime.datetime( 1970, 1, 1 ),
+                                       '_id': None,
+                                       'image_id': None,
+                                       'process_provid': None
+                                      }
+            else:
+                imagerow['report'] = myreports[0]
+                for report in myreports[1:]:
+                    if ( ( imagerow['report']['warnings'] is not None ) and
+                         ( len(imagerow['report']['warnings']) > 0 ) and
+                         ( report['warnings'] is not None ) and
+                         ( len(report['warnings']) > 0 )
+                        ):
+                        imagerow['report']['warnings'] = ( report['warnings'] +
+                                                           '\n***|***|***\n' +
+                                                           imagerow['report']['warnings'] )
+                    imagerow['report']['process_memory'].update( report['process_memory'] )
+                    imagerow['report']['process_runtime'].update( report['process_runtime'] )
+                    imagerow['report']['progress_steps_bitflag'] &= report['progress_steps_bitflag']
+                    imagerow['report']['products_exist_bitflag'] &= report['products_exist_bitflag']
+                    imagerow['report']['products_committed_bitflag'] &= report['products_committed_bitflag']
 
-            # Step 3: join to the report table.  Because we might have multiple reports
-            #   for the same exposure/section/provenance tag, pick just the latest.
-            #
-            # This mess is very similar to the mess in Exposures, to make sure we're selecting
-            #   the right reports.
 
-            q = ( 'SELECT i._id, r.error_step, r.error_type, r.error_message, r.warnings, r.start_time, r.finish_time, '
-                  '       r.process_memory, r.process_runtime, r.progress_steps_bitflag, r.products_exist_bitflag '
-                  'INTO TEMP TABLE temp_exposure_images_reports '
-                  'FROM temp_exposure_images i '
-                  'INNER JOIN ( '
-                  '  SELECT DISTINCT ON(re.exposure_id, re.section_id) re.exposure_id, re.section_id, '
-                  '         re.error_step, re.error_type, re.error_message, re.warnings, '
-                  '         re.process_memory, re.process_runtime, '
-                  '         re.progress_steps_bitflag, re.products_exist_bitflag, '
-                  '         re.start_time, re.finish_time '
-                  '  FROM ( SELECT re1.exposure_id, re1.section_id, re1.error_step, re1.error_type, re1.error_message, '
-                  '                re1.warnings, re1.process_memory, re1.process_runtime, re1.progress_steps_bitflag, '
-                  '                re1.products_exist_bitflag, re1.start_time, re1.finish_time, '
-                  '                array_agg(%(provtag)s=ANY(re1.tags)) as gotem '
-                  '         FROM ( SELECT re2.exposure_id, re2.section_id, re2.error_step, re2.error_type, '
-                  '                       re2.error_message, re2.warnings, re2.process_memory, re2.process_runtime, '
-                  '                       re2.progress_steps_bitflag, re2.products_exist_bitflag, re2.start_time, '
-                  '                       re2.finish_time, array_agg(re2.tag) AS tags '
-                  '                FROM ( SELECT DISTINCT ON( re3._id, x.key, r3pt.tag ) '
-                  '                              re3._id, re3.exposure_id, re3.section_id, re3.error_step, '
-                  '                              re3.error_type, re3.error_message, re3.warnings, re3.process_memory, '
-                  '                              re3.process_runtime, re3.progress_steps_bitflag, '
-                  '                              re3.products_exist_bitflag, re3.start_time, re3.finish_time, '
-                  '                              x.key AS process, r3pt.tag '
-                  '                        FROM reports re3 '
-                  '                        CROSS JOIN jsonb_each_text( re3.process_provid ) x '
-                  '                        INNER JOIN provenance_tags r3pt ON x.value=r3pt.provenance_id '
-                  '                        ORDER BY re3._id, r3pt.tag '
-                  '                     ) re2 '
-                  '                GROUP BY ( re2.exposure_id, re2.section_id, re2.error_step, re2.error_type, '
-                  '                           re2.error_message, re2.warnings, re2.process_memory, '
-                  '                           re2.process_runtime, re2.progress_steps_bitflag, '
-                  '                           re2.products_exist_bitflag, re2.start_time, re2.finish_time ) '
-                  '              ) re1 '
-                  '         GROUP BY ( re1.exposure_id, re1.section_id, re1.error_step, re1.error_type, '
-                  '                    re1.error_message, re1.warnings, re1.process_memory, re1.process_runtime, '
-                  '                    re1.progress_steps_bitflag, re1.products_exist_bitflag, re1.start_time, '
-                  '                    re1.finish_time ) '
-                  '       ) re '
-                  '  WHERE true=ALL(gotem) '
-                  '  ORDER BY re.exposure_id, re.section_id, re.start_time DESC '
-                  ') r ON r.exposure_id=i.exposure_id AND r.section_id=i.section_id ' )
-            # app.logger.debug( f"exposure_images getting reports; query {cursor.mogrify(q,subdict)}" )
-            cursor.execute( q, subdict )
-            # Again, we will get an error here if there are multiple rows for a given image.
-            #   Because of the distinct on exposure_id/section_id, I don't think that should happen.
-            cursor.execute( "ALTER TABLE temp_exposure_images_reports ADD PRIMARY KEY(_id)" )
-            # ****
-            # cursor.execute( "SELECT COUNT(*) FROM temp_exposure_images_reports" )
-            # app.logger.debug( f"Got {cursor.fetchone()[0]} rows with reports" )
-            # ****
+        retval = { 'status': 'ok',
+                   'provenancetag': provtag,
+                   'exposure': exposure_info,
+                   'images': imagerows }
 
-            cursor.execute( "SELECT t1.*, t2.*, t3.* "
-                            "FROM temp_exposure_images t1 "
-                            "LEFT JOIN temp_exposure_images_counts t2 ON t1._id=t2._id "
-                            "LEFT JOIN temp_exposure_images_reports t3 ON t1._id=t3._id "
-                            "ORDER BY t1.section_id" )
-            columns = { cursor.description[i][0]: i for i in range(len(cursor.description)) }
-            rows = cursor.fetchall()
-            # app.logger.debug( f"exposure_images got {len(rows)} rows from the final query." )
-
-            # Calculate average seeing and average limiting magnitude
-            totfwhm = 0.
-            nfwhm = 0
-            totlimmag = 0.
-            nlimmag = 0
-            for row in rows:
-                if row[columns['fwhm_estimate']] is not None:
-                    totfwhm += row[columns['fwhm_estimate']]
-                    nfwhm += 1
-                if row[columns['lim_mag_estimate']] is not None:
-                    totlimmag += row[columns['lim_mag_estimate']]
-                    nlimmag += 1
-            exposure_info['seeingavg'] = None if nfwhm == 0 else totfwhm / nfwhm
-            exposure_info['limmagavg'] = None if nlimmag == 0 else totlimmag / nlimmag
-
-            fields = ( '_id', 'ra', 'dec', 'gallat', 'section_id', 'fwhm_estimate', 'zero_point_estimate',
-                       'lim_mag_estimate', 'bkg_mean_estimate', 'bkg_rms_estimate',
-                       'numsources', 'nummeasurements', 'subid',
-                       'error_step', 'error_type', 'error_message', 'warnings', 'start_time', 'finish_time',
-                       'process_memory', 'process_runtime', 'progress_steps_bitflag', 'products_exist_bitflag' )
-
-            retval = { 'status': 'ok',
-                       'provenancetag': provtag,
-                       'exposure': exposure_info,
-                       'name': [] }
-
-            for field in fields :
-                rfield = 'id' if field == '_id' else field
-                retval[ rfield ] = []
-
-            lastimg = -1
-            multiples = set()
-            slashre = re.compile( '^.*/([^/]+)$' )
-            for row in rows:
-                if row[columns['_id']] == lastimg:
-                    multiples.add( row[columns['id']] )
-                    continue
-                lastimg = row[columns['_id']]
-
-                match = slashre.search( row[columns['filepath']] )
-                retval['name'].append( row[columns['filepath']] if match is None else match.group(1) )
-                for field in fields:
-                    rfield = 'id' if field == '_id' else field
-                    if ( rfield in ( 'start_time', 'finish_time' ) ) and ( row[columns[field]] is not None ):
-                        retval[rfield].append( row[columns[field]].isoformat() )
-                    else:
-                        retval[rfield].append( row[columns[field]] )
-
-            if len(multiples) != 0:
-                return { 'status': 'error',
-                         'error': ( f'Some images had multiple rows in the query; this probably indicates '
-                                    f'that the reports table is not well-formed.  Or maybe something else. '
-                                    f'offending images: {multiples}' ) }
-
-            # app.logger.debug( f"exposure_images returning {retval}" )
-            return retval
+        # app.logger.debug( f"exposure_images returning {retval}" )
+        return retval
 
 
 # ======================================================================
 
 class ExposureReports( BaseView ):
     def do_the_things( self, expid, provtag ):
-        q, subdict = Report.query_for_reports( provtag )
-        q = f"SELECT e._id,r.* FROM exposures e INNER JOIN ({q}) r ON e._id=r.exposure_id WHERE e._id=%(expid)s"
-        subdict['expid'] = expid
-        with PsycopgConnection() as conn:
-            cursor = conn.cursor()
-            cursor.execute( q, subdict )
-            columns = { cursor.description[i][0]: i for i in range( len(cursor.description) ) }
-            rows = cursor.fetchall()
-
+        # As in Exposures, going to pull down ALL reports for the exposure,
+        #  then filter later.
+        with PGDB( dictcursor=True ) as pgdb:
+            rows = pgdb.execute( sql.SQL( "SELECT provenance_id FROM provenance_tags WHERE tag={provtag}" )
+                                 .format( provtag=provtag ) )
+            okprovs = set( r['provenance_id'] for r in rows )
+            rows = pgdb.execute( sql.SQL( "SELECT * FROM reports WHERE exposure_id={expid}\n"
+                                          "ORDER BY start_time DESC" )
+                                 .format( expid=expid ) )
             retval = { 'status': 'ok',
                        'reports': {} }
             for row in rows:
-                retval['reports'][row[columns['section_id']]] = { c: row[columns[c]] for c in columns }
+                if row['section_id'] in retval['reports']:
+                    continue
+                if all( v in okprovs for v in row['process_provid'].values() ):
+                    retval['reports'][row['section_id']] = row
 
             return retval
 
@@ -670,9 +681,7 @@ class PngCutoutsForSubImage( BaseView ):
             app.logger.debug( f"Looking for cutouts from exposure {exporsubid} ({'with' if nomeas else 'without'} "
                               f"missing-measurements)" )
 
-        with PsycopgConnection() as conn:
-            cursor = conn.cursor()
-
+        with PGDB( dictcursor=True ) as pgdb:
             # Figure out the subids, zeropoints, backgrounds, and apertures we need
 
             subids = []
@@ -683,25 +692,27 @@ class PngCutoutsForSubImage( BaseView ):
             aperradses = {}
             apercorses = {}
 
-            q = ( 'SELECT s._id AS subid, zp.zp, zp.dzp, zp.aper_cor_radii, zp.aper_cors, '
-                  '  i._id AS imageid, i.bkg_mean_estimate '
-                  'FROM images s '
-                  )
-            if not issubid:
-                # If we got an exposure id, make sure only to get subtractions of the requested provenance
-                q += 'INNER JOIN provenance_tags spt ON s.provenance_id=spt.provenance_id AND spt.tag=%(provtag)s '
-            # Track our way back up from the subtraction to the new image
-            q +=  ( 'INNER JOIN image_subtraction_components isc ON isc.image_id=s._id '
-                    'INNER JOIN zero_points zp ON isc.new_zp_id=zp._id '
-                    'INNER JOIN world_coordinates wcs ON zp.wcs_id=wcs._id '
-                    'INNER JOIN source_lists sl ON wcs.sources_id=sl._id '
-                    'INNER JOIN images i ON sl.image_id=i._id ' )
+            q = sql.SQL( textwrap.dedent(
+                """\
+                SELECT s._id AS subid, zp.zp, zp.dzp, zp.aper_cor_radii, zp.aper_cors,
+                  i._id AS imageid, i.bkg_mean_estimate
+                FROM images s
+                INNER JOIN image_subtraction_components isc ON isc.image_id=s._id
+                INNER JOIN zero_points zp ON isc.new_zp_id=zp._id
+                INNER JOIN world_coordinates wcs ON zp.wcs_id=wcs._id
+                INNER JOIN source_lists sl ON wcs.sources_id=sl._id
+                INNER JOIN images i ON sl.image_id=i._id
+                """
+            ) )
 
             if issubid:
-                q += 'WHERE s._id=%(subid)s '
-                cursor.execute( q, { 'subid': exporsubid, 'provtag': provtag } )
-                cols = { cursor.description[i][0]: i for i in range(len(cursor.description)) }
-                rows = cursor.fetchall()
+                # Don't need to check provenances; got a subtraction id, so going back
+                #   from there will be unique
+                q += sql.SQL( "WHERE s._id={subid}\n" ).format( subid=exporsubid )
+                # ****
+                app.logger.debug( f"Sending query {q.as_string()}" )
+                # ****
+                rows = pgdb.execute( q )
                 if len(rows) > 1:
                     app.logger.error( f"Multiple rows for subid {exporsubid}, provenance tag {provtag} "
                                       f"is not well-defined, or something else is wrong." )
@@ -713,101 +724,112 @@ class PngCutoutsForSubImage( BaseView ):
                     return { 'status': 'error',
                              'error': f"Coudn't find zeropoint for subid {exporsubid}" }
                 subids.append( exporsubid )
-                zps[exporsubid] = rows[0][cols['zp']]
-                dzps[exporsubid] = rows[0][cols['dzp']]
-                imageids[exporsubid] = asUUID( rows[0][cols['imageid']] )
-                newbkgs[exporsubid] = rows[0][cols['bkg_mean_estimate']]
-                aperradses[exporsubid] = rows[0][cols['aper_cor_radii']]
-                apercorses[exporsubid] = rows[0][cols['aper_cors']]
+                zps[exporsubid] = rows[0]['zp']
+                dzps[exporsubid] = rows[0]['dzp']
+                imageids[exporsubid] = asUUID( rows[0]['imageid'] )
+                newbkgs[exporsubid] = rows[0]['bkg_mean_estimate']
+                aperradses[exporsubid] = rows[0]['aper_cor_radii']
+                apercorses[exporsubid] = rows[0]['aper_cors']
             else:
-                q += ( 'INNER JOIN exposures e ON i.exposure_id=e._id '
-                       'WHERE e._id=%(expid)s ORDER BY i.section_id  ' )
-                # Don't need to verify provenance here, because there's just going to be one expid!
-                cursor.execute( q, { 'expid': exporsubid, 'provtag': provtag } )
-                cols = { cursor.description[i][0]: i for i in range(len(cursor.description)) }
-                rows = cursor.fetchall()
+                # If we got an exposure ID, we have to make sure only to get subtractions of the
+                #   requested provenance tag
+                q += sql.SQL( textwrap.dedent(
+                    """\
+                    INNER JOIN provenance_tags spt ON s.provenance_id=spt.provenance_id
+                                                  AND spt.tag={provtag}
+                    INNER JOIN exposures e ON i.exposure_id=e._id
+                    WHERE e._id={expid} ORDER BY i.section_id
+                    """
+                ) ).format( provtag=provtag, expid=exporsubid )
+                rows = pgdb.execute( q )
                 for row in rows:
-                    subid = asUUID( row[cols['subid']] )
+                    subid = asUUID( row['subid'] )
                     if ( subid in subids ):
                         app.logger.error( f"subid {subid} showed up more than once in zp query" )
                         return { 'status': 'error',
                                  'error': f"subid {subid} showed up more than once in zp query" }
                     subids.append( subid )
-                    zps[subid] = row[cols['zp']]
-                    dzps[subid] = row[cols['dzp']]
-                    imageids[subid] = asUUID( row[cols['imageid']] )
-                    newbkgs[subid] = row[cols['bkg_mean_estimate']]
-                    aperradses[subid] = row[cols['aper_cor_radii']]
-                    apercorses[subid] = row[cols['aper_cors']]
+                    zps[subid] = row['zp']
+                    dzps[subid] = row['dzp']
+                    imageids[subid] = asUUID( row['imageid'] )
+                    newbkgs[subid] = row['bkg_mean_estimate']
+                    aperradses[subid] = row['aper_cor_radii']
+                    apercorses[subid] = row['aper_cors']
             app.logger.debug( f'Got {len(subids)} subtractions.' )
 
-            app.logger.debug( f"Getting cutouts files for sub images {subids}" )
-            q = ( 'SELECT c.filepath,s._id AS subimageid,sl.filepath AS sources_path,s.section_id '
-                  'FROM cutouts c '
-                  'INNER JOIN provenance_tags cpt ON cpt.provenance_id=c.provenance_id AND cpt.tag=%(provtag)s '
-                  'INNER JOIN source_lists sl ON c.sources_id=sl._id '
-                  'INNER JOIN images s ON sl.image_id=s._id '
-                  'WHERE s._id=ANY(%(subids)s) ' )
-            # Don't have to check the source_lists provenance tag because the cutouts provenance
-            # tag cut will limit us to a single source_list for each cutouts
-            cursor.execute( q, { 'subids': subids, 'provtag': provtag } )
-            cols = { cursor.description[i][0]: i for i in range(len(cursor.description)) }
-            rows = cursor.fetchall()
-            sectionids = { asUUID( c[cols['subimageid']] ): c[cols['section_id']] for c in rows }
-            cutoutsfiles = { asUUID( c[cols['subimageid']] ): c[cols['filepath']] for c in rows }
-            # sourcesfiles = { asUUID( c[cols['subimageid']] ): c[cols['sources_path']] for c in rows }
-            app.logger.debug( f"Got: {cutoutsfiles}" )
-
-            # app.logger.debug( f"Getting measurements for sub images {subids}" )
-            app.logger.debug( f"Getting measurements for {len(subids)} sub images" )
-            q = ( 'SELECT m.ra AS measra, m.dec AS measdec, m.index_in_sources, m.best_aperture, '
-                  '       m.flux, m.dflux, m.psfflux, m.dpsfflux, m.is_bad, m.name, m.is_test, '
-                  '       m.score, m._algorithm, m.center_x_pixel, m.center_y_pixel, m.x, m.y, m.gfit_x, m.gfit_y, '
-                  '       m.major_width, m.minor_width, m.position_angle, m.nbadpix, m.negfrac, m.negfluxfrac, '
-                  '       s._id AS subid, s.section_id '
-                  'FROM cutouts c '
-                  'INNER JOIN provenance_tags cpt ON cpt.provenance_id=c.provenance_id AND cpt.tag=%(provtag)s '
-                  'INNER JOIN source_lists sl ON c.sources_id=sl._id '
-                  'INNER JOIN images s ON sl.image_id=s._id '
-                  'INNER JOIN '
-                  '  ( SELECT ms.cutouts_id AS meascutid, meas.index_in_sources, meas.ra, meas.dec, meas.is_bad, '
-                  '           meas.best_aperture, meas.flux_apertures[meas.best_aperture+1] AS flux, '
-                  '           meas.flux_apertures_err[meas.best_aperture+1] AS dflux, '
-                  '           meas.flux_psf AS psfflux, meas.flux_psf_err AS dpsfflux, '
-                  '           meas.center_x_pixel, meas.center_y_pixel, meas.x, meas.y, meas.gfit_x, meas.gfit_y, '
-                  '           meas.major_width, meas.minor_width, meas.position_angle, '
-                  '           meas.nbadpix, meas.negfrac, meas.negfluxfrac, '
-                  '           obj.name, obj.is_test, score.score, score._algorithm '
-                  '    FROM measurements meas '
-                  '    INNER JOIN measurement_sets ms ON meas.measurementset_id=ms._id '
-                  '    INNER JOIN provenance_tags mpt ON ms.provenance_id=mpt.provenance_id AND mpt.tag=%(provtag)s '
-                  '    INNER JOIN objects obj ON meas.object_id=obj._id '
-                  '    LEFT JOIN '
-                  '      ( SELECT ss.measurementset_id, ss._algorithm, s.index_in_sources, s.score FROM deepscores s '
-                  '        INNER JOIN deepscore_sets ss ON s.deepscoreset_id=ss._id '
-                  '        INNER JOIN provenance_tags spt ON spt.provenance_id=ss.provenance_id '
-                  '                                       AND spt.tag=%(provtag)s '
-                  '      ) AS score '
-                  '      ON score.measurementset_id=ms._id AND score.index_in_sources=meas.index_in_sources '
-                 )
-            if not nomeas:
-                q += '    WHERE NOT meas.is_bad '
-            q += ( '   ) AS m ON m.meascutid=c._id '
-                   'WHERE s._id=ANY(%(subids)s) ' )
-            if data['sortby'] == 'fluxdesc_chip_index':
-                q += 'ORDER BY flux DESC NULLS LAST,s.section_id,m.index_in_sources '
-            elif data['sortby'] == 'rbdesc_fluxdesc_chip_index':
-                q += 'ORDER BY is_bad,score DESC NULLS LAST,flux DESC NULLS LAST,s.section_id,m.index_in_sources '
+            if len(subids) == 0:
+                app.loger.debug( "No subtraction images, skipping getting cutouts and measurements." )
+                sectionids = {}
+                cutoutsfiles = {}
+                rows = []
             else:
-                raise RuntimeError( f"Unknown sort criterion {data['sortby']}" )
-            if limit is not None:
-                q += 'LIMIT %(limit)s OFFSET %(offset)s'
-            subdict = { 'subids': subids, 'provtag': provtag, 'limit': limit, 'offset': offset }
-            # app.logger.debug( f"Sending query to get measurements: {cursor.mogrify(q,subdict)}" )
-            cursor.execute( q, subdict )
-            cols = { cursor.description[i][0]: i for i in range(len(cursor.description)) }
-            rows = cursor.fetchall()
-            app.logger.debug( f"Got {len(cols)} columns, {len(rows)} rows" )
+                app.logger.debug( f"Getting cutouts files for sub images {subids}" )
+                q = sql.SQL( textwrap.dedent(
+                    """\
+                    SELECT c.filepath,s._id AS subimageid,sl.filepath AS sources_path,s.section_id
+                    FROM cutouts c
+                    INNER JOIN provenance_tags cpt ON cpt.provenance_id=c.provenance_id AND cpt.tag={provtag}
+                    INNER JOIN source_lists sl ON c.sources_id=sl._id
+                    INNER JOIN images s ON sl.image_id=s._id
+                    WHERE s._id=ANY(ARRAY[{subids}])
+                    """
+                ) ).format( provtag=provtag, subids=sql.SQL(",").join(subids) )
+                rows = pgdb.execute( q )
+                sectionids = { asUUID( r['subimageid'] ): r['section_id'] for r in rows }
+                cutoutsfiles = { asUUID( r['subimageid'] ): r['filepath'] for r in rows }
+                app.logger.debug( f"Got: {len(cutoutsfiles)} cutouts files" )
+
+                # app.logger.debug( f"Getting measurements for sub images {subids}" )
+                app.logger.debug( f"Getting measurements for {len(subids)} sub images" )
+                q = sql.SQL( textwrap.dedent(
+                    """\
+                    SELECT m.ra AS measra, m.dec AS measdec, m.index_in_sources, m.best_aperture,
+                           m.flux, m.dflux, m.psfflux, m.dpsfflux, m.is_bad, m.name, m.is_test,
+                           m.score, m._algorithm, m.center_x_pixel, m.center_y_pixel, m.x, m.y, m.gfit_x, m.gfit_y,
+                           m.major_width, m.minor_width, m.position_angle, m.nbadpix, m.negfrac, m.negfluxfrac,
+                           s._id AS subid, s.section_id
+                    FROM cutouts c
+                    INNER JOIN provenance_tags cpt ON cpt.provenance_id=c.provenance_id AND cpt.tag={provtag}
+                    INNER JOIN source_lists sl ON c.sources_id=sl._id
+                    INNER JOIN images s ON sl.image_id=s._id
+                    INNER JOIN
+                      ( SELECT ms.cutouts_id AS meascutid, meas.index_in_sources, meas.ra, meas.dec, meas.is_bad,
+                               meas.best_aperture, meas.flux_apertures[meas.best_aperture+1] AS flux,
+                               meas.flux_apertures_err[meas.best_aperture+1] AS dflux,
+                               meas.flux_psf AS psfflux, meas.flux_psf_err AS dpsfflux,
+                               meas.center_x_pixel, meas.center_y_pixel, meas.x, meas.y, meas.gfit_x, meas.gfit_y,
+                               meas.major_width, meas.minor_width, meas.position_angle,
+                               meas.nbadpix, meas.negfrac, meas.negfluxfrac,
+                               obj.name, obj.is_test, score.score, score._algorithm
+                        FROM measurements meas
+                        INNER JOIN measurement_sets ms ON meas.measurementset_id=ms._id
+                        INNER JOIN provenance_tags mpt ON ms.provenance_id=mpt.provenance_id AND mpt.tag={provtag}
+                        INNER JOIN objects obj ON meas.object_id=obj._id
+                        LEFT JOIN
+                          ( SELECT ss.measurementset_id, ss._algorithm, s.index_in_sources, s.score FROM deepscores s
+                            INNER JOIN deepscore_sets ss ON s.deepscoreset_id=ss._id
+                            INNER JOIN provenance_tags spt ON spt.provenance_id=ss.provenance_id
+                                                           AND spt.tag={provtag}
+                          ) AS score
+                          ON score.measurementset_id=ms._id AND score.index_in_sources=meas.index_in_sources
+                    """
+                ) ).format( provtag=provtag )
+                if not nomeas:
+                    q += sql.SQL( "    WHERE NOT meas.is_bad\n" )
+                q += sql.SQL( "   ) AS m ON m.meascutid=c._id\n"
+                              "WHERE s._id=ANY(ARRAY[{subids}])\n" ).format( subids=sql.SQL(",").join(subids) )
+                if data['sortby'] == 'fluxdesc_chip_index':
+                    q += sql.SQL( "ORDER BY flux DESC NULLS LAST,s.section_id,m.index_in_sources\n" )
+                elif data['sortby'] == 'rbdesc_fluxdesc_chip_index':
+                    q += sql.SQL( "ORDER BY is_bad,score DESC NULLS LAST,flux DESC NULLS LAST,\n"
+                                  "         s.section_id,m.index_in_sources\n" )
+                else:
+                    raise RuntimeError( f"Unknown sort criterion {data['sortby']}" )
+                if limit is not None:
+                    q += sql.SQL( "LIMIT {limit} OFFSET {offset}" ).format( limit=limit, offset=offset )
+                # app.logger.debug( f"Sending query to get measurements: {cursor.mogrify(q,subdict)}" )
+                rows = pgdb.execute( q )
+                # app.logger.debug( f"Got {len(rows)} rows" )
 
             retval = { 'status': 'ok',
                        'cutouts': {
@@ -930,29 +952,29 @@ class PngCutoutsForSubImage( BaseView ):
                     dflux = None
                     aperrad= 0.
                 else:
-                    retval['cutouts']['x'].append( row[cols['x']] )
-                    retval['cutouts']['y'].append( row[cols['y']] )
-                    retval['cutouts']['gfit_x'].append( row[cols['gfit_x']] )
-                    retval['cutouts']['gfit_y'].append( row[cols['gfit_y']] )
-                    retval['cutouts']['major_width'].append( row[cols['major_width']] )
-                    retval['cutouts']['minor_width'].append( row[cols['minor_width']] )
-                    retval['cutouts']['nbadpix'].append( row[cols['nbadpix']] )
-                    retval['cutouts']['negfrac'].append( row[cols['negfrac']] )
-                    retval['cutouts']['negfluxfrac'].append( row[cols['negfluxfrac']] )
-                    retval['cutouts']['rb'].append( row[cols['score']] )
-                    retval['cutouts']['rbcut'].append( None if row[cols['_algorithm']] is None
-                                                       else DeepScoreSet.get_rb_cut( row[cols['_algorithm']] ) )
-                    retval['cutouts']['is_bad'].append( row[cols['is_bad']] )
-                    retval['cutouts']['objname'].append( row[cols['name']] )
-                    retval['cutouts']['is_test'].append( row[cols['is_test']] )
+                    retval['cutouts']['x'].append( row['x'] )
+                    retval['cutouts']['y'].append( row['y'] )
+                    retval['cutouts']['gfit_x'].append( row['gfit_x'] )
+                    retval['cutouts']['gfit_y'].append( row['gfit_y'] )
+                    retval['cutouts']['major_width'].append( row['major_width'] )
+                    retval['cutouts']['minor_width'].append( row['minor_width'] )
+                    retval['cutouts']['nbadpix'].append( row['nbadpix'] )
+                    retval['cutouts']['negfrac'].append( row['negfrac'] )
+                    retval['cutouts']['negfluxfrac'].append( row['negfluxfrac'] )
+                    retval['cutouts']['rb'].append( row['score'] )
+                    retval['cutouts']['rbcut'].append( None if row['_algorithm'] is None
+                                                       else DeepScoreSet.get_rb_cut( row['_algorithm'] ) )
+                    retval['cutouts']['is_bad'].append( row['is_bad'] )
+                    retval['cutouts']['objname'].append( row['name'] )
+                    retval['cutouts']['is_test'].append( row['is_test'] )
 
-                    if row[cols['psfflux']] is None:
-                        flux = row[cols['flux']]
-                        dflux = row[cols['dflux']]
-                        aperrad = aperradses[subid][ row[cols['best_aperture']] ]
+                    if row['psfflux'] is None:
+                        flux = row['flux']
+                        dflux = row['dflux']
+                        aperrad = aperradses[subid][ row['best_aperture'] ]
                     else:
-                        flux = row[cols['psfflux']]
-                        dflux = row[cols['dpsfflux']]
+                        flux = row['psfflux']
+                        dflux = row['dpsfflux']
                         aperrad = 0.
 
                 if flux is None:
@@ -962,23 +984,23 @@ class PngCutoutsForSubImage( BaseView ):
                     mag = -99
                     dmag = -99
                     if ( zps[subid] > 0 ) and ( flux > 0 ):
-                        mag = -2.5 * math.log10( flux ) + zps[subid] + apercorses[subid][ row[cols['best_aperture']] ]
+                        mag = -2.5 * math.log10( flux ) + zps[subid] + apercorses[subid][ row['best_aperture'] ]
                         # Ignore zp and apercor uncertainties
                         dmag = 1.0857 * dflux / flux
-                    retval['cutouts']['measra'].append( row[cols['measra']] )
-                    retval['cutouts']['measdec'].append( row[cols['measdec']] )
-                    retval['cutouts']['flux'].append( flux )
-                    retval['cutouts']['dflux'].append( dflux )
-                    retval['cutouts']['aperrad'].append( aperrad )
-                    retval['cutouts']['mag'].append( mag )
-                    retval['cutouts']['dmag'].append( dmag )
+                        retval['cutouts']['measra'].append( row['measra'] )
+                        retval['cutouts']['measdec'].append( row['measdec'] )
+                        retval['cutouts']['flux'].append( flux )
+                        retval['cutouts']['dflux'].append( dflux )
+                        retval['cutouts']['aperrad'].append( aperrad )
+                        retval['cutouts']['mag'].append( mag )
+                        retval['cutouts']['dmag'].append( dmag )
 
             # First: put in all the measurements, in the order we got them
             already_done = set()
             for row in rows:
-                subid = asUUID( row[cols['subid']] )
-                index_in_sources = row[ cols['index_in_sources'] ]
-                section_id = row[ cols['section_id'] ]
+                subid = asUUID( row['subid'] )
+                index_in_sources = row['index_in_sources']
+                section_id = row['section_id']
                 append_to_retval( subid, index_in_sources, section_id, row )
                 already_done.add( index_in_sources )
 
@@ -1097,12 +1119,21 @@ class FakeAnalysisData( BaseView ):
 # =====================================================================
 # Create and configure the flask app
 
-cfg = Config.get()
-
 app = flask.Flask( __name__, instance_relative_config=True )
-# app.logger.setLevel( logging.INFO )
-app.logger.setLevel( logging.DEBUG )
 
+# Logger
+_formatter = logging.Formatter( '[%(asctime)s - %(levelname)s] - %(message)s', datefmt='%Y-%m-%d %H:%M:%S' )
+flask.logging.default_handler.setFormatter( _formatter )
+
+# SeeChange Config.  Put logger in debug so we see logs about what config overrides are read.
+app.logger.setLevel( "DEBUG" )
+cfg = Config.get()
+if not cfg.value( "webap.verbose", True ):
+    app.logger.setLevel( "INFO" )
+app.logger.debug( "Set log level to DEBUG" )
+
+
+# Regular flask setup
 secret_key = cfg.value( 'webap.flask_secret_key' )
 if secret_key is None:
     with open( cfg.value( 'webap.flask_secret_key_file' ) ) as ifp:
@@ -1125,6 +1156,7 @@ import rkauth_flask
 import conductor
 import ltcv
 
+# Make sure we have the info we need to connect to the database and send password upate email
 kwargs = {
     'usegroups': True,
     'db_host': cfg.value( 'db.host' ),
@@ -1148,12 +1180,12 @@ if ( kwargs['smtp_password'] ) is None and ( cfg.value('email.smtp_password_file
 
 rkauth_flask.RKAuthConfig.setdbparams( **kwargs )
 
+# Register urls from subapps
 app.register_blueprint( rkauth_flask.bp )
 app.register_blueprint( conductor.bp )
 app.register_blueprint( ltcv.bp )
 
 # Configure urls
-
 urls = {
     "/": MainPage,
     "/provtags": ProvTags,
@@ -1162,9 +1194,12 @@ urls = {
     "/cloneprovtag/<existingtag>/<newtag>/<int:clobber>": CloneProvTag,
     "/provenanceinfo/<provid>": ProvenanceInfo,
     "/projects": Projects,
-    "/exposures": Exposures,
+    "/exposures/<provenancetag>": Exposures,
+    "/exposures/<provenancetag>/<path:argstr>": Exposures,
     "/exposure_images/<expid>/<provtag>": ExposureImages,
     "/exposure_reports/<expid>/<provtag>": ExposureReports,
+    "/image_data/<expid>/<provtag>/<sectionid>": ImageData,
+    "/image_data/<expid>/<provtag>/<sectionid>/<int:sub>": ImageData,
     "/png_cutouts_for_sub_image/<exporsubid>/<provtag>/<int:issubid>/<int:nomeas>": PngCutoutsForSubImage,
     "/png_cutouts_for_sub_image/<exporsubid>/<provtag>/<int:issubid>/<int:nomeas>/<int:limit>": PngCutoutsForSubImage,
     ( "/png_cutouts_for_sub_image/<exporsubid>/<provtag>/<int:issubid>/<int:nomeas>/"

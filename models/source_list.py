@@ -3,6 +3,7 @@ import os
 import numpy as np
 import pandas as pd
 
+from psycopg import sql
 import sqlalchemy as sa
 from sqlalchemy import orm
 from sqlalchemy.ext.hybrid import hybrid_property
@@ -13,7 +14,7 @@ from sqlalchemy.dialects.postgresql import ARRAY
 import astropy.table
 import matplotlib.pyplot as plt
 
-from models.base import Base, SmartSession, UUIDMixin, FileOnDiskMixin, SeeChangeBase, HasBitFlagBadness
+from models.base import Base, UUIDMixin, FileOnDiskMixin, SeeChangeBase, HasBitFlagBadness, PGDB
 from models.image import Image
 from models.enums_and_bitflags import (
     SourceListFormatConverter,
@@ -231,7 +232,7 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         """A numpy array with variances on y position"""
         if self.format == 'sextrfits':
             return self.data['ERRX2WIN_IMAGE']
-        elif self.foramt == 'sepnpy':
+        elif self.format == 'sepnpy':
             # The sep documentation says this is "Second Moment Errors",
             # which may not really be what we want.
             return self.data['erry2']
@@ -245,7 +246,7 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         """A numpy array with variances on x position"""
         if self.format == 'sextrfits':
             return self.data['ERRY2WIN_IMAGE']
-        elif self.foramt == 'sepnpy':
+        elif self.format == 'sepnpy':
             # The sep documentation says this is "Second Moment Errors",
             # which may not really be what we want.
             return self.data['errx2']
@@ -302,19 +303,35 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         some issue with the extraction (which could be deblending, too
         close to the edge, etc.).
 
-        For sextractor, "bad" is anything that has FLAGS != 0, or that
-        has IMAFLAGS_ISO & 0x7fff != 0 (the bitwise AND chosen because
-        empirically many objects have bit 0x8000 set; this probably is
-        an issue having to do with signed vs. unsigned integers, and
-        saving and loading of the FITS files, and should be
-        investigated; Issue #112).
+        For sextractor, "bad" is anything that has a FLAGS bit other
+        than 2⁰ or 2¹ set, or that has IMAFLAGS_ISO & 0x7fff != 0 (the
+        bitwise AND chosen because empirically many objects have bit
+        0x8000 set; this probably is an issue having to do with signed
+        vs. unsigned integers, and saving and loading of the FITS files,
+        and should be investigated; Issue #112).
 
         """
 
         if self.format != 'sextrfits':
             raise NotImplementedError( f"good not currently implemented for format {self.format}" )
 
-        return ( self.data['IMAFLAGS_ISO'] & 0x7fff == 0 ) & ( self.data['FLAGS'] == 0 )
+        # IMAFLAGS_ISO comes from our flags image, and everything is bad. Ignore the top
+        #   bit because we're afraid of signed ints.
+        # SExtractor flags are:
+        #   1   aperture photometry is likely to be biased by neighboring sources
+        #       or by more than 10% of bad pixels in any aperture
+        #   2   the object has been deblended
+        #   4   at least one object pixel is saturated
+        #   8   the isophotal footprint of the detected object is truncated (too close to an image boundary)
+        #  16   at least one photometric aperture is incomplete or corrupted (hitting buffer or memory limits)
+        #  32   the isophotal footprint is incomplete or corrupted (hitting buffer or memory limits)
+        #  64   a memory overflow occurred during deblending
+        # 128   a memory overflow occurred during extraction
+        #
+        # We shouldn't throw out deblended sources, and by and large that also means not throwing
+        #   out things with 2^1 set, even though that is scary.  Throw out all the others
+
+        return ( self.data['IMAFLAGS_ISO'] & 0x7fff == 0 ) & ( self.data['FLAGS'] & 0x7ffc== 0 )
 
     @property
     def is_star( self ):
@@ -797,8 +814,14 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
 
         return arr
 
-    def ds9_regfile( self, regfile, color='green', radius=2, width=2, whichsources='all',
-                     flagbit=0x10, clobber=True ):
+    def ds9_regfile( self, regfile, color='green', radius=2, width=2, sncut=5., whichsources='all', flagbit=0x10,
+                     radcolor={ 'star': (2.0, 'yellow'),
+                                'nostar': (2.0, 'blue' ),
+                                'highsn': (3.0, 'green' ),
+                                'lowsn': (3.0, 'pink' ),
+                                'bad': (2.4, 'red'),
+                                'flagged': (2.8, 'orange') },
+                     clobber=True ):
         """Write a DS9 region file with circles on the sources.
 
         See https://ds9.si.edu/doc/ref/region.html for file format
@@ -814,10 +837,25 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         radius: float
            The radius of the circles in pixels
 
+        radcolor: dict, default None
+           If given, supercedes color and radius.  A dictionary like:
+             { 'star': ( 2, 'yellow'),
+               'nonstar': ( 2, 'blue' ),
+               'highsn': ( 3.0, 'green' ),
+               'lowsn': ( 3.0, 'pink' ),
+               'bad': ( 2.4, 'red' ),
+               'flagged': (2.8,'orange' ),
+              }
+           'star' and 'nonstar' are required, the other are optional.
+           A circle will be drawn for every category that an object
+           matches.  (Since everything is either a star or a nonstar,
+           and those are exclusive, that means everything will apply.)
+
+
         width: float
            The width of the circle line (in whatever unigs DS9 uses)
 
-        whichsources: str or list, including 'all', 'stars', 'nonstars', 'good', 'notgood', 'flagged'
+        whichsources: str or list
            Which objects to write regions for.  If 'all', all of them.
            If 'stars', only the ones for which self.is_star is True.  If
            'nonstar', only the ones for which self.is_star is False.
@@ -829,11 +867,23 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
            self.data['FLAGS'].  This probably only works for
            sextractor-created sources.
 
+           If 'highsn', then only sources with flux/dflux >= sncut are
+           included.
+
+           If 'lowsn', then only sources with flux/dflux < sncut are
+           included.
+
+           (For both 'highsn' and 'lowsn', it uses self.psfflux() if
+           that works, and if not, sources.apfluxapdu().)
+
            Or, make this a list, and then the logical and of the
            *rejection* criteria will be used.  It's easy to end up with
            nothing doing this (e.g. whichsources=['stars', 'nonstars']).
            If you pass an empty list, that's the same as passing "all".
            Passing a list with "all" and something else is gratuitous.
+
+        sncut : float, default 5.
+           The S/N cut to use for "highsn" and "lowsn" in whichsources.
 
         flagbit : int
            A bitfield to bitwise and with self.sources.data['FLAGS']
@@ -851,38 +901,65 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         if any( [ i not in known for i in whichsources ] ):
             raise ValueError( f"whichsources can only include {known}" )
 
-        which = np.full_like( ( self.num_sources, ), True )
+        which = np.full( ( self.num_sources, ), True )
 
-        if 'stars' in whichsources:
-            which = which & self.is_star
-        if 'nonstars' in whichsources:
-            which = which & ( ~self.is_star )
-        if 'good' in whichsources:
-            which = which & self.good
-        if 'notgood' in whichsources:
-            which = which & ~self.good
-        if 'flagged' in whichsources:
-            which = which & ( ( self.data['FLAGS'] & flagbit ) != 0 )
+        if ( 'highsn' in whichsources ) or ( 'lowsn' in whichsources ) or ( radcolor is not None ):
+            try:
+                flux, dflux = self.spffluxadu()
+            except Exception:
+                flux, dflux = self.apfluxadu()
+
+        if 'all' not in whichsources:
+            if 'stars' in whichsources:
+                which = which & self.is_star
+            if 'nonstars' in whichsources:
+                which = which & ( ~self.is_star )
+            if 'good' in whichsources:
+                which = which & self.good
+            if 'notgood' in whichsources:
+                which = which & ~self.good
+            if 'flagged' in whichsources:
+                which = which & ( ( self.data['FLAGS'] & flagbit ) != 0 )
+            if 'higsn' in whichsources:
+                which = which & ( flux / dflux >= sncut )
+            if 'lowsn' in whichsources :
+                which = which & ( flux / dflux < sncut )
+
+        # write with +1 to go from C-coordinates to FITS-coordinates
+        def _circle( ofp, x, y, rad, col, width ):
+            ofp.write( f"image;circle({x+1},{y+1},{rad}) # color={col} width={width}\n" )
+
+        if radcolor is not None:
+            conds = { 'star': self.is_star,
+                      'nonstar': ~self.is_star,
+                      'highsn': ( flux / dflux ) >= sncut,
+                      'lowsn': ( flux / dflux ) < sncut,
+                      'bad': ~self.good,
+                      'flagged': ( self.data['FLAGS'] & flagbit ) != 0
+                     }
 
         with open( regfile, "w" ) as ofp:
-            for x, y, use in zip( self.x, self.y, which ):
+            for i, ( x, y, use )  in enumerate( zip( self.x, self.y, which ) ):
                 if use:
-                    # +1 to go from C-coordinates to FITS-coordinates
-                    ofp.write( f"image;circle({x+1},{y+1},{radius}) # color={color} width={width}\n" )
+                    if radcolor is not None:
+                        for objtype, cond in conds.items():
+                            if ( objtype in radcolor ) and cond[i]:
+                                _circle( ofp, x, y, radcolor[objtype][0], radcolor[objtype][1], width )
+                    else:
+                        _circle( ofp, x, y, radius, color, width )
 
-    def get_upstreams(self, session=None):
-        """Get the image that was used to make this source list. """
-        with SmartSession(session) as session:
-            return session.scalars(sa.select(Image).where(Image._id == self.image_id)).all()
 
-    def get_downstreams(self, session=None):
-        """Get all the data products that are made using this source list.
+    def get_upstream_ids(self, pgdb=None):
+        """Get the id of the image that was used to make this source list. """
+        return [ ( Image, self.image_id ) ]
+
+    def get_downstream_ids(self, pgdb=None):
+        """Get ids of all the data products that are made using this source list.
 
         Only gets immediate downstreams; does not recurse.  (As per the
         docstring in SeeChangeBase.get_downstreams.)
 
-        Returns a list of objects (potentially including Background,
-        PSF, WorldCoordinates, and Cutouts objects).
+        Will include Background, PSF, WorldCorodiantes, and Cutouts
 
         """
 
@@ -893,24 +970,13 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         from models.cutouts import Cutouts
 
         output = []
-        with SmartSession( session ) as sess:
-
-            # PSF (there will only be one)
-            psf = sess.query( PSF ).filter( PSF.sources_id==self.id ).first()
-            if psf is not None:
-                output.append( psf )
-
-            # Backgrounds
-            bkgs = sess.query( Background ).filter( Background.sources_id==self.id ).all()
-            output.extend( list(bkgs) )
-
-            # World Coordinates
-            wcses = sess.query( WorldCoordinates ).filter( WorldCoordinates.sources_id==self.id ).all()
-            output.extend( list(wcses) )
-
-            # Cutouts (will only happen if this is a subtraction)
-            cos = sess.query( Cutouts ).filter( Cutouts.sources_id==self.id ).all()
-            output.extend( list(cos))
+        with PGDB( pgdb ) as pgdb:
+            for model in [ Background, PSF, WorldCoordinates, Cutouts ]:
+                q = sql.SQL( "SELECT _id FROM {tab} WHERE sources_id={me}"
+                            ).format( tab=sql.Identifier( model.__tablename__ ),
+                                      me=self.id )
+                rows, _cols = pgdb.execute( q )
+                output.extend( [ ( model, row[0] ) for row in rows ] )
 
         return output
 

@@ -9,7 +9,7 @@ from astropy.wcs import WCS
 from astropy.io import fits
 
 from util.exceptions import BadMatchException
-from models.base import SmartSession, CODE_ROOT
+from models.base import SmartSession, CODE_ROOT, FourCorners
 from models.image import Image
 from models.world_coordinates import WorldCoordinates
 
@@ -86,46 +86,9 @@ def test_solve_wcs_scamp( ztf_gaia_dr3_excerpt, ztf_datastore_uncommitted, astro
         assert scold.dec.value == pytest.approx( scnew.dec.value, abs=1./3600. )
 
 
-def test_run_scamp( decam_datastore_through_extraction, astrometor ):
-    ds = decam_datastore_through_extraction
 
-    # Get the md5sum and WCS from the image before we do things to it
-    with open(ds.path_to_original_image, "rb") as ifp:
-        md5 = hashlib.md5()
-        md5.update(ifp.read())
-        origmd5 = uuid.UUID(md5.hexdigest())
-
-    xvals = [0, 0, 2047, 2047]
-    yvals = [0, 4095, 0, 4095]
-    with fits.open(ds.path_to_original_image) as hdu:
-        origwcs = WCS(hdu[ds.section_id].header)
-
-    astrometor.pars.cross_match_catalog = 'gaia_dr3'
-    astrometor.pars.solution_method = 'scamp'
-    astrometor.pars.max_catalog_mag = [20.]
-    astrometor.pars.mag_range_catalog = 4.
-    astrometor.pars.min_catalog_stars = 50
-    astrometor.pars.max_resid = 0.15
-    astrometor.pars.crossid_radii = [2.0]
-    astrometor.pars.min_frac_matched = 0.1
-    astrometor.pars.min_matched_stars = 10
-
-    # The datastore should object when it tries to get the provenance for astrometor
-    # params that don't match what we started with
-    with pytest.raises( ValueError, match=( "Passed pars_dict does not match parameters for "
-                                            "internal provenance of astrocal" ) ):
-        ds = astrometor.run(ds)
-
-    # Update the datastore's prov_tree so that it has the provenance we
-    #   want for astrometor.  Unset the datastore's provtag because
-    #   we're kind of cheating here.  (If you're going to edit
-    #   the provenance tree like this, you shouldn't have set
-    #   a provenance tag in the first place, but the fixture did.)
-    ds._provtag = None
-    ds.edit_prov_tree( 'astrocal', process='astrocal', params_dict=astrometor.pars.get_critical_pars() )
-
-    # And now run
-    ds = astrometor.run(ds)
+def verify_astrocal( astrometor, origwcs, ds, origmd5, masked=False ):
+    # Has the side effect of running ds.save_and_commit()
 
     assert astrometor.has_recalculated
 
@@ -133,6 +96,8 @@ def test_run_scamp( decam_datastore_through_extraction, astrometor ):
     # (since we know the one that came in the decam exposure is approximate)
     # BUT, make sure that it's within 40", because the original one, while
     # not great, is *something*
+    xvals = [0, 0, 2047, 2047]
+    yvals = [0, 4095, 0, 4095]
     origscs = origwcs.pixel_to_world( xvals, yvals )
     newscs = ds.wcs.wcs.pixel_to_world( xvals, yvals )
     for origsc, newsc in zip( origscs, newscs ):
@@ -140,6 +105,55 @@ def test_run_scamp( decam_datastore_through_extraction, astrometor ):
         assert not origsc.dec.value == pytest.approx( newsc.dec.value, abs=1./3600. )
         assert origsc.ra.value == pytest.approx( newsc.ra.value, abs=40./3600. )   # cos(dec)...
         assert origsc.dec.value == pytest.approx( newsc.dec.value, abs=40./3600. )
+
+    # Make sure that the four corners are right
+    newras = [ s.ra.value for s in newscs ]
+    newdecs = [ s.dec.value for s in newscs ]
+    newras, newdecs, minra, maxra, mindec, maxdec = FourCorners.sort_radec( newras, newdecs )
+    assert ds.wcs.ra_corner_00 == pytest.approx( newras[0], abs=1.0/3600. )
+    assert ds.wcs.ra_corner_01 == pytest.approx( newras[1], abs=1.0/3600. )
+    assert ds.wcs.ra_corner_10 == pytest.approx( newras[2], abs=1.0/3600. )
+    assert ds.wcs.ra_corner_11 == pytest.approx( newras[3], abs=1.0/3600. )
+    assert ds.wcs.dec_corner_00 == pytest.approx( newdecs[0], abs=1.0/3600. )
+    assert ds.wcs.dec_corner_01 == pytest.approx( newdecs[1], abs=1.0/3600. )
+    assert ds.wcs.dec_corner_10 == pytest.approx( newdecs[2], abs=1.0/3600. )
+    assert ds.wcs.dec_corner_11 == pytest.approx( newdecs[3], abs=1.0/3600. )
+    assert ds.wcs.minra == pytest.approx( minra, abs=1.0/3600. )
+    assert ds.wcs.maxra == pytest.approx( maxra, abs=1.0/3600. )
+    assert ds.wcs.mindec == pytest.approx( mindec, abs=1.0/3600. )
+    assert ds.wcs.maxdec == pytest.approx( maxdec, abs=1.0/3600. )
+
+    if masked:
+        mxvals = [ 50, 50, 1800, 1800 ]
+        myvals = [ 300, 3600, 300, 3600 ]
+    else:
+        # The DECam images are masked around the edges anyway
+        mxvals = [ 15, 15, 2032, 2032 ]
+        myvals = [ 15, 4080, 15, 4080 ]
+    mras, mdecs = ds.wcs.wcs.pixel_to_world_values( mxvals, myvals )
+    mras, mdecs, mminra, mmaxra, mmindec, mmaxdec = FourCorners.sort_radec( mras, mdecs )
+    assert ds.wcs.ra_good_00 == pytest.approx( mras[0], abs=1.0/3600. )
+    assert ds.wcs.ra_good_01 == pytest.approx( mras[1], abs=1.0/3600. )
+    assert ds.wcs.ra_good_10 == pytest.approx( mras[2], abs=1.0/3600. )
+    assert ds.wcs.ra_good_11 == pytest.approx( mras[3], abs=1.0/3600. )
+    assert ds.wcs.dec_good_00 == pytest.approx( mdecs[0], abs=1.0/3600. )
+    assert ds.wcs.dec_good_01 == pytest.approx( mdecs[1], abs=1.0/3600. )
+    assert ds.wcs.dec_good_10 == pytest.approx( mdecs[2], abs=1.0/3600. )
+    assert ds.wcs.dec_good_11 == pytest.approx( mdecs[3], abs=1.0/3600. )
+    assert ds.wcs.good_minra == pytest.approx( mminra, abs=1.0/3600. )
+    assert ds.wcs.good_maxra == pytest.approx( mmaxra, abs=1.0/3600. )
+    assert ds.wcs.good_mindec == pytest.approx( mmindec, abs=1.0/3600. )
+    assert ds.wcs.good_maxdec == pytest.approx( mmaxdec, abs=1.0/3600. )
+
+    # HACK ALERT
+    # The only place masked=True is used is in test_run_astrometry_net, and
+    #   that's after it's wiped the WorldCoordinates and made new ones with
+    #   masks.  In that case, don't check the FITS header again, we've already
+    #   done it.  Really, this should have a different flag, since logically
+    #   "don't check the header" doesn't conect to "check if the good stuff got
+    #   set right for the flags", but they happen to correlate 1:1.
+    if masked:
+        return
 
     # NOTE -- because of the cache, the image may well have the "astro_cal_done" flag
     #  set even though we're using the decam_datastore_through_bg fixture, which doesn't
@@ -198,7 +212,103 @@ def test_run_scamp( decam_datastore_through_extraction, astrometor ):
         assert uuid.UUID( info['md5sum'] ) == foundim.md5sum_components[0]
 
 
+
+
+def test_run_scamp( decam_datastore_through_extraction, astrometor ):
+    ds = decam_datastore_through_extraction
+
+    # Get the md5sum and WCS from the image before we do things to it
+    with open(ds.path_to_original_image, "rb") as ifp:
+        md5 = hashlib.md5()
+        md5.update(ifp.read())
+        origmd5 = uuid.UUID(md5.hexdigest())
+    with fits.open(ds.path_to_original_image) as hdu:
+        origwcs = WCS(hdu[ds.section_id].header)
+
+    astrometor.pars.subconfigs['subconfigs']['extragalactic']['cross_match_catalog'] = 'gaia_dr3'
+    astrometor.pars.subconfigs['subconfigs']['extragalactic']['solution_method'] = 'scamp'
+    astrometor.pars.subconfigs['subconfigs']['extragalactic']['max_catalog_mag'] = [20.]
+    astrometor.pars.subconfigs['subconfigs']['extragalactic']['mag_range_catalog'] = 4.
+    astrometor.pars.subconfigs['subconfigs']['extragalactic']['min_catalog_stars'] = 50
+    astrometor.pars.subconfigs['subconfigs']['extragalactic']['max_resid'] = 0.15
+    astrometor.pars.subconfigs['subconfigs']['extragalactic']['crossid_radii'] = [2.0]
+    astrometor.pars.subconfigs['subconfigs']['extragalactic']['min_frac_matched'] = 0.1
+    astrometor.pars.subconfigs['subconfigs']['extragalactic']['min_matched_stars'] = 10
+
+    # The datastore should object when it tries to get the provenance for astrometor
+    # params that don't match what we started with
+    with pytest.raises( ValueError, match=( "Passed pars_dict does not match parameters for "
+                                            "internal provenance of astrocal" ) ):
+        ds = astrometor.run(ds)
+
+    # Update the datastore's prov_tree so that it has the provenance we
+    #   want for astrometor.  Unset the datastore's provtag because
+    #   we're kind of cheating here.  (If you're going to edit
+    #   the provenance tree like this, you shouldn't have set
+    #   a provenance tag in the first place, but the fixture did.)
+    ds._provtag = None
+    ds.edit_prov_tree( 'astrocal', process='astrocal', params_dict=astrometor.pars.get_critical_pars() )
+
+    # And now run
+    ds = astrometor.run(ds)
+
+    verify_astrocal( astrometor, origwcs, ds, origmd5 )
+
+
 # TODO : test that it fails when it's supposed to
+
+
+def test_run_astrometry_net( decam_datastore_through_extraction, astrometor ):
+    ds = decam_datastore_through_extraction
+
+    # Get the md5sum and WCS from the image before we do things to it
+    with open(ds.path_to_original_image, "rb") as ifp:
+        md5 = hashlib.md5()
+        md5.update(ifp.read())
+        origmd5 = uuid.UUID(md5.hexdigest())
+    with fits.open(ds.path_to_original_image) as hdu:
+        origwcs = WCS(hdu[ds.section_id].header)
+
+    astrometor.pars.solution_method = 'astrometry.net'
+    astrometor.pars.cross_match_catalog = 'astrometry.net'
+    astrometor.pars.astrometry_net_exposure_radec = False
+    astrometor.pars.astrometry_net_image_radec = True
+    astrometor.pars.astrometry_net_radius = 1.2
+
+    # Update the datastore's prov_tree so that it has the provenance we
+    #   want for astrometor.  Unset the datastore's provtag because
+    #   we're kind of cheating here.  (If you're going to edit
+    #   the provenance tree like this, you shouldn't have set
+    #   a provenance tag in the first place, but the fixture did.)
+    ds._provtag = None
+    ds.edit_prov_tree( 'astrocal', process='astrocal', params_dict=astrometor.pars.get_critical_pars() )
+
+    ds = astrometor.run( ds )
+
+    verify_astrocal( astrometor, origwcs, ds, origmd5 )
+
+    # Now mask outa  bunch of the image and see if the "good" fields get set right
+    # (This code is in astro_cal.py outside the call to astrometry.net or scamp,
+    # so test do it here.)
+
+    ds.wcs.delete_from_disk_and_database()
+    ds.wcs = None
+    ds.image.flags[:] = 1
+    ds.image.flags[300:3601, 50:1801] = 0
+    ds = astrometor.run( ds )
+    verify_astrocal( astrometor, origwcs, ds, origmd5, masked=True )
+
+    ds.wcs.delete_from_disk_and_database()
+    ds.wcs = None
+    ds.image.flags[:] = 1
+    ds.image.flags[ 300, 575 ] = 0
+    ds.image.flags[ 3600, 1700 ] = 0
+    ds.image.flags[ 400, 50 ] = 0
+    ds.image.flags[ 3500, 1800 ] = 0
+    ds = astrometor.run( ds )
+    verify_astrocal( astrometor, origwcs, ds, origmd5, masked=True )
+
+    # TODO : test using astrometry_net_exposure_radec
 
 
 def test_warnings_and_exceptions(decam_datastore, astrometor):

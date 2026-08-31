@@ -45,6 +45,8 @@ def test_zeropoint_committing(provenance_base, provenance_extra):
                           target='wallmart',
                           filepath='foo',
                           md5sum=uuid.uuid4(),
+                          width=1024,
+                          height=2048,
                           ra=42.,
                           dec=23.,
                           ra_corner_00=41.9,
@@ -70,6 +72,8 @@ def test_zeropoint_committing(provenance_base, provenance_extra):
         ds.bg.insert()
         ds.wcs = WorldCoordinates( sources_id=ds.sources.id, provenance_id=provenance_base.id,
                                    filepath='foowcs', md5sum=uuid.uuid4() )
+        ds.wcs._fill_bogus_coordinate_fields( ra=ds.image.ra, dec=ds.image.dec, minra=ds.image.minra,
+                                              maxra=ds.image.maxra, mindec=ds.image.mindec, maxdec=ds.image.maxdec )
         ds.wcs.insert()
 
         zp = ZeroPoint(zp=20.1, dzp=0.1)

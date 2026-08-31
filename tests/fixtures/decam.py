@@ -12,8 +12,8 @@ import numpy as np
 from astropy.io import fits
 
 from models.base import SmartSession
-from models.instrument import Instrument, get_instrument_instance
-from models.decam import DECam  # need this import to make sure DECam is added to the Instrument list
+from models.instrument import Instrument
+from models.decam import DECam
 from models.provenance import Provenance
 from models.exposure import Exposure
 from models.image import Image
@@ -58,7 +58,7 @@ def decam_default_calibrators(cache_dir, data_dir):
                     dirs_exist_ok=True,
                 )
 
-        decam = get_instrument_instance( 'DECam' )
+        decam = Instrument.get_instrument_instance( 'DECam' )
         sections = [ 'S2', 'S3', 'N16' ]
         filters = [ 'r', 'i', 'z', 'g']
         for sec in sections:
@@ -195,8 +195,9 @@ def decam_reduced_origin_exposure_loaded_in_db( decam_reduced_origin_exposure_fi
                               'DATE-OBS', 'TIME-OBS', 'MJD-OBS', 'OBJECT', 'PROGRAM',
                               'OBSERVER', 'PROPID', 'FILTER', 'RA', 'DEC', 'HA', 'ZD', 'AIRMASS',
                               'VSUB', 'GSKYPHOT', 'LSKYPHOT' ) }
-        exphdrinfo = Instrument.extract_header_info( hdr, [ 'mjd', 'exp_time', 'filter',
-                                                            'project', 'target' ] )
+        decam = Instrument.get_instrument_instance( 'DECam' )
+        exphdrinfo = decam.extract_header_info( hdr, [ 'mjd', 'exp_time', 'filter',
+                                                       'project', 'target' ] )
         ra = util.radec.parse_sexigesimal_degrees( hdr['RA'], hours=True )
         dec = util.radec.parse_sexigesimal_degrees( hdr['DEC'] )
 
@@ -277,8 +278,9 @@ def decam_exposure_factory(download_url, data_dir, decam_cache_dir):
 
         with fits.open( filename, memmap=True ) as ifp:
             hdr = ifp[0].header
-        exphdrinfo = Instrument.extract_header_info( hdr, [ 'mjd', 'exp_time', 'filter', 'project', 'target',
-                                                            'ra','dec' ] )
+        decam = Instrument.get_instrument_instance( 'DECam' )
+        exphdrinfo = decam.extract_header_info( hdr, [ 'mjd', 'exp_time', 'filter', 'project', 'target',
+                                                       'ra','dec' ] )
 
         exposure = Exposure( filepath=filename, instrument='DECam', **exphdrinfo )
         exposure.save()  # save to archive and get an MD5 sum
@@ -359,23 +361,12 @@ def decam_datastore(
         decam_default_calibrators,  # not used directly, but makes sure this is pre-fetched from cache
         decam_reference,
 ):
-    """Provide a datastore with all the products based on the DECam exposure
-
-    To use this data store in a test where new data is to be generated,
-    simply change the pipeline object's "test_parameter" value to a unique
-    new value, so the provenance will not match and the data will be regenerated.
-
-    EXAMPLE
-    -------
-    extractor.pars.test_parameter = uuid.uuid().hex
-    extractor.run(datastore)
-    assert extractor.has_recalculated is True
-    """
+    """Provide a datastore with all the products based on the DECam exposure."""
     ds = datastore_factory(
         decam_exposure,
         'S2',
         cache_dir=decam_cache_dir,
-        cache_base_name='007/c4d_20211025_044847_S2_r_Sci_JGZHA5',
+        cache_base_name='007/c4d_20211025_044847_S2_r_Sci_QFYCXG',
         overrides={ 'subtraction': { 'refset': 'test_refset_decam' } },
         save_original_image=True,
         provtag='decam_datastore'
@@ -432,7 +423,7 @@ def decam_partial_datastore_factory( datastore_factory, decam_cache_dir,
         mat = re.search( r'^c4d_(?P<yymmdd>\d{6})_(?P<hhmmss>\d{6})_ori\.fits\.fz$', str(exposure.filepath) )
         if mat is None:
             raise ValueError( f"Failed to match {exposure.filepath}" )
-        cache_base_name = f'007/c4d_20{mat.group("yymmdd")}_{mat.group("hhmmss")}_S2_r_Sci_JGZHA5'
+        cache_base_name = f'007/c4d_20{mat.group("yymmdd")}_{mat.group("hhmmss")}_S2_r_Sci_QFYCXG'
 
         ds = datastore_factory(
             exposure,
@@ -668,17 +659,9 @@ def decam_ref_datastore( decam_elais_e1_two_refs_datastore ):
     return decam_elais_e1_two_refs_datastore[0]
 
 
-# TODO -- the provenance upstreams are now wrong after PR #407
-# (It may be possible to go back to refmaker_factory?)
 @pytest.fixture
 def decam_elais_e1_two_references( decam_elais_e1_two_refs_datastore ):
     refs = []
-
-    # This doesn't work right, because the refmaker makes assumptions
-    #    about the provenance of References that are wrong.
-    # prov = maker.refset.provenances[0]
-    # maker = refmaker_factory('test_refset_decam', 'DECam', 'decam_elais_e1_two_references' )
-    # maker.make_refset()
 
     ds = decam_elais_e1_two_refs_datastore[0]
     upstrs = Provenance.get_batch( [ ds.image.provenance_id, ds.sources.provenance_id ] )

@@ -3,7 +3,7 @@ import os
 import time
 import logging
 
-from models.base import SmartSession, PsycopgConnection
+from models.base import SmartSession, PsycopgConnection, PGDB
 from models.knownexposure import KnownExposure
 from models.exposure import Exposure
 from models.image import Image
@@ -13,7 +13,6 @@ from models.world_coordinates import WorldCoordinates
 from models.zero_point import ZeroPoint
 from models.cutouts import Cutouts
 from models.measurements import Measurements, MeasurementSet
-from models.knownexposure import PipelineWorker
 from pipeline.pipeline_exposure_launcher import ExposureLauncher
 
 from util.logger import SCLogger
@@ -116,6 +115,10 @@ def test_exposure_launcher_conductor_through_step( conductor_connector,
     """Make sure ExposureLauncher stops where the conductor tells it to."""
     decam_exposure_name = 'c4d_230702_080904_ori.fits.fz'
 
+    origconductorstatus  = conductor_connector.send( 'conductor/status' )
+    del origconductorstatus['status']
+    del origconductorstatus['lastupdate']
+    del origconductorstatus['configchangetime']
     try:
         unhold_decam_exposure( conductor_connector, decam_exposure_name )
 
@@ -129,7 +132,7 @@ def test_exposure_launcher_conductor_through_step( conductor_connector,
             keid = cursor.fetchone()[0]
 
         elaunch = ExposureLauncher( 'testcluster', 'testnode', numprocs=2, onlychips=['S2', 'N16'], verify=False,
-                                    worker_log_level=logging.DEBUG )
+                                    provtag='test_explau_cond_step', worker_log_level=logging.DEBUG )
         elaunch.register_worker()
         elaunch( max_n_exposures=1, die_on_exception=True )
         verify_exposure_image_etc( numimages=2, numsourcelists=2, numzps=2, numsubs=0 )
@@ -144,26 +147,28 @@ def test_exposure_launcher_conductor_through_step( conductor_connector,
         conductor_connector.send( "/conductor/setknownexposurestate", { 'knownexposure_ids': [ str(keid) ],
                                                                         'state': 'ready' } )
         elaunch = ExposureLauncher( 'testcluster', 'testnode', numprocs=2, onlychips=['S2', 'N16'], verify=False,
-                                    worker_log_level=logging.DEBUG )
+                                    provtag='test_explau_cond_step', worker_log_level=logging.DEBUG )
         elaunch.register_worker()
         elaunch( max_n_exposures=1, die_on_exception=True )
         verify_exposure_image_etc( numimages=2, numsourcelists=2, numzps=2, numsubs=2 )
+
+        # TODO: check that the right provenance tags got created
 
     finally:
         delete_exposure( decam_exposure_name )
 
         # See comment in test_exposure_launcher re: leftover calibrator files
 
-        # Finally, remove the pipelineworker that got created
+        # Finally, remove the pipelineworker and provenance tags that got created
         # (Don't bother cleaning up knownexposures, the fixture will do that)
-        with SmartSession() as session:
-            pws = session.query( PipelineWorker ).filter( PipelineWorker.cluster_id=='testcluster' ).all()
-            for pw in pws:
-                session.delete( pw )
-            session.commit()
+        with PsycopgConnection() as con:
+            cursor = con.cursor()
+            cursor.execute( "DELETE FROM pipelineworkers WHERE cluster_id='testcluster'" )
+            cursor.execute( "DELETE FROM provenance_tags WHERE tag='test_explau_cond_step'" )
+            con.commit()
 
-        # Reset the conductor through step to 'scoring' (the default)
-        conductor_connector.send( "/conductor/updateparameters/throughstep=scoring" )
+        # Reset the conductor through step to how it was when we got here
+        conductor_connector.send( "/conductor/updateparameters", origconductorstatus )
 
 
 # See comment on test_exposure_launcher re: user and admin_user fixtures
@@ -174,6 +179,10 @@ def test_exposure_launcher_through_step( conductor_connector,
     """Make sure that if ExposureLauncher is told to stop at a step *earlier* than conductor, it stops there."""
     decam_exposure_name = 'c4d_230702_080904_ori.fits.fz'
 
+    origconductorstatus  = conductor_connector.send( 'conductor/status' )
+    del origconductorstatus['status']
+    del origconductorstatus['lastupdate']
+    del origconductorstatus['configchangetime']
     try:
         unhold_decam_exposure( conductor_connector, decam_exposure_name )
 
@@ -184,7 +193,8 @@ def test_exposure_launcher_through_step( conductor_connector,
             assert cursor.fetchone()[0] == 'photocal'
 
         elaunch = ExposureLauncher( 'testcluster', 'testnode', numprocs=2, onlychips=['S2', 'N16'], verify=False,
-                                    through_step='extraction', worker_log_level=logging.DEBUG )
+                                    through_step='extraction', provtag='test_explau_step',
+                                    worker_log_level=logging.DEBUG )
         elaunch.register_worker()
         elaunch( max_n_exposures=1, die_on_exception=True )
         verify_exposure_image_etc( numimages=2, numsourcelists=2, numzps=0, numsubs=0 )
@@ -194,16 +204,16 @@ def test_exposure_launcher_through_step( conductor_connector,
 
         # See comment in test_exposure_launcher re: leftover calibrator files
 
-        # Finally, remove the pipelineworker that got created
+        # Finally, remove the pipelineworker and provenance tags that got created
         # (Don't bother cleaning up knownexposures, the fixture will do that)
-        with SmartSession() as session:
-            pws = session.query( PipelineWorker ).filter( PipelineWorker.cluster_id=='testcluster' ).all()
-            for pw in pws:
-                session.delete( pw )
-            session.commit()
+        with PsycopgConnection() as con:
+            cursor = con.cursor()
+            cursor.execute( "DELETE FROM pipelineworkers WHERE cluster_id='testcluster'" )
+            cursor.execute( "DELETE FROM provenance_tags WHERE tag='test_explau_step'" )
+            con.commit()
 
-        # Reset the conductor through step to 'scoring' (the default)
-        conductor_connector.send( "/conductor/updateparameters/throughstep=scoring" )
+        # Reset the conductor through step to how it was when we got here
+        conductor_connector.send( "/conductor/updateparameters", origconductorstatus )
 
 
 # NOTE -- in the past, this next test was killed on github actions;
@@ -240,7 +250,7 @@ def test_exposure_launcher( conductor_connector,
 
         # Make our launcher
         elaunch = ExposureLauncher( 'testcluster', 'testnode', numprocs=2, onlychips=['S2', 'N16'],
-                                    verify=False, worker_log_level=logging.DEBUG )
+                                    provtag='test_explau', verify=False, worker_log_level=logging.DEBUG )
         elaunch.register_worker()
 
         # Make sure the worker got registered properly
@@ -253,7 +263,7 @@ def test_exposure_launcher( conductor_connector,
         elaunch( max_n_exposures=1, die_on_exception=True )
         dt = time.perf_counter() - t0
 
-        SCLogger.debug( f"Running exposure processor took {dt} seconds" )
+        SCLogger.debug( f"Running ExposureLauncher took {dt:.2f} seconds" )
 
         # Make sure that two subtractions were created, and extract them
         subs = verify_exposure_image_etc( numimages=2, numsourcelists=2, numzps=2, numsubs=2 )
@@ -269,12 +279,11 @@ def test_exposure_launcher( conductor_connector,
                       .join( Image, SourceList.image_id==Image._id ) )
             meas0 = measq.filter( Image._id==subs[0].id ).all()
             meas1 = measq.filter( Image._id==subs[1].id ).all()
-            assert len(meas0) == 2
-            assert len(meas1) == 3
+            assert len(meas0) == 7
+            assert len(meas1) == 12
 
     finally:
         # Deleting the exposure should cascade to everything else
-
         delete_exposure( decam_exposure_name )
 
         # There will also have been a whole bunch of calibrator files.
@@ -291,10 +300,9 @@ def test_exposure_launcher( conductor_connector,
         # will have been run and its teardown does the necessary
         # cleanup.
 
-        # Finally, remove the pipelineworker that got created
+        # Finally, remove the pipelineworker and provenance tags that got created
         # (Don't bother cleaning up knownexposures, the fixture will do that)
-        with SmartSession() as session:
-            pws = session.query( PipelineWorker ).filter( PipelineWorker.cluster_id=='testcluster' ).all()
-            for pw in pws:
-                session.delete( pw )
-            session.commit()
+        with PGDB() as pgdb:
+            pgdb.execute_nofetch( "DELETE FROM pipelineworkers WHERE cluster_id='testcluster'" )
+            pgdb.execute_nofetch( "DELETE FROM provenance_tags WHERE tag='test_explau'" )
+            pgdb.commit()

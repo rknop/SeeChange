@@ -25,7 +25,7 @@ def test_source_list_bitflag(sim_sources):
     assert sim_sources.badness == ''
 
     image = Image.get_by_id( sim_sources.image_id )
-    exposure = Exposure.get_by_id( image.exposure_id )
+    exposure = Exposure.get_by_id( image.exposure_id, nofile=True )
 
     with SmartSession() as session:
         # try to find this using the bitflag hybrid property
@@ -41,7 +41,7 @@ def test_source_list_bitflag(sim_sources):
 
     # Reload from database, make sure stuff got updated
     image = Image.get_by_id( sim_sources.image_id )
-    exposure = Exposure.get_by_id( image.exposure_id )
+    exposure = Exposure.get_by_id( image.exposure_id, nofile=True )
     sources = SourceList.get_by_id( sim_sources.id )
 
     assert image.bitflag == 2**1 + 2**3
@@ -118,6 +118,8 @@ def test_invent_filepath( provenance_base, provenance_extra ):
         'section_id': 0,
         'type': "Sci",
         'format': "fits",
+        'width': 1024,
+        'height': 2048,
         'ra': 12.3456,
         'dec': -0.42,
         'mjd': 61738.64,
@@ -221,7 +223,7 @@ def test_read_sextractor( ztf_filepath_sources ):
     _ = sources.data
     assert len(sources.data) == 112
     assert sources.num_sources == 112
-    assert sources.good.sum() == 105
+    assert sources.good.sum() == 107
     assert sources.aper_rads == [ 1.0, 2.5 ]
     assert sources.inf_aper_num is None
     assert sources.x[0] == pytest.approx( 798.29, abs=0.01 )
@@ -310,12 +312,12 @@ def test_write_sextractor(archive):
 def test_calc_apercor( decam_datastore ):
     sources = decam_datastore.get_sources()
 
-    assert sources.calc_aper_cor() == pytest.approx(-0.2476, abs=0.01)
-    assert sources.calc_aper_cor(aper_num=1) == pytest.approx(-0.0589, abs=0.01)
-    assert sources.calc_aper_cor(inf_aper_num=3) == pytest.approx(-0.2476, abs=0.01)
-    assert sources.calc_aper_cor(inf_aper_num=1) == pytest.approx(-0.1879, abs=0.01)
-    assert sources.calc_aper_cor(aper_num=2) == pytest.approx(-0.0190, abs=0.01)
-    assert sources.calc_aper_cor(aper_num=2, inf_aper_num=3) == pytest.approx(-0.0190, abs=0.01)
+    assert sources.calc_aper_cor() == pytest.approx(-0.2590, abs=0.01)
+    assert sources.calc_aper_cor(aper_num=1) == pytest.approx(-0.0645, abs=0.01)
+    assert sources.calc_aper_cor(inf_aper_num=3) == pytest.approx(-0.2590, abs=0.01)
+    assert sources.calc_aper_cor(inf_aper_num=1) == pytest.approx(-0.1940, abs=0.01)
+    assert sources.calc_aper_cor(aper_num=2) == pytest.approx(-0.0229, abs=0.01)
+    assert sources.calc_aper_cor(aper_num=2, inf_aper_num=3) == pytest.approx(-0.0229, abs=0.01)
 
 
 def test_lim_mag_estimate( ptf_datastore_through_zp ):
@@ -329,7 +331,7 @@ def test_lim_mag_estimate( ptf_datastore_through_zp ):
         limMagEst = ds.sources.estimate_lim_mag( aperture=1, zp=ds.zp )
 
     # check the limiting magnitude is consistent with previous runs
-    assert limMagEst == pytest.approx(20.11, abs=0.05)
+    assert limMagEst == pytest.approx(20.14, abs=0.05)
 
     with pytest.raises( RuntimeError, match="Must pass a zp to get a limiting magnitude." ):
         _ = ds.sources.estimate_lim_mag( aperture=1 )

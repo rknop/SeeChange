@@ -4,4 +4,3 @@ ls4.v0_2.*.avsc
   schema.  However, there are substantiantial changes and reductions.
 
   TODO: More documentation.
-  

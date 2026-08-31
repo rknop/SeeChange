@@ -112,14 +112,14 @@ replacing ``<tag>`` with right string.  Now, the data store is primed to be able
 
 ``ds.get_fakeanal()``
   TODO
-    
+
 
 Finding detected objects
 ------------------------
 
 TODO
 
-  
+
 Getting all measurements and/or cutouts for an object
 -----------------------------------------------------
 

@@ -1,4 +1,5 @@
 import os
+import copy
 import pytest
 import shutil
 import datetime
@@ -175,11 +176,11 @@ def test_parameters( test_config ):
     # Verify that manual override works for all parts of pipeline
     overrides = {
         'preprocessing': { 'steps': [ 'overscan', 'linearity'] },
-        'extraction': {'threshold': 3.14 },
+        'extraction': {'snr_threshold': 3.14 },
         'astrocal': {'cross_match_catalog': 'override'},
         'photocal': {'cross_match_catalog': 'override'},
         'subtraction': { 'method': 'override' },
-        'detection': { 'threshold': 3.14 },
+        'detection': { 'snr_threshold': 3.14 },
         'cutting': { 'cutout_size': 666 },
         'measuring': { 'negatives_n_sigma_outlier': 3.5 }
     }
@@ -319,29 +320,35 @@ def check_full_run_results( ds, exposure, sec_id, ref, expected ):
 #  running the tests on the dekstop or laptop you're sitting at.  Put a
 #  breakpoint at the end of the test, and then go log into the webap
 #  (which will be at https://localhost:8081, with 8081 replaced with the
-#  value of WEBAP_PORT If you set that when running the docker compose
+#  value of WEBAP_PORT if you set that when running the docker compose
 #  file), log in with username "test" and password "test_password",
 #  and check things out.
 def test_full_run_zogy( decam_exposure, decam_reference, decam_default_calibrators, user ):
     # The source at 1619.22, 1881.40 is a real SN
     expected = {
-        'x':      np.array( [ 1452.90, 1439.28, 1451.44, 1619.22, 1385.93,
-                              1441.13,  167.41, 1358.35,  457.93, 1517.97 ] ),
-        'y':      np.array( [  807.49, 1463.51, 1627.38, 1881.40, 2019.40,
-                               2048.30, 3330.83, 3492.00, 4008.13, 4043.60 ] ),
-        'gfit_x':           [ 1451.45, 1438.01, 1450.82, 1619.22, 1387.00,
-                              1441.10,  167.30, 1358.17,  457.79, 1516.69 ],
-        'gfit_y':           [  809.30, 1464.76, 1627.95, 1881.28, 2018.87,
-                               2048.15, 3330.97, 3492.07, 4006.81, 4041.58 ],
-        'major_width': [  8.47,  7.66,  6.45,  4.02, 12.10,  3.53,  3.75,  9.74,  7.23,  7.63 ],
-        'minor_width': [  6.76,  7.24,  5.88,  3.16,  4.84,  2.31,  2.10,  4.25,  5.27,  7.30 ],
-        'neg_frac':      [ 0.09, 0.07, 0.12, 0.12, 0.20, 0.18, 0.20, 0.27, 0.16, 0.02 ],
-        'neg_flux_frac': [ 0.09, 0.05, 0.12, 0.06, 0.19, 0.21, 0.21, 0.23, 0.11, 0.04 ],
-        'psf_flux':      [ 10515,  3320, 10919,  2281,   799,  1212,   576,   824,  2962, 20511 ],
-        'psf_flux_err':  [   185,   133,   178,    97,    89,   111,    90,    87,   124,   221 ],
-        'aper_flux':     [ 11854,  3986, 10038,  1884,   998,   744,   386,  1092,  2955, 28869 ],
-        'aper_flux_err': [   209,   148,   191,   108,   103,   127,   104,   103,   152,   270 ],
-        'rb': [ 0.383, 0.575, 0.458, 0.798, 0.491, 0.637, 0.607, 0.464, 0.640, 0.434 ]
+        'x':      np.array( [ 1984.90,  785.16, 1409.14, 1452.95, 1917.67, 1439.39, 1451.49, 1619.22,
+                              1441.19, 1928.02, 1358.37,  457.96, 1518.36 ] ),
+        'y':      np.array( [  221.94,  468.16,  757.69,  807.57, 1394.23, 1463.61, 1627.44, 1881.40,
+                               2048.38, 2093.13, 3491.88, 4008.20, 4043.33 ] ),
+        'gfit_x':           [ 1985.56,  785.19, 1408.73, 1451.45, 1917.77, 1438.04, 1450.82, 1619.22,
+                              1441.06, 1927.90, 1358.17,  457.83, 1516.75 ],
+        'gfit_y':           [  221.53,  468.16,  757.71,  809.32, 1394.10, 1464.79, 1628.07, 1881.28,
+                               2048.19, 2092.87, 3492.08, 4006.62, 4041.56 ],
+        'major_width': [  5.07,  2.54,  6.71,  8.60,  2.21,  7.88,  6.80,  4.05,  3.92,  6.18,  9.74,
+                          7.73,  7.73 ],
+        'minor_width': [  2.15,  2.04,  4.53,  6.99,  1.85,  7.42,  6.15,  3.18,  2.35,  2.96,  4.25,
+                          6.01,  7.50 ],
+        'neg_frac':      [ 0.24, 0.06, 0.23, 0.07, 0.25, 0.02, 0.11, 0.00, 0.23, 0.00, 0.00, 0.05, 0.02 ],
+        'neg_flux_frac': [ 0.29, 0.01, 0.10, 0.09, 0.19, 0.02, 0.12, -0.00, 0.24, 0.00, -0.00, 0.07, 0.05 ],
+        'psf_flux':      [   2336.,   8647.,  94666.,  10838.,    518.,   3444.,  11195.,   2299.,   1335.,
+                             483.,    821.,   3003.,  21014. ],
+        'psf_flux_err':  [    130.,    110.,    467.,    185.,     89.,    133.,    178.,     97.,    111.,
+                              92.,     87.,    123.,    220. ],
+        'aper_flux':     [   1410.,   5861.,  71652.,  11512.,    346.,   3872.,   9973.,   1900.,    761.,
+                             431.,   1050.,   2925.,  27991. ],
+        'aper_flux_err': [    145.,    106.,    554.,    206.,     99.,    145.,    188.,    105.,    124.,
+                              104.,    100.,    149.,    265. ],
+        'rb': [ 0.624, 0.880, 0.439, 0.388, 0.493, 0.561, 0.457, 0.791, 0.626, 0.519, 0.488, 0.608, 0.452 ]
     }
 
     try:
@@ -354,6 +361,34 @@ def test_full_run_zogy( decam_exposure, decam_reference, decam_default_calibrato
                              detection={ 'method': 'filter' } )
         ds = pipeline.run( decam_exposure, decam_reference.image.section_id )
         ds.save_and_commit()
+
+        # # Uncomment this bit to produce the "expected" regression results above;
+        # #   will need to fix indentation and (maybe) add newlines.
+        # # Run the test with --capture=tee-sys to see the output.
+        # import io
+        # strio = io.StringIO()
+        # strio.write(
+        #     f"""
+        #     expected = {{
+        #         'x':      np.array( [ {', '.join(f"{m.x:7.2f}" for m in ds.measurements)} ] ),
+        #         'y':      np.array( [ {', '.join(f"{m.y:7.2f}" for m in ds.measurements)} ] ),
+        #         'gfit_x':           [ {', '.join(f"{m.gfit_x:7.2f}" for m in ds.measurements)} ],
+        #         'gfit_y':           [ {', '.join(f"{m.gfit_y:7.2f}" for m in ds.measurements)} ],
+        #         'major_width': [ {', '.join(f"{m.major_width:5.2f}" for m in ds.measurements)} ],
+        #         'minor_width': [ {', '.join(f"{m.minor_width:5.2f}" for m in ds.measurements)} ],
+        #         'neg_frac':      [ {', '.join(f"{m.negfrac:4.2f}" for m in ds.measurements)} ],
+        #         'neg_flux_frac': [ {', '.join(f"{m.negfluxfrac:4.2f}" for m in ds.measurements)} ],
+        #         'psf_flux':      [ {', '.join(f"{m.flux_psf:6.0f}." for m in ds.measurements)} ],
+        #         'psf_flux_err':  [ {', '.join(f"{m.flux_psf_err:6.0f}." for m in ds.measurements)} ],
+        #         'aper_flux':     [ {', '.join(f"{m.flux_apertures[0]:6.0f}." for m in ds.measurements)} ],
+        #         'aper_flux_err': [ {', '.join(f"{m.flux_apertures_err[0]:6.0f}." for m in ds.measurements)} ],
+        #         'rb': [ {', '.join(f"{d.score:5.3f}" for d in ds.deepscores)} ]
+        #     }}
+        #     """
+        # )
+        # SCLogger.info( f"Here it is:\n{strio.getvalue()}" )
+        # import pdb; pdb.set_trace()
+
         check_full_run_results( ds, decam_exposure, decam_reference.image.section_id, decam_reference, expected )
 
     finally:
@@ -366,7 +401,7 @@ def test_full_run_zogy( decam_exposure, decam_reference, decam_default_calibrato
 
 
 # See comment on test_full_run_zogy for the reason for the user fixture
-def test_full_run_hotpants( decam_exposure, decam_reference, decam_default_calibrators, user ):
+def test_full_run_hotpants( decam_exposure, decam_reference, decam_default_calibrators, user, test_config ):
     # A lot of the stuff that pass the cuts is really bad -- lots of CRs getting through.
     # I think they didn't get through with zogy because zogy effectively convolved them out
     # a bit (as the ref had worse seeing the the new here), and the blurring led to
@@ -374,52 +409,108 @@ def test_full_run_hotpants( decam_exposure, decam_reference, decam_default_calib
     # required on our analytic cuts.  But, also, R/B really needs to be trained better to
     # get rid of all of that, as a lot of these 27 are junk with high R/B.
     #
-    # The source at 1619.21, 1881.41 is a real SN.
+    # ALSO: I think we *might* be able to be more stringent on dipole detection with Alard/Luption
+    # than we are with zogy.  Investigation required.
+    #
+    # The source at 1619.21, 1881.42 is a real SN.
 
     expected = {
-        'x': np.array( [  593.75, 1358.12, 1358.22, 1265.51,  949.14,  903.47, 1752.72,  998.42,  983.28,
-                         1984.93, 1387.69, 1385.91, 1619.21, 1581.49, 1451.97, 1451.67, 1143.22, 1438.50,
-                         1434.69, 1185.98, 1450.19, 1452.53, 1409.01, 1435.25, 1576.60, 1573.30 ] ),
-        'y': np.array( [ 3527.51, 3491.16, 3493.16, 3409.27, 2847.73, 2747.91, 2620.64, 2278.11, 2273.60,
-                         2025.90, 2022.42, 2019.47, 1881.41, 1665.81, 1632.26, 1627.87, 1571.47, 1465.08,
-                         1464.62, 1085.24,  806.21,  809.13,  758.34,  477.55,  181.68,  180.33 ] ),
-        'gfit_x':      [   593.57, 1358.18, 1358.18, 1265.73,  949.17,  903.51, 1752.83,  998.43,  983.31,
-                          1985.09, 1387.00, 1387.00, 1619.22, 1581.51, 1450.99, 1450.99, 1143.46, 1438.33,
-                          1438.33, 1186.01, 1451.59, 1451.59, 1408.70, 1435.30, 1576.84, 1575.26 ],
-        'gfit_y':      [ 3527.32, 3492.07, 3492.07, 3409.50, 2847.63, 2747.88, 2620.62, 2278.16, 2273.17,
-                         2025.83, 2018.88, 2018.87, 1881.32, 1665.88, 1628.48, 1628.48, 1571.65, 1465.18,
-                         1465.18, 1085.21,  809.40,  809.40,  758.22,  477.70,  181.84,  180.84 ],
-        'major_width': [ 1.52, 9.73, 9.73, 4.68, 3.70, 2.19, 2.48, 3.53, 2.51, 5.29, 12.07, 12.09, 3.90,
-                         3.01, 7.57, 7.57, 1.96, 8.22, 8.22, 2.34, 8.12, 8.12, 7.37, 1.40, 2.74, 6.30 ],
-        'minor_width': [ 0.58, 4.16, 4.16, 1.81, 1.41, 1.37, 1.56, 1.21, 1.04, 3.18,  4.80,  4.79, 3.18,
-                         1.51, 6.57, 6.57, 0.69, 7.37, 7.36, 1.67, 7.25, 7.25, 5.39, 0.96, 1.74, 2.94 ],
-        'neg_frac':      [ 0.23, 0.29, 0.21, 0.21, 0.17, 0.14, 0.16, 0.20, 0.15, 0.19, 0.11, 0.10, 0.09, 0.10,
-                           0.12, 0.11, 0.28, 0.16, 0.12, 0.20, 0.10, 0.14, 0.20, 0.24, 0.07, 0.08 ],
-        'neg_flux_frac': [ 0.02, 0.23, 0.18, 0.02, 0.02, 0.02, 0.01, 0.03, 0.02, 0.21, 0.10, 0.09, 0.06, 0.02,
-                           0.07, 0.06, 0.03, 0.09, 0.08, 0.03, 0.06, 0.07, 0.09, 0.02, 0.01, 0.01 ],
-        'psf_flux':      [   4047,    835,    817,  12935,   7413,   8268,  13024,   6478,   5658,   1250,
-                              692,    798,   2343,   8762,   4843,   9922,   6380,   3720,   2030,   8422,
-                              7179,  11957, 103465,   8032,  16506,  14256 ],
-        'psf_flux_err':  [     96,     87,     87,    113,    104,    106,    116,    102,     99,    108,
-                               88,     88,     96,    108,    125,    176,    104,    150,    108,    108,
-                              136,    210,    465,    109,    121,    116 ],
-        'aper_flux':     [   4714,   1071,   1099,  13555,   5680,   6670,  11733,   5455,   5516,   1135,
-                              694,    910,   1931,   6870,   4969,   9281,   5911,   3451,   2612,   6431,
-                             8271,   9735,  83654,   9250,  16493,  15293 ],
-        'aper_flux_err': [    107,    102,    102,    117,    108,    109,    115,    108,    108,    122,
-                              102,    102,    107,    110,    153,    175,    108,    140,    130,    109,
-                              172,    191,    445,    112,    120,    119 ],
-        'rb': [ 0.628, 0.458, 0.490, 0.789, 0.778, 0.891, 0.852, 0.601, 0.613, 0.819, 0.576, 0.561, 0.779,
-                0.777, 0.469, 0.491, 0.838, 0.618, 0.432, 0.841, 0.477, 0.520, 0.536, 0.812, 0.814, 0.325 ]
+        'x':      np.array( [ 1519.08,  458.19,  458.25,  593.75, 1192.19, 1265.52, 1108.80,  192.91, 1645.96,
+                               949.14,  903.47, 1752.72,  998.42,  983.28,  291.46, 1984.85, 1563.97, 1619.21,
+                               397.92, 1581.49, 1451.79, 1143.22, 1741.33, 1439.00, 1437.29,  616.39, 1185.98,
+                               698.96,  246.24, 1451.11, 1409.10,  177.78, 1435.24,  785.16, 1405.95, 1610.92,
+                              1984.46, 1576.61, 1573.30,  786.63 ] ),
+        'y':      np.array( [ 4039.62, 4008.88, 4008.75, 3527.51, 3450.32, 3409.28, 3402.39, 3280.49, 2929.00,
+                              2847.72, 2747.91, 2620.64, 2278.11, 2273.60, 2228.04, 2026.02, 2006.98, 1881.41,
+                              1732.86, 1665.81, 1627.63, 1571.47, 1485.58, 1464.84, 1462.08, 1310.13, 1085.24,
+                               948.00,  933.89,  812.40,  758.22,  704.00,  477.55,  468.16,  442.23,  374.36,
+                               220.79,  181.67,  180.33,  168.42 ] ),
+        'gfit_x':           [ 1517.14,  457.84,  457.84,  593.58, 1192.27, 1265.73, 1108.94,  192.78, 1645.90,
+                               949.17,  903.51, 1752.83,  998.43,  983.31,  291.49, 1984.95, 1564.21, 1619.22,
+                               397.78, 1581.51, 1450.96, 1143.46, 1741.41, 1438.29, 1438.29,  616.41, 1186.01,
+                               698.76,  246.33, 1451.52, 1408.76,  177.89, 1435.30,  785.21, 1405.99, 1611.00,
+                              1984.66, 1576.84, 1575.26,  786.69 ],
+        'gfit_y':           [ 4041.87, 4008.77, 4008.77, 3527.33, 3450.46, 3409.50, 3402.59, 3280.40, 2929.19,
+                              2847.63, 2747.88, 2620.62, 2278.16, 2273.17, 2228.10, 2025.94, 2006.84, 1881.32,
+                              1732.93, 1665.88, 1628.44, 1571.65, 1485.61, 1465.15, 1465.15, 1310.15, 1085.21,
+                               947.97,  933.92,  809.42,  758.05,  703.85,  477.70,  468.15,  442.27,  374.44,
+                               220.54,  181.84,  180.84,  168.45 ],
+        'major_width': [  7.95,  5.87,  5.87,  1.50,  1.62,  4.68,  2.17,  1.85,  0.69,  3.70,  2.19,  2.48,
+                          3.53,  2.52,  1.20,  4.86,  0.59,  3.94,  0.45,  3.01,  7.47,  1.96,  2.07,  7.96,
+                          7.96,  2.18,  2.34,  0.68,  2.08,  8.44,  7.15,  0.77,  1.40,  2.50,  1.59,  0.62,
+                          3.80,  2.74,  6.30,  0.99 ],
+        'minor_width': [  6.74,  2.02,  2.02,  0.57,  0.82,  1.81,  0.95,  0.74,  0.58,  1.41,  1.37,  1.56,
+                          1.21,  1.04,  1.06,  3.19,  0.38,  3.19,  0.29,  1.51,  6.40,  0.69,  1.62,  7.52,
+                          7.52,  1.76,  1.67,  0.38,  1.53,  6.90,  5.13,  0.66,  0.96,  1.96,  1.55,  0.39,
+                          1.77,  1.74,  2.94,  0.61 ],
+        'neg_frac':      [ 0.01, 0.14, 0.14, 0.00, 0.00, 0.00, 0.10, 0.00, 0.00, 0.00, 0.03, 0.00, 0.00, 0.00,
+                           0.14, 0.25, 0.00, 0.06, 0.00, 0.00, 0.07, 0.00, 0.00, 0.05, 0.05, 0.00, 0.00, 0.00,
+                           0.00, 0.07, 0.17, 0.00, 0.00, 0.00, 0.00, 0.00, 0.24, 0.00, 0.01, 0.00 ],
+        'neg_flux_frac': [ 0.00, 0.18, 0.18, 0.00, 0.00, 0.00, 0.01, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00,
+                           0.02, 0.27, 0.00, 0.03, 0.00, 0.00, 0.06, 0.00, 0.00, 0.04, 0.04, 0.00, 0.00, 0.00,
+                           0.00, 0.07, 0.07, 0.00, 0.00, 0.00, 0.00, 0.00, 0.19, 0.00, 0.00, 0.00 ],
+        'psf_flux':      [  19090.,   2340.,   2969.,   4050.,   6993.,  12925.,   4356.,   4815.,    620.,
+                             7405.,   8262.,  13013.,   6467.,   5645.,   2859.,   1390.,   1468.,   2347.,
+                              578.,   8752.,  10268.,   6364.,   7924.,   3624.,   2223.,   7568.,   8401.,
+                             1203.,   9584.,   8622., 103492.,    504.,   8016.,   8550.,   4852.,   2299.,
+                             1757.,  16487.,  14246.,   3416. ],
+        'psf_flux_err':  [    190.,    109.,    110.,     96.,    105.,    113.,    101.,    100.,     90.,
+                              104.,    106.,    116.,    102.,     99.,     97.,    107.,     91.,     96.,
+                               90.,    108.,    168.,    104.,    107.,    145.,    109.,    107.,    108.,
+                               92.,    110.,    158.,    454.,     92.,    109.,    109.,    102.,     97.,
+                              107.,    121.,    116.,    102. ],
+        'aper_flux':     [  16938.,   2340.,   1478.,   4678.,   5765.,  13466.,   4356.,   4159.,    620.,
+                             5630.,   6590.,  11471.,   5367.,   5365.,   1844.,   1236.,   1468.,   1909.,
+                              578.,   6765.,   9402.,   5908.,   5486.,   3507.,   2321.,   4958.,   6365.,
+                             1203.,   7272.,   7841.,  84008.,    504.,   9071.,   5709.,   3052.,   2299.,
+                             1599.,  15938.,  14476.,   3416. ],
+        'aper_flux_err': [    214.,    133.,    144.,    104.,    105.,    114.,    104.,    104.,     99.,
+                              105.,    106.,    113.,    105.,    105.,    103.,    119.,    100.,    104.,
+                               99.,    107.,    171.,    106.,    105.,    138.,    123.,    105.,    107.,
+                              100.,    108.,    161.,    439.,    100.,    110.,    106.,    102.,    101.,
+                              123.,    117.,    115.,    103. ],
+        'rb': [ 0.452, 0.654, 0.426, 0.628, 0.880, 0.788, 0.904, 0.899, 0.716, 0.778, 0.891, 0.852, 0.601, 0.613,
+                0.791, 0.819, 0.741, 0.779, 0.766, 0.777, 0.489, 0.838, 0.921, 0.600, 0.495, 0.847, 0.841, 0.795,
+                0.809, 0.695, 0.528, 0.761, 0.812, 0.881, 0.891, 0.815, 0.548, 0.814, 0.325, 0.894 ]
     }
 
     try:
+        detconfigs = test_config.value( 'detection' )
+        detconfigs['subconfigs']['subconfigs']['extragalactic']['method'] = 'sextractor'
+        detconfigs['subconfigs']['subconfigs']['galactic']['method'] = 'sextractor'
         pipeline = Pipeline( pipeline={ 'provenance_tag': 'test_full_run_hotpants' },
                              subtraction={ 'method': 'hotpants',
                                            'refset': 'test_refset_decam' },
-                             detection={ 'method': 'sextractor' } )
+                             detection=detconfigs )
         ds = pipeline.run( decam_exposure, decam_reference.image.section_id )
         ds.save_and_commit()
+
+        # # Uncomment this bit to produce the "expected" regression results above;
+        # #   will need to fix indentation and (maybe) add newlines
+        # import io
+        # strio = io.StringIO()
+        # strio.write(
+        #     f"""
+        #     expected = {{
+        #         'x':      np.array( [ {', '.join(f"{m.x:7.2f}" for m in ds.measurements)} ] ),
+        #         'y':      np.array( [ {', '.join(f"{m.y:7.2f}" for m in ds.measurements)} ] ),
+        #         'gfit_x':           [ {', '.join(f"{m.gfit_x:7.2f}" for m in ds.measurements)} ],
+        #         'gfit_y':           [ {', '.join(f"{m.gfit_y:7.2f}" for m in ds.measurements)} ],
+        #         'major_width': [ {', '.join(f"{m.major_width:5.2f}" for m in ds.measurements)} ],
+        #         'minor_width': [ {', '.join(f"{m.minor_width:5.2f}" for m in ds.measurements)} ],
+        #         'neg_frac':      [ {', '.join(f"{m.negfrac:4.2f}" for m in ds.measurements)} ],
+        #         'neg_flux_frac': [ {', '.join(f"{m.negfluxfrac:4.2f}" for m in ds.measurements)} ],
+        #         'psf_flux':      [ {', '.join(f"{m.flux_psf:6.0f}." for m in ds.measurements)} ],
+        #         'psf_flux_err':  [ {', '.join(f"{m.flux_psf_err:6.0f}." for m in ds.measurements)} ],
+        #         'aper_flux':     [ {', '.join(f"{m.flux_apertures[0]:6.0f}." for m in ds.measurements)} ],
+        #         'aper_flux_err': [ {', '.join(f"{m.flux_apertures_err[0]:6.0f}." for m in ds.measurements)} ],
+        #         'rb': [ {', '.join(f"{d.score:5.3f}" for d in ds.deepscores)} ]
+        #     }}
+        #     """
+        # )
+        # SCLogger.info( f"Here it is:\n{strio.getvalue()}" )
+        # import pdb; pdb.set_trace()
+
         check_full_run_results( ds, decam_exposure, decam_reference.image.section_id, decam_reference, expected )
 
     finally:
@@ -452,8 +543,8 @@ def test_data_flow(decam_exposure, decam_reference, decam_default_calibrators, p
     try:  # cleanup the file at the end
         p = pipeline_for_tests
         p.subtractor.pars.refset = 'test_refset_decam'
-        assert p.extractor.pars.threshold != 3.14
-        assert p.detector.pars.threshold != 3.14
+        assert p.extractor.pars.snr_threshold != 3.14
+        assert p.detector.pars.snr_threshold != 3.14
 
         ds = p.run(exposure, sec_id)
         ds.save_and_commit()
@@ -814,8 +905,9 @@ def test_provenance_tree(pipeline_for_tests, decam_exposure, decam_datastore, de
     # Make sure that we get an exception if we ask for a mismatched provenance tree
     # Do this by creating a new pipeline with inconsistent parameters but asking
     # for the same provenance tag.
-    newp = Pipeline( pipeline={'provenance_tag': 'pipeline_for_tests'},
-                     extraction={ 'threshold': 42. } )
+    extrsubconfigs = copy.deepcopy( p.extractor.pars.subconfigs )
+    extrsubconfigs['subconfigs']['extragalactic']['snr_threshold'] = 42.
+    newp = Pipeline( pipeline={'provenance_tag': 'pipeline_for_tests'}, extraction={'subconfigs': extrsubconfigs} )
     with pytest.raises( RuntimeError,
                         match=( 'The following provenances do not match the existing provenance '
                                 'for tag pipeline_for_tests' ) ):

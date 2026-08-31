@@ -1,0 +1,9 @@
+apiVersion: v1
+data:
+  tls.crt: PUT THE RIGHT THING HERE
+  tls.key: PUT THE RIGHT THING HERE
+kind: Secret
+metadata:
+  name: ls4-production-webap-cert
+  namespace: ls4-production
+type: kubernetes.io/tls

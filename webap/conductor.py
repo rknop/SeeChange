@@ -5,22 +5,19 @@ import json
 import datetime
 import pytz
 import traceback
+import textwrap
+import uuid
 
 import psycopg
 import psycopg.types.json
+from psycopg import sql
 
 import flask
 
 from util.util import asUUID
-from models.base import SmartSession, PsycopgConnection
-from models.enums_and_bitflags import KnownExposureStateConverter
-from models.knownexposure import PipelineWorker
-# NOTE: for get_instrument_instrance to work, must manually import all
-#  known instrument classes we might want to use here.
-# If models.instrument gets imported somewhere else before this file
-#  is imported, then even this won't work.  There must be a better way....
-import models.decam  # noqa: F401
-from models.instrument import get_instrument_instance
+from models.base import PsycopgConnection, PGDB
+from models.enums_and_bitflags import KnownExposureStateConverter, ImageTypeConverter
+from models.instrument import Instrument
 
 sys.path.insert( 0, pathlib.Path(__name__).resolve().parent )
 from baseview import BaseView, BadUpdaterReturnError
@@ -191,7 +188,7 @@ class UpdateParameters( ConductorBaseView ):
                     clsatttoset[arg] = val
 
         if len(unknown) != 0:
-            return f"Unknown arguments to UpdateParameters: {unknown}", 500
+            return f"Unknown arguments to UpdateParameters: {unknown}", 422
 
         for att, val in clsatttoset.items():
             setattr( ConductorBaseView, att, val )
@@ -244,38 +241,47 @@ class RegisterWorker( ConductorBaseView ):
         args = self.argstr_to_args( argstr, { 'node_id': None, 'replace': 0 } )
         args['replace'] = int( args['replace'] )
         if 'cluster_id' not in args.keys():
-            return "cluster_id is required for registerworker", 500
-        with SmartSession() as session:
-            existing = ( session.query( PipelineWorker )
-                         .filter( PipelineWorker.cluster_id==args['cluster_id'] )
-                         .filter( PipelineWorker.node_id==args['node_id'] )
-                        ).all()
+            return "cluster_id is required for registerworker", 422
+        with PGDB( dictcursor=True ) as pgdb:
+            q = sql.SQL( "SELECT * FROM pipelineworkers WHERE cluster_id={cluster} AND node_id={node}"
+                        ).format( cluster=args['cluster_id'], node=args['node_id'] )
+            rows = pgdb.execute( q )
             newworker = None
             status = None
-            if len( existing ) > 0:
-                if len( existing ) > 1:
+            if len( rows ) > 0:
+                if len( rows ) > 1:
                     return ( f"cluster_id {args['cluster_id']} node_id{args['node_id']} multiply defined, "
-                             f"database needs to be cleaned up" ), 500
+                             f"database needs to be cleaned up" ), 422
                 if args['replace']:
-                    newworker = existing[0]
-                    newworker.lastheartbeat = datetime.datetime.now()
+                    newworker = rows[0]
+                    q = sql.SQL( "UPDATE pipelineworkers SET lastheartbeat={now}"
+                                ).format( datetime.datetime.now( tz=datetime.UTC ) )
+                    pgdb.execute_nofetch( q )
                     status = 'updated'
                 else:
-                    return f"cluster_id {args['cluster_id']} node_id {args['node_id']} already exists", 500
+                    return f"cluster_id {args['cluster_id']} node_id {args['node_id']} already exists", 422
 
             else:
-                newworker = PipelineWorker( cluster_id=args['cluster_id'],
-                                            node_id=args['node_id'],
-                                            lastheartbeat=datetime.datetime.now() )
+                newid = uuid.uuid4()
+                q = sql.SQL( textwrap.dedent(
+                    """
+                    INSERT INTO pipelineworkers(_id, cluster_id, node_id, lastheartbeat)
+                    VALUES ({newid}, {cluster_id}, {node_id}, {lastheartbeat})
+                    """
+                ) ).format( newid=newid,
+                            cluster_id=args['cluster_id'],
+                            node_id=args['node_id'],
+                            lastheartbeat=datetime.datetime.now( tz=datetime.UTC ) )
+                pgdb.execute_nofetch( q )
+                newworker = { '_id': newid, 'cluster_id': args['cluster_id'], 'node_id': args['node_id'] }
                 status = 'added'
-            session.add( newworker )
-            session.commit()
-            # Make sure that newworker has the id field loaded
-            # session.merge( newworker )
+            if status in ( 'updated', 'added' ):
+                pgdb.commit()
+
         return { 'status': status,
-                 'id': newworker.id,
-                 'cluster_id': newworker.cluster_id,
-                 'node_id': newworker.node_id }
+                 'id': newworker['_id'],
+                 'cluster_id': newworker['cluster_id'],
+                 'node_id': newworker['node_id'] }
 
 
 # ======================================================================
@@ -286,14 +292,16 @@ class RegisterWorker( ConductorBaseView ):
 
 class UnregisterWorker( ConductorBaseView ):
     def do_the_things( self, pipelineworker_id ):
-        with SmartSession() as session:
-            pipelineworker_id = asUUID( pipelineworker_id )
-            existing = session.query( PipelineWorker ).filter( PipelineWorker._id==pipelineworker_id ).all()
-            if len(existing) == 0:
-                return f"Unknown pipeline worker {pipelineworker_id}", 500
+        pipelineworker_id = asUUID( pipelineworker_id )
+        with PGDB( dictcursor=True ) as pgdb:
+            q = sql.SQL( "SELECT * FROM pipelineworkers WHERE _id={pwid}" ).format( pwid=pipelineworker_id )
+            rows = pgdb.execute( q )
+            if len(rows) == 0:
+                return f"Unknown pipeline worker {pipelineworker_id}", 422
             else:
-                session.delete( existing[0] )
-                session.commit()
+                q = sql.SQL( "DELETE FROM pipelineworkers WHERE _id={pwid}" ).format( pwid=pipelineworker_id )
+                pgdb.execute_nofetch( q )
+                pgdb.commit()
         return { "status": "worker deleted" }
 
 
@@ -305,15 +313,16 @@ class UnregisterWorker( ConductorBaseView ):
 class WorkerHeartbeat( ConductorBaseView ):
     def do_the_things( self, pipelineworker_id ):
         pipelineworker_id = asUUID( pipelineworker_id )
-        with SmartSession() as session:
-            existing = session.query( PipelineWorker ).filter( PipelineWorker._id==pipelineworker_id ).all()
-            if len( existing ) == 0:
-                return f"Unknown pipelineworker {pipelineworker_id}"
-            existing = existing[0]
-            existing.lastheartbeat = datetime.datetime.now()
-            session.merge( existing )
-            session.commit()
-            return { 'status': 'updated' }
+        with PGDB( dictcursor=True ) as pgdb:
+            q = sql.SQL( "SELECT * FROM pipelineworkers WHERE _id={pwid}" ).format( pwid=pipelineworker_id )
+            rows = pgdb.execute( q )
+            if len(rows) == 0:
+                return f"Unknown pipelineworker {pipelineworker_id}", 422
+            q = sql.SQL( "UPDATE pipelineworkers SET lastheartbeat={now} WHERE _id={pwid}"
+                        ).format( pwid=pipelineworker_id, now=datetime.datetime.now( tz=datetime.UTC ) )
+            pgdb.execute_nofetch( q )
+            pgdb.commit()
+        return { 'status': 'updated' }
 
 # ======================================================================
 # /getworkers
@@ -321,10 +330,10 @@ class WorkerHeartbeat( ConductorBaseView ):
 
 class GetWorkers( ConductorBaseView ):
     def do_the_things( self ):
-        with SmartSession() as session:
-            workers = session.query( PipelineWorker ).all()
-            return { 'status': 'ok',
-                     'workers': [ w.to_dict() for w in workers ] }
+        with PGDB( dictcursor=True ) as pgdb:
+            rows = pgdb.execute( "SELECT * FROM pipelineworkers" )
+        return { 'status': 'ok',
+                 'workers': rows }
 
 # ======================================================================
 # /requestexposure
@@ -334,15 +343,41 @@ class RequestExposure( ConductorBaseView ):
     def do_the_things( self, argstr=None ):
         args = self.argstr_to_args( argstr )
         if 'cluster_id' not in args.keys():
-            return "cluster_id is required for RequestExposure", 500
+            return "cluster_id is required for RequestExposure", 422
+        if 'types' in args:
+            types = args['types'].split( "," )
+            if 'all' in [ t.lower() for t in types ]:
+                types = list( ImageTypeConverter.dict.keys() )
+            else:
+                types = [ ImageTypeConverter.to_int( t ) for t in types ]
+        else:
+            types = [ ImageTypeConverter.to_int( 'Unknown' ), ImageTypeConverter.to_int( 'Sci' ) ]
+
+        # ****
+        flask.current_app.logger.debug( f"RequestExposure got argstr={argstr}\n...parsed to {args}\n" )
+        # ****
+
         knownexp_id = None
         with PsycopgConnection() as dbcon:
             cursor = dbcon.cursor( row_factory=psycopg.rows.dict_row )
             cursor.execute( "LOCK TABLE knownexposures" )
+
             # Select the lowest-mjd exposure in the "ready" state (1)
-            cursor.execute( "SELECT _id, cluster_id FROM knownexposures "
-                            "WHERE _state=1 "
-                            "ORDER BY mjd LIMIT 1" )
+            q = sql.SQL( "SELECT _id, cluster_id FROM knownexposures\n"
+                         "WHERE _state=1\n"
+                         "  AND _type=ANY(%(types)s)\n" )
+            subdict = { 'types': types }
+
+            if 'instrument' in args:
+                q += sql.SQL( "  AND instrument=%(instr)s\n" )
+                subdict['instr'] = args['instrument']
+
+            # ****
+            flask.current_app.logger.debug( f"Sending query:\n{q}\n...args {subdict}" )
+            # ****
+
+            q += sql.SQL( "ORDER BY mjd" )
+            cursor.execute( q, subdict )
             rows = cursor.fetchall()
             if len(rows) > 0:
                 knownexp_id = rows[0]['_id']
@@ -378,72 +413,183 @@ class GetKnownExposures( ConductorBaseView ):
                                               "project": None,
                                               "minexptime": None,
                                               "state": None,
-                                              "maxclaimtime": None
+                                              "maxclaimtime": None,
+                                              "provtag": None,
+                                              "types": None
                                              } )
         args['minmjd'] = float( args['minmjd'] ) if args['minmjd'] is not None else None
         args['maxmjd'] = float( args['maxmjd'] ) if args['maxmjd'] is not None else None
-        with PsycopgConnection() as conn:
-            cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
-            q = ( "SELECT ke.*,e.filepath FROM knownexposures ke "
-                  "LEFT JOIN exposures e ON ke.exposure_id=e._id " )
-            _and = "WHERE"
-            subdict = {}
 
-            if args['minmjd'] is not None:
-                q += f"{_and} ke.mjd >= %(minmjd)s "
-                subdict['minmjd'] = float( args['minmjd'] )
-                _and = "AND"
-            if args['maxmjd'] is not None:
-                q += f"{_and} ke.mjd <= %(maxmjd)s "
-                subdict['maxmjd'] = float( args['maxmjd'] )
-                _and = "AND"
-            if args['instrument'] is not None:
-                q += f"{_and} ke.instrument = %(instr)s "
-                subdict['instr'] = args['instrument']
-                _and = "AND"
-            if args['target'] is not None:
-                q += f"{_and} ke.target = %(target)s "
-                subdict['target'] = args['target']
-                _and = "AND"
-            if args['project'] is not None:
-                q += f"{_and} ke.project = %(project)s "
-                subdict['project'] = args['project']
-                _and = "AND"
-            if args['minexptime'] is not None:
-                q += f"{_and} ke.exp_time >= %(minexp)s "
-                subdict['minexp'] = float( args['minexptime'] )
-                _and = "AND"
-            if args['state'] is not None:
-                q += f"{_and} ke._state=ANY(%(state)s)"
-                subdict['state'] = [ KnownExposureStateConverter.to_int( s ) for s in args['state'].split(",") ]
-            if args['maxclaimtime'] is not None:
-                claimtime = datetime.datetime.fromisoformat( args['maxclaimtime'] )
-                if claimtime.tzinfo is None:
-                    claimtime = pytz.utc.localize( claimtime )
-                q += f"{_and} ke.claim_time <= %(maxclaimtime)s "
-                subdict['maxclaimtime'] = claimtime
-                _and = "AND"
-            q += "ORDER BY ke.mjd "
 
-            cursor.execute( q, subdict )
-            rows = cursor.fetchall()
+        if args['provtag'] is None:
+            q = sql.SQL( textwrap.dedent(
+                """\
+                SELECT ke.*,
+                       NULL as matched_exposure_id,
+                       NULL as exp_filename,
+                       NULL as nimg,
+                       NULL as nsrc,
+                       NULL as nwcs,
+                       NULL as nzp,
+                       NULL as nsub,
+                       NULL as ngooddets,
+                       NULL as ndets
+                FROM knownexposures ke
+                """
+            ) )
+
+        else:
+            # Check this out
+            q = sql.SQL( textwrap.dedent(
+                """\
+                SELECT ke.*,
+                       e._id AS matched_exposure_id,
+                       substring( e.filepath FROM '/?([^/]+)$' ) AS exp_filename,
+                       SUM( CASE WHEN i._id IS NULL THEN 0 ELSE 1 END ) AS nimg,
+                       SUM( nsrc ) AS nsrc, SUM( nwcs ) AS nwcs, SUM( nzp ) AS nzp, SUM( nsub ) AS nsub,
+                       SUM( ngooddets ) AS ngooddets, SUM( ndets ) AS ndets
+                FROM knownexposures ke
+                LEFT JOIN (
+                   SELECT DISTINCT ON(e._id) e._id, e.filepath, e.origin_identifier FROM exposures e
+                   INNER JOIN provenance_tags t ON e.provenance_id=t.provenance_id
+                                               AND t.tag={provtag}
+                ) e ON e.origin_identifier=ke.identifier
+                LEFT JOIN (
+                   SELECT i._id, i.exposure_id,
+                          SUM( CASE WHEN s._id IS NULL THEN 0 ELSE 1 END ) as nsrc,
+                          SUM( nwcs ) AS nwcs, SUM( nzp ) AS nzp, SUM( nsub ) AS nsub,
+                          SUM( ngooddets ) AS ngooddets, SUM( ndets ) AS ndets
+                   FROM (
+                     SELECT DISTINCT ON (i._id) i._id, i.exposure_id
+                     FROM images i
+                     INNER JOIN provenance_tags t ON i.provenance_id=t.provenance_id AND t.tag={provtag}
+                   ) i
+                   LEFT JOIN (
+                      SELECT s._id, s.image_id,
+                             SUM( CASE WHEN w._id IS NULL THEN 0 ELSE 1 END ) as nwcs,
+                             SUM( nzp ) AS nzp, SUM( nsub ) AS nsub,
+                             SUM( ngooddets ) AS ngooddets,
+                             SUM( ndets ) AS ndets
+                      FROM (
+                        SELECT DISTINCT ON (s._id) s._id, s.image_id
+                        FROM source_lists s
+                        INNER JOIN provenance_tags t ON s.provenance_id=t.provenance_id AND t.tag={provtag}
+                      ) s
+                      LEFT JOIN (
+                         SELECT w._id, w.sources_id,
+                                SUM( CASE WHEN z._id IS NULL THEN 0 ELSE 1 END ) as nzp,
+                                SUM( nsub ) as nsub, SUM( ngooddets ) AS ngooddets, SUM( ndets ) AS ndets
+                         FROM (
+                           SELECT DISTINCT ON (w._id) w._id, w.sources_id
+                           FROM world_coordinates w
+                           INNER JOIN provenance_tags t ON w.provenance_id=t.provenance_id AND t.tag={provtag}
+                         ) w
+                         LEFT JOIN (
+                            SELECT DISTINCT ON (z._id ) z._id, z.wcs_id,
+                                   SUM( CASE WHEN sub._id IS NULL THEN 0 ELSE 1 END ) as nsub,
+                                   SUM( sub.ngooddets ) AS ngooddets, SUM( sub.ndets ) as ndets
+                            FROM zero_points z
+                            INNER JOIN provenance_tags t ON z.provenance_id=t.provenance_id AND t.tag={provtag}
+                            LEFT JOIN (
+                               SELECT DISTINCT ON (sub._id) sub._id, isc.new_zp_id,
+                                      SUM( CASE WHEN mset.msetid IS NULL THEN 0 ELSE ngooddets END ) AS ngooddets,
+                                      SUM( CASE WHEN mset.msetid IS NULL THEN 0 ELSE ndets END ) AS ndets
+                               FROM images sub
+                               INNER JOIN provenance_tags t ON sub.provenance_id=t.provenance_id AND t.tag={provtag}
+                               INNER JOIN image_subtraction_components isc ON isc.image_id=sub._id
+                               LEFT JOIN (
+                                  SELECT DISTINCT ON(mset._id) s.image_id AS subid, mset._id AS msetid,
+                                                               COUNT( m._id ) AS ndets,
+                                                               SUM( CASE WHEN m.is_bad THEN 0 ELSE 1 END ) as ngooddets
+                                  FROM source_lists s
+                                  INNER JOIN cutouts c ON c.sources_id=s._id
+                                  INNER JOIN measurement_sets mset ON mset.cutouts_id=c._id
+                                  INNER JOIN provenance_tags t ON mset.provenance_id=t.provenance_id AND t.tag={provtag}
+                                  INNER JOIN measurements m ON m.measurementset_id=mset._id
+                                  GROUP BY s.image_id, mset._id
+                              ) mset ON mset.subid=sub._id
+                              GROUP BY sub._id, isc.new_zp_id
+                           ) sub ON sub.new_zp_id=z._id
+                           GROUP BY z._id, z.wcs_id
+                         ) z ON z.wcs_id=w._id
+                         GROUP BY w._id, w.sources_id
+                      ) w ON w.sources_id=s._id
+                      GROUP BY s._id, s.image_id
+                   ) s ON s.image_id=i._id
+                   GROUP BY i._id, i.exposure_id
+                ) i ON i.exposure_id=e._id
+                """
+            ) ).format( provtag=args['provtag'] )
+
+        _and = sql.SQL( "WHERE" )
+
+        for minarg in [ 'mjd', 'exptime' ]:
+            if args[f'min{minarg}'] is not None:
+                q += sql.SQL( "{_and} ke.{field} >= {val}\n"
+                             ).format( _and=_and, field=sql.Identifier(minarg), val=args[f'min{minarg}'] )
+                _and = sql.SQL( "  AND" )
+        for eqarg in [ 'instrument', 'target', 'project' ]:
+            if args[eqarg] is not None:
+                q += sql.SQL( "{_and} ke.{field} = {val}\n"
+                              ).format( _and=_and, field=sql.Identifier(eqarg), val=args[eqarg] )
+                _and = sql.SQL( "  AND" )
+
+        if args['maxmjd'] is not None:
+            q += sql.SQL( "{_and} ke.mjd <= {maxmjd}\n" ).format( _and=_and, maxmjd=float(args['maxmjd']) )
+            _and = sql.SQL( "  AND" )
+        if args['maxclaimtime'] is not None:
+            claimtime = datetime.datetime.fromisoformat( args['maxclaimtime'] )
+            if claimtime.tzinfo is None:
+                claimtime = pytz.utc.localize( claimtime )
+            q += sql.SQL( "{_and} ke.claim_time <= {t}\n" ).format( _and=_and, t=claimtime )
+            _and = sql.SQL( "  AND" )
+        if args['state'] is not None:
+            q += sql.SQL( "{_and} ke._state=ANY(ARRAY[{state}])\n"
+                         ).format( _and=_and,
+                                   state=sql.SQL(",").join(
+                                       KnownExposureStateConverter.to_int( s ) for s in args['state'].split(",") )
+                                  )
+            _and = sql.SQL( "  AND" )
+        if args['types'] is not None:
+            types = args['types'].split(",")
+            if "all" not in [ t.lower() for t in types ]:
+                types = [ ImageTypeConverter.to_int( t ) for t in types ]
+                q += sql.SQL( "{_and} ke._type=ANY(ARRAY[{types}])\n"
+                             ).format( _and=_and,
+                                       types=sql.SQL(",").join( types ) )
+                _and = "AND"
+
+        if args['provtag'] is not None:
+            q += sql.SQL( "GROUP BY ke._id, e._id, e.filepath\n" )
+        q += sql.SQL( "ORDER BY ke.mjd" )
+
+        flask.current_app.logger.debug( f"Sending query:\n{q.as_string()}" )
+        with PGDB( dictcursor=True ) as pgdb:
+            rows = pgdb.execute( q )
+
+        # OMGTOOMUCH
+        # import io
+        # import pprint
+        # strio = io.StringIO()
+        # pprint.pp( rows, stream=strio )
+        # flask.current_app.logger.debug( f"Return from query:\n{strio.getvalue()}" )
+        # OMGTOOMUCH
 
         retval = { 'status': 'ok',
                    'knownexposures': rows }
         # Add the "id" field that's the same as "_id" for convenience,
         #   make the filter the short name, convert "_state" to a string
-        #   in "state", and strip off all but the filename of the
-        #   filepath
+        #   in "state", "_type" to a string in "type".
         for ke in retval['knownexposures']:
             ke['id'] = ke['_id']
-            ke['filter'] = get_instrument_instance( ke['instrument'] ).get_short_filter_name( ke['filter'] )
             ke['state'] = KnownExposureStateConverter.to_string( ke['_state'] )
-            if ke['filepath'] is not None:
-                ke['filepath'] = pathlib.Path( ke['filepath'] ).name
+            ke['type'] = ImageTypeConverter.to_string( ke['_type'] )
+            ke['filter'] = Instrument.get_instrument_instance( ke['instrument'] ).get_short_filter_name( ke['filter'] )
         # We didn't search by filter because we want to make sure we're letting the user
         #   specify short filter names.  Filter by filter now.
         if args['filter'] is not None:
             retval['knownexposures'] = [ ke for ke in retval['knownexposures'] if ke['filter'] == args['filter'] ]
+
         return retval
 
 
@@ -481,7 +627,7 @@ class DeleteKnownExposures( ConductorBaseView ):
     def do_the_things( self ):
         args = flask.request.json
         if 'knownexposure_ids' not in args:
-            return "Error, must pass knownexposure_ids in JSON post body", 500
+            return "Error, must pass knownexposure_ids in JSON post body", 422
         with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( "DELETE FROM knownexposures WHERE _id=ANY(%(expids)s)",
@@ -497,7 +643,7 @@ class FullyClearClusterClaim( ConductorBaseView ):
     def do_the_things( self ):
         args = flask.request.json
         if 'knownexposure_ids' not in args:
-            return "Error, must pass knownexposure_ids in JSON post body", 500
+            return "Error, must pass knownexposure_ids in JSON post body", 422
         with PsycopgConnection() as conn:
             cursor = conn.cursor()
             cursor.execute( "UPDATE knownexposures SET cluster_id=NULL, node_id=NULL, machine_name=NULL, "

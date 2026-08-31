@@ -1,6 +1,10 @@
+import time
 import uuid
+import textwrap
 from contextlib import contextmanager
 
+import numpy as np
+from psycopg import sql
 import sqlalchemy as sa
 import sqlalchemy.types
 from sqlalchemy import orm
@@ -11,7 +15,8 @@ from sqlalchemy.schema import CheckConstraint
 import util.ldac
 from util.util import ensure_file_does_not_exist
 from util.logger import SCLogger
-from models.base import Base, SeeChangeBase, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners
+from util.config import Config
+from models.base import Base, SeeChangeBase, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, PGDB
 from models.base import PsycopgConnection
 from models.enums_and_bitflags import CatalogExcerptFormatConverter, CatalogExcerptOriginConverter
 from sqlalchemy.dialects.postgresql import ARRAY
@@ -168,7 +173,7 @@ class CatalogExcerpt(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCor
         self._hdr = None
         self._data = None
 
-    def get_downstreams( self, session=None ):
+    def get_downstream_ids( self, pgdb=None ):
         """CatalogExcerpt has no downstreams """
         return []
 
@@ -265,12 +270,18 @@ class GaiaDR3DownloadLock(Base, UUIDMixin):
 
     # Not bothering to index the columns because I don't expect this
     #   table to ever have very many rows at one time.
-    minra = sa.Column( sa.REAL, nullable=False, index=False, doc="Min RA" )
-    maxra = sa.Column( sa.REAL, nullable=False, index=False, doc="Max RA" )
-    mindec = sa.Column( sa.REAL, nullable=False, index=False, doc="Min RA" )
-    maxdec = sa.Column( sa.REAL, nullable=False, index=False, doc="Max RA" )
-    minmag = sa.Column( sa.REAL, nullable=True, index=False, doc="min mag" )
-    maxmag = sa.Column( sa.REAL, nullable=True, index=False, doc="max mag" )
+    # minra = sa.Column( sa.REAL, nullable=False, index=False, doc="Min RA" )
+    # maxra = sa.Column( sa.REAL, nullable=False, index=False, doc="Max RA" )
+    # mindec = sa.Column( sa.REAL, nullable=False, index=False, doc="Min RA" )
+    # maxdec = sa.Column( sa.REAL, nullable=False, index=False, doc="Max RA" )
+    # minmag = sa.Column( sa.REAL, nullable=True, index=False, doc="min mag" )
+    # maxmag = sa.Column( sa.REAL, nullable=True, index=False, doc="max mag" )
+    minra = sa.Column( sa.Integer, nullable=False, index=False, doc="Min RA / catalog_gaiadr3.coord_round" )
+    maxra = sa.Column( sa.Integer, nullable=False, index=False, doc="Max RA / catalog_gaiadr3.coord_round" )
+    mindec = sa.Column( sa.Integer, nullable=False, index=False, doc="Min Dec / catalog_gaiadr3.coord_round" )
+    maxdec = sa.Column( sa.Integer, nullable=False, index=False, doc="Max RA / catalog_gaiadr3.coord_round" )
+    minmag = sa.Column( sa.Integer, nullable=True, index=False, doc="Min mag / catalog_gaiadr3.mag_round" )
+    maxmag = sa.Column( sa.Integer, nullable=True, index=False, doc="Max mag / catalog_gaiadr3.mag_round" )
 
     @classmethod
     @contextmanager
@@ -288,66 +299,90 @@ class GaiaDR3DownloadLock(Base, UUIDMixin):
 
         """
 
-        def sqlconds( minra, maxra, minmag, maxmag ):
-            q = ( "WHERE ABS(minra - %(minra)s) < 0.005 "
-                  "  AND ABS(maxra - %(maxra)s) < 0.005 "
-                  "  AND ABS(mindec - %(mindec)s) < 0.005 "
-                  "  AND ABS(maxdec - %(maxdec)s) < 0.005 " )
-            subdict = { 'minra': minra, 'maxra': maxra,
-                        'mindec': mindec, 'maxdec': maxdec }
+        cfg = Config.get()
+        coord_round = cfg.value( 'catalog_gaiadr3.coord_round' )
+        mag_round = cfg.value( 'catalog_gaiadr3.mag_round' )
+
+        minra = int( round( minra / coord_round ) )
+        maxra = int( round( maxra / coord_round ) )
+        mindec = int( round( mindec / coord_round ) )
+        maxdec = int( round( maxdec / coord_round ) )
+        minmag = None if minmag is None else int( round( minmag / mag_round ) )
+        maxmag = None if maxmag is None else int( round( maxmag / mag_round ) )
+
+        def sqlconds( minra, maxra, mindec, maxdec, minmag, maxmag ):
+            q = sql.SQL( textwrap.dedent(
+                """\
+                WHERE minra={minra}
+                  AND maxra={maxra}
+                  AND mindec={mindec}
+                  AND maxdec={maxdec}
+                """ ) ).format( minra=minra, maxra=maxra, mindec=mindec, maxdec=maxdec )
             if minmag is None:
-                q += "  AND minmag IS NULL "
+                q += sql.SQL( "  AND minmag IS NULL\n" )
             else:
-                q += "  AND ABS(minmag - %(minmag)s) < 0.1 "
-                subdict['minmag'] = minmag
+                q += sql.SQL( "  AND minmag={minmag}\n" ).format( minmag=minmag )
             if maxmag is None:
-                q += "  AND maxmag IS NULL "
+                q += sql.SQL( "  AND maxmag IS NULL\n" )
             else:
-                q += "  AND ABS(maxmag - %(maxmag)s) < 0.1 "
-                subdict['maxmag'] = maxmag
+                q += sql.SQL( "  AND maxmag={maxmag}\n" ).format( maxmag=maxmag )
+            return q
 
-            return q, subdict
-
+        lockid = None
         try:
-            with PsycopgConnection() as conn:
+            with PGDB( dictcursor=True ) as conn:
+                minsleep = 0.1
+                sleept = 0.5
+                sleepfac = 2
+                maxsleep = 32
+                sleepfuzz = 0.1
+                rng = np.random.default_rng()
+                t0 = time.monotonic()
                 gotit = False
-                cursor = None
                 while not gotit:
-                    cursor = conn.cursor()
-                    cursor.execute( "LOCK TABLE gaiadr3_downloadlock" )
-                    q = "SELECT * FROM gaiadr3_downloadlock "
-                    conds, subdict = sqlconds( minra, maxra, minmag, maxmag )
-                    q += conds
-                    cursor.execute( q, subdict )
-                    rows = cursor.fetchall()
+                    conn.execute_nofetch( "LOCK TABLE gaiadr3_downloadlock" )
+                    q = sql.SQL( "SELECT * FROM gaiadr3_downloadlock\n" )
+                    q += sqlconds( minra, maxra, mindec, maxdec, minmag, maxmag )
+                    rows = conn.execute( q )
                     if len(rows) == 0:
                         gotit = True
                     else:
                         # The row existed, so somebody else is doing this.
                         # Release the lock, wait, try again
                         conn.rollback()
-                        SCLogger.debug( "...waiting for gaiadr3 downloadlock..." )
+                        nextsleept = sleept * sleepfac
+                        if nextsleept > maxsleep:
+                            raise RuntimeError( f"Timed out after {time.monotonic()-t0:.1f}s waiting for "
+                                                f"gaia download lock." )
+                        actual_sleept = max( minsleep, sleept + rng.normal( sleepfuzz * sleept ) )
+                        SCLogger.debug( f"...didn't get gaiadr3 downloadlock, waiting {actual_sleept:.1f}s "
+                                        f"and trying again." )
+                        time.sleep( actual_sleept )
+                        sleept = nextsleept
 
-                # If we get here, we're holding a lock
-                q = ( "INSERT INTO gaiadr3_downloadlock(_id,minra,maxra,mindec,maxdec,minmag,maxmag) "
-                      "VALUES (%(_id)s,%(minra)s,%(maxra)s,%(mindec)s,%(maxdec)s,%(minmag)s,%(maxmag)s)" )
-                cursor.execute( q, { '_id': uuid.uuid4(),
-                                     'minra': minra, 'maxra': maxra,
-                                     'mindec': mindec, 'maxdec': maxdec,
-                                     'minmag': minmag, 'maxmag': maxmag } )
-                # This will add the row to the table and release the lock
+                # If we get here, we're holding a lock on the giadownloadlock table
+                lockid = uuid.uuid4()
+                SCLogger.debug( f"Locking gaia catalog row: {minra},{maxra},{mindec},{maxdec},{minmag},{maxmag}: "
+                                f"{lockid}" )
+                q = sql.SQL( textwrap.dedent (
+                    """
+                    INSERT INTO gaiadr3_downloadlock(_id,minra,maxra,mindec,maxdec,minmag,maxmag)
+                    VALUES ({_id},{minra},{maxra},{mindec},{maxdec},{minmag},{maxmag})
+                    """ ) ).format( _id=lockid,
+                                    minra=minra, maxra=maxra, mindec=mindec, maxdec=maxdec,
+                                    minmag=minmag, maxmag=maxmag )
+                conn.execute_nofetch( q )
+                # This will add the row to the table and release the table lock
                 conn.commit()
 
             yield True
 
         finally:
-            # This is in a "finally" so that if the thing that we
-            #  yielded to gets an exception, this stuff still gets
-            #  executed.
-            with PsycopgConnection() as conn:
-                cursor = conn.cursor()
-                q = "DELETE FROM gaiadr3_downloadlock "
-                conds, subdict = sqlconds( minra, maxra, minmag, maxmag )
-                q += conds
-                cursor.execute( q, subdict )
-                conn.commit()
+            # Release the lock row
+            if lockid is not None:
+                SCLogger.debug( f"Releasing gaia catalog lock {lockid}" )
+                with PsycopgConnection() as conn:
+                    cursor = conn.cursor()
+                    q = sql.SQL( "DELETE FROM gaiadr3_downloadlock WHERE _id={_id}\n" ).format( _id=lockid )
+                    cursor.execute( q )
+                    conn.commit()

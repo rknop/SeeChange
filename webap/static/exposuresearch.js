@@ -108,10 +108,9 @@ seechange.ExposureSearch = class
         rkWebUtil.elemaker( "p", this.exposurelist.listdiv, { "text": "Loading exposures...",
                                                               "classes": [ "warning", "bold", "italic" ] } );
 
-        this.context.connector.sendHttpRequest( "exposures",
+        this.context.connector.sendHttpRequest( "exposures/" + provtag,
                                                 { "startdate": startdate,
                                                   "enddate": enddate,
-                                                  "provenancetag": provtag,
                                                   "projects": projects },
                                                 function( data ) {
                                                     self.actually_show_exposures( data ); } );

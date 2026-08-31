@@ -6,7 +6,10 @@ import pytz
 from enum import Enum
 
 import numpy as np
+import numpy.polynomial.chebyshev
 
+import psycopg
+from psycopg import sql
 import sqlalchemy as sa
 
 import astropy.time
@@ -14,23 +17,13 @@ from astropy.io import fits
 import astropy.units as u
 from astropy.coordinates import SkyCoord, Distance
 
-from models.base import Base, SmartSession, UUIDMixin
+from models.base import Base, SmartSession, UUIDMixin, PsycopgConnection
 from models.provenance import Provenance
+from models.enums_and_bitflags import CalibratorSetConverter, CalibratorTypeConverter, FlatTypeConverter
 
 from pipeline.catalog_tools import Bandpass
-from util.util import get_inheritors
 from util.fits import read_fits_image
 from util.logger import SCLogger
-
-
-# dictionary of regex for filenames, pointing at instrument names
-INSTRUMENT_FILENAME_REGEX = None
-
-# dictionary of names of instruments, pointing to the relevant class
-INSTRUMENT_CLASSNAME_TO_CLASS = None
-
-# dictionary of instrument object instances, lazy loaded to be shared between exposures
-INSTRUMENT_INSTANCE_CACHE = None
 
 
 # Orientations for those instruments that have a permanent orientation square to the sky
@@ -44,82 +37,6 @@ class InstrumentOrientation(Enum):
     NrightEdown = 5       # flip-x, then 90° clockwise
     NdownEleft = 6        # flip-x, then 180°
     NleftEup = 7          # flip-x, then 270° clockwise
-
-
-def register_all_instruments():
-    """Go over all subclasses of Instrument and register them in the global dictionaries."""
-    global INSTRUMENT_FILENAME_REGEX, INSTRUMENT_CLASSNAME_TO_CLASS
-
-    if INSTRUMENT_FILENAME_REGEX is None:
-        INSTRUMENT_FILENAME_REGEX = {}
-    if INSTRUMENT_CLASSNAME_TO_CLASS is None:
-        INSTRUMENT_CLASSNAME_TO_CLASS = {}
-
-    inst = get_inheritors(Instrument)
-    for i in inst:
-        INSTRUMENT_CLASSNAME_TO_CLASS[i.__name__] = i
-        if i.get_filename_regex() is not None:
-            for regex in i.get_filename_regex():
-                INSTRUMENT_FILENAME_REGEX[regex] = i.__name__
-
-
-def guess_instrument(filename):
-    """Find the name of the instrument from the filename.
-
-    Uses the regex of each instrument (if it exists)
-    to try to match the filename with the expected
-    instrument's file name convention.
-    If multiple instruments match, raises an error.
-
-    If no instruments match, returns None.
-    TODO: add a fallback method that lets each instrument
-      run its own load method and see if it can load the file.
-
-    """
-    if filename is None:
-        raise ValueError("Cannot guess instrument without a filename! ")
-
-    filename = os.path.basename(filename)  # only scan the file name itself!
-
-    if INSTRUMENT_FILENAME_REGEX is None:
-        register_all_instruments()
-
-    instrument_list = []
-    for k, v in INSTRUMENT_FILENAME_REGEX.items():
-        if re.search(k, filename):
-            instrument_list.append(v)
-
-    if len(instrument_list) == 0:
-        # TODO: maybe add a fallback of looking into the file header?
-        # raise ValueError(f"Could not guess instrument from filename: {filename}. ")
-        return None  # leave empty is the right thing? should probably go to a fallback method
-    elif len(instrument_list) == 1:
-        return instrument_list[0]
-    else:
-        raise ValueError(f"Found multiple instruments matching filename: {filename}. ")
-
-    # TODO: add fallback method that runs all instruments
-    #  (or only those on the short list) and checks if they can load the file
-
-
-def get_instrument_instance(instrument_name):
-    """Get an instance of the instrument class, given the name of the instrument.
-
-    Will store that instance in the INSTRUMENT_INSTANCE_CACHE dictionary,
-    so the instruments can be re-used for e.g., loading multiple exposures.
-    """
-    if INSTRUMENT_CLASSNAME_TO_CLASS is None:
-        register_all_instruments()
-
-    global INSTRUMENT_INSTANCE_CACHE
-    if INSTRUMENT_INSTANCE_CACHE is None:
-        INSTRUMENT_INSTANCE_CACHE = {}
-
-    if instrument_name not in INSTRUMENT_INSTANCE_CACHE:
-        SCLogger.debug( f"Making instrument cache for {instrument_name}" )
-        INSTRUMENT_INSTANCE_CACHE[instrument_name] = INSTRUMENT_CLASSNAME_TO_CLASS[instrument_name]()
-
-    return INSTRUMENT_INSTANCE_CACHE[instrument_name]
 
 
 class SensorSection(Base, UUIDMixin):
@@ -327,6 +244,114 @@ class Instrument:
     values either in time or in space.
 
     """
+
+    # dictionary of regex for filenames, pointing at instrument names
+    _instrument_filename_regex = {}
+
+    # dictionary of names of instruments, pointing to the relevant class
+    _instrument_classname_to_class = {}
+
+    # dictionary of instrument object instances, lazy loaded to be shared between exposures
+    _instrument_instance_cache = {}
+
+    @classmethod
+    def register_all_instruments( cls ):
+        # Any module that defines classes that derive from Instrument is
+        # supposed to call <class>.regsiter_this_instrument at the
+        # bottom.
+        #
+        # Import all the classes here so that Instrument knows about
+        # them, and so that get_instrument_instance() and
+        # guess_instrument() will work.
+        #
+        # This does mean we have to edit this
+        # class method every time we add a new instrument.
+        #
+        # Doing this in a function rather than at the bottom of the
+        # class to avoid circular imports.  Individual instruments
+        # import Exposure, which imports Instrument....
+
+        import models.ptf     # noqa: F401
+        import models.decam   # noqa: F401
+        import models.ls4cam  # noqa: F401
+
+
+    @classmethod
+    def register_this_instrument( cls ):
+        """Register this instrument in the Instrument class dictionaries.
+
+        Any module that defines a subclass of Instrument needs to call
+        this method on that subclass after the class is defined.
+        Otherwise, Instrument won't know about that instrument and won't
+        be able to find it in get_instrument_instance or
+        guess_instrument.
+
+        """
+
+        if cls.__name__ not in Instrument._instrument_classname_to_class:
+            Instrument._instrument_classname_to_class[cls.__name__] = cls
+            if cls.get_filename_regex() is not None:
+                for regex in cls.get_filename_regex():
+                    if not isinstance( regex, re.Pattern ):
+                        raise TypeError( r"Coding error: at least one of the returns of get_instrument_regex() for "
+                                         r"{cls.__name__} is not a re.Pattern" )
+                    Instrument._instrument_filename_regex[regex] = cls.__name__
+
+
+    @classmethod
+    def get_instrument_instance( cls, instrument_name ):
+        """Get the singleton instrument instance for an instrument."""
+
+        Instrument.register_all_instruments()
+        if instrument_name not in Instrument._instrument_instance_cache:
+            if instrument_name not in Instrument._instrument_classname_to_class:
+                raise ValueError( f"Unknown instrument {instrument_name}" )
+            SCLogger.debug( f"Making instrument cache for {instrument_name}" )
+            Instrument._instrument_instance_cache[ instrument_name ] = (
+                Instrument._instrument_classname_to_class[ instrument_name ]() )
+
+        return Instrument._instrument_instance_cache[ instrument_name ]
+
+
+    @classmethod
+    def guess_instrument( cls, filename ):
+        """Find the name of the instrument from the filename.
+
+        Uses the regex of each instrument (if it exists)
+        to try to match the filename with the expected
+        instrument's file name convention.
+        If multiple instruments match, raises an error.
+
+        If no instruments match, returns None.
+        TODO: add a fallback method that lets each instrument
+          run its own load method and see if it can load the file.
+
+        """
+
+        if filename is None:
+            raise ValueError("Cannot guess instrument without a filename! ")
+
+        filename = os.path.basename(filename)  # only scan the file name itself!
+
+        Instrument.register_all_instruments()
+        instrument_list = []
+        for k, v in cls._instrument_filename_regex.items():
+            if k.search( filename ):
+                instrument_list.append(v)
+
+        if len(instrument_list) == 0:
+            # TODO: maybe add a fallback of looking into the file header?
+            # raise ValueError(f"Could not guess instrument from filename: {filename}. ")
+            return None  # leave empty is the right thing? should probably go to a fallback method
+        elif len(instrument_list) == 1:
+            return instrument_list[0]
+        else:
+            raise ValueError(f"Found multiple instruments matching filename: {filename}. ")
+
+        # TODO: add fallback method that runs all instruments
+        #  (or only those on the short list) and checks if they can load the file
+
+
     def __init__(self, **kwargs):
         """Create a new Instrument.
 
@@ -386,6 +411,8 @@ class Instrument:
         # and (if it's a step that includes a calibraiton image or datafile)
         # to the CalibratorTypeConverter dict in enums_and_bitflags.
         self.preprocessing_steps_available = ['overscan', 'zero', 'dark', 'linearity', 'flat', 'fringe', 'illumination']
+        # If a type isn't listed, it does all steps.  Otherwise, just the steps listed.
+        self.preprocessing_steps_by_type = {}
         # a list of preprocessing steps that are pre-applied to the exposure data
         self.preprocessing_steps_done = []
         self.preprocessing_step_skip_by_filter = {}  # e.g., {'g': ['fringe', 'illumination']} will skip those for g
@@ -398,11 +425,8 @@ class Instrument:
             setattr(self, key, value)
 
         # add this instrument to the cache, if there isn't one already
-        global INSTRUMENT_INSTANCE_CACHE
-        if INSTRUMENT_INSTANCE_CACHE is None:
-            INSTRUMENT_INSTANCE_CACHE = {}
-        if self.name not in INSTRUMENT_INSTANCE_CACHE:
-            INSTRUMENT_INSTANCE_CACHE[self.__class__.__name__] = self
+        if self.name not in Instrument._instrument_instance_cache:
+            Instrument._instrument_instance_cache[self.__class__.__name__] = self
 
     def __repr__(self):
         ap = None if self.aperture is None else f'{self.aperture:.1f}m'
@@ -410,8 +434,21 @@ class Instrument:
         filts = [] if self.allowed_filters is None else [",".join(self.allowed_filters)]
         return f'<Instrument {self.name} on {self.telescope} ({ap}, {sc}, {filts})'
 
+
     @classmethod
-    def get_section_ids(cls):
+    def get_filename_regex(cls):
+        """Get the regular expressions used to match filenames for this instrument.
+
+        This is used to guess the correct instrument class to load the file
+        based only on the filename. Must return a list of regular expressions.
+
+        THIS FUNCTION MUST BE OVERRIDEN BY EACH SUBCLASS.
+
+        """
+        raise NotImplementedError("This method must be implemented by the subclass.")
+
+
+    def get_section_ids(self):
         """Get a list of SensorSection identifiers for this instrument.
 
         Returns
@@ -422,8 +459,7 @@ class Instrument:
         """
         raise NotImplementedError("This method must be implemented by the subclass.")
 
-    @classmethod
-    def check_section_id(cls, section_id):
+    def check_section_id(self, section_id):
         """Check that the type and value of the section is compatible with the instrument.
 
         For example, many instruments will key the section by a running
@@ -700,7 +736,7 @@ class Instrument:
         Returns
         -------
         offset: tuple of floats
-            The offsets in the x and y direction.
+            The offsets in the x and y direction (in pixels).
         """
         self.check_section_id(section_id)
         # this simple instrument defaults to zero offsets for ALL sections
@@ -734,12 +770,18 @@ class Instrument:
         idx = 0
         return idx
 
+    def get_section_filter(self, section_id):
+        raise NotImplementedError( f"get_section_filter not implemented for {self.__class__.__name__}" )
+
+
     def load(self, filepath, section_ids=None):
         """Load a part of an exposure file, based on the section identifier.
 
         If the instrument does not have multiple sections, set section_ids=0.
 
         THIS FUNCTION SHOULD GENERALLY NOT BE OVERRIDEN BY SUBCLASSES.
+        Instead, override load_section_image if necessary; often you can
+        get by by just overriding _get_fits_hdu_index_from_section_id.
 
         Parameters
         ----------
@@ -758,6 +800,7 @@ class Instrument:
         -------
         data: np.ndarray or list of np.ndarray
             The data from the exposure file.
+
         """
         if section_ids is None:
             section_ids = self.get_section_ids()
@@ -780,7 +823,9 @@ class Instrument:
         which is a basic FITS reader utility. More advanced instruments should
         override this function to use more complex file reading code.
 
-        THIS FUNCTION CAN BE OVERRIDEN BY EACH INSTRUMENT IMPLEMENTATION.
+        THIS FUNCTION CAN BE OVERRIDEN BY EACH INSTRUMENT
+        IMPLEMENTATION.  You may be able to get by just overriding
+        _get_fits_hdu_index_from_section_id.
 
         Parameters
         ----------
@@ -794,22 +839,11 @@ class Instrument:
         -------
         data: np.ndarray
             The data from the exposure file.
+
         """
         self.check_section_id(section_id)
         idx = self._get_fits_hdu_index_from_section_id(section_id)
         return read_fits_image(filepath, idx)
-
-    @classmethod
-    def get_filename_regex(cls):
-        """Get the regular expressions used to match filenames for this instrument.
-
-        This is used to guess the correct instrument class to load the file
-        based only on the filename. Must return a list of regular expressions.
-
-        THIS FUNCTION MUST BE OVERRIDEN BY EACH SUBCLASS.
-
-        """
-        raise NotImplementedError("This method must be implemented by the subclass.")
 
     def read_header(self, filepath, section_id=None):
         """Load the header from file.
@@ -825,9 +859,11 @@ class Instrument:
         Parameters
         ----------
         filepath: str, Path or list of str or Path
-            The filename (and full path) of the exposure file.
-            If an Exposure is associated with multiple files,
-            this will be a list of filenames.
+            The filename (and full path) of the exposure file.  If an
+            Exposure is associated with multiple files, this will be a
+            list of filenames.  In that case, the header of the first
+            file in the list is what's read.
+
         section_id: int or str (optional)
             The identifier of the section to load.
             If None (default), will load the header for the entire detector,
@@ -838,26 +874,23 @@ class Instrument:
         -------
         header: astropy.io.fits.Header
             The header from the exposure file, as an astropy.io.fits.Header object.
+
         """
-        if isinstance(filepath, (str, pathlib.Path)):
-            if section_id is None:
-                return read_fits_image(filepath, ext=0, output='header')
-            else:
-                self.check_section_id(section_id)
-                idx = self._get_fits_hdu_index_from_section_id(section_id)
-                return read_fits_image(filepath, ext=idx, output='header')
-        elif isinstance(filepath, list) and all( (isinstance(f, (str, pathlib.Path))) for f in filepath):
-            if section_id is None:
-                # just read the header of the first file
-                return read_fits_image(filepath[0], ext=0, output='header')
-            else:
-                self.check_section_id(section_id)
-                idx = self._get_file_index_from_section_id(section_id)
-                return read_fits_image(filepath[idx], ext=0, output='header')
+        if isinstance( filepath, list ):
+            if not all( isinstance( f, (str, pathlib.Path) ) for f in filepath ):
+                raise TypeError( "If you pass a list to read_header, it must be a list of file paths." )
+            filepath = filepath[0]
+
+        if not isinstance( filepath, (str, pathlib.Path) ):
+            raise TypeError( f"filepath must be a string or path. Got {type(filepath)}" )
+
+        if section_id is None:
+            return read_fits_image(filepath, ext=0, output='header')
         else:
-            raise ValueError(
-                f"filepath must be a string or list of strings. Got {type(filepath)}"
-            )
+            self.check_section_id(section_id)
+            idx = self._get_fits_hdu_index_from_section_id(section_id)
+            return read_fits_image(filepath, ext=idx, output='header')
+
 
     @staticmethod
     def normalize_keyword(key):
@@ -867,8 +900,7 @@ class Instrument:
         """
         return key.upper().replace(' ', '').replace('_', '').replace('-', '')
 
-    @classmethod
-    def extract_header_info(cls, header, names):
+    def extract_header_info(self, header, names):
         """Get information from the raw header into common column names.
 
         This includes keywords that are required for non-nullable columns (like MJD),
@@ -879,6 +911,13 @@ class Instrument:
         THIS FUNCTION SHOULD NOT BE OVERRIDEN BY SUBCLASSES.
         To override the header keyword translation, use _get_header_keyword_translations(),
         to add unit conversions use _get_header_values_converters().
+
+        (However, if you must, consider using super() for most of the
+        work.  As an example, see::
+
+          ls4cam.py::LS4Cam.extract_header_info
+
+        .)
 
         Parameters
         ----------
@@ -891,11 +930,12 @@ class Instrument:
         -------
         output_values: dict
             A dictionary with some of the required values from the header.
+
         """
-        header = {cls.normalize_keyword(key): value for key, value in header.items()}
+        header = {self.normalize_keyword(key): value for key, value in header.items()}
         output_values = {}
-        translations = cls._get_header_keyword_translations()
-        converters = cls._get_header_values_converters()
+        translations = self._get_header_keyword_translations()
+        converters = self._get_header_values_converters()
         for name in names:
             translation_list = translations.get(name, [])
             if isinstance(translation_list, str):
@@ -910,8 +950,7 @@ class Instrument:
 
         return output_values
 
-    @classmethod
-    def get_auxiliary_exposure_header_keys(cls):
+    def get_auxiliary_exposure_header_keys(self):
         """Additional header keys that can be useful to have on the Exposure header.
 
         This could include instrument specific items that are saved to
@@ -939,8 +978,6 @@ class Instrument:
         global exposure header, e.g., using the offsets and
         pixel scale to calculate the center of the section
         relative to the center of the detector.
-
-        THIS METHOD SHOULD BE OVERRIDEN BY SUBCLASSES.
 
         Parameters
         ----------
@@ -971,7 +1008,7 @@ class Instrument:
 
         Returns
         -------
-           dict, 10 keys: (ra|dec)_corner_(0|1)(0|1), (min|max)(ra|dec)
+           dict, 12 keys: (ra|dec)_corner_(0|1)(0|1), (min|max)(ra|dec)
 
         """
         raise NotImplementedError( f"{self.__class__.__name__} needs to implement get_ra_dec_corners_for_section" )
@@ -1006,6 +1043,11 @@ class Instrument:
         It should be overriden by any subclass that has such a default
         flags image.  By default, it returns a data array of all zeros.
 
+        NOTE: SeeChange flags images are int16, not uint16, because the
+        FITS standard doesn't have a unsigned int type . Yes, yes, we
+        could BSCALE it, but it's safer and simpler to just have 15 bits
+        of flags to play with.
+
         Parameters
         ----------
         section_id: int or str
@@ -1013,12 +1055,12 @@ class Instrument:
 
         Returns
         -------
-        A 2d numpy array of uint16 with shape [ sensorsection.size_y, sensorsection.size_x ]
+        A 2d numpy array of int16 with shape [ sensorsection.size_y, sensorsection.size_x ]
 
         """
 
         sec = self.get_section( section_id )
-        return np.zeros( [ sec.size_y, sec.size_x ], dtype=np.uint16 )
+        return np.zeros( [ sec.size_y, sec.size_x ], dtype=np.int16 )
 
     def convert_reduced_flags_to_seechange_flags( self, flagdata ):
         """Convert the dqmask flags for source-supplied reduced images to the SeeChange bitmask.
@@ -1122,8 +1164,7 @@ class Instrument:
         """
         return self.saturation_limit
 
-    @classmethod
-    def _get_header_keyword_translations(cls):
+    def _get_header_keyword_translations(self):
         """Get a dictionary that translates the header keywords into normalized column names.
 
         Each column name has a list of possible header keywords that can be used to populate it.
@@ -1145,12 +1186,12 @@ class Instrument:
             telescope=['TELESCOP', 'TELESCOPE'],
             gain=['GAIN'],
             airmass=['AIRMASS'],
+            sec_id=['SEC_ID'],
         )
         return t
         # TODO: add more!
 
-    @classmethod
-    def _get_header_values_converters(cls):
+    def _get_header_values_converters(self):
         """Get a dictionary with information needed to turn raw header values into values with correct units.
 
         Get a dictionary with some keywords
@@ -1168,8 +1209,7 @@ class Instrument:
         """
         return {}
 
-    @classmethod
-    def _get_fits_hdu_index_from_section_id(cls, section_id):
+    def _get_fits_hdu_index_from_section_id(self, section_id):
         """Translate the section_id into the index of the HDU in the FITS file.
 
         For example, if we have an instrument with 10 CCDs, numbered 0
@@ -1199,11 +1239,10 @@ class Instrument:
             FITS file.
 
         """
-        cls.check_section_id(section_id)
+        self.check_section_id(section_id)
         return int(section_id) + 1
 
-    @classmethod
-    def _get_file_index_from_section_id(cls, section_id):
+    def _get_file_index_from_section_id(self, section_id):
         """Translate the section_id into the file index in an array of filenames.
 
         For example, if we have an instrument with 10 CCDs, numbered 0 to 9,
@@ -1224,19 +1263,21 @@ class Instrument:
             The list index for the file that corresponds to the section_id.
             The list of filenames must be in the correct order for this to work.
         """
-        cls.check_section_id(section_id)
+        self.check_section_id(section_id)
         return int(section_id)
 
-    @classmethod
-    def get_short_instrument_name(cls):
+    def get_short_instrument_name(self):
         """Get a short name used for e.g., making filenames.
 
-        The default instrument just spits out the instrument class name.
+        The default spits out the property __name__, or, if that doesn't
+        exist, the class name.
         """
-        return cls.__name__
+        if hasattr( self, "__name__" ):
+            return self.__name__
+        else:
+            return self.__class__.__name__
 
-    @classmethod
-    def get_short_filter_name(cls, filter):
+    def get_short_filter_name(self, filter):
         """Translate the full filter name into a shorter version,
 
         e.g., for using in filenames.
@@ -1247,8 +1288,7 @@ class Instrument:
 
         return filter
 
-    @classmethod
-    def get_full_filter_name(cls, shortfilter):
+    def get_full_filter_name(self, shortfilter):
         """Translate the short filter name into the full version.
 
         The default is to just return the short filter name,
@@ -1258,8 +1298,7 @@ class Instrument:
         # should be overridden: default is to return the input
         return shortfilter
 
-    @classmethod
-    def standard_apertures( cls ):
+    def standard_apertures( self ):
         """Return standard photometry aperture radii in FWHMs.
 
         The first aperture on the list is the one that will be used for
@@ -1278,8 +1317,7 @@ class Instrument:
         return RuntimeError('We should no longer depend on instruments to give the standard apertures')
         return [ 0.6732, 1., 2., 3., 4., 5., 7., 10. ]
 
-    @classmethod
-    def fiducial_aperture( cls ):
+    def fiducial_aperture( self ):
         """Return the aperture number assumed to be 'infinite' for aperture corrections.
 
         Defaults to 5, which is 5*FWHM if using the base
@@ -1311,8 +1349,7 @@ class Instrument:
     # For gaia_dr3, catdata has fields:
     # X_WORLD, Y_WORLD, MAG_G, MAGERR_G, MAG_BP, MAGERR_BP, MAG_RP, MAGERR_RP, STARPROB
 
-    @classmethod
-    def gaia_dr3_prune_star_cat(cls, catdata, gaiaminbp_rp=0.5, gaiamaxbp_rp=3.0):
+    def gaia_dr3_prune_star_cat(self, catdata, gaiaminbp_rp=0.5, gaiamaxbp_rp=3.0):
         """Choose only rows from a catalog that have stars.
 
         Usually this is done by choosing a subset of the catalog
@@ -1358,8 +1395,7 @@ class Instrument:
 
         return output
 
-    @classmethod
-    def gaia_dr3_get_skycoords(cls, catdata, image_mjd=None):
+    def gaia_dr3_get_skycoords(self, catdata, image_mjd=None):
         """Use the RA/Dec from a Gaia catalog data array to initialize an array of SkyCoord objects
 
         Parameters
@@ -1395,8 +1431,7 @@ class Instrument:
 
         return coords
 
-    @classmethod
-    def gaia_dr3_to_instrument_mag( cls, filter, catdata ):
+    def gaia_dr3_to_instrument_mag( self, filter, catdata ):
         """Transform Gaia DR3 magnitudes to instrument magnitudes.
 
         Could use a polynomial based on the colors, or any other method.
@@ -1425,7 +1460,7 @@ class Instrument:
         trans_magerr: float or numpy array
             The instrument magnitude error(s).
         """
-        raise NotImplementedError( f"{cls.__name__} needs to implement gaia_dr3_to_instrument_mag" )
+        raise NotImplementedError( f"{self.__name__} needs to implement gaia_dr3_to_instrument_mag" )
 
     # ----------------------------------------
     # Preprocessing functions.  These live here rather than
@@ -1433,8 +1468,7 @@ class Instrument:
     # may need specific overrides for some of the steps.  For many
     # instruments, the defaults should work.
 
-    @classmethod
-    def get_filter_bandpasses(cls):
+    def get_filter_bandpasses(self):
         """Get a dictionary of filter name -> Bandpass object for a list of common filters.
 
         The default Instrument just gives some generic filters and their bandpasses,
@@ -1518,7 +1552,9 @@ class Instrument:
 
         return None
 
-    def preprocessing_calibrator_files( self, calibset, flattype, section, filter, mjd, nofetch=False ):
+    def preprocessing_calibrator_files( self, calibset, flattype, section, filter, mjd,
+                                        zero_provtag=None, flat_provtag=None, fringe_provtag=None,
+                                        nofetch=False ):
         """Get a dictionary of calibrator images/datafiles for a given mjd and sensor section.
 
         Don't call this when you're holding open a database session, as
@@ -1552,6 +1588,12 @@ class Instrument:
           be the short filter name, not the long filter name.
         mjd: float
           The mjd where the calibrator params are valid
+        zero_provtag: str or None
+          If given, the provenance tag of the bias image to get.
+        flat_provtag: str or None
+          If given, the provenance tag of the flat image to get.
+        fringe_provtag: str or None
+          If given, the provenance tag of the fringe image to get.
         nofetch: bool
           If True, will only search the database for an
           externally_supplied calibrator.  If False (default), will call
@@ -1578,13 +1620,6 @@ class Instrument:
         if ( calibset == 'externally_supplied' ) != ( flattype == 'externally_supplied' ):
             raise ValueError( "Doesn't make sense to have only one of calibset and flattype be externally_supplied" )
 
-        # Import CalibratorFile here.  We can't import it at the top of
-        # the file because calibrator.py imports image.py, image.py
-        # imports exposure.py, and exposure.py imports instrument.py --
-        # leading to a circular import
-        from models.calibratorfile import CalibratorFile
-        from models.image import Image
-
         params = {}
 
         expdatetime = pytz.utc.localize( astropy.time.Time( mjd, format='mjd' ).datetime )
@@ -1593,52 +1628,84 @@ class Instrument:
             if calibtype in self.preprocessing_nofile_steps:
                 continue
 
-            SCLogger.debug( f'Looking for calibrators for {section} type {calibtype}' )
+            provtag = ( zero_provtag if calibtype=='zero'
+                        else flat_provtag if calibtype=='flat'
+                        else fringe_provtag if calibtype=='fringe'
+                        else None )
+
+            SCLogger.debug( f'Looking for calibrators for {section} type {calibtype}'
+                            f'{f" provtag {provtag}" if provtag is not None else ""}' )
 
             calib = None
-            with SmartSession() as dbsess:
-                calibquery = ( dbsess.query( CalibratorFile )
-                               .filter( CalibratorFile.calibrator_set == calibset )
-                               .filter( CalibratorFile.instrument == self.name )
-                               .filter( CalibratorFile.type == calibtype )
-                               .filter( CalibratorFile.sensor_section == section )
-                               .filter( sa.or_( CalibratorFile.validity_start.is_(None),
-                                                CalibratorFile.validity_start <= expdatetime ) )
-                               .filter( sa.or_( CalibratorFile.validity_end.is_(None),
-                                                CalibratorFile.validity_end >= expdatetime ) )
-                              )
-                if calibtype == 'flat':
-                    calibquery = calibquery.filter( CalibratorFile.flat_type == flattype )
+            with PsycopgConnection() as conn:
+                cursor = conn.cursor( row_factory=psycopg.rows.dict_row )
+                q = sql.SQL( "SELECT c.* FROM calibrator_files c\n"
+                             "LEFT JOIN images i ON c.image_id=i._id\n"
+                             "LEFT JOIN data_files d ON c.datafile_id=d._id\n"
+                            )
+                if provtag is not None:
+                    q += sql.SQL( "LEFT JOIN provenance_tags it ON i.provenance_id=it.provenance_id\n"
+                                  "LEFT JOIN provenance_tags dt ON d.provenance_id=dt.provenance_id\n" )
+                q += sql.SQL( "WHERE c._calibrator_set={calibset}\n"
+                              "  AND c._type={calibtype}\n"
+                              "  AND c.instrument={instr}\n"
+                              "  AND c.sensor_section={sec}\n"
+                              "  AND ( c.validity_start IS NULL OR c.validity_start <= {expdatetime} )\n"
+                              "  AND ( c.validity_end IS NULL OR c.validity_end >= {expdatetime} )\n"
+                             ).format( calibset=CalibratorSetConverter.to_int(calibset),
+                                       calibtype=CalibratorTypeConverter.to_int(calibtype),
+                                       instr=self.name,
+                                       sec=section,
+                                       expdatetime=expdatetime )
+                if calibtype == "flat":
+                    q += ( sql.SQL( "  AND _flat_type={flat_type}\n" )
+                           .format( flat_type=FlatTypeConverter.to_int(flattype) ) )
                 if ( calibtype in [ 'flat', 'fringe', 'illumination' ] ) and ( filter is not None ):
-                    calibquery = ( calibquery.join( Image, CalibratorFile.image_id==Image._id )
-                                   .filter( Image.filter == filter ) )
+                    q += sql.SQL( "  AND i.filter={filter}\n" ).format( filter=filter )
+                if provtag is not None:
+                    q += sql.SQL( "  AND ( it.tag={provtag} OR dt.tag={provtag} )\n" ).format( provtag=provtag )
 
-                if calibquery.count() > 1:
-                    SCLogger.warning( f"Found {calibquery.count()} valid {calibtype}s for "
-                                      f"{self.name} {section}, randomly using one." )
-                if calibquery.count() > 0:
-                    SCLogger.debug( f"Got an existing valid {calibtype} for {self.name} {section}" )
-                    calib = calibquery.first()
+                # Select thing with most recent validity start; if there are more than one with the same
+                #   validity_start, choose the one made most recently.
+                q += sql.SQL( "ORDER BY c.validity_start DESC, c.created_at DESC\n" )
 
-            if ( calib is None ) and ( calibset == 'externally_supplied' ) and ( not nofetch ):
-                # This is the real reason we got the calibfile downloadlock, but of course
-                # we had to do it before searching for the file so that we don't have a race
-                # condition for multiple processes all downloading the file at once.
+                cursor.execute( q )
+                rows = cursor.fetchall()
+
+            matchedrow = None
+            if len(rows) > 1:
+                SCLogger.warning( f"Found {len(rows)} valid {calibtype}s for "
+                                  f"{self.name} {section}, picking the latest one, or, failing "
+                                  f"that, picking a 'random' one." )
+            if len(rows) > 0:
+                SCLogger.debug( f"Got an existing valid {calibtype} for {self.name} {section}" )
+                for row in rows:
+                    if row['validity_start'] is not None:
+                        matchedrow = row
+                        break
+                if matchedrow is None:
+                    matchedrow = rows[0]
+
+            if ( ( matchedrow is None ) and
+                 ( CalibratorSetConverter.to_string( calibset ) == 'externally_supplied' ) and
+                 ( not nofetch )
+                ):
                 calib = self._get_default_calibrator( mjd, section, calibtype=calibtype, filter=filter )
                 SCLogger.debug( f"Got default calibrator {calib} for {calibtype} {section}" )
+                matchedrow = calib.to_dict() if calib is not None else None
 
-            if calib is None:
+            if matchedrow is None:
                 params[ f'{calibtype}_isimage' ] = False
                 params[ f'{calibtype}_fileid' ] = None
             else:
-                if calib.image_id is not None:
+                if matchedrow['image_id'] is not None:
                     params[ f'{calibtype}_isimage' ] = True
-                    params[ f'{calibtype}_fileid' ] = calib.image_id
-                elif calib.datafile_id is not None:
+                    params[ f'{calibtype}_fileid' ] = matchedrow['image_id']
+                elif matchedrow['datafile_id'] is not None:
                     params[ f'{calibtype}_isimage' ] = False
-                    params[ f'{calibtype}_fileid' ] = calib.datafile_id
+                    params[ f'{calibtype}_fileid' ] = matchedrow['datafile_id']
                 else:
-                    raise RuntimeError( f'Data corruption: CalibratorFile {calib.id} has neither '
+                    raise RuntimeError( f'Data corruption: CalibratorFile {matchedrow["_id"]} has neither '
                                         f'image_id nor datafile_id' )
         return params
 
@@ -1810,11 +1877,11 @@ class Instrument:
         return []
 
 
-    def overscan_and_trim( self, *args ):
+    def overscan_and_trim( self, *args, method='median', **kwargs ):
         """Overscan and trim image.
 
-        Parameters
-        ----------
+        Positional Parameters
+        ---------------------
         Can pass either one or two positional parameters
 
         If one: image
@@ -1829,6 +1896,21 @@ class Instrument:
           Image header.  Need the full header, i.e. Image.header not Image.info.
         data: numpy array
           Image data.  Must not be trimmed, i.e. must include the overscan section
+
+        Keyword Parameters
+        ------------------
+          method : str, default 'median'
+             If 'median', then the overscan for an image's row/column is
+             the median of the overscan region for that row/column.
+
+             If 'polymedrej', then the overscan will first calculate the
+             median of all the rows/cols, then fit a kwargs['order']
+             (default: 3) Chebychev polynomial along the cols/rows of
+             those resultant medians, will reject points that are more
+             than kwargs['sigcut'] (default 3) σ away from the fit, and
+             will iterate the fit until there are no more rejections.
+             The overscan value for an image's row/col is then
+             interpolated from that polynomial.
 
         Hopefully most instruments won't have to override this (only
         overscan_sections), but this routine does assume that the data
@@ -1879,18 +1961,12 @@ class Instrument:
             ysize = max( sec['destsec']['y1'], ysize )
             xsize = max( sec['destsec']['x1'], xsize )
 
-        # Figure out bias values by taking the median of the appropriate overscan sections
         for sec in sections:
             # Have to figure out whether the overscan strip is offset in x or offset in y
-            if sec['biassec']['y1'] - sec['biassec']['y0'] == sec['datasec']['y1'] - sec['datasec']['y0']:
-                sec['bias'] = np.median( data[ sec['biassec']['y0']:sec['biassec']['y1'] ,
-                                               sec['biassec']['x0']:sec['biassec']['x1'] ],
-                                         axis=1 )[ :, np.newaxis ]
-            elif sec['biassec']['x1'] - sec['biassec']['x0'] == sec['datasec']['x1'] - sec['datasec']['x0']:
-                sec['bias'] = np.median( data[ sec['biassec']['y0']:sec['biassec']['y1'] ,
-                                               sec['biassec']['x0']:sec['biassec']['x1'] ],
-                                         axis=0 )[ np.newaxis, : ]
-            else:
+            isrow = ( sec['biassec']['y1'] - sec['biassec']['y0'] == sec['datasec']['y1'] - sec['datasec']['y0'] )
+            iscol = ( sec['biassec']['x1'] - sec['biassec']['x0'] == sec['datasec']['x1'] - sec['datasec']['x0'] )
+            axis = 1 if isrow else 0 if iscol else None
+            if axis is None:
                 err = ( f"Bias/Data section size mismatch: biassec=["
                         f"{sec['biassec']['x0']}:{sec['biassec']['x1']},"
                         f"{sec['biassec']['y0']}:{sec['biassec']['y1']}], datasec=["
@@ -1898,6 +1974,43 @@ class Instrument:
                         f"{sec['datasec']['y0']}:{sec['datasec']['y1']}]" )
                 SCLogger.error( err )
                 raise ValueError( err )
+
+            ovscn_meds = np.median( data[ sec['biassec']['y0']:sec['biassec']['y1'] ,
+                                          sec['biassec']['x0']:sec['biassec']['x1'] ],
+                                    axis=axis )
+
+            if method == 'median':
+                # Figure out bias values by taking the median of the appropriate overscan sections
+                pass
+
+            elif method == 'polymedrej':
+                order = kwargs['order'] if 'order' in kwargs else 3
+                sigcut = kwargs['sigcut'] if 'sigcut' in kwargs else 3.
+                allxvals = numpy.arange( 0, ovscn_meds.shape[0], dtype=ovscn_meds.dtype )
+                xvals = allxvals.copy()
+                done = False
+                while not done:
+                    poly = np.polynomial.chebyshev.Chebyshev.fit( xvals, ovscn_meds, order )
+                    resid = ovscn_meds - poly(xvals)
+                    sig = resid.std()
+                    keeps = np.where( np.fabs(resid) < sigcut * sig )[0]
+                    if len(keeps) == len(xvals):
+                        done = True
+                    else:
+                        xvals = xvals[keeps]
+                        ovscn_meds = ovscn_meds[keeps]
+                ovscn_meds = poly( allxvals )
+
+            else:
+                raise ValueError( f"Unknown overscan method {method}" )
+
+            # By now, the right overscan values as a function of col/row are in ovscn_meds
+            if isrow:
+                sec['bias'] = ovscn_meds[:, np.newaxis]
+            elif iscol:
+                sec['bias'] = ovscn_meds[np.newaxis, :]
+            else:
+                raise RuntimeError( "This should never happen." )
 
         # Actually subtract overscan and trim
         trimmedimage = np.zeros( [ ysize, xsize ], dtype=data.dtype )
@@ -1950,6 +2063,7 @@ class Instrument:
         """
         raise NotImplementedError( f"{self.__class__.__name__} needs to impldment linearity_correct" )
 
+
     def get_exposure_provenance( self, proc_type='raw', method='download', code_version=None, **kwargs ):
         """Get the provenance for an exposure from this instrument.
 
@@ -1997,119 +2111,50 @@ class Instrument:
         return provenance
 
 
+    def manually_load_exposure( self, filepath, origin_identifier=None, params=None,
+                                proc_type='raw', method='manual_load', code_version=None,
+                                exists_ok=False ):
+        """Load an exposure into the database from a file on disk.
 
-class DemoInstrument(Instrument):
-    fake_image_size_x = 512
-    fake_image_size_y = 1024
-
-    def __init__(self, **kwargs):
-        self.name = 'DemoInstrument'
-        self.telescope = 'DemoTelescope'
-        self.aperture = 2.0
-        self.focal_ratio = 5.0
-        self.square_degree_fov = 0.5
-        self.pixel_scale = 0.41
-        self.read_time = 2.0
-        self.read_noise = 1.5
-        self.dark_current = 0.1
-        self.gain = 2.0
-        self.non_linearity_limit = 10000.0
-        self.saturation_limit = 50000.0
-        self.allowed_filters = ["g", "r", "i", "z", "Y"]
-
-        # will apply kwargs to attributes, and register instrument in the INSTRUMENT_INSTANCE_CACHE
-        Instrument.__init__(self, **kwargs)
-
-        # DemoInstrument doesn't know how to preprocess
-        self.preprocessing_steps_available = []
-        self.preprocessing_steps_done = ['overscan', 'linearity', 'flat', 'fringe']
-
-    @classmethod
-    def get_section_ids(cls):
-        """Get a list of SensorSection identifiers for this instrument.
-
-        See Instrument.get_section_ids for interface.
-        """
-
-        return [ '0' ]
-
-    @classmethod
-    def check_section_id(cls, section_id):
-        """Check if the section_id is valid for this instrument.
-
-        The demo instrument only has one section, so the section_id must be 0.
-        """
-        if ( not isinstance(section_id, (str, int)) ) or ( int(section_id) != 0 ):
-            raise ValueError(f"section_id must be 0 for this instrument. Got {section_id} instead.")
-
-    def _make_new_section(self, identifier):
-        """Make a single section for the DEMO instrument.
-
-        The identifier must be a valid section identifier.
-
-        Returns
-        -------
-        section: SensorSection
-            A new section for this instrument.
-        """
-        return SensorSection(identifier, self.name, size_x=self.fake_image_size_x, size_y=self.fake_image_size_y)
-
-    def load_section_image(self, filepath, section_id):
-        """A spoof load method for this demo instrument.
-
-        The data is just a random array.
-        The instrument only has one section,
-        so the section_id must be 0.
-
-        Will fail if sections were not loaded using fetch_sections().
+        USE THIS WITH CARE.  EXTREME CARE.  Subclasses that implement
+        this need to make sure that what they do with origin_identifier
+        is the right thing!  The conductor will use this field to decide
+        if an exposure it finds via find_origin_exposures is the same as
+        one that's already loaded into the database.  So, if you're
+        manually loading exposures rather than going througha ll the
+        acquire_and_commit_origin_exposures process, make sure that you
+        aren't going to end up with duplicate exposires!
 
         Parameters
         ----------
-        filepath: str
-            The filename (and full path) of the exposure file.
-            In this case the filepath is not used.
-        section_id: str or int
-            The identifier of the SensorSection object.
-            This instrument only has one section, so this must be 0.
+          filepath : str or pathlib.Path
+              Path to file with exposure to load
+
+          origin_identifier : str
+              VERY IMPORTANT.  See warning above.
+
+          params : ...something
+              Instrument dependent.
+
+          proc_type, method, code_version: all passed on to get_exposure_provenance
+
+          exists_ok: bool, default False
+             If True, and an exposure with the same origin_identifier
+             already exists, and the provenance is as expected, assume
+             that what's there is right.  If the exposure in the
+             database has a different provenance from what we would have
+             loaded, raise an exception.  If exists_ok is False
+             (default) and an exposure with the same origin_identifier
+             exists at all, regardless of whether the provenance matches
+             or not, raise an exception.
 
         Returns
         -------
-        data: np.ndarray
-            The data from the exposure file.
+          Exposure
+
         """
+        raise NotImplementedError( f"{self.__class__.__name__} hasn't implemented manually_load_exposure" )
 
-        section = self.get_section(section_id)
-
-        rng = np.random.default_rng()
-        return np.array( rng.poisson(10., (section.size_y, section.size_x)), dtype='=f4' )
-
-    def read_header(self, filepath, section_id=None):
-        # return a spoof header
-        rng = np.random.default_rng()
-        return fits.Header( {
-            'RA': rng.uniform(0, 360),
-            'DEC': rng.uniform(-90, 90),
-            'EXPTIME': 30.0,
-            'FILTER': rng.choice(self.allowed_filters),
-            'MJD': rng.uniform(50000, 60000),
-            'PROPID': '2020A-0001',
-            'OBJECT': 'crab nebula',
-            'TELESCOP': self.telescope,
-            'INSTRUME': self.name,
-            'GAIN': rng.normal(self.gain, 0.01),
-        } )
-
-    def get_gain_at_pixel( self, image, x, y, section_id=None ):
-        return self.gain
-
-    @classmethod
-    def get_filename_regex(cls):
-        return [r'Demo']
-
-    @classmethod
-    def get_short_instrument_name(cls):
-        """Get a short name used for e.g., making filenames."""
-        return 'Demo'
 
     def acquire_origin_exposure( self, identifier, params, outdir=None ):
         """Does the same thing as InstrumentOriginExposures.download_exposures.
@@ -2139,6 +2184,7 @@ class DemoInstrument(Instrument):
         raise NotImplementedError( f"Instrument class {self.__class__.__name__} hasn't "
                                    f"implemented acquire_origin_exposure" )
 
+
     def acquire_and_commit_origin_exposure( self, identifier, params ):
         """Call acquire_origin_exposure and add the exposure to the database.
 
@@ -2159,6 +2205,7 @@ class DemoInstrument(Instrument):
         """
         raise NotImplementedError( f"Instrument class {self.__class__.__name__} hasn't "
                                    f"implemented acquire_and_commit_origin_exposure" )
+
 
     def find_origin_exposures( self,
                                skip_exposures_in_database=True,
@@ -2229,6 +2276,124 @@ class DemoInstrument(Instrument):
         """
         raise NotImplementedError( f"Instrument class {self.__class__.__name__} hasn't "
                                    f"implemented find_origin_exposures." )
+
+
+class DemoInstrument(Instrument):
+    fake_image_size_x = 512
+    fake_image_size_y = 1024
+
+    def __init__(self, **kwargs):
+        self.name = 'DemoInstrument'
+        self.telescope = 'DemoTelescope'
+        self.aperture = 2.0
+        self.focal_ratio = 5.0
+        self.square_degree_fov = 0.5
+        self.max_rad_degree = 0.4
+        self.pixel_scale = 0.41
+        self.read_time = 2.0
+        self.read_noise = 1.5
+        self.dark_current = 0.1
+        self.gain = 2.0
+        self.non_linearity_limit = 10000.0
+        self.saturation_limit = 50000.0
+        self.allowed_filters = ["g", "r", "i", "z", "Y"]
+
+        # will apply kwargs to attributes, and register instrument in the INSTRUMENT_INSTANCE_CACHE
+        Instrument.__init__(self, **kwargs)
+
+        # DemoInstrument doesn't know how to preprocess
+        self.preprocessing_steps_available = []
+        self.preprocessing_steps_done = ['overscan', 'linearity', 'flat', 'fringe']
+
+
+    @classmethod
+    def get_filename_regex(cls):
+        return [ re.compile(r'^Demo') ]
+
+
+    def get_section_ids(self):
+        """Get a list of SensorSection identifiers for this instrument.
+
+        See Instrument.get_section_ids for interface.
+        """
+
+        return [ '0' ]
+
+    def check_section_id(self, section_id):
+        """Check if the section_id is valid for this instrument.
+
+        The demo instrument only has one section, so the section_id must be 0.
+        """
+        if ( not isinstance(section_id, (str, int)) ) or ( int(section_id) != 0 ):
+            raise ValueError(f"section_id must be 0 for this instrument. Got {section_id} instead.")
+
+    def _make_new_section(self, identifier):
+        """Make a single section for the DEMO instrument.
+
+        The identifier must be a valid section identifier.
+
+        Returns
+        -------
+        section: SensorSection
+            A new section for this instrument.
+        """
+        return SensorSection(identifier, self.name, size_x=self.fake_image_size_x, size_y=self.fake_image_size_y)
+
+    def load_section_image(self, filepath, section_id):
+        """A spoof load method for this demo instrument.
+
+        The data is just a random array.
+        The instrument only has one section,
+        so the section_id must be 0.
+
+        Will fail if sections were not loaded using fetch_sections().
+
+        Parameters
+        ----------
+        filepath: str
+            The filename (and full path) of the exposure file.
+            In this case the filepath is not used.
+        section_id: str or int
+            The identifier of the SensorSection object.
+            This instrument only has one section, so this must be 0.
+
+        Returns
+        -------
+        data: np.ndarray
+            The data from the exposure file.
+        """
+
+        section = self.get_section(section_id)
+
+        rng = np.random.default_rng()
+        return np.array( rng.poisson(10., (section.size_y, section.size_x)), dtype='=f4' )
+
+    def read_header(self, filepath, section_id=None):
+        # return a spoof header
+        rng = np.random.default_rng()
+        return fits.Header( {
+            'RA': rng.uniform(0, 360),
+            'DEC': rng.uniform(-90, 90),
+            'EXPTIME': 30.0,
+            'FILTER': rng.choice(self.allowed_filters),
+            'MJD': rng.uniform(50000, 60000),
+            'PROPID': '2020A-0001',
+            'OBJECT': 'crab nebula',
+            'TELESCOP': self.telescope,
+            'INSTRUME': self.name,
+            'GAIN': rng.normal(self.gain, 0.01),
+        } )
+
+    def get_gain_at_pixel( self, image, x, y, section_id=None ):
+        return self.gain
+
+    def get_short_instrument_name(self):
+        """Get a short name used for e.g., making filenames."""
+        return 'Demo'
+
+
+# Register the instrument in the Instrument dictionaries
+DemoInstrument.register_this_instrument()
 
 
 class InstrumentOriginExposures:
@@ -2497,6 +2662,7 @@ class InstrumentOriginExposures:
     def __len__( self ):
         """The number of exposures this object encapsulates."""
         raise NotImplementedError( f"Instrument class {self.__class__.__name__} hasn't implemented __len__." )
+
 
 
 if __name__ == "__main__":

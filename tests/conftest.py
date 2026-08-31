@@ -7,14 +7,15 @@ import shutil
 import pathlib
 import math
 import random
+import textwrap
 import subprocess
+import json
 
 import numpy as np
 from scipy.integrate import dblquad
 
 import psycopg.errors
-import sqlalchemy as sa
-import sqlalchemy.orm
+from psycopg import sql
 
 from astropy.io import fits
 
@@ -24,8 +25,7 @@ from util.config import Config
 from models.base import (
     Base,
     FileOnDiskMixin,
-    SmartSession,
-    PsycopgConnection,
+    PGDB,
     CODE_ROOT,
     setup_warning_filters,
     get_archive_object
@@ -35,13 +35,12 @@ from models.catalog_excerpt import CatalogExcerpt
 from models.user import AuthUser, AuthGroup
 from models.image import Image
 from models.source_list import SourceList
-from models.psf import PSF, PSFExPSF
+from models.psf import PSFExPSF
 from models.background import Background
 from models.world_coordinates import WorldCoordinates
 from models.zero_point import ZeroPoint
 from models.fakeset import FakeSet
 
-from util.archive import Archive
 from util.util import remove_empty_folders, env_as_bool
 from util.retrydownload import retry_download
 from util.logger import SCLogger
@@ -82,8 +81,40 @@ def pytest_sessionstart(session):
     # Will be executed before the first test
     global SKIP_WARNING_TESTS
 
-    if False:  # this is only to make the warnings into errors, so it is easier to track them down...
-        warnings.filterwarnings('error', append=True)  # comment this out in regular usage
+    # make sure to load the test config
+    test_config_file = os.getenv( "SEECHANGE_CONFIG", None )
+    if test_config_file is None:
+        test_config_file = str((pathlib.Path(__file__).parent.parent
+                                / 'tests' / 'seechange_config_test.yaml').resolve())
+    cfg = Config.get(configfile=test_config_file, setdefault=True)
+    FileOnDiskMixin.configure_paths()
+
+    # Make sure that the config is what we expect for tests.  It's possible
+    # somebody put a local_override.yaml or some such file in the SeeChange
+    # directory that changes things from what we're expecting.  We might
+    # also wipe out a production database in that case!  So, yeah, be
+    # careful.
+    assert cfg.value( 'path.data_root' ) == '/seechange/tests/test_filestore'
+    assert cfg.value( 'path.data_temp' ) == '/seechange/tests/test_tempdata'
+    assert cfg.value( 'db.host' ) == 'postgres'
+    assert cfg.value( 'db.database' ) == 'seechange'
+    assert cfg.value( 'db.user' ) == 'postgres'
+    assert cfg.value( 'db.password' ) == 'fragile'
+    assert cfg.value( 'db.password_file' ) is None
+    assert cfg.value( 'archive.archive_url' ) == 'http://archive:8080/'
+    assert cfg.value( 'archive.local_read_dir' ) is None
+    assert cfg.value( 'archive.local_write_dir' ) is None
+    assert cfg.value( 'archive.token' ) == 'insecure'
+    assert cfg.value( 'webap.webap_url' ) == 'https://webap:8081/'
+    # ... I think these next three aren't used any more, only webap, so
+    #   we should remove them and remove them from the test config (if I'm right)
+    assert cfg.value( 'conductor.conductor_url' ) == 'https://webap:8081/'
+    assert cfg.value( 'conductor.username' ) == 'admin'
+    assert cfg.value( 'conductor.password' ) == 'admin'
+
+    # this is only to make the warnings into errors, so it is easier to track them down...
+    if False:
+        warnings.filterwarnings('error', append=True)
         SKIP_WARNING_TESTS = True
 
     setup_warning_filters()  # load the list of warnings that are to be ignored (not just in tests)
@@ -92,23 +123,19 @@ def pytest_sessionstart(session):
     # ignore warnings from photometry code that occur for cutouts with mostly zero values
     warnings.filterwarnings('ignore', message=r'.*Background mean=.*, std=.*, normalization skipped!.*')
 
-    # make sure to load the test config
-    test_config_file = os.getenv( "SEECHANGE_CONFIG", None )
-    if test_config_file is None:
-        test_config_file = str((pathlib.Path(__file__).parent.parent
-                                / 'tests' / 'seechange_config_test.yaml').resolve())
-    Config.get(configfile=test_config_file, setdefault=True)
-    FileOnDiskMixin.configure_paths()
     # SCLogger.setLevel( logging.INFO )
 
     # get rid of any catalog excerpts from previous runs:
-    with SmartSession() as session:
-        catexps = session.scalars(sa.select(CatalogExcerpt)).all()
-        for catexp in catexps:
-            if os.path.isfile(catexp.get_fullpath()):
-                os.remove(catexp.get_fullpath())
-            session.delete(catexp)
-        session.commit()
+    with PGDB( dictcursor=True ) as pgdb:
+        rows = pgdb.execute( "SELECT * FROM catalog_excerpts" )
+        if len(rows) > 0:
+            catexps = [ CatalogExcerpt(**r) for r in rows ]
+            for catexp in catexps:
+                if os.path.isfile(catexp.get_fullpath()):
+                    os.remove(catexp.get_fullpath())
+            pgdb.execute( sql.SQL( "DELETE FROM catalog_excerpts WHERE _id=ANY(ARRAY[{catexps}])" )
+                          .format( catexps=sql.SQL(",").join( [c.id for c in catexps] ) ) )
+            pgdb.commit()
 
 
 def any_objects_in_database():
@@ -138,17 +165,15 @@ def any_objects_in_database():
     alltables = Base.metadata.tables.keys()
 
     any_objects = False
-    with PsycopgConnection() as con:
-        cursor = con.cursor()
+    with PGDB() as pgdb:
         for table in alltables:
             try:
-                # Some tests create tables they then delete, but
-                #  SQLAlchmey doesn't forget about them.  Issue #516.
-                cursor.execute( f"SELECT COUNT(*) FROM {table}" )
+                rows, _cols = pgdb.execute( f"SELECT COUNT(*) FROM {table}" )
             except psycopg.errors.UndefinedTable:
-                con.rollback()
+                # Should this ever happen?
+                pgdb.rollback()
                 continue
-            n = cursor.fetchone()[0]
+            n = rows[0][0]
 
             if n > 0:
                 if table in ok_to_stay:
@@ -179,8 +204,7 @@ def any_objects_in_database():
 # @pytest.fixture(autouse=True)
 # def check_empty_database_at_end_of_each_test():
 #     yield True
-#     with SmartSession() as dbsession:
-#         assert not any_objects_in_database( dbsession )
+#     assert not any_objects_in_database()
 
 
 # This will be executed after the last test (session is the pytest session, not the SQLAlchemy session)
@@ -193,50 +217,41 @@ def pytest_sessionfinish(session, exitstatus):
     # ISSUE 479 this will find and DEBUG report the codeversions that are about to get killed in the next line.
     any_objects = any_objects_in_database()
 
-    with SmartSession() as dbsession:
+    with PGDB( dictcursor=True ) as pgdb:
         # We'll need the catalog excerpts later after we delete the table
-        catexps = dbsession.scalars(sa.select(CatalogExcerpt)).all()
+        rows = pgdb.execute( "SELECT * FROM catalog_excerpts" )
+        catexps = [ CatalogExcerpt(**r) for r in rows ]
 
-    # ...SQLAlchemy sometimes seems determined to have dangling sessions
-    # even when I tell it to close them.  See long rant in comments in
-    # models/base.py::SmartSession.  To try to not make that hang when
-    # cleaning up tests, try to totally shut down sqlalchemy altogether
-    # and just use postgres directly.  (Honestly, we should never have
-    # used sqlalchemy in the first place, its benefits have come nowhere
-    # close to offsetting its headcaches.)
-    #
-    # Issue #516
-    sqlalchemy.orm.session.close_all_sessions()
-
-    with PsycopgConnection() as conn:
-        cursor = conn.cursor()
-
+    with PGDB() as pgdb:
         # delete the CodeVersion objects (this should remove all provenances as well,
         # and that should cascade to *almost* everything else)
-        cursor.execute( "TRUNCATE TABLE code_versions CASCADE" )
+        pgdb.execute_nofetch( "TRUNCATE TABLE code_versions CASCADE" )
 
         # remove any Object objects, as these are not automatically cleaned up
         # Will cascade to object legacy survey matches
-        cursor.execute( "TRUNCATE TABLE objects CASCADE" )
+        pgdb.execute_nofetch( "TRUNCATE TABLE objects CASCADE" )
 
         # make sure there aren't any CalibratorFileDownloadLock rows
         # left over from tests that failed or errored out
-        cursor.execute( "DELETE FROM calibfile_downloadlock" )
+        pgdb.execute_nofetch( "DELETE FROM calibfile_downloadlock" )
 
         # remove SensorSections, though see Issue #487
-        cursor.execute( "DELETE FROM sensor_sections" )
+        pgdb.execute_nofetch( "DELETE FROM sensor_sections" )
 
         # remove RefSets, because those won't have been deleted by the code version / provenance cascade
-        cursor.execute( "DELETE FROM refsets" )
+        pgdb.execute_nofetch( "DELETE FROM refsets" )
 
         # remove any residual KnownExposures and PipelineWorkers
-        cursor.execute( "DELETE FROM knownexposures" )
-        cursor.execute( "DELETE FROM pipelineworkers" )
+        pgdb.execute_nofetch( "DELETE FROM knownexposures" )
+        pgdb.execute_nofetch( "DELETE FROM pipelineworkers" )
 
         # remove database records for any catalog excerpts.  (We'll remove the files below.)
-        cursor.execute( "DELETE FROM catalog_excerpts" )
+        pgdb.execute_nofetch( "DELETE FROM catalog_excerpts" )
 
-        conn.commit()
+        # remove any archive locks
+        pgdb.execute_nofetch( "DELETE FROM archive_locks" )
+
+        pgdb.commit()
 
     # remove empty folders from the archive
     if ARCHIVE_PATH is not None:
@@ -271,7 +286,11 @@ def pytest_sessionfinish(session, exitstatus):
 
 @pytest.fixture(scope='session')
 def download_url():
-    return 'https://portal.nersc.gov/cfs/m4616/SeeChange_testing_data'
+    test_download_url = os.getenv( "TEST_DOWNLOAD_URL", None )
+    if test_download_url is not None:
+        return os.getenv( "TEST_DOWNLOAD_URL" )
+    else:
+        return 'https://portal.nersc.gov/cfs/m4616/SeeChange_testing_data'
 
 
 # data that is included in the repo and should be available for tests
@@ -289,7 +308,7 @@ def cache_dir():
 
 
 # this will be configured to FileOnDiskMixin.local_path, and used as temporary data location
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="session", autouse=True)
 def data_dir():
     temp_data_folder = FileOnDiskMixin.local_path
     tdf = pathlib.Path( temp_data_folder )
@@ -307,6 +326,21 @@ def data_dir():
     # make sure the test config is pointing the data_dir
     # to a different location than the rest of the data
     # shutil.rmtree(temp_data_folder)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def temp_dir():
+    temp_path = pathlib.Path( FileOnDiskMixin.temp_path )
+    temp_path.mkdir( exist_ok=True, parents=True )
+    with open( temp_path / 'placeholder', 'w' ):
+        # Create an empty folder so the directory doesn't get deleted on "remove_data_from_disk"
+        pass
+
+    yield FileOnDiskMixin.temp_path
+
+    ( temp_path / 'placeholder' ).unlink( missing_ok=True )
+    # Remove the whole temp path.
+    shutil.rmtree( temp_path )
 
 
 @pytest.fixture(scope="session")
@@ -382,9 +416,9 @@ def provenance_base():
 
     yield p
 
-    with SmartSession() as session:
-        session.execute( sa.delete( Provenance ).where( Provenance._id==p.id ) )
-        session.commit()
+    with PGDB() as pgdb:
+        pgdb.execute_nofetch( sql.SQL( "DELETE FROM provenances WHERE _id={pvid}" ).format( pvid=p.id ) )
+        pgdb.commit()
 
 
 @pytest.fixture
@@ -400,32 +434,30 @@ def provenance_extra( provenance_base ):
 
     yield p
 
-    with SmartSession() as session:
-        session.execute( sa.delete( Provenance ).where( Provenance._id==p.id ) )
-        session.commit()
+    with PGDB() as pgdb:
+        pgdb.execute_nofetch( sql.SQL( "DELETE FROM provenances WHERE _id={pvid}" ).format( pvid=p.id ) )
+        pgdb.commit()
 
 
 @pytest.fixture
 def provenance_tags_loaded( provenance_base, provenance_extra ):
     try:
-        with PsycopgConnection() as conn:
-            cursor = conn.cursor()
-            cursor.execute( "INSERT INTO provenance_tags(_id,tag,provenance_id) "
-                            "VALUES (%(id)s,%(tag)s,%(provid)s)",
-                            { 'id': uuid.uuid4(), 'tag': 'xyzzy', 'provid': provenance_base.id } )
-            cursor.execute( "INSERT INTO provenance_tags(_id,tag,provenance_id) "
-                            "VALUES (%(id)s,%(tag)s,%(provid)s)",
-                            { 'id': uuid.uuid4(), 'tag': 'plugh', 'provid': provenance_base.id } )
-            cursor.execute( "INSERT INTO provenance_tags(_id,tag,provenance_id) "
-                            "VALUES (%(id)s,%(tag)s,%(provid)s)",
-                            { 'id': uuid.uuid4(), 'tag': 'plugh', 'provid': provenance_extra.id } )
-            conn.commit()
+        with PGDB() as pgdb:
+            for tag, prov in zip( [ 'xyzzy', 'plugh', 'plugh' ],
+                                  [ provenance_base.id, provenance_base.id, provenance_extra.id ] ):
+                pgdb.execute_nofetch( sql.SQL( textwrap.dedent(
+                    """\
+                    INSERT INTO provenance_tags(_id,tag,provenance_id)
+                    VALUES ({tid},{tag},{provid})
+                    """
+                ) ).format( tid=uuid.uuid4(), tag=tag, provid=prov ) )
+
+            pgdb.commit()
         yield True
     finally:
-        with PsycopgConnection() as conn:
-            cursor = conn.cursor()
-            cursor.execute( "DELETE FROM provenance_tags WHERE tag=ANY( ARRAY['xyzzy', 'plugh'] )" )
-            conn.commit()
+        with PGDB() as pgdb:
+            pgdb.execute_nofetch( "DELETE FROM provenance_tags WHERE tag=ANY( ARRAY['xyzzy', 'plugh'] )" )
+            pgdb.commit()
 
 
 # use this to make all the pre-committed Image fixtures
@@ -441,9 +473,9 @@ def provenance_preprocessing():
 
     yield p
 
-    with SmartSession() as session:
-        session.execute( sa.delete( Provenance ).where( Provenance._id==p.id ) )
-        session.commit()
+    with PGDB() as pgdb:
+        pgdb.execute_nofetch( sql.SQL( "DELETE FROM provenances WHERE _id={pvid}" ).format( pvid=p.id ) )
+        pgdb.commit()
 
 
 @pytest.fixture(scope="session")
@@ -458,9 +490,9 @@ def provenance_extraction():
 
     yield p
 
-    with SmartSession() as session:
-        session.execute( sa.delete( Provenance ).where( Provenance._id==p.id ) )
-        session.commit()
+    with PGDB() as pgdb:
+        pgdb.execute_nofetch( sql.SQL( "DELETE FROM provenances WHERE _id={pvid}" ).format( pvid=p.id ) )
+        pgdb.commit()
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -481,12 +513,7 @@ def archive_path(test_config):
 
 @pytest.fixture(scope="session")
 def archive(test_config, archive_path):
-    archive_specs = test_config.value('archive')
-    if archive_specs is None:
-        raise ValueError( "archive in config is None" )
-    archive_specs[ 'logger' ] = SCLogger
-    archive = Archive( **archive_specs )
-
+    archive = get_archive_object()
     archive.test_folder_path = archive_path  # track the place where these files actually go in the test suite
     yield archive
 
@@ -611,7 +638,7 @@ class PSFPaletteMaker:
 
         hdu = fits.PrimaryHDU( data=self.img )
         hdu.writeto( self.imagename, overwrite=True )
-        hdu = fits.PrimaryHDU( data=np.zeros_like( self.img, dtype=np.uint8 ) )
+        hdu = fits.PrimaryHDU( data=np.zeros_like( self.img, dtype=np.int16 ) )
         hdu.writeto( self.flagsname, overwrite=True )
         hdu = fits.PrimaryHDU( data=np.full( self.img.shape, 1. / ( self.noiselevel**2 ) ) )
         hdu.writeto( self.weightname, overwrite=True )
@@ -715,7 +742,7 @@ def psf_palette():
 @pytest.fixture
 def user():
     # username test, password test_password
-    with SmartSession() as session:
+    try:
         user = AuthUser( id='fdc718c3-2880-4dc5-b4af-59c19757b62d',
                          username='test',
                          displayname='Test User',
@@ -739,23 +766,30 @@ nRVct/brmHSH0KXam2bLZFECAwEAAQ==
         user.privkey = {"iv": "pXz7x5YA79o+Qg4w",
                         "salt": "aBtXrLT7ds9an38nW7EgbQ==",
                         "privkey": "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"  # noqa: E501
-                        }
-        session.add( user )
-        session.commit()
+                    }
+        with PGDB() as pgdb:
+            q = sql.SQL( textwrap.dedent(
+                """\
+                INSERT INTO authuser(id,username,displayname,email,pubkey,privkey)
+                VALUES ({uid},{username},{displayname},{email},{pubkey},{privkey})
+                """
+            ) ).format( uid=user.id, username=user.username, displayname=user.displayname,
+                        email=user.email, pubkey=user.pubkey, privkey=json.dumps(user.privkey) )
+            pgdb.execute_nofetch( q )
+            pgdb.commit()
 
-    yield True
+        yield True
 
-    with SmartSession() as session:
-        user = session.query( AuthUser ).filter( AuthUser.username=='test' ).all()
-        for u in user:
-            session.delete( u )
-        session.commit()
+    finally:
+        with PGDB() as pgdb:
+            pgdb.execute_nofetch( "DELETE FROM authuser WHERE username='test'" )
+            pgdb.commit()
 
 
 @pytest.fixture
 def admin_user():
     # In the noble tradition of routers everywhere, username admin, password admin
-    with SmartSession() as session:
+    try:
         user = AuthUser( id='684ece1d-c33a-4f80-b90e-646ae54021b7',
                          username='admin',
                          displayname='Admin User',
@@ -780,29 +814,36 @@ def admin_user():
                         "salt": "tZXnze39AoYqUsGYQoAIWw==",
                         "privkey": "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"  # noqa: E501
                         }
-        session.add( user )
 
         group = AuthGroup( id='d6de6f07-96e0-46a4-addd-56f6c29b47d3',
                            name='admin',
                            description='Admin Group' )
-        session.add( group )
-        session.commit()
-        session.execute( sa.text( "INSERT INTO auth_user_group(userid,groupid) VALUES(:user,:group)" ),
-                         { 'user': '684ece1d-c33a-4f80-b90e-646ae54021b7',
-                           'group': 'd6de6f07-96e0-46a4-addd-56f6c29b47d3' } )
 
-        session.commit()
 
-    yield True
+        with PGDB() as pgdb:
+            q = sql.SQL( textwrap.dedent(
+                """\
+                INSERT INTO authuser(id,username,displayname,email,pubkey,privkey)
+                VALUES ({uid},{username},{displayname},{email},{pubkey},{privkey})
+                """
+            ) ).format( uid=user.id, username=user.username, displayname=user.displayname,
+                        email=user.email, pubkey=user.pubkey, privkey=json.dumps(user.privkey) )
+            pgdb.execute_nofetch( q )
+            q = sql.SQL( "INSERT INTO authgroup(id,name,description) VALUES ({gid},{name},{desc})"
+                        ).format( gid=group.id, name=group.name, desc=group.description )
+            pgdb.execute_nofetch( q )
+            q = sql.SQL("INSERT INTO auth_user_group(userid,groupid) VALUES({user},{group})"
+                        ).format( user=user.id, group=group.id )
+            pgdb.execute_nofetch( q )
+            pgdb.commit()
 
-    with SmartSession() as session:
-        user = session.query( AuthUser ).filter( AuthUser.username=='admin' ).all()
-        for u in user:
-            session.delete( u )
-        group = session.query( AuthGroup ).filter( AuthGroup.name=='admin' ).all()
-        for g in group:
-            session.delete( g )
-        session.commit()
+        yield True
+
+    finally:
+        with PGDB() as pgdb:
+            pgdb.execute_nofetch( "DELETE FROM authuser WHERE username='admin'" )
+            pgdb.execute_nofetch( "DELETE FROM authgroup WHERE name='admin'" )
+            pgdb.commit()
 
 
 @pytest.fixture
@@ -906,9 +947,9 @@ def bogus_image( bogus_image_factory ):
 
     # Doing this manually rather than calling img.delete_from_disk_and_database
     #   because of the bogus_datastore cleanup below
-    with SmartSession() as session:
-        session.execute( sa.delete( Image ).where( Image._id==img.id ) )
-        session.commit()
+    with PGDB() as pgdb:
+        pgdb.execute_nofetch( sql.SQL( "DELETE FROM images WHERE _id={imgid}" ).format( imgid=img.id ) )
+        pgdb.commit()
     archive = get_archive_object()
     for comp in [ 'image', 'weight', 'flags' ]:
         p = pathlib.Path( FileOnDiskMixin.local_path ) / f'fake_bogus_image.{comp}.fits'
@@ -932,10 +973,10 @@ def bogus_sources_and_psf( bogus_image, bogus_sources_factory ):
 
     yield src, psf
 
-    with SmartSession() as session:
-        session.execute( sa.delete( PSF ).where( PSF._id==psf.id ) )
-        session.execute( sa.delete( SourceList ).where( SourceList._id==src.id ) )
-        session.commit()
+    with PGDB() as pgdb:
+        pgdb.execute_nofetch( sql.SQL( "DELETE FROM psfs WHERE _id={pid}" ).format( pid=psf.id ) )
+        pgdb.execute_nofetch( sql.SQL( "DELETE FROM source_lists WHERE _id={sid}" ).format( sid=src.id) )
+        pgdb.commit()
 
 
 @pytest.fixture
@@ -953,9 +994,9 @@ def bogus_bg( bogus_sources_and_psf ):
 
     yield bg
 
-    with SmartSession() as session:
-        session.execute( sa.delete( Background ).where( Background._id==bg.id ) )
-        session.commit()
+    with PGDB() as pgdb:
+        pgdb.execute_nofetch( sql.SQL( "DELETE FROM backgrounds WHERE _id={bid}" ).format( bid=bg.id ) )
+        pgdb.commit()
 
 
 @pytest.fixture
@@ -971,15 +1012,16 @@ def bogus_wcs( bogus_sources_and_psf ):
     wcs = WorldCoordinates( sources_id=bogus_sources.id,
                             provenance_id=prov.id,
                             filepath='fake_bogus_wcs.txt',
-
                             md5sum=uuid.uuid4() )
+    wcs._fill_bogus_coordinate_fields()
+
     wcs.insert()
 
     yield wcs
 
-    with SmartSession() as session:
-        session.execute( sa.delete( WorldCoordinates ).where( WorldCoordinates._id==wcs.id ) )
-        session.commit()
+    with PGDB() as pgdb:
+        pgdb.execute_nofetch( sql.SQL( "DELETE FROM world_coordinates WHERE _id={wid}" ).format( wid=wcs.id ) )
+        pgdb.commit()
 
 
 @pytest.fixture
@@ -999,9 +1041,9 @@ def bogus_zp( bogus_wcs ):
 
     yield zp
 
-    with SmartSession() as session:
-        session.execute( sa.delete( ZeroPoint ).where( ZeroPoint._id==zp.id ) )
-        session.commit()
+    with PGDB() as pgdb:
+        pgdb.execute_nofetch( sql.SQL( "DELETE FROM zero_points WHERE _id={zid}" ).format( zid=zp.id ) )
+        pgdb.commit()
 
 
 @pytest.fixture

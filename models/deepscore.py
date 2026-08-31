@@ -1,3 +1,7 @@
+import textwrap
+
+from psycopg import sql
+
 import sqlalchemy as sa
 from sqlalchemy import orm
 from sqlalchemy.schema import UniqueConstraint
@@ -5,7 +9,7 @@ from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.declarative import declared_attr
 
-from models.base import Base, UUIDMixin, SeeChangeBase, SmartSession, HasBitFlagBadness
+from models.base import Base, UUIDMixin, SeeChangeBase, PGDB, HasBitFlagBadness
 from models.enums_and_bitflags import DeepscoreAlgorithmConverter
 from models.measurements import MeasurementSet
 
@@ -59,11 +63,17 @@ class DeepScoreSet( Base, UUIDMixin, HasBitFlagBadness ):
     @property
     def deepscores( self ):
         if self._deepscores is None:
-            with SmartSession() as session:
-                self._deepscores = list( session.scalars( sa.select( DeepScore )
-                                                          .where( DeepScore.deepscoreset_id == self.id )
-                                                          .order_by( DeepScore.index_in_sources )
-                                                         ).all() )
+            with PGDB( dictcursor=True ) as pgdb:
+                q = sql.SQL( textwrap.dedent(
+                    """\
+                    SELECT * FROM deepscores
+                    WHERE deepscoreset_id={me}
+                    ORDER BY index_in_sources
+                    """
+                ) ).format( me=self.id )
+                rows = pgdb.execute( q )
+                self._deepscores = [ DeepScore(**row) for row in rows ]
+
         return self._deepscores
 
     @deepscores.setter
@@ -103,18 +113,15 @@ class DeepScoreSet( Base, UUIDMixin, HasBitFlagBadness ):
         return cuts[ method ]
 
 
-    def get_upstreams( self, session=None ):
-        """Return the upstreams of this DeepScoreSet object.
+    def get_upstream_ids( self, pgdb=None ):
+        """Return the id upstreams of this DeepScoreSet object.
 
         Will be the MeasurementSet the DeepScoreSet object is associated with.
 
         """
-        with SmartSession( session ) as session:
-            return session.scalars( sa.select( MeasurementSet )
-                                    .where( MeasurementSet._id == self.measurementset_id )
-                                   ).all()
+        return [ ( MeasurementSet, self.measurementset_id ) ]
 
-    def get_downstreams( self, session=None ):
+    def get_downstream_ids( self, pgdb=None ):
         """Return the downstreams of this DeepScoreSet object.
 
         Will be all DeepScore objects that are members of this set, plus
@@ -125,13 +132,15 @@ class DeepScoreSet( Base, UUIDMixin, HasBitFlagBadness ):
         """
 
         from models.fakeset import FakeAnalysis
-        with SmartSession( session ) as session:
-            downstreams = list( session.scalars( sa.Select( FakeAnalysis )
-                                                 .where( FakeAnalysis.orig_deepscore_set_id == self.id )
-                                                ).all() )
-            downstreams.extend( list( session.scalars( sa.select( DeepScore )
-                                                       .where( DeepScore.deepscoreset_id == self.id )
-                                                      ).all() ) )
+        with PGDB( pgdb ) as pgdb:
+            q = sql.SQL( "SELECT _id FROM fake_analysis WHERE orig_deepscore_set_id={me}" ).format( me=self.id )
+            rows, _cols = pgdb.execute( q )
+            downstreams = [ ( FakeAnalysis, row[0] ) for row in rows ]
+
+            q = sql.SQL( "SELECT _id FROM deepscores WHERE deepscoreset_id={me}" ).format( me=self.id )
+            rows, _cols = pgdb.execute( q )
+            downstreams.extend( [ ( DeepScore,row[0] ) for row in rows ] )
+
         return downstreams
 
 
@@ -196,13 +205,10 @@ class DeepScore(Base, UUIDMixin, HasBitFlagBadness):
         return f"<DeepScore {self.id} from Set {self.deepscoreset_id} ; score={self.score}>"
 
 
-    def get_upstreams(self, session=None):
-        """Get the DeepScoreSet this is a member of."""
-        with SmartSession(session) as session:
-            return session.scalars( sa.select( DeepScoreSet )
-                                    .where( DeepScoreSet._id == self.deepscoreset_id )
-                                    ).all()
+    def get_upstream_ids(self, pgdb=None):
+        """Get the id of the DeepScoreSet this is a member of."""
+        return [ ( DeepScoreSet, self.deepscoreset_id ) ]
 
-    def get_downstreams(self, session=None):
+    def get_downstream_ids(self, pgdb=None):
         """DeepScore objects have no downstreams."""
         return []

@@ -4,6 +4,7 @@ import os
 import time
 import pathlib
 import requests
+import functools
 
 import numpy as np
 import pandas
@@ -17,7 +18,7 @@ from models.base import SmartSession, FileOnDiskMixin
 from models.catalog_excerpt import CatalogExcerpt, GaiaDR3DownloadLock
 
 from util.exceptions import CatalogNotFoundError
-from util.util import listify
+from util.util import listify, retry_with_sleep
 from util.logger import SCLogger
 from util.config import Config
 
@@ -221,30 +222,21 @@ def download_gaia_dr3( minra, maxra, mindec, maxdec, padding=0.1, minmag=18., ma
     df = None
 
     if cfg.value( 'catalog_gaiadr3.use_server' ):
-        for i in range(5):
-            try:
-                df = _download_gaia_dr3_custom_server( ralow, rahigh, declow, dechigh, minmag, maxmag )
-                break
-            except Exception as ex:
-                SCLogger.debug( f"Exception trying to download ra=({ralow}:{rahigh}), dec=({declow}:{dechigh}), "
-                                f"mag=({minmag}:{maxmag}) from custom gaia server: {ex}" )
-                if i < 4:
-                    SCLogger.debug( "Sleeping 1s and retrying gaia query" )
-                    time.sleep( 1 )
-        else:
-            SCLogger.error( f"Repeated failures trying to download  ra=({ralow}:{rahigh}), dec=({declow}:{dechigh}), "
-                            f"mag=({minmag}:{maxmag}) from custom gaia server" )
+        dodownload = functools.partial( _download_gaia_dr3_custom_server,
+                                        ralow, rahigh, declow, dechigh, minmag, maxmag )
+        df = retry_with_sleep( dodownload, sleepmin=0.1, sleept=1.0, sleepfac=2., sleepfuzz=0.1, sleepmax=64,
+                               failmessage=( f"trying to download ra=({ralow}:{rahigh}), dec=({declow}:{dechigh}), "
+                                             f"mag=({minmag}:{maxmag}) from custom gaia server" ),
+                               exception_on_fail=False, retval_on_fail=None )
 
     if ( ( df is None ) and cfg.value( 'catalog_gaiadr3.fallback_datalab' ) ):
-        SCLogger.error( 'Skipping quering NOIRLab Astro Data Archive for Gaia DR3 stars; '
-                        'need to handle RA spanning 0, or verify that noirlab does it right.' )
-        # Leave this code here for the unspecified future time when we deal with
-        # ra spanning 0.  For now, we'll hope that the custom gaia dr3 server
-        # is just working....
-        if False:
-            SCLogger.warning( "NOIRLab Astro Data Archive querying right now doesn't handle RA spanning 0" )
-            SCLogger.info( 'Querying NOIRLab Astro Data Archive for Gaia DR3 stars' )
-
+        # Handle RA spanning 0.  When this happens, ralow will be < 0
+        if ralow < 0:
+            raranges = [ (ralow+360., 360.), (0, rahigh) ]
+        else:
+            raranges = [ (ralow, rahigh) ]
+        dfs = []
+        for rarange in raranges:
             gaia_query = (
                 f"SELECT source_id, ra, dec, ra_error, dec_error, pm, pmra, pmdec, "
                 f"       phot_g_mean_mag, phot_g_mean_flux_over_error, "
@@ -252,7 +244,7 @@ def download_gaia_dr3( minra, maxra, mindec, maxdec, padding=0.1, minmag=18., ma
                 f"       phot_rp_mean_mag, phot_rp_mean_flux_over_error, "
                 f"       classprob_dsc_combmod_star, classprob_dsc_combmod_quasar, classprob_dsc_combmod_galaxy "
                 f"FROM gaia_dr3.gaia_source "
-                f"WHERE ra>={ralow} AND ra<={rahigh} AND dec>={declow} AND dec<={dechigh} "
+                f"WHERE ra>={rarange[0]} AND ra<={rarange[1]} AND dec>={declow} AND dec<={dechigh} "
             )
             if minmag is not None:
                 gaia_query += f"AND phot_g_mean_mag>={minmag} "
@@ -274,7 +266,12 @@ def download_gaia_dr3( minra, maxra, mindec, maxdec, padding=0.1, minmag=18., ma
                 SCLogger.error( errstr )
                 raise RuntimeError( errstr )
 
-            df = dl.helpers.utils.convert( qresult, "pandas" )
+            dfs.append( dl.helpers.utils.convert( qresult, "pandas" ) )
+
+        if len(dfs) == 1:
+            df = dfs[0]
+        else:
+            df = pandas.concat( dfs ).reset_index()
 
     if df is None:
         raise RuntimeError( "Failed to download Gaia DR3 sources" )
@@ -361,6 +358,15 @@ def fetch_gaia_dr3_excerpt( image, minstars=50, maxmags=None, magrange=None,
     in some sort of locking, but that would be very touchy to do
     well without grinding everything to a halt, given that creating
     a new catalog excerpt isn't instant.
+
+    ROUNDING : so that we can reuse catalogs, and doing == on floats is
+    infinitely scary, every coordinate is rounded to to the value
+    specified in config by catalog_gaiadr3.coord_round, and magnitudes
+    are rounded to catalog_gaiadr3.mag_round.
+
+    [Currently, this rounding is only used for locking excerpts in
+    synchronizing multiple processes.  It's not actually used in the
+    definition of the catalogs.]
 
     Parameters
     ----------
@@ -514,7 +520,8 @@ def fetch_gaia_dr3_excerpt( image, minstars=50, maxmags=None, magrange=None,
                 if q.count() > 0:
                     catexp = q.first()
 
-                    if not os.path.isfile( catexp.get_fullpath() ):
+                    fullpath = catexp.get_fullpath( nofile=False )
+                    if not os.path.isfile( fullpath ):
                         SCLogger.error( f"CatalogExcerpt {catexp.id} has no file at {catexp.filepath}!" )
                         raise RuntimeError( f"CatalogExcerpt {catexp.id} has no file at {catexp.filepath}!" )
 

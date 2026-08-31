@@ -1,6 +1,0 @@
-preloads:
-  - seechange_config_test.yaml
-
-configchoice:
-  choice_algorithm: null
-  configs: null

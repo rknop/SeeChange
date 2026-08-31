@@ -16,7 +16,7 @@ import sqlalchemy as sa
 from models.base import SmartSession, FileOnDiskMixin
 from models.exposure import Exposure
 from models.knownexposure import KnownExposure
-from models.instrument import Instrument, InstrumentOrientation, SensorSection, get_instrument_instance
+from models.instrument import Instrument, InstrumentOrientation, SensorSection
 from models.image import Image
 from models.datafile import DataFile
 from models.provenance import Provenance
@@ -45,12 +45,15 @@ FILTER_NAME_CONVERSIONS = {
 
 class DECam(Instrument):
 
+    _file_re = re.compile(r'^c4d.*\.fits(.fz)?$')
+
     def __init__(self, **kwargs):
         self.name = 'DECam'
         self.telescope = 'CTIO 4.0-m telescope'
         self.aperture = 4.0
         self.focal_ratio = 2.7
         self.square_degree_fov = 3.0
+        self.max_rad_degree = 1.05
         self.pixel_scale = 0.263
         self.read_time = 20.0
         self.orientation_fixed = True
@@ -145,10 +148,16 @@ class DECam(Instrument):
         Instrument.__init__(self, **kwargs)
 
         self.preprocessing_steps_available = [ 'overscan', 'linearity', 'flat', 'illumination', 'fringe' ]
+        self.preprocessing_step_skip_by_filter = { 'g': [ 'fringe' ], 'r': [ 'fringe' ], 'i': [ 'fringe' ] }
         self.preprocessing_steps_done = []
 
+
     @classmethod
-    def get_section_ids(cls):
+    def get_filename_regex(cls):
+        return [ cls._file_re ]
+
+
+    def get_section_ids(self):
         """Get a list of SensorSection identifiers for this instrument.
 
         We are using the names of the FITS extensions (e.g., N12, S22, etc.).
@@ -160,8 +169,7 @@ class DECam(Instrument):
         s_list = [ f'S{i}' for i in range(1, 32) if i != 7 ]
         return n_list + s_list
 
-    @classmethod
-    def check_section_id(cls, section_id):
+    def check_section_id(self, section_id):
         """Check that the type and value of the section is compatible with the instrument.
 
         In this case, it must be a string starting with 'N' or 'S' and a number between 1 and 31.
@@ -177,6 +185,23 @@ class DECam(Instrument):
 
         if not 1 <= number <= 31:
             raise ValueError(f"The section_id number must be in the range [1, 31]. Got {number}. ")
+
+
+    def _make_new_section(self, section_id):
+        """Make a single section for the DECam instrument.
+
+        The section_id must be a valid section identifier (Si or Ni, where i is an int in [1,31])
+
+        Returns
+        -------
+        section: SensorSection
+            A new section for this instrument.
+        """
+        (dx, dy) = self.get_section_offsets(section_id)
+        defective = section_id in { 'N30', 'S7' }
+        return SensorSection(section_id, self.name, size_x=2048, size_y=4096,
+                             offset_x=dx, offset_y=dy, defective=defective)
+
 
     def get_section_offsets(self, section_id):
         """Find the offset for a specific section.
@@ -221,26 +246,13 @@ class DECam(Instrument):
         return ( -self._chip_radec_off[section_id]['ddec'] * 3600. / self.pixel_scale ,
                  self._chip_radec_off[section_id]['dra'] * 3600. / self.pixel_scale )
 
-    def _make_new_section(self, section_id):
-        """Make a single section for the DECam instrument.
-
-        The section_id must be a valid section identifier (Si or Ni, where i is an int in [1,31])
-
-        Returns
-        -------
-        section: SensorSection
-            A new section for this instrument.
-        """
-        (dx, dy) = self.get_section_offsets(section_id)
-        defective = section_id in { 'N30', 'S7' }
-        return SensorSection(section_id, self.name, size_x=2048, size_y=4096,
-                             offset_x=dx, offset_y=dy, defective=defective)
 
     def get_ra_dec_for_section( self, ra, dec, section_id ):
         if section_id not in self._chip_radec_off:
             raise ValueError( f"Unknown DECam section_id {section_id}" )
         return ( ra + self._chip_radec_off[section_id]['dra'] / math.cos( dec * math.pi / 180. ),
                  dec + self._chip_radec_off[section_id]['ddec'] )
+
 
     def get_ra_dec_corners_for_section( self, ra, dec, section_id ):
         self.fetch_sections()
@@ -263,40 +275,6 @@ class DECam(Instrument):
                  'mindec': mindec,
                  'maxdec': maxdec
                 }
-
-    @classmethod
-    def _get_header_keyword_translations( cls ):
-        t = dict(
-            ra = [ 'TELRA', 'RA' ],
-            dec = [ 'TELDEC, DEC' ],
-            mjd = [ 'MJD-OBS' ],
-            project = [ 'PROPID' ],
-            target = [ 'OBJECT' ],
-            width = [ 'NAXIS1' ],
-            height = [ 'NAXIS2' ],
-            exp_time = [ 'EXPTIME' ],
-            filter = [ 'FILTER' ],
-            instrument = [ 'INSTRUME' ],
-            telescope = [ 'TELESCOP' ],
-            gain = [ 'GAINA' ],
-            airmass = [ 'AIRMASS' ]
-        )
-        return t
-
-    @classmethod
-    def _get_header_values_converters( cls ):
-        t = dict(
-            ra = lambda r: util.radec.parse_sexigesimal_degrees( r, hours=True ),
-            dec = util.radec.parse_sexigesimal_degrees
-        )
-        return t
-
-    def overscan_trim_keywords_to_strip( self ):
-        yanklist = [ 'DETSIZE' ]
-        for base in [ 'TRIMSEC', 'DATASEC', 'DETSEC', 'CCDSEC', 'PRESEC', 'POSTSEC', 'BIASSEC', 'AMPSEC' ]:
-            for suffix in [ '', 'A', 'B' ]:
-                yanklist.append( f"{base}{suffix}" )
-        return yanklist
 
 
     def get_standard_flags_image( self, section_id ):
@@ -323,10 +301,11 @@ class DECam(Instrument):
         #  (If we ever change this, we have to fix the
         #  flag_image_bits dictionary in enums_and_bitflags,
         #  and everything that has used it...)
-        bpm = np.zeros( rawbpm.shape, dtype=np.uint16 )
+        bpm = np.zeros( rawbpm.shape, dtype=np.int16 )
         bpm[ rawbpm != 0 ] = string_to_bitflag( 'bad pixel', flag_image_bits_inverse )
 
         return bpm
+
 
     def get_gain_at_pixel( self, image, x, y, section_id=None ):
         if image is None:
@@ -351,6 +330,7 @@ class DECam(Instrument):
             else:
                 return self.gain
 
+
     def average_gain( self, image, section_id=None ):
         if image is None:
             return Instrument.average_again( self, None, section_id=section_id )
@@ -360,6 +340,7 @@ class DECam(Instrument):
             return float( image.header['GAIN'] )
         else:
             raise ValueError( "Unable to find gain level in header" )
+
 
     def average_saturation_limit( self, image, section_id=None ):
         if image is None:
@@ -376,27 +357,54 @@ class DECam(Instrument):
         else:
             raise ValueError( "Unable to find saturation level in header" )
 
-    @classmethod
-    def _get_fits_hdu_index_from_section_id(cls, section_id):
+
+    def _get_header_keyword_translations( self ):
+        t = dict(
+            ra = [ 'TELRA', 'RA' ],
+            dec = [ 'TELDEC', 'DEC' ],
+            mjd = [ 'MJD-OBS', 'MJDOBS' ],
+            project = [ 'PROPID' ],
+            target = [ 'OBJECT' ],
+            width = [ 'NAXIS1' ],
+            height = [ 'NAXIS2' ],
+            exp_time = [ 'EXPTIME' ],
+            filter = [ 'FILTER' ],
+            instrument = [ 'INSTRUME' ],
+            telescope = [ 'TELESCOP' ],
+            gain = [ 'GAINA' ],
+            airmass = [ 'AIRMASS' ]
+        )
+        return t
+
+
+    def _get_header_values_converters( self ):
+        t = dict(
+            ra = lambda r: util.radec.parse_sexigesimal_degrees( r, hours=True ),
+            dec = util.radec.parse_sexigesimal_degrees
+        )
+        return t
+
+
+    def _get_fits_hdu_index_from_section_id(self, section_id):
         """Return the index of the HDU in the FITS file for the DECam files.
 
         Since the HDUs have extension names, we can use the section_id directly
         to index into the HDU list.
         """
-        cls.check_section_id(section_id)
+        self.check_section_id(section_id)
         return section_id
 
-    @classmethod
-    def get_filename_regex(cls):
-        return [r'c4d.*\.fits']
 
-    @classmethod
-    def get_short_instrument_name(cls):
+    def _get_file_index_from_section_id( self, section_id ):
+        raise NotImplementedError( "_get_file_index_from_section_id doesn't make sense for DECam" )
+
+
+    def get_short_instrument_name(self):
         """Get a short name used for e.g., making filenames."""
         return 'c4d'
 
-    @classmethod
-    def get_short_filter_name(cls, filter):
+
+    def get_short_filter_name(self, filter):
         """Return the short version of each filter used by DECam.
 
         In this case we just return the first character of the filter name,
@@ -414,8 +422,7 @@ class DECam(Instrument):
         except Exception as e:
             raise KeyError( f"No shortname for filter name: {filter} ") from e
 
-    @classmethod
-    def get_full_filter_name(cls, shortfilter):
+    def get_full_filter_name(self, shortfilter):
         """Return the full version of each filter used by DECam from the shortname.
 
         e.g., returning "g" to "g DECam SDSS c0001 4720.0 1520.0".
@@ -423,8 +430,7 @@ class DECam(Instrument):
         return FILTER_NAME_CONVERSIONS[shortfilter]
 
 
-    @classmethod
-    def gaia_dr3_to_instrument_mag( cls, filter, catdata ):
+    def gaia_dr3_to_instrument_mag( self, filter, catdata ):
         """Transform Gaia DR3 magnitudes to instrument magnitudes.
 
         Uses a polynomial transformation from Gaia MAG_G to instrument magnitude.
@@ -461,7 +467,7 @@ class DECam(Instrument):
         if not isinstance(filter, str):
             raise ValueError(f"The filter must be a string. Got {type(filter)}. ")
         if len(filter) > 1:
-            filter_short = cls.get_short_filter_name(filter)
+            filter_short = self.get_short_filter_name(filter)
         else:
             filter_short = filter
 
@@ -492,6 +498,7 @@ class DECam(Instrument):
         trans_magerr = np.sqrt(catdata['MAGERR_G'] ** 2 + (trns[np.newaxis, :] * coltonerr).sum(axis=1) ** 2)
 
         return trans_mag, trans_magerr
+
 
     def _get_default_calibrator( self, mjd, section, calibtype='dark', filter=None ):
         # Just going to use the 56876 versions for everything
@@ -611,8 +618,6 @@ class DECam(Instrument):
                                                           calibtype=calibtype,
                                                           flattype=( 'externally_supplied' if calibtype == 'flat'
                                                                      else None ) ):
-                retry_download( url, fileabspath )
-
                 # We know calibtype will be one of fringe, flat, or illumination
                 if calibtype == 'fringe':
                     dbtype = 'Fringe'
@@ -621,33 +626,70 @@ class DECam(Instrument):
                 elif calibtype == 'illumination':
                     dbtype = 'ComSkyFlat'
                 mjd = float( cfg.value( "DECam.calibfiles.mjd" ) )
-                image = Image( format='fits', type=dbtype, provenance_id=prov.id, instrument='DECam',
-                               telescope='CTIO4m', filter=filter, section_id=section, filepath=str(filepath),
-                               mjd=mjd, end_mjd=mjd,
-                               info={}, exp_time=0, ra=0., dec=0.,
-                               ra_corner_00=0., ra_corner_01=0.,ra_corner_10=0., ra_corner_11=0.,
-                               dec_corner_00=0., dec_corner_01=0., dec_corner_10=0., dec_corner_11=0.,
-                               minra=0, maxra=0, mindec=0, maxdec=0,
-                               target="", project="" )
-                # Use FileOnDiskMixin.save instead of Image.save here because we're doing
-                # a lower-level operation.  image.save would be if we wanted to read and
-                # save FITS data, but here we just want to have it make sure the file
-                # is in the right place and check its md5sum.  (FileOnDiskMixin.save, when
-                # given a filename, will move that file to where it goes in the local data
-                # storage unless it's already in the right place.)
-                FileOnDiskMixin.save( image, fileabspath )
-                calfile = CalibratorFile( type=calibtype,
-                                          calibrator_set='externally_supplied',
-                                          flat_type='externally_supplied' if calibtype == 'flat' else None,
-                                          instrument='DECam',
-                                          sensor_section=section,
-                                          image_id=image.id )
-                image.insert()
-                calfile.insert()
+
+                # Gotta check to see if the file was there because another process pulled
+                #   it down while we were waiting for the lock.
+                with SmartSession() as session:
+                    image = session.query( Image ).filter( Image.filepath==str(filepath) ).first()
+                    if image is not None:
+                        calfile = ( session.query( CalibratorFile )
+                                    .filter( CalibratorFile.type==calibtype )
+                                    .filter( CalibratorFile.calibrator_set=='externally_supplied' )
+                                    .filter( CalibratorFile.flat_type==('externally_supplied'
+                                                                        if calibtype=='flat' else None) )
+                                    .filter( CalibratorFile.instrument=='DECam' )
+                                    .filter( CalibratorFile.sensor_section==section )
+                                    .filter( CalibratorFile.image_id==image.id ) )
+                        if calfile is None:
+                            raise RuntimeError( f"Image {filepath} exists, but the corresponding CalibratorFile "
+                                                f"does not exist." )
+                if image is None:
+                    retry_download( url, fileabspath )
+
+                    image = Image( format='fits', type=dbtype, provenance_id=prov.id, instrument='DECam',
+                                   telescope='CTIO4m', filter=filter, section_id=section, filepath=str(filepath),
+                                   mjd=mjd, end_mjd=mjd,
+                                   info={}, exp_time=0, ra=0., dec=0.,
+                                   ra_corner_00=0., ra_corner_01=0.,ra_corner_10=0., ra_corner_11=0.,
+                                   dec_corner_00=0., dec_corner_01=0., dec_corner_10=0., dec_corner_11=0.,
+                                   minra=0, maxra=0, mindec=0, maxdec=0,
+                                   target="", project="" )
+
+                    # Load the image data... mostly to force it to set the width and height fields
+                    #   for the database.  Because of how we downloaded it, we know it's in the right
+                    #   place in the local file store.
+                    image.load()
+
+                    # Use FileOnDiskMixin.save instead of Image.save here because we're doing
+                    # a lower-level operation.  image.save would be if we wanted to read and
+                    # save FITS data, but here we just want to have it make sure the file
+                    # is in the right place and check its md5sum.  (FileOnDiskMixin.save, when
+                    # given a filename, will move that file to where it goes in the local data
+                    # storage unless it's already in the right place.)
+                    FileOnDiskMixin.save( image, fileabspath )
+                    calfile = CalibratorFile( type=calibtype,
+                                              calibrator_set='externally_supplied',
+                                              flat_type='externally_supplied' if calibtype == 'flat' else None,
+                                              instrument='DECam',
+                                              sensor_section=section,
+                                              image_id=image.id )
+                    image.insert()
+                    calfile.insert()
+
             SCLogger.debug( f"decam_get_default_calibrator: releasing calibfile lock for {self.name} {section} "
                             f"calibset='externally_supplied' calibtype={calibtype}" )
 
         return calfile
+
+
+    def overscan_trim_keywords_to_strip( self ):
+        yanklist = [ 'DETSIZE' ]
+        for base in [ 'TRIMSEC', 'DATASEC', 'DETSEC', 'CCDSEC', 'PRESEC', 'POSTSEC', 'BIASSEC', 'AMPSEC' ]:
+            for suffix in [ '', 'A', 'B' ]:
+                yanklist.append( f"{base}{suffix}" )
+        return yanklist
+
+
 
     def linearity_correct( self, *args, linearitydata=None ):
         if not isinstance( linearitydata, DataFile ):
@@ -715,6 +757,7 @@ class DECam(Instrument):
                         clobber=True, md5sum=params['md5sum'], sizelog='GiB', logger=SCLogger.get() )
         return outfile
 
+
     def _commit_exposure( self, origin_identifier, expfile, obs_type='Sci', proc_type='raw',
                           preproc_bitflag=0, wtfile=None, flgfile=None, session=None ):
         """Add to the Exposures table in the database an exposure downloaded from NOIRLab.
@@ -778,8 +821,8 @@ class DECam(Instrument):
                               'DATE-OBS', 'TIME-OBS', 'MJD-OBS', 'OBJECT', 'PROGRAM',
                               'OBSERVER', 'PROPID', 'FILTER', 'RA', 'DEC', 'HA', 'ZD', 'AIRMASS',
                               'VSUB', 'GSKYPHOT', 'LSKYPHOT' ) }
-        exphdrinfo = Instrument.extract_header_info( hdr, [ 'mjd', 'exp_time', 'filter',
-                                                            'project', 'target' ] )
+        decam = Instrument.get_instrument_instance( 'DECam' )
+        exphdrinfo = decam.extract_header_info( hdr, [ 'mjd', 'exp_time', 'filter', 'project', 'target' ] )
         ra = util.radec.parse_sexigesimal_degrees( hdr['RA'], hours=True )
         dec = util.radec.parse_sexigesimal_degrees( hdr['DEC'] )
 
@@ -1151,7 +1194,7 @@ class DECamOriginExposures:
         """
         self.proc_type = proc_type
         self._frame = frame
-        self.decam = get_instrument_instance( 'DECam' )
+        self.decam = Instrument.get_instrument_instance( 'DECam' )
 
     def __len__( self ):
         # The length is the number of values there are in the *first* index
@@ -1379,3 +1422,7 @@ class DECamOriginExposures:
                         dl.unlink( missing_ok=True )
 
         return exposures
+
+
+# Register the instrument in the Instrument dictionaries
+DECam.register_this_instrument()

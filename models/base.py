@@ -8,15 +8,23 @@ import pathlib
 import json
 import datetime
 import uuid
+import socket
+import threading
+import functools
+import logging
+import textwrap
 from uuid import UUID
 from contextlib import contextmanager
 
 import numpy as np
 import shapely
 
+import astropy.wcs
+import astropy.units as u
 from astropy.coordinates import SkyCoord
 
 import psycopg
+from psycopg import sql
 # import psycopg.adapt
 
 import sqlalchemy as sa
@@ -41,7 +49,7 @@ import util.config as config
 from util.archive import Archive
 from util.logger import SCLogger
 from util.radec import radec_to_gal_ecl
-from util.util import asUUID, NumpyAndUUIDJsonEncoder
+from util.util import asUUID, NumpyAndUUIDJsonEncoder, listify, retry_with_sleep
 
 # Postgres adapters to allow insertion of some numpy types
 # ...let's see if we can get by without these in psycopg3
@@ -117,17 +125,49 @@ def setup_warning_filters():
 setup_warning_filters()  # need to call this here and also call it explicitly when setting up tests
 
 _engine = None
+# _Session isn't actually a SQLAlchemy session, it's a sessionmaker
 _Session = None
 _psycopg_params = None
 
 
-def Session():
-    """Make a session if it doesn't already exist.
+def _get_psycopg_params():
+    global _psycopg_params
 
-    Use this in interactive sessions where you don't want to open the
-    session as a context manager.  Don't use this anywhere in the code
-    base.  Instead, always use a context manager, getting your
-    connection using "with SmartSession(...) as ...".
+    if _psycopg_params is None:
+        cfg = config.Config.get()
+        if cfg.value( "db.engine" ) != "postgresql+psycopg":
+            raise ValueError( "This pipeline only supports PostgreSQL as a database engine" )
+        if psycopg.__version__[0] != '3':
+            raise ValueError( "This pipeline requires psycopg version 3." )
+
+        password = cfg.value( 'db.password' )
+        if password is None:
+            if cfg.value( "db.password_file" ) is None:
+                raise RuntimeError( "Must specify either db.password or db.password_file in config" )
+            with open( cfg.value( "db.password_file" ) ) as ifp:
+                password = ifp.readline().strip()
+
+        # psycopg docs seems to suggest that the client_encoding parameter isn't necessary,
+        #   but empirically it is.
+        _psycopg_params = { 'engine': cfg.value('db.engine'),
+                            'host': cfg.value('db.host'),
+                            'port': cfg.value('db.port'),
+                            'dbname': cfg.value('db.database'),
+                            'user': cfg.value('db.user'),
+                            'password': password,
+                            'client_encoding': 'UTF8' }
+
+    return _psycopg_params
+
+
+def Session():
+    """Make a SQLAlchemy session.
+
+    This is primarily intended for interactive sessions where you're
+    developing or testing.  In real code, you should use SmartSession in
+    a context manager ("with SmartSession(...) as sess: ... ").  In
+    fact, in real code, you should move towards using the PGDB context
+    manager and stop using SQLAlchemy at all.
 
     Returns
     -------
@@ -138,31 +178,20 @@ def Session():
     global _Session, _engine
 
     if _Session is None:
+        params = _get_psycopg_params()
+        url = ( f'{params["engine"]}://{params["user"]}:{params["password"]}@{params["host"]}:{params["port"]}/'
+                f'{params["dbname"]}?client_encoding=utf8')
         cfg = config.Config.get()
-
-        if cfg.value("db.engine") != "postgresql+psycopg":
-            raise ValueError( "This pipeline only supports PostgreSQL as a database engine" )
-
-        password = cfg.value( "db.password" )
-        if password is None:
-            if cfg.value( "db.password_file" ) is None:
-                raise RuntimeError( "Must specify either db.password or db.password_file in config" )
-            with open( cfg.value( "db.password_file" ) ) as ifp:
-                password = ifp.readline().strip()
-
-        url = (f'{cfg.value("db.engine")}://{cfg.value("db.user")}:{password}'
-               f'@{cfg.value("db.host")}:{cfg.value("db.port")}/{cfg.value("db.database")}'
-               f'?client_encoding=utf8')
         _engine = sa.create_engine( url,
                                     future=True,
                                     poolclass=sa.pool.NullPool,
-                                    connect_args={ "options": "-c timezone=utc" }
+                                    connect_args={ "options": "-c timezone=UTC",
+                                                   "connect_timeout": cfg.value("db.sa_connect_timeout")
+                                                  }
                                    )
-
         _Session = sessionmaker(bind=_engine, expire_on_commit=False)
 
     session = _Session()
-
     return session
 
 
@@ -174,8 +203,11 @@ def SmartSession(*args):
     If all inputs are None, create a session that would
     close at the end of the life of the calling scope.
 
+    For new code, use the PGDB() context manager, and start writing SQL
+    instead of using SQLAlchemy constructs.  (Issue #516.)
+
     """
-    global _Session, _engine
+    global _engine
 
     for arg in args:
         if isinstance(arg, sa.orm.session.Session):
@@ -273,6 +305,9 @@ def PsycopgConnection( current=None ):
     Useful if you don't want to fight with SQLAlchemy, e.g. if you
     want to use table locks (see comment above in SmartSession).
 
+    For new code, use the PGDB class (in a with block) instead of using
+    this function.
+
     Parameters
     ----------
       current : psycopg.Connection or None (default None)
@@ -290,7 +325,6 @@ def PsycopgConnection( current=None ):
        block exits.
 
     """
-    global _psycopg_params
 
     if current is not None:
         if not isinstance( current, psycopg.Connection ):
@@ -302,29 +336,11 @@ def PsycopgConnection( current=None ):
 
     # If a connection wasn't passed, make one, and then be sure to roll it back and close it when we're done
 
-    if _psycopg_params is None:
-        cfg = config.Config.get()
-        if cfg.value( "db.engine" ) != "postgresql+psycopg":
-            raise ValueError( "This pipeline only supports PostgreSQL as a database engine" )
-
-        password = cfg.value( 'db.password' )
-        if password is None:
-            if cfg.value( "db.password_file" ) is None:
-                raise RuntimeError( "Must specify either db.password or db.password_file in config" )
-            with open( cfg.value( "db.password_file" ) ) as ifp:
-                password = ifp.readline().strip()
-
-        # psycopg docs seems to suggest that the client_encoding parameter isn't necessary,
-        #   but empirically it is.
-        _psycopg_params = { 'host': cfg.value('db.host'),
-                            'port': cfg.value('db.port'),
-                            'dbname': cfg.value('db.database'),
-                            'user': cfg.value('db.user'),
-                            'password': password,
-                            'client_encoding': 'UTF8' }
-
+    conn = None
     try:
-        conn = psycopg.connect( **_psycopg_params )
+        params = _get_psycopg_params().copy()
+        del params['engine']
+        conn = psycopg.connect( **params )
         yield conn
 
     finally:
@@ -335,11 +351,367 @@ def PsycopgConnection( current=None ):
         #   on the caller having done that.  (E.g., if there's an
         #   exception, the caller may have short-circuited, which is why
         #   the yield is in a try and this cleaup is in a finally.)
-        conn.rollback()
-        conn.close()
+        if conn is not None:
+            conn.rollback()
+            conn.close()
+
+
+class PGDBTimings:
+    def __init__( self ):
+        self.reset()
+
+    def reset( self ):
+        self.last_query_time = None
+        self.last_commit_time = None
+        self.last_fetch_time = None
+        self.tot_query_time = 0.
+        self.tot_commit_time = 0.
+        self.tot_fetch_time = 0.
+
+
+class PGDB:
+    """A class that encapsulates a psycopg connection to the databsae.
+
+    Use this in a context manager:
+
+       with PGDB() as dbcon:
+           rows, cols = dbcon.execute( query, subdict )
+           # do other things
+
+    It will automatically close the connection when the with block ends.
+    You can pass either a psycopg.connection or a PGDB object to the
+    PGDB constructor, and it will reuse that connection; in that case,
+    it *won't* close the connection, trusting wherever the connection
+    came from to close it.  Do this if you call functions within a block
+    where you already have an open connection; pass the PGDB object to
+    the function, have the function use that in the constructor.
+
+    Send queries using DBCon.execute() and DBCon.execute_nofetch()
+
+    If for some reason you need access to the underlying cursor, you can
+    get it from the cursor property.
+
+    """
+
+    _sleept = None
+    _sleepmin = None
+    _sleepfac = None
+    _sleepfuzz = None
+    _sleepmax = None
+
+    def __init__( self, con=None, dictcursor=False,
+                  sleept=0.25, sleepmin=0.125, sleepfac=2, sleepfuzz=0.1, sleepmax=4.0
+                 ):
+        """Instantiate.
+
+        If you use this, either use it in a with block that doesn't last
+        too long, or call close(), and soon.
+
+        It will use the connection it is passed, or, if not, make a new
+        connection and hold on to it.  It will relinquish the connection
+        when you call the object's close method.  (This may or may not
+        actually close the connection to the database, based on how the
+        class was instantiated.)  Better, use this inside a context
+        manager; then the connection is relinquished when the connection
+        is released.  Example:
+
+           with PGDB( oldconnection ) as pgdb:
+               # do things
+
+        Where oldconnection can be, ideally, a PGDB, but can also be a
+        psycopg.Connection or a psycopg.Cursor.  (A sqlalchemy Session
+        will also work, but we're trying to phase that out.)  The passed
+        connection will be wrapped by this PGDB, and will *not* be
+        closed when the with block (as whoever opened it and started
+        this with block will still be expecting it to be there).  If
+        oldconnectoin is None, then a new connection is made, and closed
+        when the with block ends.
+
+        In the event that you're opening a new connection, it will retry
+        the connection if it fails with a psycopg.OperationalError.
+        *Hopefully* this will work around temporary spates of there
+        being too many connections to the database.  (If everybody is
+        obeying the request to not hold database connections open too
+        long.)  If you don't want it to do this, pass the optional
+        parameter maxsleep=0. to the constructor.
+
+        Parameters
+        ----------
+          con : psycopg.Connection, psycopg.Cursor, PGDB, or (shudder) sa.orm.session.Session
+            If None (the default), will make a new connection, and will
+            roll back and close it when done.  If not None, then will
+            instead wrap this connection; when close() is called, or
+            when the context manager that created this object ends, will
+            roll back and close the connection.  However, if con is not
+            None, then the assumption is that somebody else is managing
+            the connection, so will not rollback or close.
+
+          dictcursor : bool, default False
+            If True, then the cursor uses psycopg.rows.dict_row as its
+            row factory.  execite() will return a list of dictionaries,
+            with each element of the list being one row of the result.
+            If False, then execute returns two lists: a list of tuples
+            (the rows) and a list of strings (the column names).
+
+          sleept, sleepmin, sleepfac, sleepfuzz, sleepmax : passed to util.util.retry_with_sleep
+            If it needs to make a new connection to the database, and
+            the connection fails because of a psycopg.OperationalError,
+            it will retry, configured by these values.  They default to
+            values from config.db.*.
+
+        """
+
+        made_a_new_PGDB = True
+        if con is not None:
+            if isinstance( con, PGDB ):
+                self.con = con.con
+                self.timings = con.timings
+                self.echoqueries = con.echoqueries
+                self.alwaysexplain = con.alwaysexplain
+                self.alwaysanalyze = con.alwaysanalyze
+                made_a_new_PGDB = False
+            elif isinstance( con, psycopg.Connection ):
+                self.con = con
+            elif isinstance( con, psycopg.Cursor ):
+                self.con = con.connection
+            elif isinstance( con, sa.orm.session.Session ):
+                SCLogger.warning( "You're using a SQLAlchemy Session, still trying "
+                                  "to make a PGDB from it (Issue #516)" )
+                self.con = con.connection().connection.driver_connection
+            else:
+                raise TypeError( f"con must be None, a PGDB, a psycopg.Connection, a psycopg.Cursor, or a "
+                                 f"sa.orm.session.Session (shudder), not a {type(con)}" )
+            self._con_is_mine = False
+        else:
+            params = _get_psycopg_params().copy()
+            del params['engine']
+            connector = functools.partial( psycopg.connect, **params )
+            if PGDB._sleept is None:
+                cfg = config.Config.get()
+                PGDB._sleept = cfg.value( 'db.sleept' )
+                PGDB._sleepmin = cfg.value( 'db.sleepmin' )
+                PGDB._sleepfac = cfg.value( 'db.sleepfac' )
+                PGDB._sleepfuzz = cfg.value( 'db.sleepfuzz' )
+                PGDB._sleepmax = cfg.value( 'db.sleepmax' )
+            sleept = sleept if sleept is not None else PGDB._sleept
+            sleepmin = sleepmin if sleepmin is not None else PGDB._sleepmin
+            sleepfac = sleepfac if sleepfac is not None else PGDB._sleepfac
+            sleepfuzz = sleepfuzz if sleepfuzz is not None else PGDB._sleepfuzz
+            sleepmax = sleepmax if sleepmax is not None else PGDB._sleepmax
+            self.con = retry_with_sleep( connector, sleepmin=sleepmin, sleept=sleept, sleepfac=sleepfac,
+                                         sleepfuzz=sleepfuzz, sleepmax=sleepmax,
+                                         failmessage=f"to connect to database {params['dbname']} on {params['host']}",
+                                         accept_exceptions=psycopg.OperationalError )
+            self._con_is_mine = True
+
+        if made_a_new_PGDB:
+            self.timings = PGDBTimings()
+            cfg = config.Config.get()
+            self.echoqueries = cfg.value( 'db.echoqueries' )
+            self.alwaysexplain = cfg.value( 'db.alwaysexplain' )
+            self.alwaysanalyze = cfg.value( 'db.alwaysanalyze' )
+
+        self.dictcursor = dictcursor
+        self.remake_cursor()
+
+
+    def __enter__( self ):
+        return self
+
+    def __exit__( self, type, value, traceback ):
+        self.close()
+
+    def remake_cursor( self, dictcursor=None ):
+        """Recreate the cursor used for database communication.
+
+        Parameters
+        ----------
+          dictcursor : bool, default None
+            If None, will make a cursor that returns dictionaries
+            (vs. tuples) for rows based on what was passed to the
+            dictcursor argument of the DBCon constructor.  If True,
+            makes a cursor that will cause execute() to return a list of
+            dictionaries.  If False, makes a cursor that will cause
+            execute() to return two lists; the first is a list of tuples
+            (the rows), the second is a list of strings (the column
+            names).
+
+        """
+        self.curcursorisdict = self.dictcursor if dictcursor is None else dictcursor
+        if self.curcursorisdict:
+            self.cursor = self.con.cursor( row_factory=psycopg.rows.dict_row )
+        else:
+            self.cursor = self.con.cursor()
+
+
+    def close( self ):
+        """Rolls back and closes the connection if appropriate.
+
+        If you did stuff you want kept, make sure to call commit.
+
+        If the constructor was called with con=None, then the connection
+        will be rolled back.  If the constructor was callled with a
+        non-None none, then this method does nothing.  (In the latter case,
+        this PGDB object is wrapping a connection that was made externally,
+        so whoever made it is responsible for rolling back and closing.)
+
+        """
+        if self._con_is_mine:
+            self.con.rollback()
+            self.con.close()
+
+
+    def rollback( self ):
+        """Rollback any ongoing transaction.
+
+        Also be all cavalier about python function calling overhead.
+
+        """
+        self.con.rollback()
+
+
+    def commit( self ):
+        """Commit changes to the database.
+
+        Call this if you've done any INSERT or UPDATE or similar
+        commands that change the database, and you want your commands to
+        stick.
+
+        """
+        t0 = time.perf_counter()
+        self.con.commit()
+        t1 = time.perf_counter()
+        self.timings.last_commit_time = t1 - t0
+        self.timings.tot_commit_time += t1 - t0
+        self.remake_cursor( self.curcursorisdict )  # ...is this necessary?
+
+
+    def execute_nofetch( self, q, subdict={}, echo=None, explain=None, analyze=None ):
+        """Runs a query where you don't expect to fetch results.
+
+        Parameters are the same as execute(), except for analyze, which
+        works just like explain, only it does "EXPLAIN ANALYZE" rather
+        than just "EXPLAIN".  Returns nothing.
+
+        """
+
+        t0 = time.perf_counter()
+
+        alreadydid = False
+        if not isinstance( q, ( sql.SQL, sql.Composed ) ):
+            q = sql.SQL( q )
+
+        if SCLogger.instance().get().level <= logging.DEBUG:
+            echo = echo if echo is not None else self.echoqueries
+            explain = explain if explain is not None else self.alwaysexplain
+            analyze = analyze if analyze is not None else self.alwaysanalyze
+            if echo:
+                SCLogger.debug( f"Sending query\n{q.as_string()}\nwith substitutions: {subdict}" )
+
+            nl = '\n'
+            if explain:
+                SCLogger.debug( "Explaining..." )
+                self.cursor.execute( sql.SQL("EXPLAIN ") + q, subdict )
+                rows = self.cursor.fetchall()
+                dex = 'QUERY PLAN' if self.curcursorisdict else 0
+                SCLogger.debug( f"Query plan:\n{nl.join([r[dex] for r in rows])}" )
+            if analyze:
+                SCLogger.debug( "Doing EXPLAIN ANALYZE..." )
+                self.cursor.execute( sql.SQL("EXPLAIN ANALYZE ") + q, subdict )
+                alreadydid = True
+                rows = self.cursor.fetchall()
+                dex = 'QUERY PLAN' if self.curcursorisdict else 0
+                SCLogger.debug( f"Query plan:\n{nl.join([r[dex] for r in rows])}" )
+
+        # NOTE: if we ran with EXPLAIN ANALYZE, any side effects of the query happened!
+        # So don't run the query again.  This is why execute() forces analyze to
+        # be false, because you can't EXPLAIN ANALYZE the query and get the results
+        # all in one call.
+        if not alreadydid:
+            self.cursor.execute( q, subdict )
+
+        if ( SCLogger.instance().get().level <= logging.DEBUG ) and ( echo or explain ):
+            SCLogger.debug( "Query complete." )
+
+        t1 = time.perf_counter()
+        self.timings.last_query_time = t1 - t0
+        self.timings.tot_query_time += t1 - t0
+
+    def execute( self, q, subdict={}, silent=False, echo=None, explain=None ):
+        """Runs a query, and returns either (rows, columns) or just rows.
+
+        Parmaeters
+        ----------
+          q : str or sql.SQL (or a subclass thereof)
+            The query.  Use %(var)s in the string for a substitution, if
+            necessary.  The key "var" must then show up in subdict.
+
+          subdict : dict
+            Substitution dictionary. For every %(var)s that shows up in
+            q, there must be a key "var" in this dictionary with the
+            value to be substituted.  Extra keys are ignored.  Do not
+            pass this if q is a Composed; in that case, you've already
+            built in the substitutions.
+
+          echo : bool, default None
+            If True, echo queries before sending them.  If False, don't.
+            If None, use the default (self.echoqueries, initialized from
+            the db.echoqueries config value).
+
+          explain : bool, default None
+            If True, before running the query run an EXPLAIN on it and
+            send the output to debug logging.  If False, don't.  If
+            None, use the default (self.alwaysexplain, initialized from
+            the db.alwaysexplain config value).
+
+            WARNING: use of this makes you susceptible to SQL injection
+            attacks if you aren't completely and totally confident about
+            where your SQL came from.  Do not get bobby tablesed!
+
+        Returns
+        -------
+          If the current cursor is a dict cursor, returns a list of dictionaries.
+
+          If the current cursor is not a dict cursor, returns two lists.
+          The first is a list of lists, with the rows pulled from the
+          dictionary.  The second is a list of column names.
+
+        """
+        self.execute_nofetch( q, subdict, echo=echo, explain=explain, analyze=False )
+        if self.curcursorisdict:
+            if self.cursor.description is None:
+                return None
+            else:
+                if ( echo or explain ):
+                    SCLogger.debug( "Fetching..." )
+                t0 = time.perf_counter()
+                rval = self.cursor.fetchall()
+                t1 = time.perf_counter()
+                self.timings.last_fetch_time = t1 - t0
+                self.timings.tot_fetch_time += t1 - t0
+                if ( echo or explain ):
+                    SCLogger.debug( "...fetched" )
+                return rval
+        else:
+            if self.cursor.description is None:
+                return None, None
+            if ( echo or explain ):
+                SCLogger.debug( "Fetching..." )
+            t0 = time.perf_counter()
+            rows = self.cursor.fetchall()
+            cols = [ desc[0] for desc in self.cursor.description ]
+            t1 = time.perf_counter()
+            self.timings.last_fetch_time = t1 - t0
+            self.timings.tot_fetch_time += t1 - t0
+            if ( echo or explain ):
+                SCLogger.debug( "...fetched" )
+            return rows, cols
+
+
 
 
 def db_stat(obj):
+
     """Check the status of an object. It can be one of: transient, pending, persistent, deleted, detached."""
     for word in ['transient', 'pending', 'persistent', 'deleted', 'detached']:
         if getattr(sa.inspect(obj), word):
@@ -372,7 +744,7 @@ class SeeChangeBase:
 
         if hasattr(self, '_bitflag'):
             self._bitflag = 0
-        if hasattr(self, 'upstream_bitflag'):
+        if hasattr(self, '_upstream_bitflag'):
             self._upstream_bitflag = 0
 
         for k, v in kwargs.items():
@@ -421,6 +793,8 @@ class SeeChangeBase:
     def _get_table_lock( cls, session, tablename=None ):
         """Never use this.  The code that uses this is already written.  Use it and get Bobby Tablesed."""
 
+        raise RuntimeError( "_get_table_lock is deprecated.  Issue #516." )
+
         # This is kind of irritating.  I got the point where I was sure
         # there were no deadlocks written into the code.  However,
         # sometimes, unreproducibly, we'd get a deadlock when trying to
@@ -467,7 +841,6 @@ class SeeChangeBase:
                     session.rollback()
                     time.sleep( sleeptime )
         if failed:
-            # import pdb; pdb.set_trace()
             session.rollback()
             SCLogger.error( f"Repeated failures getting lock on {tablename}." )
             raise RuntimeError( f"Repeated failures getting lock on {tablename}." )
@@ -525,7 +898,7 @@ class SeeChangeBase:
 
         Parameters
         ----------
-          session: SQLALchemy Session, or psycopg.Connection, or None
+          session: PGDB, psycopg.Connection, psycogp.Cursor, or sqlalchemy Session, or None
             Usually you do not want to pass this; it's mostly for other
             upsert etc. methods that cascade to this.
 
@@ -534,7 +907,7 @@ class SeeChangeBase:
             actually commit the database.  Do this if you want the
             insert to be inside a transaction you've started on session.
             It doesn't make sense to set nocommit=True unless you've
-            passed either a Session or a psycopg connection.
+            passed something in session.
 
         """
 
@@ -558,31 +931,20 @@ class SeeChangeBase:
         #  with objects attached, or not attached, to sessions.
         #
         # (Even better, unless a sa Session is passed, bypass sqlalchemy
-        # altogether.)
+        # altogether by just usgin PGDB.)
 
         cols, values = self._get_cols_and_vals_for_insert()
-        notmod = [ c for c in cols if c != 'modified' ]
+        subdict = { c: v for c,v in zip( cols, values ) if c != 'modified' }
 
-        if ( session is not None ) and ( isinstance( session, sa.orm.session.Session ) ):
-            q = f'INSERT INTO {self.__tablename__}({",".join(notmod)}) VALUES (:{",:".join(notmod)}) '
-            subdict = { c: v for c, v in zip( cols, values ) if c != 'modified' }
-            with SmartSession( session ) as sess:
-                sess.execute( sa.text( q ), subdict )
-                if not nocommit:
-                    sess.commit()
-            return
-
-        if ( session is not None ) and ( not isinstance( session, psycopg.Connection ) ):
-            raise TypeError( f"session must be a sa Session or psycopg.Connection or None, "
-                             f"not a {type(session)}" )
-
-        q = f'INSERT INTO {self.__tablename__}({",".join(notmod)}) VALUES (%({")s,%(".join(notmod)})s) '
-        subdict = { c: v for c, v in zip( cols, values ) if c != 'modified' }
-        with PsycopgConnection( session ) as conn:
-            cursor = conn.cursor()
-            cursor.execute( q, subdict )
+        with PGDB( session ) as pgdb:
+            q = sql.SQL( "INSERT INTO {tab}({fields}) VALUES ({vals})"
+                        ).format( tab=sql.Identifier(self.__tablename__),
+                                  fields=sql.SQL(",").join( sql.Identifier(c) for c in subdict.keys() ),
+                                  vals=sql.SQL(",").join( sql.SQL(f'%({c})s') for c in subdict.keys() )
+                                 )
+            pgdb.execute_nofetch( q, subdict )
             if not nocommit:
-                conn.commit()
+                pgdb.commit()
 
 
     def upsert( self, session=None, load_defaults=False ):
@@ -590,8 +952,6 @@ class SeeChangeBase:
 
         Will *not* update self's fields with server default values!
         Re-get the database row if you want that.
-
-        Will not attach the object to session if you pass it.
 
         Will assign the object an id if it doesn't alrady have one (in self.id).
 
@@ -607,7 +967,7 @@ class SeeChangeBase:
 
         Parameters
         ----------
-          session: SQLAlchemy Session, default None
+          session: PGDB, psycopg.Connect, psycopg.Cursor, sa.orm.session.Session, or None
             Usually you don't want to pass this.
 
           load_defaults: bool, default False
@@ -638,17 +998,32 @@ class SeeChangeBase:
 
         _ = self.id   # Make sure that self._id is generated
         cols, values = self._get_cols_and_vals_for_insert()
-        notmod = [ c for c in cols if c != 'modified' ]
-        q = ( f'INSERT INTO {self.__tablename__}({",".join(notmod)}) VALUES (:{",:".join(notmod)}) '
-              f'ON CONFLICT (_id) DO UPDATE SET '
-              f'{",".join( [ f"{c}=:{c}" for c in cols if c!="id" ] )} ')
         subdict = { c: v for c, v in zip( cols, values ) }
-        with SmartSession( session ) as sess:
-            sess.execute( sa.text( q ), subdict )
-            sess.commit()
+        subdict['modified'] = datetime.datetime.now( tz=datetime.UTC )
+        basicdict = subdict.copy()
+        del basicdict['modified']
+        conflictdict = subdict.copy()
+        if '_id' in conflictdict:
+            del conflictdict['_id']
+
+        q = sql.SQL( textwrap.dedent(
+            """\
+            INSERT INTO {tab}({fields})
+            VALUES ({vals})
+            ON CONFLICT( _id) DO UPDATE SET {conflict}
+            """
+        ) ).format( tab=sql.Identifier(self.__tablename__),
+                    fields=sql.SQL(",").join( sql.Identifier(c) for c in basicdict.keys() ),
+                    vals=sql.SQL(",").join( sql.SQL(f'%({c})s') for c in basicdict.keys() ),
+                    conflict=sql.SQL(",").join( sql.SQL(f"{{c}}=%({c})s").format( c=sql.Identifier(c) )
+                                                for c in conflictdict )
+                   )
+        with PGDB( session ) as pgdb:
+            pgdb.execute_nofetch( q, subdict )
+            pgdb.commit()
 
             if load_defaults:
-                dbobj = self.__class__.get_by_id( self.id, session=sess )
+                dbobj = self.__class__.get_by_id( self.id, pgdb=pgdb )
                 for col in sa.inspect( self.__class__ ).c:
                     if ( ( col.name == 'modified' ) or
                          ( ( col.server_default is not None ) and ( getattr( self, col.name ) is None ) )
@@ -679,21 +1054,36 @@ class SeeChangeBase:
         if not all( [ isinstance( o, cls ) for o in objects ] ):
             raise TypeError( f"{cls.__name__}.upsert_list: passed objects weren't all of this class!" )
 
-        with SmartSession( session ) as sess:
+        with PGDB( session ) as pgdb:
             for obj in objects:
                 _ = obj.id                 #  Make sure _id is generated
                 cols, values = obj._get_cols_and_vals_for_insert()
-                notmod = [ c for c in cols if c != 'modified' ]
-                q = ( f'INSERT INTO {cls.__tablename__}({",".join(notmod)}) VALUES (:{",:".join(notmod)}) '
-                      f'ON CONFLICT (_id) DO UPDATE SET '
-                      f'{",".join( [ f"{c}=:{c}" for c in cols if c!="id" ] )} ')
                 subdict = { c: v for c, v in zip( cols, values ) }
-                sess.execute( sa.text( q ), subdict )
-            sess.commit()
+                subdict['modified'] = datetime.datetime.now( tz=datetime.UTC )
+                basicdict = subdict.copy()
+                del basicdict['modified']
+                conflictdict = subdict.copy()
+                if '_id' in conflictdict:
+                    del conflictdict['_id']
+
+                q = sql.SQL( textwrap.dedent(
+                    """\
+                    INSERT INTO {tab}({fields})
+                    VALUES ({vals})
+                    ON CONFLICT(_id) DO UPDATE SET {conflict}
+                    """
+                ) ).format( tab=sql.Identifier(cls.__tablename__),
+                            fields=sql.SQL(",").join( sql.Identifier(c) for c in basicdict.keys() ),
+                            vals=sql.SQL(",").join( sql.SQL(f'%({c})s') for c in basicdict.keys() ),
+                            conflict=sql.SQL(",").join( sql.SQL(f"{{c}}=%({c})s").format( c=sql.Identifier(c) )
+                                                        for c in conflictdict.keys() )
+                           )
+                pgdb.execute_nofetch( q, subdict )
+            pgdb.commit()
 
             if load_defaults:
                 for obj in objects:
-                    dbobj = obj.__class__.get_by_id( obj.id, session=sess )
+                    dbobj = obj.__class__.get_by_id( obj.id, pgdb=pgdb )
                     for col in sa.inspect( obj.__class__).c:
                         if ( ( col.name == 'modified' ) or
                              ( ( col.server_default is not None ) and ( getattr( obj, col.name ) is None ) )
@@ -701,7 +1091,7 @@ class SeeChangeBase:
                             setattr( obj, col.name, getattr( dbobj, col.name ) )
 
 
-    def _delete_from_database( self ):
+    def _delete_from_database( self, pgdb=None ):
         """Remove the object from the database.  Don't call this, call delete_from_disk_and_database.
 
         This does not remove any associated files (if this is a
@@ -716,24 +1106,95 @@ class SeeChangeBase:
 
         """
 
-        with SmartSession() as session:
-            session.execute( sa.text( f"DELETE FROM {self.__tablename__} WHERE _id=:id" ), { 'id': self.id } )
-            session.commit()
+        with PGDB( pgdb ) as pgdb:
+            pgdb.execute_nofetch( sql.SQL( "DELETE FROM {tab} WHERE _id={myid}" )
+                                  .format( tab=sql.Identifier(self.__class__.__tablename__),
+                                           myid=self.id ) )
+
+            pgdb.commit()
 
         # Look how much easier this is when you don't have to spend a whole bunch of time
         #  deciding if the object needs to be merged, expunged, etc. to a session
 
 
+    def get_upstream_ids(self, pgdb=None):
+        """Get a list of tuples of (type, id) for all direct upstreams of this object (non-recursive)."""
+        raise NotImplementedError( f'get_upstream_ids not implemented for this {self.__class__.__name__}' )
+
     def get_upstreams(self, session=None):
         """Get all data products that were directly used to create this object (non-recursive)."""
-        raise NotImplementedError( f'get_upstreams not implemented for this {self.__class__.__name__}' )
+        upstreams = []
+        with PGDB( session, dictcursor=True ) as pgdb:
+            upstream_info = self.get_upstream_ids( pgdb)
+            for cls, upid in upstream_info:
+                q = sql.SQL( "SELECT * FROM {tab} WHERE _id={objid}" ).format( tab=sql.Identifier(cls.__tablename__),
+                                                                               objid=upid )
+                rows = pgdb.execute( q )
+                if len(rows) != 1:
+                    raise RuntimeError( "This should never happen." )
+                upstreams.append( cls( **(rows[0]) ) )
+        return upstreams
+
+    def get_downstream_ids(self, pgdb=None):
+        """Get a list of tuples of (type, id) for all direct downstreams of this object (non-recursive)."""
+        raise NotImplementedError( f'get_downstream_ids not implemented for this {self.__class__.__name__}' )
 
     def get_downstreams(self, session=None):
         """Get all data products that were created directly from this object (non-recursive)."""
-        raise NotImplementedError( f'get_downstreams not implemented for {self.__class__.__name__}' )
+        downstreams = []
+        with PGDB( session, dictcursor=True ) as pgdb:
+            downstream_info = self.get_downstream_ids( pgdb )
+            for cls, dwnid in downstream_info:
+                q = sql.SQL( "SELECT * FROM {tab} WHERE _id={objid}" ).format( tab=sql.Identifier(cls.__tablename__),
+                                                                               objid=dwnid )
+                rows = pgdb.execute( q )
+                if len(rows) != 1:
+                    raise RuntimeError( "This should never happen." )
+                downstreams.append( cls( **(rows[0]) ) )
+        return downstreams
+
+    def delete_everything_in_provtag( self, tag, models=[], remove_folders=True,
+                                      remove_downstreams=True, archive=True ):
+        raise NotImplementedError( "In progress" )
+        with PGDB( dictcursor=True ) as pgdb:
+            # Find all the provenances associated with this provence tag
+            rows = pgdb.execute( sql.SQL( "SELECT provenance_id FROM provenance_tags WHERE tag={tag}" )
+                                 .format( tag=tag ) )
+            chopping_block = set( r['provenance_id'] for r in rows )
+
+            # Remove any provenances that are in another provenance tag
+            q = sql.SQL( textwrap.dedent(
+                """\
+                SELECT provenacne_id, tag FROM provenance_tags
+                WHERE tag!={tag}
+                AND provenance_id=ANY(ARRAY[{provids}])
+                """
+            ) ).format( tag=tag, provids=sql.SQL(",").join( chopping_block ) )
+            rows = pgdb.execute( q )
+            for row in rows:
+                SCLogger.warning( f"Not deleting things from provenance {row['provenance_id']} because "
+                                  f"it also exists in tag {row['tag']}" )
+                chopping_block.remove( row['provenance_id'] )
+
+            # OMG delete
+            for model in models:
+                rows = pgdb.execute( sql.SQL( "SELECT * FROM {tab} WHERE provenance_id=ANY(ARRAY[{provids}])" )
+                                     .format( tab=sql.Identifier(model.__tablenme__),
+                                              provids=sql.SQL(",").join(chopping_block) ) )
+                objs = [ model(**row) for row in rows ]
+                SCLogger.warning( f"Deleteing {len(objs)} rows from {model.__tablename__}, plus associated "
+                                  f"data, plus (probably) all downstreams." )
+                for i, obj in enumerate(objs):
+                    if i % 100 == 0:
+                        SCLogger.debug( f"...deleted {i} of {len(objs)}..." )
+                    obj.delete_from_disk_and_database( remove_folders=remove_folders,
+                                                       remove_downstreams=remove_downstreams,
+                                                       archive=archive )
+                SCLogger.debug( f"...done deleting {len(objs)} rows from {model.__tablename__}." )
 
 
-    def delete_from_disk_and_database( self, remove_folders=True, remove_downstreams=True, archive=True ):
+
+    def delete_from_disk_and_database( self, remove_folders=True, remove_downstreams=True, archive=True, pgdb=None ):
         """Delete any data from disk, archive and the database.
 
         Use this to clean up an entry from all locations, as relevant
@@ -782,7 +1243,7 @@ class SeeChangeBase:
                 for d in downstreams:
                     if hasattr( d, 'delete_from_disk_and_database' ):
                         d.delete_from_disk_and_database( remove_folders=remove_folders, archive=archive,
-                                                         remove_downstreams=True )
+                                                         remove_downstreams=True, pgdb=pgdb )
 
         # Remove files from archive
 
@@ -810,7 +1271,7 @@ class SeeChangeBase:
 
         # Finally, after everything is cleaned up, remove the database record
 
-        self._delete_from_database()
+        self._delete_from_database( pgdb=pgdb )
 
 
     def to_dict(self):
@@ -953,6 +1414,43 @@ class SeeChangeBase:
 
 Base = declarative_base(cls=SeeChangeBase)
 
+
+def table_class_map():
+    # Imports here.  All these things import base.py, so we can't do them at the
+    #   top of the file or we'd have conflits.
+    # TODO: think if there's a reflection way we can get these imports
+    #   without having to remember to add a file here every time we
+    #   add something to models.
+    import models.background        # noqa: F401
+    import models.calibratorfile    # noqa: F401
+    import models.catalog_excerpt   # noqa: F401
+    import models.cutouts           # noqa: F401
+    import models.datafile          # noqa: F401
+    import models.deepscore         # noqa: F401
+    import models.exposure          # noqa: F401
+    import models.fakeset           # noqa: F401
+    import models.image             # noqa: F401
+    import models.knownexposure     # noqa: F401
+    import models.measurements      # noqa: F401
+    import models.object            # noqa: F401
+    import models.provenance        # noqa: F401
+    import models.psf               # noqa: F401
+    import models.reference         # noqa: F401
+    import models.refset            # noqa: F401
+    import models.report            # noqa: F401
+    import models.source_list       # noqa: F401
+    import models.user              # noqa: F401
+    import models.world_coordinates # noqa: F401
+    import models.zero_point        # noqa: F401
+
+    tabclsmap = {}
+    for cls in Base.__subclasses__():
+        if hasattr( cls, '__tablename__' ):
+            tabclsmap[cls.__tablename__] = cls
+
+    return tabclsmap
+
+
 ARCHIVE = None
 
 
@@ -964,6 +1462,13 @@ def get_archive_object():
         archive_specs = cfg.value('archive', None)
         if archive_specs is not None:
             archive_specs[ 'logger' ] = SCLogger
+            archive_specs[ 'lockfunc' ] = ArchiveLock.lockfunc
+            if ( 'token' not in archive_specs ) or  ( archive_specs[ 'token' ] is None ):
+                if ( 'token_file' not in archive_specs ) or ( archive_specs[ 'token_file' ] is None ):
+                    raise RuntimeError( "Archive specs don't include a token or token_file" )
+                with open( archive_specs[ 'token_file' ] ) as ifp:
+                    archive_specs[ 'token' ] = ifp.readline().strip()
+                del archive_specs[ 'token_file' ]
             ARCHIVE = Archive(**archive_specs)
     return ARCHIVE
 
@@ -1283,7 +1788,8 @@ class FileOnDiskMixin:
         return [ f'{self.filepath}.{comp}{self._file_suffix(comp)}' for comp in self.components ]
 
 
-    def get_fullpath( self, download=True, as_list=False, nofile=None, always_verify_md5=False ):
+    def get_fullpath( self, download=True, as_list=False, components=None,
+                      nofile=None, always_verify_md5=False ):
         """Get the full path of the file, or list of full paths of files if components is not None.
 
         If the archive is defined, and download=True (default),
@@ -1312,8 +1818,12 @@ class FileOnDiskMixin:
             Must have archive defined. Default is True.
 
         as_list: bool
-            Whether to return a list of filepaths, even if components=None.
+            Whether to return a list of filepaths, even if self.components=None.
             Default is False.
+
+        components: list, str, or None
+            Which components to get.  Must be None if self.components is
+            None None.  If not given, defaults to self.components.
 
         nofile: bool
             Whether to check if the file exists on local disk.
@@ -1330,7 +1840,10 @@ class FileOnDiskMixin:
             Absolute path to the file(s) on local disk.
 
         """
-        if self.components is None:
+
+        components = self.components if components is None else listify( components )
+
+        if components is None:
             if as_list:
                 return [self._get_fullpath_single(download=download, nofile=nofile,
                                                   always_verify_md5=always_verify_md5)]
@@ -1338,10 +1851,16 @@ class FileOnDiskMixin:
                 return self._get_fullpath_single(download=download, nofile=nofile,
                                                  always_verify_md5=always_verify_md5)
         else:
+            if self.components is None:
+                raise ValueError( "Can't give components for an object that doesn't have components." )
+            unknown = set(components) - set(self.components)
+            if unknown:
+                raise ValueError( f"Unknown components: {unknown}" )
+
             return [
                 self._get_fullpath_single(download=download, comp=comp, nofile=nofile,
                                           always_verify_md5=always_verify_md5)
-                for comp in self.components
+                for comp in components
             ]
 
 
@@ -1774,11 +2293,17 @@ class UUIDMixin:
     #   id property of a created object before it's saved to the datbase, or it will
     #   be set in our insert/upsert methods, as we only very rarely let SQLAlchemy
     #   itself actually save anything to the database.)
+    # ...and that was really annoying, because as I wrote more code that didn't
+    #   use SQLAlchemy, having SQLAlchmey handle the default was troublesome.
+    #   However, I'm afraid of removing the SQLAlchmey default, because it will
+    #   probably break lots of code in lots of places, so just try putting in
+    #   both here.  Cf. Issue #516.
     _id = sa.Column(
         sqlUUID,
         primary_key=True,
         index=True,
         default=uuid.uuid4,            # This is the one exception to always using server_default
+        server_default=func.gen_random_uuid(),
         doc="Unique identifier for this row",
     )
 
@@ -1795,34 +2320,103 @@ class UUIDMixin:
         self._id = asUUID( val )
 
     @classmethod
-    def get_by_id( cls, uuid, session=None ):
+    def get_by_id( cls, uuid, session=None, pgdb=None, **kwargs ):
         """Get an object of the current class that matches the given uuid.
 
         Returns None if not found.
+
+        Parameters
+        ----------
+          uuid : UUID
+            The id of the object you want
+
+          session, pgdb: PGDB, psycopg.Connection, psycopg.Cursor, or sqlalchmey session
+            Will use pgdb if it's not None, else session.  If both are None,
+            makes and closes a new connection to the database.
+
+          **kwargs: further keywords are passed on to the object constructor
+
+        Returns
+        -------
+          object of type cls
+
         """
-        with SmartSession( session ) as sess:
-            return sess.query( cls ).filter( cls._id==uuid ).first()
+
+        with PGDB( (pgdb if pgdb is not None else session), dictcursor=True ) as pgdb:
+            q = sql.SQL( "SELECT * FROM {table} WHERE _id=%(id)s" ).format( table=sql.Identifier(cls.__tablename__) )
+            rows = pgdb.execute( q, { 'id': uuid } )
+            if len(rows) == 0:
+                return None
+            elif len(rows) > 1:
+                raise RuntimeError( "This should never happen." )
+            else:
+                kwargs = kwargs.copy()
+                kwargs.update( rows[0] )
+                obj = cls( **kwargs )
+                obj.from_db = True
+                return obj
+
 
     @classmethod
-    def get_batch_by_ids( cls, uuids, session=None, return_dict=False ):
+    def get_batch_by_ids( cls, uuids, session=None, pgdb=None, return_dict=False ):
         """Get objects whose ids are in the list uuids.
 
         Parameters
         ----------
-          uuids: list of UUID
+          uuids: UUID or list of UUID
             The object IDs whose corresponding objects you want.
 
-          session: SQLAlchmey session or None
+          session, pgdb: PGDB, psycopg.Connection, psycopg.Cursor, or sqlalchemy session
+            Will use pgdb if it's not None, else session.  If both are None,
+            makes and closes a new connection to the database.
 
           return_dict: bool, default False
             If False, just return a list of objects.  If True, return a
             dict of { id: object }.
 
+        Returns
+        -------
+          either list of cls, or dict of { UUID: cls }
+
         """
 
-        with SmartSession( session ) as sess:
-            objs = sess.query( cls ).filter( cls._id.in_( uuids ) ).all()
-        return { o.id: o for o in objs } if return_dict else objs
+        uuids = listify( uuids )
+        with PGDB( (pgdb if pgdb is not None else session), dictcursor=True ) as pgdb:
+            q = sql.SQL( "SELECT * FROM {tab} WHERE _id=ANY(ARRAY[{ids}])"
+                        ).format( tab=sql.Identifier( cls.__tablename__ ),
+                                  ids=sql.SQL(",").join(uuids) )
+            rows = pgdb.execute( q )
+
+        if return_dict:
+            return { r['_id']: cls(**r) for r in rows }
+        else:
+            return [ cls(**r) for r in rows ]
+
+
+    @classmethod
+    def get_by_field_value( cls, field, values, pgdb=None ):
+        """Get a list of objects of a class whose field have a certain value or are in a list of values.
+
+        Parameters
+        ----------
+          field : str
+            The name of the field as defined in the database (so, use _id, not id, etc.).
+
+          values : *
+            Either a sequence of values to match, or a single value to match.
+
+          pgdb : PGDB, psycopg.Connection, psycopg.Cursor, sqlalchemy session, or None
+            Use this database connection; if None, makes and closes a new one.
+
+        """
+
+        values = listify( values )
+        with PGDB( pgdb, dictcursor=True ) as pgdb:
+            rows = pgdb.execute( sql.SQL( "SELECT * FROM {tab} WHERE {field}=ANY(ARRAY[{vals}])" )
+                                 .format( tab=sql.Identifier(cls.__tablename__),
+                                          field=sql.Identifier(field),
+                                          vals=sql.SQL(",").join(values) ) )
+        return [ cls(**r) for r in rows ]
 
 
 
@@ -1878,15 +2472,20 @@ class SpatiallyIndexed:
           radius : float, default 1.0
             Radius in arcseconds of cone search
 
-          session : Session or None
+          session : PGDB, psycopg.Connection, psycopg.Cursor, or Session
 
         Returns
         -------
           list of Object
 
         """
-        with SmartSession( session ) as sess:
-            return sess.query( cls ).filter( func.q3c_radial_query( cls.ra, cls.dec, ra, dec, radius / 3600. ) ).all()
+
+        with PGDB( session, dictcursor=True ) as pgdb:
+            q = sql.SQL( "SELECT * FROM {tab} WHERE q3c_radial_query( ra, dec, {ra}, {dec}, {rad} )" )
+            q = q.format( tab=sql.Identifier(cls.__tablename__), ra=ra, dec=dec, rad=radius/3600. )
+            rows = pgdb.execute( q )
+
+        return [ cls(**row) for row in rows ]
 
 
     @hybrid_method
@@ -1960,21 +2559,21 @@ class SpatiallyIndexed:
 class FourCorners:
     """A mixin for tables that have four RA/Dec corners"""
 
-    ra_corner_00 = sa.Column( sa.REAL, nullable=False, index=True,
+    ra_corner_00 = sa.Column( sa.REAL, nullable=False, index=False,
                               doc="RA of the low-RA, low-Dec corner (degrees)" )
-    ra_corner_01 = sa.Column( sa.REAL, nullable=False, index=True,
+    ra_corner_01 = sa.Column( sa.REAL, nullable=False, index=False,
                               doc="RA of the low-RA, high-Dec corner (degrees)" )
-    ra_corner_10 = sa.Column( sa.REAL, nullable=False, index=True,
+    ra_corner_10 = sa.Column( sa.REAL, nullable=False, index=False,
                               doc="RA of the high-RA, low-Dec corner (degrees)" )
-    ra_corner_11 = sa.Column( sa.REAL, nullable=False, index=True,
+    ra_corner_11 = sa.Column( sa.REAL, nullable=False, index=False,
                               doc="RA of the high-RA, high-Dec corner (degrees)" )
-    dec_corner_00 = sa.Column( sa.REAL, nullable=False, index=True,
+    dec_corner_00 = sa.Column( sa.REAL, nullable=False, index=False,
                                doc="Dec of the low-RA, low-Dec corner (degrees)" )
-    dec_corner_01 = sa.Column( sa.REAL, nullable=False, index=True,
+    dec_corner_01 = sa.Column( sa.REAL, nullable=False, index=False,
                                doc="Dec of the low-RA, high-Dec corner (degrees)" )
-    dec_corner_10 = sa.Column( sa.REAL, nullable=False, index=True,
+    dec_corner_10 = sa.Column( sa.REAL, nullable=False, index=False,
                                doc="Dec of the high-RA, low-Dec corner (degrees)" )
-    dec_corner_11 = sa.Column( sa.REAL, nullable=False, index=True,
+    dec_corner_11 = sa.Column( sa.REAL, nullable=False, index=False,
                                doc="Dec of the high-RA, high-Dec corner (degrees)" )
 
     # These next four can be calcualted from the columns above, but are here to speed up
@@ -1990,6 +2589,33 @@ class FourCorners:
 
 
     @classmethod
+    def _fromclause( cls, fromclause=None ):
+        return ( sql.SQL(fromclause) if fromclause is not None
+                 else ( sql.SQL( "FROM {tab} i" )
+                        .format( tab=sql.Identifier(cls.__tablename__) ) )
+                )
+
+    @classmethod
+    def _provclause( cls, prov_id, provtable=None ):
+        provtable = cls.__tablename__ if provtable is None else provtable
+
+        if isinstance( prov_id, str ):
+            provclause = sql.SQL( "AND {provtable}.provenance_id={prov_id}"
+                                  ).format( provtable=sql.Identifier(provtable),
+                                            prov_id=prov_id )
+        elif isinstance( prov_id, list ):
+            provclause = sql.SQL( "AND {provtable}.provenance_id=ANY(ARRAY[{provs}])"
+                                 ).format( provtable=sql.Identifier(provtable),
+                                           provs=sql.SQL(",").join( sql.SQL("{p}").format(p=p) for p in prov_id ) )
+        elif prov_id is not None:
+            raise TypeError( "prov_id must be string, list, or None" )
+        else:
+            provclause = sql.SQL("")
+
+        return provclause
+
+
+    @classmethod
     def sort_radec( cls, ras, decs ):
         """Sort ra and dec lists so they're each in the order in models.base.FourCorners
 
@@ -2002,27 +2628,32 @@ class FourCorners:
 
         Returns
         -------
-          Two new lists (ra, dec) sorted so they're in the order:
-          (lowRA,lowDec), (lowRA,highDec), (highRA,lowDec), (highRA,highDec)
+          racorners, deccorners, minra, maxra, mindec, maxdec
+
+            racorners and deccorners are lists, sorted so that they're in the order:
+              (lowRA,lowDec), (lowRA,highDec), (highRA,lowDec), (highRA,highDec)
+
+            min/maxra is the min/max of all the RAs, trying to properly deal with ra spanning 0
+            min/maxdec is the min/max of all the decs
 
         """
 
         if len(ras) != 4:
             raise ValueError(f'ras must be a list/array with exactly four elements. Got {ras}')
             raise ValueError(f'decs must be a list/array with exactly four elements. Got {decs}')
+        if any( ( r < 0. ) or ( r >= 360. ) for r in ras ):
+            raise ValueError( f"ras must be in the range [0,360); got {ras}" )
+        if any( ( d < -90. ) or ( d > 90. ) for d in decs ):
+            raise ValueError( f"decs must be in the range [-90, 90]; got {decs}" )
 
         raorder = list( range(4) )
         raorder.sort( key=lambda i: ras[i] )
 
-        # Try to detect an RA that spans 0.
+        # Try to detect an RA that spans 0.  Assume that no FourCorners is ever going to span more than 180° in RA
         if ras[raorder[3]] - ras[raorder[0]] > 180.:
-            newras = []
-            for ra in ras:
-                if ra > 180.:
-                    newras.append( ra - 360. )
-                else:
-                    newras.append( ra )
-            raorder.sort( key=lambda i: newras[i] )
+            # Deal with this by just subtracting 360 from RAS between 180 and 360 and then fixing it later
+            ras = [ r - 360. if r > 180. else r for r in ras ]
+            raorder.sort( key=lambda i: ras[i] )
 
         # Of two lowest ras, of those, pick the one with the lower dec;
         #   that's lowRA,lowDec; the other one is lowRA, highDec
@@ -2035,18 +2666,50 @@ class FourCorners:
         dex10 = raorder[2] if decs[raorder[2]] < decs[raorder[3]] else raorder[3]
         dex11 = raorder[3] if decs[raorder[2]] < decs[raorder[3]] else raorder[2]
 
+        # Min/max
+
+        minra = min( ras )
+        maxra = max( ras )
+        mindec = min( decs )
+        maxdec = max( decs )
+
+        # Fix the ra-crossing-0 detection stuff we did above
+
+        minra = minra + 360. if minra < 0. else minra
+        maxra = maxra + 360. if maxra < 0. else maxra
+        ras = [ r + 360. if r < 0. else r for r in ras ]
+
         return ( [  ras[dex00],  ras[dex01],  ras[dex10],  ras[dex11] ],
-                 [ decs[dex00], decs[dex01], decs[dex10], decs[dex11] ] )
+                 [ decs[dex00], decs[dex01], decs[dex10], decs[dex11] ],
+                 minra, maxra, mindec, maxdec )
+
+
+    def set_corners_minmax( self, ras, decs ):
+        ras, decs, minra, maxra, mindec, maxdec = FourCorners.sort_radec( ras, decs )
+        self.ra_corner_00 = ras[0]
+        self.ra_corner_01 = ras[1]
+        self.ra_corner_10 = ras[2]
+        self.ra_corner_11 = ras[3]
+        self.dec_corner_00 = decs[0]
+        self.dec_corner_01 = decs[1]
+        self.dec_corner_10 = decs[2]
+        self.dec_corner_11 = decs[3]
+        self.minra = minra
+        self.maxra = maxra
+        self.mindec = mindec
+        self.maxdec = maxdec
 
 
     @classmethod
-    def find_containing_siobj( cls, siobj, session=None ):
+    def find_containing_siobj( cls, siobj, **kwargs ):
         """Return all images (or whatever) that contain the given SpatiallyIndexed thing
 
         Parameters
         ----------
           siobj: SpatiallyIndexed
             A single object that is spatially indexed
+
+          **kwargs : further arguments passed to find_containing()
 
         Returns
         -------
@@ -2059,11 +2722,13 @@ class FourCorners:
         # siobj.dec could be set to anything.)
         ra = float( siobj.ra )
         dec = float( siobj.dec )
-        return cls.find_containing( ra, dec, session=session )
+        return cls.find_containing( ra, dec, **kwargs )
 
     @classmethod
     def _find_possibly_containing_temptable( cls, ra, dec, session, prov_id=None,
-                                             fromclause=None, provtable='i' ):
+                                             fromclause=None, provtable='i',
+                                             corner="corner", limprefix="",
+                                             temptable="temp_find_containing" ):
         """Internal.
 
         Looks for all cls objects where ra, dec is between minra:maxra,
@@ -2072,14 +2737,14 @@ class FourCorners:
 
         Lots of special case code for images that cross RA 0.
 
-        Loads up the temp table temp_find_containing
+        Loads up the temp table specified by argument temptable.
 
         Parameters
         ----------
           ra, dec : float
-             Coordinates to search for; deciam degrees.
+             Coordinates to search for; decimal degrees.
 
-          session : Session
+          session : sa.orm.session.Session or PGDB or psycopg.Connection or psycopg.Cursor
              Required here, otherwise the temp table would be useless.
 
           prov_id : str, list of str, or None
@@ -2090,59 +2755,98 @@ class FourCorners:
              Complicated.  Used in Image.find_images.  WARNING.  Misuse
              of this can totally Bobby Tables the database.  Be good.
 
+          corner : str, default "corner"
+             ...used so that subclasses don't have to reimplement this
+             method.  If you misuse this, you can totally Bobby Tables
+             the databse, but if you're calling this function, you have
+             access anyway, so you may as well just "DROP TABLE..."
+             directly.  But, don't expose this to anything outside, and
+             don't use it unless you really know what you're doing.
+
+          limprefix: str, default ""
+             ...used so that subclasses don't have to reimplement this
+             method.  See warnings on corner re: Bobby Tables.
+
           provtable : str, default 'i'
              Complicated.  Used in Image.find_images.  WARNING.  Misuse
              of this can totally Bobby Tables the database.  Be good.
 
+          temptable : str, default "temp_find_containing"
+             Name of the temptable to write to.
+
         """
-        session.execute( sa.text( "DROP TABLE IF EXISTS temp_find_containing" ) )
+        if not isinstance( session, ( sa.orm.session.Session, psycopg.Connection, psycopg.Cursor, PGDB ) ):
+            raise TypeError( f"session must be a sa.orm.session.Session, psycopg.Connection, psycopg.Cursor, or PGDB, "
+                             f"not a {type(session)}" )
 
         # Shouldn't need this, but just in case somebody gave us a wrapped RA:
         while ( ra < 0 ): ra += 360.
         while ( ra >= 360.): ra -= 360.
 
-        query = ( "SELECT i._id, i.ra_corner_00, i.ra_corner_01, i.ra_corner_10, i.ra_corner_11, "
-                  "       i.dec_corner_00, i.dec_corner_01, i.dec_corner_10, i.dec_corner_11 "
-                  "INTO TEMP TABLE temp_find_containing " )
-        if fromclause is not None:
-            query += fromclause + " "
-        else:
-            query += f"FROM {cls.__tablename__} i "
-        query += ( "WHERE ( "
-                   "  ( i.maxdec >= :dec AND i.mindec <= :dec ) "
-                   "  AND ( "
-                   "    ( (i.maxra > i.minra ) AND "
-                   "      ( maxra >= :ra AND minra <= :ra ) )"
-                   "    OR "
-                   "    ( ( i.maxra < i.minra ) AND "
-                   "      ( ( i.maxra >= :ra OR :ra > 180. ) AND ( i.minra <= :ra OR :ra <= 180. ) ) )"
-                   "  )"
-                   ")"
-                  )
-        subdict = { "ra": ra, "dec": dec }
-        if prov_id is not None:
-            if isinstance( prov_id, str ):
-                query += f" AND {provtable}.provenance_id=:prov"
-                subdict['prov'] = prov_id
-            elif isinstance( prov_id, list ):
-                query += f" AND {provtable}.provenance_id=ANY(:prov)"
-                subdict['prov'] = prov_id
-            else:
-                raise TypeError( "prov_id must be a a str or a list of str" )
+        fromclause = cls._fromclause( fromclause )
+        provclause = cls._provclause( prov_id, provtable )
 
-        session.execute( sa.text( query ), subdict )
+        q = sql.SQL( textwrap.dedent(
+            """\
+            SELECT i._id,
+                   i.ra_{corner}_00 AS ra_corner_00,
+                   i.ra_{corner}_01 AS ra_corner_01,
+                   i.ra_{corner}_10 AS ra_corner_10,
+                   i.ra_{corner}_11 AS ra_corner_11,
+                   i.dec_{corner}_00 AS dec_corner_00,
+                   i.dec_{corner}_01 AS dec_corner_01,
+                   i.dec_{corner}_10 AS dec_corner_10,
+                   i.dec_{corner}_11 AS dec_corner_11
+            INTO TEMP TABLE {temptable}
+            {fromclause}
+            WHERE (
+              ( i.{limprefix}maxdec >= {dec} AND i.{limprefix}mindec <= {dec} )
+              AND (
+                ( (i.{limprefix}maxra > i.{limprefix}minra ) AND
+                  ( i.{limprefix}maxra >= {ra} AND i.{limprefix}minra <= {ra} ) )
+                OR
+                ( ( i.{limprefix}maxra < i.{limprefix}minra ) AND
+                  ( ( i.{limprefix}maxra >= {ra} OR {ra} > 180. ) AND ( i.{limprefix}minra <= {ra} OR {ra} <= 180. ) ) )
+              )
+              {provclause}
+            )
+            """
+        ) ).format( ra=ra, dec=dec, fromclause=fromclause, provclause=provclause,
+                    corner=sql.SQL(corner), temptable=sql.Identifier(temptable), limprefix=sql.SQL(limprefix) )
+
+        with PGDB( session ) as pgdb:
+            pgdb.execute_nofetch( sql.SQL( "DROP TABLE IF EXISTS {temptable}" )
+                                  .format( temptable=sql.Identifier(temptable) ) )
+            pgdb.execute_nofetch( q )
 
 
     @classmethod
-    def find_containing( cls, ra, dec, prov_id=None, session=None ):
+    def find_containing( cls, ra, dec, corner="corner", limprefix="", prov_id=None, session=None,
+                         temptable="temp_find_containing" ):
         """Return all objects in this class that contain the given RA and Dec
 
         Parameters
         ----------
           ra, dec: float, decimal degrees
 
+          corner: str, default "corner"
+             ...used so that subclasses don't have to reimplement this
+             method.  If you misuse this, you can totally Bobby Tables
+             the databse, but if you're calling this function, you have
+             access anyway, so you may as well just "DROP TABLE..."
+             directly.  But, don't expose this to anything outside, and
+             don't use it unless you really know what you're doing.
+
+          limperfix: str, default ""
+             ...used by subclasses.  See warnings on corner.
+
           prov_id : str, list of str, or None
              If not None, search for objects with this provenance, or any of these provenances if a list.
+
+          session: sa.orm.session.Session, PGDB, psycopg.Connection, psycopg.Cursor, or None
+
+          temptable: str, default "temp_find_containing"
+             Name of an internally used temporary table.
 
         Returns
         -------
@@ -2164,21 +2868,35 @@ class FourCorners:
         # (which *are* indexed) to greatly reduce the number of things
         # we'll q3c_poly_query.
 
-        with SmartSession( session ) as sess:
-            cls._find_possibly_containing_temptable( ra, dec, sess, prov_id=prov_id )
-            query = sa.text( f"SELECT i.* FROM {cls.__tablename__} i "
-                             f"INNER JOIN temp_find_containing t ON t._id=i._id "
-                             f"WHERE q3c_poly_query( {ra}, {dec}, ARRAY[ t.ra_corner_00, t.dec_corner_00, "
-                             f"                                          t.ra_corner_01, t.dec_corner_01, "
-                             f"                                          t.ra_corner_11, t.dec_corner_11, "
-                             f"                                          t.ra_corner_10, t.dec_corner_10 ])" )
-            objs = sess.scalars( sa.select( cls ).from_statement( query ) ).all()
-            sess.execute( sa.text( "DROP TABLE temp_find_containing" ) )
+        with PGDB( session, dictcursor=True ) as pgdb:
+            cls._find_possibly_containing_temptable( ra, dec, pgdb, prov_id=prov_id,
+                                                     corner=corner, limprefix=limprefix,
+                                                     temptable=temptable )
+
+            q = sql.SQL( textwrap.dedent(
+                """
+                SELECT i.* FROM {tab} i
+                INNER JOIN {temptable} t ON t._id=i._id
+                WHERE q3c_poly_query( {ra}, {dec}, ARRAY[ t.ra_corner_00, t.dec_corner_00,
+                                                          t.ra_corner_01, t.dec_corner_01,
+                                                          t.ra_corner_11, t.dec_corner_11,
+                                                          t.ra_corner_10, t.dec_corner_10 ])
+                """
+            ) ).format( tab=sql.Identifier(cls.__tablename__),
+                        temptable=sql.Identifier(temptable),
+                        ra=ra, dec=dec )
+
+            rows = pgdb.execute( q )
+            objs = [ cls(**r) for r in rows ]
+            pgdb.execute_nofetch( sql.SQL( "DROP TABLE {temptable}" ).format( temptable=sql.Identifier(temptable) ) )
             return objs
+
 
     @classmethod
     def _find_potential_overlapping_temptable( cls, fcobj, session, prov_id=None,
-                                               fromclause=None, provtable='i' ):
+                                               fromclause=None, provtable='i',
+                                               corner="corner", limprefix="",
+                                               temptable="temp_find_overlapping" ):
         """Internal.
 
         Given a FourCorners object fcobj, will return all objects of
@@ -2194,8 +2912,8 @@ class FourCorners:
         ----------
           fcobj : FourCorners
 
-          session : Session
-             required here; otherwise, the temp table wouldn't be useful
+          session : sa.orm.session.Session or PGDB or psycopg.Connection or psycopg.Cursor
+             Required here, otherwise the temp table would be useless.
 
           prov_id: str, list of str, or None
              id or ids of the provenance of cls objects to search; if
@@ -2209,59 +2927,74 @@ class FourCorners:
              Complicated.  Used in Image.find_images.  WARNING.  Misuse
              of this can totally Bobby Tables the database.  Be good.
 
+          corner, limprefix : See _find_possibly_containing_temptable ; same thing
+
+          temptable : str, default "temp_find_overlapping"
+             Name of temp table to create.
+
         """
 
-        session.execute( sa.text( "DROP TABLE IF EXISTS temp_find_overlapping" ) )
+        fromclause = cls._fromclause( fromclause )
+        provclause = cls._provclause( prov_id, provtable )
+
+        if not isinstance( session, ( sa.orm.session.Session, psycopg.Connection, psycopg.Cursor, PGDB ) ):
+            raise TypeError( f"session must be a sa.orm.session.Session, psycopg.Connection, psycopg.Cursor, or PGDB, "
+                             f"not a {type(session)}" )
 
         # All kinds of special cases (everything from the first OR
         # onwards) below to deal with the the case where RA crosses 0
         # TODO : speed tests once we have a big enough database for that
         # to matter to see how much this hurts us.
 
-        query = ( "SELECT i._id, i.ra_corner_00, i.ra_corner_01, i.ra_corner_10, i.ra_corner_11, "
-                  "       i.dec_corner_00, i.dec_corner_01, i.dec_corner_10, i.dec_corner_11 "
-                  "INTO TEMP TABLE temp_find_overlapping " )
-        if fromclause is not None:
-            query += fromclause + " "
-        else:
-            query += f"FROM {cls.__tablename__} i "
-        query += ( "WHERE ( "
-                   "  ( i.maxdec >= :mindec AND i.mindec <= :maxdec ) "
-                   "  AND "
-                   "  ( ( ( i.maxra >= i.minra AND :maxra >= :minra ) AND "
-                   "      i.maxra >= :minra AND i.minra <= :maxra ) "
-                   "    OR "
-                   "    ( i.maxra < i.minra AND :maxra < :minra ) "   # both include RA=0, will overlap in RA
-                   "    OR "
-                   "    ( ( i.maxra < i.minra AND :maxra >= :minra AND :minra <= 180. ) AND "
-                   "      i.maxra >= :minra ) "
-                   "    OR "
-                   "    ( ( i.maxra < i.minra AND :maxra >= :minra AND :minra > 180. ) AND "
-                   "      i.minra <= :maxra ) "
-                   "    OR "
-                   "    ( ( i.maxra >= i.minra AND :maxra < :minra AND i.maxra <= 180. ) AND "
-                   "      i.minra <= :maxra ) "
-                   "    OR "
-                   "    ( ( i.maxra >= i.minra AND :maxra < :minra AND i.maxra > 180. ) AND "
-                  "      i.maxra >= :minra ) "
-                   "  )"
-                   ") " )
-        subdict = { 'minra': fcobj.minra, 'maxra': fcobj.maxra,
-                    'mindec': fcobj.mindec, 'maxdec': fcobj.maxdec }
-        if prov_id is not None:
-            if isinstance( prov_id, str ):
-                query += f" AND {provtable}.provenance_id=:prov"
-                subdict['prov'] = prov_id
-            elif isinstance( prov_id, list ):
-                query += f" AND {provtable}.provenance_id=ANY(:prov)"
-                subdict['prov'] = prov_id
-            else:
-                raise TypeError( "prov_id must be a a str or a list of str" )
+        q = sql.SQL( textwrap.dedent(
+            """
+            SELECT i._id,
+                   i.ra_{corner}_00 AS ra_corner_00,
+                   i.ra_{corner}_01 AS ra_corner_01,
+                   i.ra_{corner}_10 AS ra_corner_10,
+                   i.ra_{corner}_11 AS ra_corner_11,
+                   i.dec_{corner}_00 AS dec_corner_00,
+                   i.dec_{corner}_01 AS dec_corner_01,
+                   i.dec_{corner}_10 AS dec_corner_10,
+                   i.dec_{corner}_11 AS dec_corner_11
+            INTO TEMP TABLE {temptable}
+            {fromclause}
+            WHERE (
+              ( i.{limprefix}maxdec >= {mindec} AND i.{limprefix}mindec <= {maxdec} )
+              AND
+              ( ( ( i.{limprefix}maxra >= i.{limprefix}minra AND {maxra} >= {minra} ) AND
+                  i.{limprefix}maxra >= {minra} AND i.{limprefix}minra <= {maxra} )
+                OR
+                ( i.{limprefix}maxra < i.{limprefix}minra AND {maxra} < {minra} )
+                OR
+                ( ( i.{limprefix}maxra < i.{limprefix}minra AND {maxra} >= {minra} AND {minra} <= 180. ) AND
+                  i.{limprefix}maxra >= {minra} )
+                OR
+                ( ( i.{limprefix}maxra < i.{limprefix}minra AND {maxra} >= {minra} AND {minra} > 180. ) AND
+                  i.{limprefix}minra <= {maxra} )
+                OR
+                ( ( i.{limprefix}maxra >= i.{limprefix}minra AND {maxra} < {minra} AND i.{limprefix}maxra <= 180. ) AND
+                  i.{limprefix}minra <= {maxra} )
+                OR
+                ( ( i.{limprefix}maxra >= i.{limprefix}minra AND {maxra} < {minra} AND i.{limprefix}maxra > 180. ) AND
+                 i.{limprefix}maxra >= {minra} )
+              )
+              {provclause}
+            )
+            """
+        ) ).format( mindec=fcobj.mindec, maxdec=fcobj.maxdec, minra=fcobj.minra, maxra=fcobj.maxra,
+                    temptable=sql.Identifier(temptable), provclause=provclause, fromclause=fromclause,
+                    corner=sql.SQL(corner), limprefix=sql.SQL(limprefix) )
 
-        session.execute( sa.text( query ), subdict )
+        with PGDB( session ) as pgdb:
+            pgdb.execute_nofetch( sql.SQL( "DROP TABLE IF EXISTS {temptable}" )
+                                  .format( temptable=sql.Identifier(temptable) ) )
+            pgdb.execute_nofetch( q )
+
 
     @classmethod
-    def find_potential_overlapping( cls, fcobj, prov_id=None, session=None ):
+    def find_potential_overlapping( cls, fcobj, prov_id=None, session=None,
+                                    corner="corner", limprefix="", temptable="temp_find_overlapping" ):
         """Return all objects of this class that *might* overlap FourCorners object fcobj.
 
         This will in general be a superset of things that actually do
@@ -2286,24 +3019,30 @@ class FourCorners:
           prov_id: str
              The ide of the provenance of objects in this class to search for
 
-          session: Session
-             (Optional) SA session.
+          corner, limprefix: str
+             Don't use this.  Used internally by subclasses. Passed on
+             to _find_potential_overlapping_temptable.
+
+          session: sa.orm.session.Session, PGDB, psycopg,Connection, or psycopg.Cursor
 
         Returns
         -------
           The result of a sess.scalars(...).all() with members of this class.
 
         """
-        with SmartSession( session ) as sess:
-            cls._find_potential_overlapping_temptable( fcobj, sess, prov_id=prov_id )
-            objs = sess.scalars( sa.select( cls )
-                                 .from_statement( sa.text( "SELECT _id FROM temp_find_overlapping" ) )
-                                ).all()
-            sess.execute( sa.text( "DROP TABLE temp_find_overlapping" ) )
+        with PGDB( session, dictcursor=True ) as pgdb:
+            cls._find_potential_overlapping_temptable( fcobj, pgdb, prov_id=prov_id,
+                                                       corner=corner, limprefix=limprefix )
+            rows = pgdb.execute( sql.SQL( "SELECT i.* FROM {tab} i INNER JOIN {temptable} t ON i._id=t._id" )
+                                 .format( tab=sql.Identifier(cls.__tablename__),
+                                          temptable=sql.Identifier(temptable) ) )
+            objs = [ cls(**r) for r in rows ]
+            pgdb.execute_nofetch( sql.SQL( "DROP TABLE {temptable}" ).format( temptable=sql.Identifier(temptable) ) )
             return objs
 
+
     @classmethod
-    def get_overlap_frac(cls, obj1, obj2):
+    def get_overlap_frac(cls, obj1, obj2, corner="corner", limprefix="" ):
         """Calculate the overlap fraction between two objects that have four corners.
 
         Returns
@@ -2311,16 +3050,26 @@ class FourCorners:
         overlap_frac: float
             The fraction of obj1's area that is covered by the intersection of the objects
 
+        corner: str, default "corner"
+            Used by subclasses
+
+        limprefix: str, default ""
+            Used by subclasses
+
         Assumes that the images are small enough that a simple cos(dec)
         correction for RA is enough that we can assume that the sky is
         flat.  This assumption will break down near the poles.
 
         """
 
-        o1ra = np.array( [ [ obj1.ra_corner_00, obj1.ra_corner_01 ], [ obj1.ra_corner_10, obj1.ra_corner_11 ] ] )
-        o2ra = np.array( [ [ obj2.ra_corner_00, obj2.ra_corner_01 ], [ obj2.ra_corner_10, obj2.ra_corner_11 ] ] )
-        o1dec = np.array( [ [ obj1.dec_corner_00, obj1.dec_corner_01 ], [ obj1.dec_corner_10, obj1.dec_corner_11 ] ] )
-        o2dec = np.array( [ [ obj2.dec_corner_00, obj2.dec_corner_01 ], [ obj2.dec_corner_10, obj2.dec_corner_11 ] ] )
+        o1ra = np.array( [ [ getattr( obj1,  f"ra_{corner}_00" ), getattr( obj1,  f"ra_{corner}_01" ) ],
+                           [ getattr( obj1,  f"ra_{corner}_10" ), getattr( obj1,  f"ra_{corner}_11" ) ] ])
+        o2ra = np.array( [ [ getattr( obj2,  f"ra_{corner}_00" ), getattr( obj2,  f"ra_{corner}_01" ) ],
+                           [ getattr( obj2,  f"ra_{corner}_10" ), getattr( obj2,  f"ra_{corner}_11" ) ] ] )
+        o1dec = np.array( [ [ getattr( obj1,  f"dec_{corner}_00" ), getattr( obj1,  f"dec_{corner}_01" ) ],
+                            [ getattr( obj1,  f"dec_{corner}_10" ), getattr( obj1,  f"dec_{corner}_11" ) ] ] )
+        o2dec = np.array( [ [ getattr( obj2,  f"dec_{corner}_00" ), getattr( obj2,  f"dec_{corner}_01" ) ],
+                            [ getattr( obj2,  f"dec_{corner}_10" ), getattr( obj2,  f"dec_{corner}_11" ) ] ] )
 
         # Have to handle the case of ra spanning 0.  This happens when
         # maxra < minra.  In that case, take all ras > 180 and subtract
@@ -2330,7 +3079,9 @@ class FourCorners:
         # happen.  (If you're using this pipeline with some sort of
         # fisheye all-sky camera, then... well, sorry.  All kinds of things
         # are probably going to break having to do with coordinates.)
-        if ( obj1.maxra < obj1.minra ) or ( obj2.maxra < obj2.minra ):
+        if ( ( getattr( obj1, f"{limprefix}maxra" ) < getattr( obj1, f"{limprefix}minra" ) ) or
+             ( getattr( obj2, f"{limprefix}maxra" ) < getattr( obj2, f"{limprefix}minra" ) )
+            ):
             o1ra[ o1ra > 180. ] -= 360.
             o2ra[ o2ra > 180. ] -= 360.
 
@@ -2364,15 +3115,15 @@ class FourCorners:
         return obj1.intersection( obj2 ).area / obj1.area
 
 
-    def contains( self, ra, dec ):
+    def contains( self, ra, dec, corner="corner", limprefix="" ):
         """Return True if ra, dec is contained within the four corners."""
 
-        corners = np.array( [ [ self.ra_corner_00, self.dec_corner_00 ],
-                              [ self.ra_corner_01, self.dec_corner_01 ],
-                              [ self.ra_corner_11, self.dec_corner_11 ],
-                              [ self.ra_corner_10, self.dec_corner_10 ],
-                              [ self.ra_corner_00, self.dec_corner_00 ] ] )
-        if self.maxra < self.minra:
+        corners = np.array( [ [ getattr( self, f"ra_{corner}_00" ), getattr( self, f"dec_{corner}_00" ) ],
+                              [ getattr( self, f"ra_{corner}_01" ), getattr( self, f"dec_{corner}_01" ) ],
+                              [ getattr( self, f"ra_{corner}_11" ), getattr( self, f"dec_{corner}_11" ) ],
+                              [ getattr( self, f"ra_{corner}_10" ), getattr( self, f"dec_{corner}_10" ) ],
+                              [ getattr( self, f"ra_{corner}_00" ), getattr( self, f"dec_{corner}_00" ) ] ] )
+        if getattr( self, f"{limprefix}maxra" ) < getattr( self, f"{limprefix}minra" ):
             corners[ corners[:,0]>180, 0 ] -= 360.
             if ra > 180.:
                 ra -= 360.
@@ -2381,8 +3132,192 @@ class FourCorners:
         return obj.contains( shapely.Point( ra, dec ) )
 
 
-class HasBitFlagBadness:
-    """A mixin class that adds a bitflag marking why this object is bad. """
+    def set_corners_from_wcs( self, wcs=None, width=None, height=None, setradec=False ):
+        """Update the object's four corners (and, optionally, RA/Dec) from a WCS.
+
+        Subclasses may have alternate sets of arguments they can supply.
+
+        Parameters
+        ----------
+        wcs : astropy.wcs.WCS or WorldCoordinates default None
+           The WCS to use.  If nothing is here in this positional
+           parameter, then the first two positional parameters are
+           actually width and height, and this method will use self.wcs.
+           This will only work if self.wcs exists and is the right kind
+           of thing.
+
+        width : int, default None
+            Width (x-size) of image.  Either (width, height) or image is required.
+
+        height : int, default None
+            Height (y-size) of image.  Either (width, height) or image is required
+
+        image : Image, default None
+
+        setradec : bool, default False
+           If True, also update the image's ra and dec fields, as well
+           as the things calculated from it (galactic, ecliptic
+           coordinates).
+
+        """
+
+        # avoid circular imports
+        from models.world_coordinates import WorldCoordinates
+
+        if any( x is None for x in ( wcs, width, height ) ):
+            raise ValueError( "Must provide all of wcs, width, height" )
+
+        if isinstance( wcs, WorldCoordinates ):
+            wcs = wcs.wcs
+        elif not isinstance( wcs, astropy.wcs.WCS ):
+            raise TypeError( f"Error, wcs must be a WorldCoordinates or a WCS, not a {type(wcs)}" )
+
+        ras = []
+        decs = []
+        xs = [ 0., width-1., 0., width-1. ]
+        ys = [ 0., height-1., height-1., 0. ]
+        scs = wcs.pixel_to_world( xs, ys )
+        if isinstance( scs[0].ra, astropy.coordinates.Longitude ):
+            ras = [ i.ra.to_value() for i in scs ]
+            decs = [ i.dec.to_value() for i in scs ]
+        else:
+            ras = [ i.ra.value_in(u.deg).value for i in scs ]
+            decs = [ i.dec.value_in(u.deg).value for i in scs ]
+        self.set_corners_minmax( ras, decs )
+
+        if setradec:
+            sc = wcs.pixel_to_world( width / 2., height / 2. )
+            self.ra = sc.ra.to(u.deg).value
+            self.dec = sc.dec.to(u.deg).value
+            self.gallat = sc.galactic.b.deg
+            self.gallon = sc.galactic.l.deg
+            self.ecllat = sc.barycentrictrueecliptic.lat.deg
+            self.ecllon = sc.barycentrictrueecliptic.lon.deg
+
+
+
+class FourCornersWithGood( FourCorners ):
+    """FourCorners, plus another set of fields indicating what's actually good.
+
+    This is for images where a substantial fraction of the image is
+    masked out, e.g. an image where one of two chips is bad.
+
+    """
+
+    ra_good_00 = sa.Column( sa.REAL, nullable=False, index=False )
+    ra_good_01 = sa.Column( sa.REAL, nullable=False, index=False )
+    ra_good_10 = sa.Column( sa.REAL, nullable=False, index=False )
+    ra_good_11 = sa.Column( sa.REAL, nullable=False, index=False )
+    dec_good_00 = sa.Column( sa.REAL, nullable=False, index=False )
+    dec_good_01 = sa.Column( sa.REAL, nullable=False, index=False )
+    dec_good_10 = sa.Column( sa.REAL, nullable=False, index=False )
+    dec_good_11 = sa.Column( sa.REAL, nullable=False, index=False )
+    good_minra = sa.Column( sa.REAL, nullable=False, index=True )
+    good_maxra = sa.Column( sa.REAL, nullable=False, index=True )
+    good_mindec = sa.Column( sa.REAL, nullable=False, index=True )
+    good_maxdec = sa.Column( sa.REAL, nullable=False, index=True )
+
+
+    @classmethod
+    def find_containing_siobj( cls, siobj, session=None, corner="good", limprefix="good_" ):
+        return FourCorners.find_containing_siobj( cls, siobj, session=session, corner=corner, limprefix=limprefix )
+
+    @classmethod
+    def find_containing( cls, ra, dec, corner="good", limprefix="good_", prov_id=None, session=None ):
+        return FourCorners.find_containing( cls, ra, dec, corner=corner, limprefix=limprefix,
+                                            prov_id=prov_id, session=session )
+
+
+    @classmethod
+    def find_potentialy_overlapping( cls, fcobj, prov_id=None, session=None, corner="good", limprefix="good_" ):
+        return FourCorners.find_potentially_overlapping( cls, fcobj, prov_id=prov_id, session=session,
+                                                         corner=corner, limprefix=limprefix )
+
+    @classmethod
+    def get_overlap_frac( cls, obj1, obj2, corner="good", limprefix="good_" ):
+        return FourCorners.get_overlap_frac( obj1, obj2, corner=corner, limprefix=limprefix )
+
+
+    def contains( self, ra, dec, corner="good", limprefix="good_" ):
+        return FourCorners.contains( self, ra, dec, corner=corner, limprefix=limprefix )
+
+
+    def set_corners_minmax( self, ras, decs, goodras=None, gooddecs=None ):
+        FourCorners.set_corners_minmax( self, ras, decs )
+        if goodras is not None:
+            ras, decs, minra, maxra, mindec, maxdec = FourCorners.sort_radec( goodras, gooddecs )
+            self.ra_good_00 = ras[0]
+            self.ra_good_01 = ras[1]
+            self.ra_good_10 = ras[2]
+            self.ra_good_11 = ras[3]
+            self.good_minra = minra
+            self.good_maxra = maxra
+            self.dec_good_00 = decs[0]
+            self.dec_good_01 = decs[1]
+            self.dec_good_10 = decs[2]
+            self.dec_good_11 = decs[3]
+            self.good_mindec = mindec
+            self.good_maxdec = maxdec
+
+
+    def set_corners_from_wcs( self, wcs, width=None, height=None, setradec=False, mask=None ):
+        """Update four corners.
+
+        If mask is given, use that to set the "good" corners and limits.
+        Otherwise, they will be direct copies of the regular ones.
+
+        """
+
+        if ( width is None ) or ( height is None ):
+            if mask is None:
+                raise ValueError( "Must give width/height, or mask" )
+            width = width if width is not None else mask.shape[1]
+            height = height if height is not None else mask.shape[0]
+
+        xs = [ 0., width-1., 0., width-1. ]
+        ys = [ 0., 0., height-1., height-1. ]
+        ras, decs = wcs.pixel_to_world_values( xs, ys )
+
+        if mask is not None:
+            # Figure out what is the outer "bad region" that we want to throw out
+            # or along y to get the xs that have any good pixels
+            xok = np.where( np.any( mask==0, axis=0 ) )[0]
+            xgood0 = np.min( xok )
+            xgood1 = np.max( xok )
+            # or along x to get the ys that have any good pixels
+            yok = np.where( np.any( mask==0, axis=1 ) )[0]
+            ygood0 = np.min( yok )
+            ygood1 = np.max( yok )
+
+            xs = [ xgood0, xgood0, xgood1, xgood1 ]
+            ys = [ ygood0, ygood1, ygood0, ygood1 ]
+            goodras, gooddecs = wcs.pixel_to_world_values( xs, ys )
+        else:
+            goodras = ras
+            gooddecs = decs
+
+        self.set_corners_minmax( ras, decs, goodras, gooddecs )
+
+        if setradec:
+            # So... do we want it at the center of the whole image, or the center of the
+            #   good part?  Let's do whole image.  Answer not obvious.
+            sc = wcs.pixel_to_world( width / 2., height / 2. )
+            self.ra = sc.ra.to(u.deg).value
+            self.dec = sc.dec.to(u.deg).value
+            self.gallat = sc.galactic.b.deg
+            self.gallon = sc.galactic.l.deg
+            self.ecllat = sc.barycentrictrueecliptic.lat.deg
+            self.ecllon = sc.barycentrictrueecliptic.lon.deg
+
+
+
+class HasBitFlagBadnessButNoUpstream:
+    """A mixin class that adds a bitflag marking why this object is bad.
+
+    Most classes actually use HasBitFlagBadness, but Exposure uses this one.
+
+    """
+
     _bitflag = sa.Column(
         sa.BIGINT,
         nullable=False,
@@ -2394,31 +3329,24 @@ class HasBitFlagBadness:
             'upstream object that were used to make this one. '
     )
 
-    @declared_attr
-    def _upstream_bitflag(cls):  # noqa: N805
-        if cls.__name__ != 'Exposure':
-            return sa.Column(
-                sa.BIGINT,
-                nullable=False,
-                server_default=sa.sql.elements.TextClause( '0' ),
-                index=True,
-                doc='Bitflag of objects used to generate this object. '
-            )
-        else:
-            return None
-
     @hybrid_property
     def bitflag(self):
         if self._bitflag is None:
             self._bitflag = 0
-        if self._upstream_bitflag is None:
-            self._upstream_bitflag = 0
-        return self._bitflag | self._upstream_bitflag
+        if hasattr( self, '_upstream_bitflag' ):
+            if self._upstream_bitflag is None:
+                self._upstream_bitflag = 0
+            return self._bitflag | self._upstream_bitflag
+        else:
+            return self._bitflag
 
     @bitflag.inplace.expression
     @classmethod
     def bitflag(cls):
-        return cls._bitflag.op('|')(cls._upstream_bitflag)
+        if hasattr( cls, '_bitflag' ):
+            return cls._bitflag.op('|')(cls._upstream_bitflag)
+        else:
+            return cls._bitflag
 
     @bitflag.inplace.setter
     def bitflag(self, value):
@@ -2476,10 +3404,12 @@ class HasBitFlagBadness:
         if value is not None:
             self._bitflag = value
         if commit and ( self.id is not None ):
-            with SmartSession() as sess:
-                sess.execute( sa.text( f"UPDATE {self.__tablename__} SET _bitflag=:bad WHERE _id=:id" ),
-                              { "bad": self._bitflag, "id": self.id } )
-                sess.commit()
+            with PGDB() as pgdb:
+                q = sql.SQL( "UPDATE {tab} SET _bitflag={bad} WHERE _id={objid}" )
+                q = q.format( tab=sql.Identifier(self.__tablename__), bad=self._bitflag, objid=self.id )
+                pgdb.execute( q )
+                pgdb.commit()
+
 
     def set_badness( self, value=None, commit=True ):
         """Set the badness for this image using a comma separated string.
@@ -2541,9 +3471,10 @@ class HasBitFlagBadness:
 
     def __init__(self):
         self._bitflag = 0
-        self._upstream_bitflag = 0
+        if hasattr( self, '_upstream_bitflag' ):
+            self._upstream_bitflag = 0
 
-    def update_downstream_badness(self, session=None, commit=True, objbank=None):
+    def update_downstream_badness(self, session=None, commit=True, _objbank=None):
         """Send a recursive command to update all downstream objects that have bitflags.
 
         Since this function is called recursively, it always updates the
@@ -2551,77 +3482,79 @@ class HasBitFlagBadness:
         object's immediate upstreams, before calling the same function on all
         downstream objects.
 
-        Note that this function will session.merge() this object and all its
-        recursive downstreams (to update the changes in bitflag) and will
-        commit the new changes on its own (unless given commit=False)
-        but only at the end of the recursion.
-
         If session=None and commit=False an exception is raised.
 
         Parameters
         ----------
-        session: sqlalchemy session
+        session: PGDB, psycopg.Connection, psycopg.Cursor, or sqlalchemy Session (default None)
             The session to use for the update. If None, will open a new session,
             which will also close at the end of the call. In that case, must
-            provide a commit=True to commit the changes.
+            provide commit=True to commit the changes,
 
         commit: bool (default True)
             Whether to commit the changes to the database.
 
-        objbank: dict
+        _objbank: dict
             Don't pass this, it's only used internally.
 
         """
 
-        if objbank is None:
-            objbank = {}
+        if ( session is None ) and ( not commit ):
+            raise ValueError( "Must either pass a session, or set commit to True." )
 
-        with SmartSession(session) as session:
-            # Before the database refactor, this was done with
-            # SQLAlchemy, and worked.  Afterwards, even though in this
-            # one place I tried to keep them all in one session, it
-            # didn't work.  What was happening was that when an object,
-            # merged into the session, was changed here, that same
-            # object (i.e. same memory location) was *not* being pulled
-            # out from the queries in image.get_upstreams(), even though
-            # session was passed on to get_upstreams().  So, things
-            # weren't propagating right.  Something about session
-            # querying and merging wasn't working right.  (WHAT?
-            # Confusion with SQLAlchemy merging?  Never!)
-            #
-            # So, rather than fully trusting the mysteriousness of
-            # sqlalchemy sessions, use an object bank that we pass
-            # recursively, to make sure that every time we want to refer
-            # an object of a given id, we refer to the same object in
-            # memory.  That way, we can be sure that changes we make
-            # during the recursion will stick.  (We're still trusting SA
-            # that when we commit, because we merged all of those
-            # objects, the changes to them will get sent in to the
-            # databse.  Fingers crossed.  merge is always scary.)
+        # Keep an object bank so we don't have to keep regetting stuff from the database in recursive calls.
+        # (...though would that happne?  Not sure, would have to think about the possible upstream/downstream
+        # trees.)  (Pretty sure it could happen.  Consider, for instance, a reference that has more than one
+        # downstream subtraction.  It's possible that more than one of those subtractions will share the
+        # same upstream new zp, if the subtraction provenance was changed.  In that case, object_bank
+        # saves us from grabbing the upstream zeropoints repeatedly.)
+        if _objbank is None:
+            _objbank = {}
 
-            if self.id not in objbank.keys():
-                merged_self = session.merge(self)
-                objbank[ merged_self.id ] = merged_self
-            merged_self = objbank[ self.id ]
+        with PGDB(session) as pgdb:
+            if self.id not in _objbank.keys():
+                _objbank[ self.id ] = self
+            elif self is not _objbank[ self.id ]:
+                raise RuntimeError( "This should never happen" )
 
-            new_bitflag = 0  # start from scratch, in case some upstreams have lost badness
-            for upstream in merged_self.get_upstreams( session=session ):
-                if upstream.id in objbank.keys():
-                    upstream = objbank[ upstream.id ]
+            # Start from scratch; we're updating recursively, and it's possible
+            #  some bits will have been cleared, so just bitwise anding with the
+            #  existing might be the wrong thing.
+            new_bitflag = 0
+
+            for upstream_model, upstream_id in self.get_upstream_ids( pgdb=pgdb ):
+                if upstream_id in _objbank.keys():
+                    upstream = _objbank[ upstream_id ]
+                else:
+                    # HACK ALERT.... remove this ugly hack when Issue #542 is solved
+                    if upstream_model.__name__ == 'Exposure':
+                        upstream = upstream_model.get_by_id( upstream_id, pgdb=pgdb, nofile=True )
+                    else:
+                        upstream = upstream_model.get_by_id( upstream_id, pgdb=pgdb )
+                    _objbank[ upstream_id ] = upstream
                 if hasattr(upstream, '_bitflag'):
                     new_bitflag |= upstream.bitflag
 
-            if hasattr(merged_self, '_upstream_bitflag'):
-                merged_self._upstream_bitflag = new_bitflag
-                self._upstream_bitflag = merged_self._upstream_bitflag
+            if hasattr( self, '_upstream_bitflag' ):
+                self._upstream_bitflag = new_bitflag
+                pgdb.execute( sql.SQL( "UPDATE {tab} SET _upstream_bitflag={val} WHERE _id={me}" )
+                              .format( tab=sql.Identifier(self.__tablename__),
+                                       val=self._upstream_bitflag,
+                                       me=self.id ) )
 
             # recursively do this for all downstream objects
-            for downstream in merged_self.get_downstreams(session=session):
-                if hasattr(downstream, 'update_downstream_badness') and callable(downstream.update_downstream_badness):
-                    downstream.update_downstream_badness(session=session, commit=False, objbank=objbank)
+            for downstream_model, downstream_id in self.get_downstream_ids( pgdb=pgdb ):
+                if ( hasattr( downstream_model, 'update_downstream_badness' ) and
+                     callable( downstream_model.update_downstream_badness )
+                    ):
+                    if downstream_id not in _objbank:
+                        _objbank[ downstream_id ] = downstream_model.get_by_id( downstream_id, pgdb=pgdb )
+                    _objbank[ downstream_id ].update_downstream_badness( session=pgdb, commit=False, _objbank=_objbank )
+
 
             if commit:
-                session.commit()
+                pgdb.commit()
+
 
     def _get_inverse_badness(self):
         """Get a dict with the allowed values of badness that can be assigned to this object
@@ -2629,6 +3562,121 @@ class HasBitFlagBadness:
         For the base class this is the most inclusive inverse (allows all badness).
         """
         return data_badness_inverse
+
+
+class HasBitFlagBadness( HasBitFlagBadnessButNoUpstream ):
+    _upstream_bitflag = sa.Column(
+        sa.BIGINT,
+        nullable=False,
+        server_default=sa.sql.elements.TextClause( '0' ),
+        index=True,
+        doc='Bitflag of objects used to generate this object. '
+    )
+
+
+class ArchiveLock( Base, UUIDMixin ):
+    __tablename__ = 'archive_locks'
+
+    serverpath = sa.Column(
+        sa.Text,
+        nullable=False,
+        index=True,
+        unique=True,
+        doc="Path on the archive server that we want to lock"
+    )
+
+    hostname = sa.Column(
+        sa.Text,
+        nullable=True,
+        server_default=None,
+        doc="hostname that holds the lock"
+    )
+
+    pid = sa.Column(
+        sa.Integer,
+        nullable=True,
+        server_default=None,
+        doc="PID of the process that holds the lock"
+    )
+
+    identifier = sa.Column(
+        sa.Text,
+        nullable=True,
+        server_default=None,
+        doc=( "Some sort of identifier of the thread that holds the lock so it can be sure not to delete "
+              "locks owned by other threads." )
+    )
+
+
+    def __init__( self, *args, **kwargs ):
+        super().__init__( *args, **kwargs )
+
+
+    @staticmethod
+    def lockfunc( serverpath,
+                  unlock=False,
+                  sleep_min=0.5,
+                  sleep_init=2,
+                  sleep_max=32,
+                  sleep_fac=2,
+                  sleep_fuzz=0.1 ):
+        if unlock:
+            with PGDB() as con:
+                q = sql.SQL( "DELETE FROM archive_locks "
+                             "WHERE serverpath={path} "
+                             "  AND hostname={host} "
+                             "  AND pid={pid} "
+                             "  AND identifier={id}",
+                            ).format( path=serverpath,
+                                      host=socket.gethostname(),
+                                      pid=os.getpid(),
+                                      id=str(threading.get_ident()) )
+                con.execute_nofetch( q )
+                con.commit()
+                return
+
+        rng = np.random.default_rng()
+        sleept = sleep_init
+        t0 = time.perf_counter()
+        ok = False
+        while not ok:
+            with PsycopgConnection() as con:
+                try:
+                    cursor = con.cursor()
+                    cursor.execute( "LOCK TABLE archive_locks" )
+                    cursor.execute( "SELECT serverpath, hostname, pid, identifier, created_at "
+                                    "FROM archive_locks "
+                                    "WHERE serverpath=%(path)s",
+                                    { 'path': serverpath } )
+                    rows = cursor.fetchall()
+                    if len(rows) == 0:
+                        cursor.execute( "INSERT INTO archive_locks(serverpath, hostname, pid, identifier) "
+                                        "VALUES (%(path)s, %(host)s, %(pid)s, %(id)s)",
+                                        { 'path': serverpath,
+                                          'host': socket.gethostname(),
+                                          'pid': os.getpid(),
+                                          'id': str(threading.get_ident()) }
+                                       )
+                        con.commit()
+                        ok = True
+                finally:
+                    con.rollback()
+
+            if not ok:
+                nextsleept = sleept * sleep_fac
+                if nextsleept > sleep_max:
+                    raise RuntimeError( f"Failed to get archive lock on {serverpath} after "
+                                        f"{time.perf_counter()-t0:.1f}s" )
+                actualsleept = max( sleep_min, sleept + rng.normal( scale=sleep_fuzz * sleept ) )
+                SCLogger.debug( f"PID {os.getpid()} thread {threading.get_ident()} didn't get "
+                                f"archive lock on {serverpath}" )
+                SCLogger.debug( f"Archive lock held by {rows[0][1]} PID {rows[0][2]} thread "
+                                f"{rows[0][3]} at {rows[0][4]}" )
+                SCLogger.info( f"Archive lock exists on {serverpath}; sleeping {actualsleept:.1f}s and trying again." )
+                if len(rows) > 1:
+                    SCLogger.error( f"{len(rows)} locks held on {serverpath}; that's not supposed to happen!" )
+                time.sleep( actualsleept )
+                sleept = nextsleept
 
 
 if __name__ == "__main__":

@@ -81,6 +81,7 @@ seechange.ExposureList = class
                               );
             td = rkWebUtil.elemaker( "td", row, { "text": exps["project"][i] } );
             td = rkWebUtil.elemaker( "td", row, { "text": exps["mjd"][i].toFixed(2) } );
+            td = rkWebUtil.elemaker( "td", row, { "text": exps["imgtype"][i] } );
             td = rkWebUtil.elemaker( "td", row, { "text": exps["target"][i] } );
             td = rkWebUtil.elemaker( "td", row, { "text": exps["filter"][i] } );
             td = rkWebUtil.elemaker( "td", row, { "text": exps["exp_time"][i] } );
@@ -92,11 +93,12 @@ seechange.ExposureList = class
             return row
         };
 
-        let fields = [ "name", "project", "mjd", "target", "filter", "exp_time",
+        let fields = [ "name", "project", "mjd", "imgtype", "target", "filter", "exp_time",
                        "n_subs", "n_sources", "n_measurements", "n_successim", "n_errors" ];
         let fieldmap = { "name": 'Exposure',
                          "project": 'project',
                          "mjd": 'MJD',
+                         "imgtype": 'type',
                          "target": 'target',
                          "filter": 'filter',
                          "exp_time": 't_exp (s)',
