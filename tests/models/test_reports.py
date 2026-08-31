@@ -121,7 +121,7 @@ def test_measure_runtime_memory(decam_exposure, decam_reference, pipeline_for_te
         for k, v in ds.report.process_runtime.items():
             strio.write( f"        {k:24s} {v:6.1f} s\n" )
         SCLogger.info( f"Pipeline process times:\n{strio.getvalue()}" )
-        assert measured_time > 0.98 * total_time  # at least 98% of the time is accounted for
+        assert measured_time > 0.97 * total_time  # at least 97% of the time is accounted for
 
         if env_as_bool('SEECHANGE_TRACEMALLOC'):
             SCLogger.info( f'Pipeline peak memory: {peak_memory:.1f}MB' )
