@@ -191,7 +191,7 @@ def generate_image_fixture(commit=True, filter=None, seed=None ):
         rng = np.random.default_rng( seed=seed )
         im = None
         exp = None
-        exp = make_sim_exposure( filter=filter, seed=rng.integers(0, 2**31) )
+        exp = make_sim_exposure( filter=filter, seed=seed-10000 )
         add_file_to_exposure(exp)
         # Have to commit the exposure even if commit=False
         #  because otherwise tests that use this fixture
