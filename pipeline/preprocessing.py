@@ -381,6 +381,7 @@ class Preprocessor:
                         image.data -= calibfile.data
                         if ( step == 'zero' ) and ( self.pars.use_zero_mask ) and ( calibfile.flags is not None ):
                             image.flags = np.bitwise_or( image.flags, calibfile.flags )
+                        image.info[step] = calibfile.id
                         image.header['HISTORY'] = f'{step} subtracted by SeeChange with {calibfile.id}'
                         image.header['HISTORY'] = f'{step}: {calibfile.filepath}'
 
@@ -389,6 +390,7 @@ class Preprocessor:
                         image.data /= calibfile.data
                         if ( step == 'flat' ) and ( self.pars.use_flat_mask ) and ( calibfile.flags is not None ):
                             image.flags = np.bitwise_or( image.flags, calibfile.flags )
+                        image.info[step] = calibfile.id
                         image.header['HISTORY'] = f'{step} divided by SeeChange with {calibfile.id}'
                         image.header['HISTORY'] = f'{step}: {calibfile.filepath}'
 
@@ -399,6 +401,7 @@ class Preprocessor:
                     elif step == 'linearity':
                         # Linearity is instrument-specific
                         self.instrument.linearity_correct( image, linearitydata=calibfile )
+                        image.info['linearity'] = calibfile.id
                         image.header['HISTORY'] = f'linearity corrected by SeeChange with {calibfile.id}'
                         image.header['HISTORY'] = f'linearity: {calibfile.filepath}'
 
