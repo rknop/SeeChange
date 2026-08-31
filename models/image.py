@@ -219,10 +219,14 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         JSONB,
         nullable=False,
         server_default='{}',
-        doc=(
-            "Additional information on this image. "
-            "Only keep a subset of the header keywords, "
-            "and re-key them to be more consistent. "
+        doc=( "A dictionary (key:value) of additional information from the image.  "
+              "Some of this may have been pulled from the image header.  This should "
+              "NOT include anything that has its own columN (mjd, filter, target, "
+              "instrument, etc.).  A few standard keys include: zero, dark, flat, "
+              "illumination, linearity.  All of these have values that are UUIDs that "
+              "point to the calibrator_files table (though they're not formal SQL foreign "
+              "keys).  If that preprocessing step hasn't been done, then probably the key "
+              "will not be present in the dict." )
         )
     )
 
@@ -751,7 +755,6 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             new.maxdec = dec1
 
         new.info = header_info  # save any additional header keys into a JSONB column
-
 
         return new
 

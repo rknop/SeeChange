@@ -953,9 +953,10 @@ class Instrument:
     def get_auxiliary_exposure_header_keys(self):
         """Additional header keys that can be useful to have on the Exposure header.
 
-        This could include instrument specific items that are saved to
-        the global exposure header, in addition to the keys in
-        Exposure.EXPOSURE_HEADER_KEYS.
+        These will be parsed from the expousre header and put in the
+        info database column.  Should *not* include anything that
+        already has its own database column (mjd, exp_time, filter,
+        etc.).
 
         THIS METHOD SHOULD BE OVERRIDEN BY SUBCLASSES, TO ADD MORE ITEMS
 
@@ -1722,8 +1723,6 @@ class Instrument:
         ----------
         header: fits.Header
           The header of the image in question.
-          NOTE: this needs to be the full header of the image,
-          i.e. Image.header rather than Image.info.
 
         Returns
         -------
