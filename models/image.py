@@ -227,7 +227,6 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
               "point to the calibrator_files table (though they're not formal SQL foreign "
               "keys).  If that preprocessing step hasn't been done, then probably the key "
               "will not be present in the dict." )
-        )
     )
 
     width = sa.Column(

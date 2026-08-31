@@ -381,7 +381,7 @@ class Preprocessor:
                         image.data -= calibfile.data
                         if ( step == 'zero' ) and ( self.pars.use_zero_mask ) and ( calibfile.flags is not None ):
                             image.flags = np.bitwise_or( image.flags, calibfile.flags )
-                        info.info[step] = calibfile.id
+                        image.info[step] = calibfile.id
                         image.header['HISTORY'] = f'{step} subtracted by SeeChange with {calibfile.id}'
                         image.header['HISTORY'] = f'{step}: {calibfile.filepath}'
 
