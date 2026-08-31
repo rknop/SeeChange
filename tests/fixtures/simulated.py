@@ -224,10 +224,10 @@ def generate_image_fixture(commit=True, filter=None, seed=None ):
 
 # this will inject 9 images named sim_image1, sim_image2, etc.
 for i in range(1, 10):
-    globals()[f'sim_image{i}'] = generate_image_fixture( seed=1011888316 )
+    globals()[f'sim_image{i}'] = generate_image_fixture( seed=1011888316+i )
 
 for i in range(1, 10):
-    globals()[f'sim_image_r{i}'] = generate_image_fixture( filter='r', seed=869327863 )
+    globals()[f'sim_image_r{i}'] = generate_image_fixture( filter='r', seed=869327863+i )
 
 # use this Image if you want the test to do the saving
 sim_image_uncommitted = generate_image_fixture(commit=False, seed=1093069384)
