@@ -34,6 +34,8 @@ from util.util import patch_image_overlap_limits
 from tests.conftest import rnd_str
 
 
+# Instrument will be DemoInstrument through the magic
+#   of Instrument.guess_instrument()
 def make_sim_exposure( filter=None, seed=None ):
     rng = np.random.default_rng( seed=seed )
     e = Exposure(
@@ -91,7 +93,12 @@ def generate_exposure_fixture( seed=None ):
     return new_exposure
 
 
-# this will inject 9 exposures named sim_exposure1, sim_exposure2, etc.
+# Create test-scope fixtures sim_exposure1 through sim_exposure9
+# Each creates an Exposure record with DemoInstrument as the Instrument
+#   and other fields (sorta) randomly filled.  Saves that record to the
+#   database and creates an empty file on disk to go with it.  (There's
+#   no actual simualted data.)  Useful if you need a saved exposue_id to
+#   point an image at.
 _rng = np.random.default_rng( seed=1611012017 )
 for i in range(1, 10):
     globals()[f'sim_exposure{i}'] = generate_exposure_fixture( seed=_rng.integers( 0, 2**31 ) )
@@ -222,7 +229,12 @@ def generate_image_fixture(commit=True, filter=None, seed=None ):
     return new_image
 
 
-# this will inject 9 images named sim_image1, sim_image2, etc.
+# Create image-scope fixures sim_image1 through sim_image9
+# Each will be an image saved to the database with a file full
+#   of random numbers.  (Size is 512×1024, which comes from
+#   DemoInstrument.fake_image_size_[xy].)
+# If you want actual simulated data, see the sim_lightcurve*
+#   fixtures.
 for i in range(1, 10):
     globals()[f'sim_image{i}'] = generate_image_fixture( seed=1011888316+i )
 
