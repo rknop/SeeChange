@@ -215,7 +215,7 @@ class ParsFlatBuilder(Parameters):
             'nightly',
             str,
             ( "The calibrator_set for the CalibratorFile created.  One of unknown, externally_supplied, "
-              "general, or nightly" ),
+              "general, nightly, roughly_weekly, or roughly_monthly" ),
         )
 
         self.flat_type = self.add_par(
