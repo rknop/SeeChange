@@ -139,7 +139,7 @@ catalog_gaiadr3:
 #   is_flat (which is probably passed as a function argument)
 
 flat_bias_builder:
-  exposure_mode: True
+  exposure_mode: False
   filter: null
   section_id: null
   is_flat: False
