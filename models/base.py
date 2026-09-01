@@ -475,8 +475,8 @@ class PGDB:
             elif isinstance( con, psycopg.Cursor ):
                 self.con = con.connection
             elif isinstance( con, sa.orm.session.Session ):
-                SCLogger.warning( "You're using a SQLAlchemy Session, still trying "
-                                  "to make a PGDB from it (Issue #516)" )
+                SCLogger.debug( "FEAR/LOATHING: You're using a SQLAlchemy Session, still trying "
+                                "to make a PGDB from it (Issue #516)" )
                 self.con = con.connection().connection.driver_connection
             else:
                 raise TypeError( f"con must be None, a PGDB, a psycopg.Connection, a psycopg.Cursor, or a "
