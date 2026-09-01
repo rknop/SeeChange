@@ -583,7 +583,7 @@ def test_image_enum_values( sim_image_uncommitted ):
         pass
 
 
-def test_image_preproc_bitflag( sim_image1 ):
+def test_image_preproc_bitflag( sim_image1, provenance_base ):
     # Reload the image from the database so the default values that get
     # set when the image is saved to the database are filled.
     with SmartSession() as session:
@@ -600,8 +600,11 @@ def test_image_preproc_bitflag( sim_image1 ):
     im2 = None
     try:
         # Save a new image with the preproc bitflag that we've set
+        # Because of the unique constraint on (provenance_id,exposure_id,section_id)
+        #   give this image a new provenance.
         im2 = im.copy()
         im2.id = uuid.uuid4()
+        im2.provenance_id = provenance_base.id
         im2.filepath = "delete_this_file.fits"       # Shouldn't actually get saved
         im2.insert()
 
