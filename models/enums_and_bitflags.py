@@ -229,7 +229,9 @@ class CalibratorSetConverter( EnumConverter ):
         0: 'unknown',
         1: 'externally_supplied',
         2: 'general',             # A calib file you built yourself and use for a long time
-        3: 'nightly'              # A calib built each night (or for a very limited mjd range)
+        3: 'nightly',             # A calib built each night (or for a very limited mjd range)
+        4: 'roughly_weekly',      # Built weekly, or something like that, may not be regular
+        5: 'roughly_monthly'      # Built monthly, or something like that, may not be regular
     }
 
 
