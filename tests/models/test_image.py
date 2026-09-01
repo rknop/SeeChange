@@ -9,7 +9,7 @@ import uuid
 import time
 import warnings
 
-import psycopg
+from psycopg import sql
 import psycopg.errors
 import numpy as np
 
@@ -18,7 +18,7 @@ from astropy.utils.exceptions import AstropyWarning
 
 import sqlalchemy as sa
 
-from models.base import SmartSession, FileOnDiskMixin, PsycopgConnection
+from models.base import SmartSession, FileOnDiskMixin, PsycopgConnection, PGDB
 from models.provenance import Provenance
 from models.instrument import Instrument
 from models.exposure import Exposure
@@ -768,6 +768,65 @@ def test_image_from_reduced_exposure( decam_reduced_origin_exposure_loaded_in_db
     assert img._flags.max() == 1
     assert img._flags.min() == 0
     assert img._flags.sum() == 266089
+
+
+def test_image_unique( sim_exposure1, provenance_base, provenance_extra ):
+    """Test the unique constraint on (provenance_id, exposure_id, section_id)."""
+    imparams = { 'exposure_id': sim_exposure1.id,
+                 'provenance_id': provenance_base.id,
+                 'width': 1024,
+                 'height': 2048,
+                 'mjd': 60000.,
+                 'end_mjd': 60000.01,
+                 'exp_time': 60.,
+                 'instrument': 'foo',
+                 'telescope': 'bar',
+                 'filter': 'r',
+                 'section_id': '0',
+                 'project': 'baz',
+                 'target': 'qux',
+                 'ra': 42.,
+                 'dec': -13.,
+                 'ra_corner_00': 41.9,
+                 'ra_corner_01': 41.9,
+                 'ra_corner_10': 42.1,
+                 'ra_corner_11': 42.1,
+                 'minra': 41.9,
+                 'maxra': 42.1,
+                 'dec_corner_00': -13.1,
+                 'dec_corner_10': -13.1,
+                 'dec_corner_01': -12.9,
+                 'dec_corner_11': -12.9,
+                 'mindec': -13.1,
+                 'maxdec': -12.9,
+                 'md5sum': uuid.uuid4()
+                }
+
+    try:
+        im1 = Image( filepath='quux.fits', **imparams )
+        im1.insert()
+
+        with pytest.raises( psycopg.errors.UniqueViolation,
+                            match='duplicate key value violates unique constraint "_image_provexpsec_uniq"' ):
+            im2 = Image( filepath='corge.fits', **imparams )
+            im2.insert()
+
+        imparams['provenance_id'] = provenance_extra.id
+        im2 = Image( filepath='corge.fits', **imparams )
+        im2.insert()
+
+        with PGDB() as pgdb:
+            rows, _cols = pgdb.execute( sql.SQL( "SELECT _id,filepath FROM images WHERE filepath=ANY(ARRAY[{paths}])" )
+                                        .format( paths=sql.SQL(",").join( ['quux.fits', 'corge.fits'] ) ) )
+        assert len(rows) == 2
+        assert set( r[0] for r in rows ) == { im1.id, im2.id }
+        assert set( r[1] for r in rows ) == { 'quux.fits', 'corge.fits' }
+
+    finally:
+        with PGDB() as pgdb:
+            pgdb.execute_nofetch( sql.SQL( "DELETE FROM images WHERE filepath=ANY(ARRAY[{paths}])" )
+                                  .format( paths=sql.SQL(",").join( ['quux.fits', 'corge.fits'] ) ) )
+            pgdb.commit()
 
 
 # This next test doesn't actually test coadding images, it tests that the
