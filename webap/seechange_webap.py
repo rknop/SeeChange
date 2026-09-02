@@ -291,7 +291,7 @@ class Exposures( BaseView ):
                        SUM( CASE WHEN t.subid IS NULL THEN 0 ELSE 1 END ) AS num_subs,
                        SUM( CASE WHEN t.num_sources IS NULL THEN 0 ELSE t.num_sources END ) AS num_sources,
                        SUM( CASE WHEN t.num_measurements IS NULL THEN 0 ELSE num_measurements END )
-                         AS num_measuREMENTS
+                         AS num_measurements
                 INTO TEMP TABLE temp_imgs_2
                 FROM temp_imgs t
                 GROUP BY t._id, t.filepath, t.mjd, t.airmass, t.target, t.project,
@@ -307,7 +307,7 @@ class Exposures( BaseView ):
             #   the reports join do everything and only need to get
             #   results at the end of that.
             app.logger.debug( "Exposures getting results" )
-            exposureinfo = pgdb.execute( "SELECT * FROM temp_imgs_2" )
+            exposureinfo = pgdb.execute( "SELECT * FROM temp_imgs_2 ORDER BY mjd" )
 
             # Run a third query to count reports.  Tried using
             #   models/report.py::Report.query_for_reports, but it

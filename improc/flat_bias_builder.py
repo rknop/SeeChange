@@ -50,7 +50,7 @@ class ParsFlatBuilder(Parameters):
 
         self.exposure_mode = self.add_par(
             'exposure_mode',
-            True,
+            False,
             bool,
             "Work on raw exposures rather than images.",
             critical=False
@@ -215,7 +215,7 @@ class ParsFlatBuilder(Parameters):
             'nightly',
             str,
             ( "The calibrator_set for the CalibratorFile created.  One of unknown, externally_supplied, "
-              "general, or nightly" ),
+              "general, nightly, roughly_weekly, or roughly_monthly" ),
         )
 
         self.flat_type = self.add_par(
@@ -307,7 +307,7 @@ class ParsFlatBuilder(Parameters):
         self.validity_start = self.add_par(
             'validity_start',
             None,
-            ( datetime.datetime, None ),
+            ( datetime.datetime, str, None ),
             ( "The flat or bias should be valid starting at this time.  Irrelevant if save_to_db is False.  "
               "Make both this and valdity_start_offset None to be valid from the beginning of time." ),
             critical=False
@@ -316,7 +316,7 @@ class ParsFlatBuilder(Parameters):
         self.validity_end = self.add_par(
             'validity_end',
             None,
-            ( datetime.datetime, None ),
+            ( datetime.datetime, str, None ),
             ( "The flat or bias should be valid until this time.  Irrelevant if save_to_db is False.  "
               "Make both this and valdity_end_offset None to valid until the end of time." ),
             critical=False
@@ -500,7 +500,13 @@ class FlatBuilder:
             cursor.execute( q )
             rows = cursor.fetchall()
             if len(rows) < self.pars.nmin:
-                raise RuntimeError( f"Only found {len(rows)} {table} that matched, which is < {self.pars.nmin}" )
+                baseerr = f"Only found {len(rows)} {table} that matched, which is < {self.pars.nmin}"
+                if SCLogger.getEffectiveLevel() <= logging.DEBUG:
+                    nlsp = '\n      '
+                    SCLogger.error( f"{baseerr}\n    Files:\n      {nlsp.join(r['filepath'] for r in rows)}" )
+                else:
+                    SCLogger.error( baseerr )
+                raise RuntimeError( baseerr )
 
             if self.pars.dup_reject is not None:
                 oldrows = rows
@@ -893,7 +899,10 @@ class FlatBuilder:
 
             t = pytz.utc.localize( astropy.time.Time( results['min_mjd'], format='mjd' ).datetime )
             if self.pars.validity_start is not None:
-                validity_start = dateutil.parser.parse( self.pars.validity_start )
+                if isinstance( self.pars.validity_start, str ):
+                    validity_start = dateutil.parser.parse( self.pars.validity_start )
+                else:
+                    validity_start = self.pars.validity_start
             elif self.pars.validity_start_offset is not None:
                 validity_start = t - datetime.timedelta( days=self.pars.validity_start_offset )
             else:
@@ -903,7 +912,10 @@ class FlatBuilder:
                 validity_start = pytz.utc.localize( validity_start )
 
             if self.pars.validity_end is not None:
-                validity_end = dateutil.parser.parse( self.pars.validity_end )
+                if isinstance( self.pars.validity_end, str ):
+                    validity_end = dateutil.parser.parse( self.pars.validity_end )
+                else:
+                    validity_end = self.pars.validity_end
             elif self.pars.validity_end_offset is not None:
                 validity_end = t + datetime.timedelta( days=self.pars.validity_end_offset )
             else:
@@ -1176,14 +1188,13 @@ def main():
     parser.add_argument( "--nodb", default=False, action='store_true',
                          help=( "By default, input images are all in the database and you must give database ids "
                                 "or database filepaths.  With --nodb, instead just give paths to images." ) )
-    parser.add_argument( "--section_keyword", default=None,
-                         help=( "If using --nodb and --exposure-mode, this is the header keyword to figure out "
-                                "which HDU of an exposure has the data for a given sensor section." ) )
 
     parser.add_argument( "-f", "--find-images", default=argparse.SUPPRESS, action='store_true',
                          help=( "Instead of specifying files, search the database for images and/or exposures." ) )
-    parser.add_argument( "--prov-id", default=None, help="Find images/exposures with this provenance id" )
-    parser.add_argument( "--prov-tag", default=None, help="Find images/exposures with this provenance tag" )
+    parser.add_argument( "--prov-id", default=argparse.SUPPRESS,
+                         help="Find images/exposures with this provenance id" )
+    parser.add_argument( "--prov-tag", default=argparse.SUPPRESS,
+                         help="Find images/exposures with this provenance tag" )
     parser.add_argument( "--section-id", default=argparse.SUPPRESS,
                          help=( "When finding images, find images of this secton id.  Do not use when in "
                                 "exposure mode, but required when not in exposure mode." ) )
