@@ -1,4 +1,5 @@
 import pytest
+import argparse
 import pathlib
 import random
 import functools
@@ -7,7 +8,8 @@ import time
 import re
 
 from util.logger import SCLogger
-from util.util import listify, ensure_file_does_not_exist, retry_with_sleep
+import util.util
+from util.util import listify, ensure_file_does_not_exist, retry_with_sleep, reconstruct_commandline
 
 # TODO : tests of most of the stuff in util...!  (Issue #384)
 
@@ -208,3 +210,112 @@ def test_retry_with_sleep( caplog ):
     res = retry_with_sleep( dothething, sleepmin=0.1, sleept=0.125, sleepfac=2, sleepmax=1.0, sleepfuzz=0.1,
                             accept_exceptions=(RuntimeError,ValueError) )
     assert res == 42
+
+
+def test_reconstruct_commandline():
+    cmds = [ { "cmd": [],
+               "nopositional": True,
+               "expected": {}
+              },
+             { "cmd": [ "64738" ],
+               "expected": { 'positional': '"64738"' }
+              },
+             { "cmd": [ "64738", "-q", "qux", "--string", "bar", "--bool", "--zeroormore" ],
+               "expected": { 'positional': '"64738"',
+                             '-q': '"qux"',
+                             '--string':  '"bar"',
+                             '--bool': None,
+                             '--zeroormore': None }
+              },
+             { "cmd": [ "64738", "-q", "qux", "-s", "bar", "-b", "-z" ],
+               "expected": { 'positional': '"64738"',
+                             '-q': '"qux"',
+                             '--string': '"bar"',
+                             '--bool': None,
+                             '--zeroormore': None }
+              },
+             { "cmd": [ "--also-string", "bar" ],
+               "nopositional": True,
+               "expected": { '--string': '"bar"' }
+              },
+             { "cmd": [ "-d", "13", "64738" ],
+               "expected": { 'positional': '"64738"',
+                             '--default': '"13"' }
+              }
+            ]
+
+    envses = [ ( None, "" ),
+               ( [],  "" ),
+               ( [ "HOME", "PWD" ], '  HOME="/home/seechange"\n  PWD="/seechange/tests"' )
+              ]
+
+    # omg it's a four-loop
+    for cmd in cmds:
+        nopositional = ( "nopositional" in cmd.keys() ) and cmd["nopositional"]
+        for showcommand in ( False, True ):
+            for showdefaults in ( False, True ):
+                for envs, envexpected in envses:
+                    parser = argparse.ArgumentParser()
+                    if not nopositional:
+                        parser.add_argument( "positional" )
+                    parser.add_argument( "-d", "--default", type=int, default=42 )
+                    parser.add_argument( "-n", "--no-default", type=int )
+                    parser.add_argument( "-s", "--string", "--also-string", default="foo" )
+                    parser.add_argument( "-q" )
+                    parser.add_argument( "-b", "--bool", action="store_true" )
+                    parser.add_argument( "-z", "--zeroormore", nargs="*", default=['a', 'b', 'c'] )
+                    parser.add_argument( "-o", "--oneormore", nargs="+" )
+                    args = parser.parse_args( cmd["cmd"] )
+                    if envs is None:
+                        cmdstr = reconstruct_commandline( parser, args, showdefaults=showdefaults,
+                                                          executable="testing" if showcommand else None )
+                    else:
+                        cmdstr = reconstruct_commandline( parser, args, showdefaults=showdefaults,
+                                                          executable="testing" if showcommand else None,
+                                                          envs=envs )
+
+                    expected = ( '\nKey environment variables:\n'
+                                 '  SEECHANGE_CONFIG="/seechange/tests/seechange_config_test.yaml"' )
+
+                    if len(envexpected) > 0:
+                        expected += f"\n{envexpected}"
+
+                    expected += "\n"
+
+                    if ( len(cmd["expected"]) > 0 ) or showcommand or showdefaults:
+                        expected += "\nCommand line:\n"
+                        slashy = ""
+                        spaces = "  "
+                        if showcommand:
+                            expected += "  testing"
+                            slashy = " \\\n"
+                            spaces = "    "
+                        for action in parser._actions:
+                            optstr = util.util._reconstruct_commandline_canonical_option( action )
+                            if optstr == "--help":
+                                continue
+                            optstr = optstr if optstr is not None else "positional"
+                            if ( ( optstr in cmd["expected"] ) or
+                                 ( showdefaults and ( action.default is not None ) and
+                                   ( not isinstance( action.nargs, int ) or ( action.nargs > 0 ) )
+                                  )
+                                ):
+                                if optstr in cmd["expected"]:
+                                    expval = cmd['expected'][optstr]
+                                else:
+                                    if isinstance( action.default, list ):
+                                        expval = ' '.join( f'"{v}"' for v in action.default )
+                                    else:
+                                        expval = f'"{action.default}"'
+                                if optstr == "positional":
+                                    expected += f"{slashy}{spaces}{expval}"
+                                else:
+                                    expected += f"{slashy}{spaces}{optstr}"
+                                    if expval is not None:
+                                        expected += " " + expval
+                                slashy = " \\\n"
+
+                        expected += "\n"
+
+                    SCLogger.debug( f"Command string:\n{cmdstr}" )
+                    assert cmdstr == expected

@@ -1,6 +1,8 @@
 import collections.abc
 import numbers
 import os
+import io
+import re
 import pathlib
 import time
 from datetime import datetime, date
@@ -444,3 +446,116 @@ def retry_with_sleep( func, sleepmin=0.1, sleept=0.5, sleepfac=2, sleepfuzz=0.1,
             raise RuntimeError( f"Failed {failmessage} after {t1-t0:.2f}s and {tries} tries." )
         else:
             return retval_on_fail
+
+
+def _reconstruct_commandline_canonical_option( action ):
+    optstr = None
+    if len( action.option_strings) > 0:
+        for o in action.option_strings:
+            # Try to keep the first one that starts with --
+            optstr = o
+            # ...so, yeah, I think I maybe could just have done
+            #   "for optstr in ..." and not had o as a variable at all,
+            #   but a more formal part of me is a little nervous about
+            #   variable scoping and how python tries to be friendly
+            #   to the newcomer and in so doing makes it confusing to
+            #   people who know something but haven't fully internalized
+            #   all of python's quirks.  Java/C/C++ may be painful and
+            #   verbose, but that is not without some advantages.
+            if ( len(o) > 1 ) and ( o[0:2] == '--' ):
+                break
+        if optstr is None:
+            # by constructon
+            raise RuntimeError( "This should never happen." )
+        if re.search( r"\s", optstr ):
+            raise ValueError( "Some of the arguments you sent to ArgumentParser.add_argument "
+                              "have whitespace in them!  Why would you do that?!?!?" )
+    return optstr
+
+
+def reconstruct_commandline( argparser, args, executable=None, envs=[], showdefaults=False ):
+    """Try to reconstruct a command line based on parsed args.
+
+    Parameters
+    ----------
+      argparser: argparse.ArgumentParser
+         The parser object that did the parsing.
+
+      args: ...
+         The thing that as returned by argparser.parse_args()
+
+      executable: str, default None
+         If not None, put this at the beginning of the returned command string
+
+      envs: list, default []
+         A list of key environment variables to output.
+         SEECHANGE_CONFIG will always be prepended to this list.
+
+      showdefaults: bool, default False
+         Normally, of args.{option} is at the default value found in
+         argparser, then {option} will not be included in the returned
+         command string.  Set this to True to include everything.
+
+    Returns
+    -------
+      str
+
+        Intended for human consumption, not machine parsing.  Just log it.
+
+    """
+
+    def valprint( v ):
+        if ( isinstance( v, str ) and '"' in v ):
+            if "'" in v:
+                raise RuntimeError( "This function is not sophisticated enough to cope with "
+                                    "things specified on the command line that have both single "
+                                    "and double quotes." )
+            return f"'{v}'"
+        else:
+            return f'"{v}"'
+
+    if 'SEECHANGE_CONFIG' not in envs:
+        envs.insert( 0, 'SEECHANGE_CONFIG' )
+
+    strio = io.StringIO()
+    if len(envs) > 0:
+        nlsp = "\n  "
+        strio.write( f"\nKey environment variables:\n  "
+                     f"{nlsp.join( f'{v}={valprint(os.getenv(v))}' for v in envs )}\n" )
+
+    if executable is None:
+        cmdline = ""
+        spaces = "  "
+    else:
+        cmdline = executable
+        spaces = "    "
+
+    # I feel a little queasy using an underscore property of an object....
+    for action in argparser._actions:
+        if action.dest in args:
+            val = getattr( args, action.dest )
+            if ( ( val != action.default ) or
+                    ( showdefaults and ( action.default is not None ) and
+                        ( not isinstance( action.nargs, int ) or ( action.nargs > 0 ) )
+                     )
+                 ):
+                if len(cmdline) > 0:
+                    cmdline += f" \\\n{spaces}"
+                optstr = _reconstruct_commandline_canonical_option( action )
+                if optstr is not None:
+                    cmdline += optstr
+                    sp = " "
+                else:
+                    sp = ""
+
+                if action.nargs in ( '*', '+' ):
+                    for v in val:
+                        cmdline += sp + valprint( v )
+                        sp = " "
+                elif action.nargs != 0:
+                    cmdline += sp + valprint( val )
+
+    if len( cmdline ) > 0:
+        strio.write( f"\nCommand line:\n  {cmdline}\n" )
+
+    return strio.getvalue()
