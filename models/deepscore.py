@@ -205,10 +205,10 @@ class DeepScore(Base, UUIDMixin, HasBitFlagBadness):
         return f"<DeepScore {self.id} from Set {self.deepscoreset_id} ; score={self.score}>"
 
 
-    def get_upstream_ids(self, session=None):
+    def get_upstream_ids(self, pgdb=None):
         """Get the id of the DeepScoreSet this is a member of."""
         return [ ( DeepScoreSet, self.deepscoreset_id ) ]
 
-    def get_downstream_ids(self, session=None):
+    def get_downstream_ids(self, pgdb=None):
         """DeepScore objects have no downstreams."""
         return []

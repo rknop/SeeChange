@@ -293,11 +293,6 @@ class Measurer:
                     n[ m ] = np.nan
 
                 positions = [ ( detections.x[i], detections.y[i] ) for i in range(len(detections.x)) ]
-                ###### OMG ROB
-                # if ds.image.filepath == '123/Demo_20230403_000000_0_r_Sci_FJKIX6':
-                #     import pdb; pdb.set_trace()
-                #     pass
-                ###### OMG ROB
                 all_measurements = photometry_and_diagnostics( sub_image.data, sub_noise, sub_mask,
                                                                positions, aper_radii, psfobj=sub_psf,
                                                                dobgsub=self.pars.use_annulus_bg_on_sub,
@@ -307,7 +302,9 @@ class Measurer:
                                                                noise_cutouts=sub_noise_cutouts,
                                                                mask_cutouts=sub_mask_cutouts,
                                                                diagdist=self.pars.diag_box_halfsize,
-                                                               distunit=self.pars.diag_box_halfsize_unit )
+                                                               distunit=self.pars.diag_box_halfsize_unit,
+                                                               n_sigma_outlier=self.pars.negatives_n_sigma_outlier
+                                                              )
                 # Fill in some basic fields of the measurements
                 for i, m in enumerate( all_measurements ):
                     m.measurementset_id = measurement_set.id

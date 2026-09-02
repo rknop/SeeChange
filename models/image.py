@@ -16,7 +16,7 @@ from sqlalchemy.dialects.postgresql import UUID as sqlUUID
 from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.schema import CheckConstraint
+from sqlalchemy.schema import CheckConstraint, UniqueConstraint
 
 from astropy.time import Time
 from astropy.wcs import WCS
@@ -87,6 +87,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             CheckConstraint( sqltext='NOT(md5sum IS NULL AND '
                                '(md5sum_components IS NULL OR array_position(md5sum_components, NULL) IS NOT NULL))',
                                name=f'{cls.__tablename__}_md5sum_check' ),
+            UniqueConstraint( 'provenance_id', 'exposure_id', 'section_id', name='_image_provexpsec_uniq' ),
             sa.Index(f"{cls.__tablename__}_q3c_ang2ipix_idx", sa.func.q3c_ang2ipix(cls.ra, cls.dec)),
         )
 
@@ -242,11 +243,26 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         JSONB,
         nullable=False,
         server_default='{}',
-        doc=(
-            "Additional information on this image. "
-            "Only keep a subset of the header keywords, "
-            "and re-key them to be more consistent. "
-        )
+        doc=( "A dictionary (key:value) of additional information from the image.  "
+              "Some of this may have been pulled from the image header.  This should "
+              "NOT include anything that has its own columN (mjd, filter, target, "
+              "instrument, etc.).  A few standard keys include: zero, dark, flat, "
+              "illumination, linearity.  All of these have values that are UUIDs that "
+              "point to the calibrator_files table (though they're not formal SQL foreign "
+              "keys).  If that preprocessing step hasn't been done, then probably the key "
+              "will not be present in the dict." )
+    )
+
+    width = sa.Column(
+        sa.SmallInteger,
+        nullable=False,
+        doc="Width of the image"
+    )
+
+    height = sa.Column(
+        sa.SmallInteger,
+        nullable=False,
+        doc="Height of the image"
     )
 
     mjd = sa.Column(
@@ -606,10 +622,10 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
            as the things calculated from it (galactic, ecliptic
            coordinates).
 
-        width : int, default data.shape[1]
+        width : int, default self.width
            Width (x-size) of the image
 
-        height : int, default data.shape[0]
+        height : int, default self.height
            Height (y-size) of the image
 
         """
@@ -619,13 +635,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         if ( wcs.axis_type_names == ['', ''] ):
             raise ValueError( "Could not find a good WCS" )
 
-        # Note: this used to prefer raw_data; changed it to prefer
-        #  data, because we believe that's what we want to prefer,
-        #  but left this note here in case things go haywire.
-        # data = self.raw_data if self.raw_data is not None else self.data
-        data = self.data if self.data is not None else self.raw_data
-        width = data.shape[1]
-        height = data.shape[0]
+        width = self.width if width is None else width
+        height = self.height if height is None else height
 
         FourCorners.set_corners_from_wcs( self, wcs, width, height, setradec=setradec )
 
@@ -713,8 +724,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                 del new.header[delkw]
 
         # numpy array axis ordering is backwards from FITS ordering
-        width = new.raw_data.shape[1]
-        height = new.raw_data.shape[0]
+        new.width = new.raw_data.shape[1]
+        new.height = new.raw_data.shape[0]
 
         names = ['ra', 'dec'] + new.instrument_object.get_auxiliary_exposure_header_keys()
         header_info = new.instrument_object.extract_header_info(new._header, names)
@@ -747,8 +758,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             new.calculate_coordinates()  # galactic and ecliptic coordinates
 
             # Set the corners
-            halfwid = new.instrument_object.pixel_scale * width / 2. / np.cos( new.dec * np.pi / 180. ) / 3600.
-            halfhei = new.instrument_object.pixel_scale * height / 2. / 3600.
+            halfwid = new.instrument_object.pixel_scale * new.width / 2. / np.cos( new.dec * np.pi / 180. ) / 3600.
+            halfhei = new.instrument_object.pixel_scale * new.height / 2. / 3600.
             ra0 = new.ra - halfwid
             ra1 = new.ra + halfwid
             dec0 = new.dec - halfhei
@@ -767,7 +778,6 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             new.maxdec = dec1
 
         new.info = header_info  # save any additional header keys into a JSONB column
-
 
         return new
 
@@ -856,7 +866,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         return new
 
     @classmethod
-    def from_image_zps(cls, zps, index=0, images=None, alignment_target=None,
+    def from_image_zps(cls, zps, width=None, height=None, index=0, images=None, alignment_target=None,
                        ra_corners=None, dec_corners=None, set_is_coadd=True):
         """Create a new Image object from a list of other ZeroPoint objects
 
@@ -881,6 +891,14 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         ----------
         zps: list of ZeroPoint objects
             The ZeroPoints of the images to combine into a new Image object.
+
+        width: int
+            Width of the summed image.  You must set this if you aren't
+            going to later set the .data property of the created Image.
+
+        height: int
+            Height of the summed image.  You must set this if you aren't
+            going to later set the .data property of the created Image.
 
         index: int, default 0
             The image index in the (mjd sorted) list of upstream images
@@ -975,7 +993,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         #   control this.
         upstream_ids = [ z.id for z in zps ]
 
-        output = Image( nofile=True, is_coadd=set_is_coadd )
+        output = Image( nofile=True, is_coadd=set_is_coadd, width=width, height=height )
 
         fail_if_not_consistent_attributes = ['filter']
         copy_if_consistent_attributes = ['section_id', 'instrument', 'telescope', 'project', 'target', 'filter']
@@ -1021,7 +1039,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         output.end_mjd = max([image.end_mjd for image in images])  # exposure ends are not necessarily sorted
                                                                    # ...but that only matters in pathological cases
 
-        # ...not obvious this is the right thing to do
+        # ...not obvious this is the right thing to do.
+        # (In fact, I want to get rid of Image.inf -- see Issue #542
         output.info = images[index].info
         # TODO? : this next one is woeful.  Coordinates should be updated
         #   to come from the alignment target image, but lots of
@@ -1032,6 +1051,11 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         #   and the other methods use an index, so probably we don't
         #   really need to worry about it.)
         output.header = images[index].header
+        #
+        # ...in fact, let's just set an empty header.  That way, we don't have to
+        #   read image, and this will work in tests where there are Image
+        #   objects without associated files.
+        # output.header = fits.Header()
 
         output.format = config.Config.get().value( 'storage.images.format' )
 
@@ -1054,7 +1078,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         return cls.from_new_and_ref(new_image, ref)
 
     @classmethod
-    def from_new_and_ref(cls, new_image_zp, ref, new_image=None):
+    def from_new_and_ref(cls, new_image_zp, ref, new_image=None, width=None, height=None):
         """Create a new Image object from a Reference object and a new Image object.
         This is the first step in making a difference image.
 
@@ -1077,6 +1101,10 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             If you pass this, then it must be the Image that goes along
             with ZeroPoint.  Normally, this function will search the
             database to find the right Image.
+
+        width, height: int, default None
+            You probably never want to set these, because they will
+            default to the size of new_image.
 
         Returns
         -------
@@ -1124,7 +1152,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         #   the sub image to the new image here (which is the
         #   default).
         for att in ['instrument', 'telescope', 'project', 'section_id', 'filter', 'target',
-                    'exp_time', 'airmass', 'mjd', 'end_mjd', 'info', 'header',
+                    'exp_time', 'airmass', 'mjd', 'end_mjd', 'info', 'header', 'width', 'height',
                     'gallon', 'gallat', 'ecllon', 'ecllat', 'ra', 'dec',
                     'ra_corner_00', 'ra_corner_01', 'ra_corner_10', 'ra_corner_11',
                     'dec_corner_00', 'dec_corner_01', 'dec_corner_10', 'dec_corner_11',
@@ -1152,6 +1180,18 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
 
         # Note that "data" is not filled by this method, also the provenance is empty!
         return output
+
+
+    def set_corners_from_wcs( self, wcs=None, width=None, height=None, setradec=False ):
+        if wcs is None:
+            raise ValueError( "Must provide a wcs" )
+        if ( ( ( width is not None ) and ( width != self.width ) ) or
+             ( ( height is not None ) and ( height != self.height ) ) ):
+            raise ValueError( f"You passed width={width} and height={height}, but this is an image "
+                              f"of dimensions {self.width}×{self.height}" )
+        width = self.width if width is None else width
+        height = self.height if height is None else height
+        super().set_corners_from_wcs( wcs, width, height, setradec=setradec )
 
 
     def set_coordinates_to_match_target( self, target ):
@@ -1695,6 +1735,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             if not os.path.isfile(filename):
                 raise FileNotFoundError(f"Could not find the image file: {filename}")
             self._data, self._header = read_fits_image(filename, ext='image', output='both')
+            self.width = self._data.shape[1]
+            self.height = self._data.shape[0]
             for att in self.saved_components:
                 if att == 'image':
                     continue
@@ -1704,6 +1746,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         else:  # load each data array from a separate file
             if self.components is None:
                 self._data, self._header = read_fits_image( self.get_fullpath(nofile=False), output='both' )
+                self.width = self._data.shape[1]
+                self.height = self._data.shape[0]
             else:
                 gotim = False
                 gotweight = False
@@ -1713,6 +1757,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                         raise FileNotFoundError(f"Could not find the image component file: {filename}")
                     if comp == 'image':
                         self._data, self._header = read_fits_image( filename, output='both' )
+                        self.width = self._data.shape[1]
+                        self.height = self._data.shape[0]
                     else:
                         setattr( self, f'_{comp}', read_fits_image( filename, output='data' ) )
 
@@ -2108,7 +2154,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                         )
                     else:
                         WorldCoordinates._find_possibly_containing_temptable(
-                            ra, dec, session=pgdb, prov_id=provenance_ids, corner=corner, limprefix=limprefix )
+                            ra, dec, session=pgdb, prov_id=provenance_ids, corner=corner, limprefix=limprefix,
+                            temptable=f"temp_find_containing_{barf}" )
 
                     pgdb.execute_nofetch(
                         sql.SQL( textwrap.dedent(
@@ -2518,6 +2565,15 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
     def data(self, value):
         self._nandata = None
         self._data = value
+        if value is not None:
+            self.width = value.shape[1]
+            self.height = value.shape[0]
+            # zero out inconsistent weight and flags.  This isn't obviously
+            # the right thing to do, but doing nothing is obviously wrong.
+            if ( self._weight is not None ) and ( self._weight.shape != value.shape ):
+                self._weight = None
+            if ( self._flags is not None ) and ( self._flags.shape != value.shape ):
+                self._flags = None
 
     @property
     def header(self):
@@ -2548,6 +2604,9 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
 
     @flags.setter
     def flags(self, value):
+        if ( self._data is not None ) and ( value is not None ) and ( self._data.shape != value.shape ):
+            raise ValueError( f"Tried to set flags array of shape {value.shape} "
+                              f"for image with shape {self._data.shape}" )
         self._nandata = None
         self._nanscore = None
         self._flags = value
@@ -2561,6 +2620,9 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
 
     @weight.setter
     def weight(self, value):
+        if ( self._data is not None ) and ( value is not None ) and ( self._data.shape != value.shape ):
+            raise ValueError( f"Tried to set weight array of shape {value.shape} "
+                              f"for image with shape {self._data.shape}" )
         self._weight = value
 
     @property

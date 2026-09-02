@@ -34,6 +34,8 @@ from util.util import patch_image_overlap_limits
 from tests.conftest import rnd_str
 
 
+# Instrument will be DemoInstrument through the magic
+#   of Instrument.guess_instrument()
 def make_sim_exposure( filter=None, seed=None ):
     rng = np.random.default_rng( seed=seed )
     e = Exposure(
@@ -91,7 +93,12 @@ def generate_exposure_fixture( seed=None ):
     return new_exposure
 
 
-# this will inject 9 exposures named sim_exposure1, sim_exposure2, etc.
+# Create test-scope fixtures sim_exposure1 through sim_exposure9
+# Each creates an Exposure record with DemoInstrument as the Instrument
+#   and other fields (sorta) randomly filled.  Saves that record to the
+#   database and creates an empty file on disk to go with it.  (There's
+#   no actual simualted data.)  Useful if you need a saved exposue_id to
+#   point an image at.
 _rng = np.random.default_rng( seed=1611012017 )
 for i in range(1, 10):
     globals()[f'sim_exposure{i}'] = generate_exposure_fixture( seed=_rng.integers( 0, 2**31 ) )
@@ -191,7 +198,7 @@ def generate_image_fixture(commit=True, filter=None, seed=None ):
         rng = np.random.default_rng( seed=seed )
         im = None
         exp = None
-        exp = make_sim_exposure( filter=filter, seed=rng.integers(0, 2**31) )
+        exp = make_sim_exposure( filter=filter, seed=seed-10000 )
         add_file_to_exposure(exp)
         # Have to commit the exposure even if commit=False
         #  because otherwise tests that use this fixture
@@ -222,12 +229,17 @@ def generate_image_fixture(commit=True, filter=None, seed=None ):
     return new_image
 
 
-# this will inject 9 images named sim_image1, sim_image2, etc.
+# Create image-scope fixures sim_image1 through sim_image9
+# Each will be an image saved to the database with a file full
+#   of random numbers.  (Size is 512×1024, which comes from
+#   DemoInstrument.fake_image_size_[xy].)
+# If you want actual simulated data, see the sim_lightcurve*
+#   fixtures.
 for i in range(1, 10):
-    globals()[f'sim_image{i}'] = generate_image_fixture( seed=1011888316 )
+    globals()[f'sim_image{i}'] = generate_image_fixture( seed=1011888316+i )
 
 for i in range(1, 10):
-    globals()[f'sim_image_r{i}'] = generate_image_fixture( filter='r', seed=869327863 )
+    globals()[f'sim_image_r{i}'] = generate_image_fixture( filter='r', seed=869327863+i )
 
 # use this Image if you want the test to do the saving
 sim_image_uncommitted = generate_image_fixture(commit=False, seed=1093069384)
@@ -283,6 +295,7 @@ def sim_reference(provenance_preprocessing, provenance_extraction, provenance_ex
         wcs.wcs.wcs.crval = np.array([ra, dec])
         wcs.provenance_id = provenance_extra.id
         wcs.sources_id = sl.id
+        wcs.set_corners_from_wcs( image=im, setradec=True )
         wcs.save( image=im )
         wcs.insert()
         zp = ZeroPoint()
@@ -829,6 +842,9 @@ def sim_lightcurve_reference_image_unsaved( sim_lightcurve_image_parameters, sim
     ds.wcs.sources_id = ds.sources.id
     # This is a cheat, as we didn't really use the params in the provenance, but, whatevs
     ds.wcs.provenance_id = ds.prov_tree['astrocal'].id
+    ds.wcs._fill_bogus_coordinate_fields( ra=imageargs['ra'], dec=imageargs['dec'],
+                                          minra=imageargs['minra'], maxra=imageargs['maxra'],
+                                          mindec=imageargs['mindec'], maxdec=imageargs['maxdec'] )
 
     # Likewise, make a fake zeropoint, cheating again on provenance
     # (Re: number of stars, there just aren't that many not-deblended
@@ -904,6 +920,7 @@ def sim_lightcurve_reference_module(  sim_lightcurve_reference_image_unsaved ):
 @pytest.fixture( scope='session' )
 def sim_lightcurve_image_datastore_maker_factory( sim_lightcurve_image_parameters, sim_lightcurve_pipeline_parameters,
                                                   sim_lightcurve_reference_image_unsaved ):
+    imageinfo, imageargs = sim_lightcurve_image_parameters
     refds = sim_lightcurve_reference_image_unsaved
     dsentocleanup = []
 
@@ -914,6 +931,11 @@ def sim_lightcurve_image_datastore_maker_factory( sim_lightcurve_image_parameter
         # (We also then need to pass input_psf to extractor.run.)
         pipparams['extraction'].update( { 'measure_psf': False } )
         pip = Pipeline( **pipparams )
+        # ....gah.  Because of our whole subconfigs business, we have to fix this now.
+        # Never do this in real code.  This kind of post-hoc parameter editing is
+        # a recipe for trouble; I know it works here because of the internals of the code,
+        # but will probably regret having said that later.
+        pip.extractor.pars.subconfigs['subconfigs']['extragalactic']['measure_psf'] = False
         ds.prov_tree = pip.make_provenance_tree( ds, no_provtag=True, ok_no_ref_prov=True )
 
         ds = pip.extractor.run( ds, input_psf=refds.psf )
@@ -933,6 +955,9 @@ def sim_lightcurve_image_datastore_maker_factory( sim_lightcurve_image_parameter
         ds.wcs.sources_id = ds.sources.id
         ds.wcs.provenance_id = ds.prov_tree['astrocal'].id
         ds.wcs.save( image=ds.image )
+        ds.wcs._fill_bogus_coordinate_fields( ra=imageargs['ra'], dec=imageargs['dec'],
+                                              minra=imageargs['minra'], maxra=imageargs['maxra'],
+                                              mindec=imageargs['mindec'], maxdec=imageargs['maxdec'] )
         ds.wcs.insert()
 
         # Likewise, make a fake zeropoint, cheating again on provenance

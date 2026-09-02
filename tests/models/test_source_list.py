@@ -25,7 +25,7 @@ def test_source_list_bitflag(sim_sources):
     assert sim_sources.badness == ''
 
     image = Image.get_by_id( sim_sources.image_id )
-    exposure = Exposure.get_by_id( image.exposure_id )
+    exposure = Exposure.get_by_id( image.exposure_id, nofile=True )
 
     with SmartSession() as session:
         # try to find this using the bitflag hybrid property
@@ -41,7 +41,7 @@ def test_source_list_bitflag(sim_sources):
 
     # Reload from database, make sure stuff got updated
     image = Image.get_by_id( sim_sources.image_id )
-    exposure = Exposure.get_by_id( image.exposure_id )
+    exposure = Exposure.get_by_id( image.exposure_id, nofile=True )
     sources = SourceList.get_by_id( sim_sources.id )
 
     assert image.bitflag == 2**1 + 2**3
@@ -118,6 +118,8 @@ def test_invent_filepath( provenance_base, provenance_extra ):
         'section_id': 0,
         'type': "Sci",
         'format': "fits",
+        'width': 1024,
+        'height': 2048,
         'ra': 12.3456,
         'dec': -0.42,
         'mjd': 61738.64,

@@ -583,7 +583,7 @@ class DataStore:
         args: list
             A list of arguments to parse.
             Possible argument combinations are:
-             - DataStore: makes a copy of the other DataStore's __dict__
+             - DataStore: makes a copy of the other DataStore's __dict__.  WARNING : shallow copy!
              - exposure_id, section_id: a uuid and a string
              - Exposure, section_id: an Exposure object, and a string
              - Image: an Image object.

@@ -87,6 +87,42 @@ class WorldCoordinates(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness, Spat
         newwcs.wcs = self.wcs[ subset[1].start:subset[1].stop, subset[0].start:subset[0].start ]
         return newwcs
 
+    def _fill_bogus_coordinate_fields( self, image=None, ra=-999., dec=-999.,
+                                       minra=-999., maxra=-999., mindec=-999., maxdec=-999. ):
+        """This is used in tests to make sure some fields aren't NULL."""
+
+        if image is not None:
+            self.ra = image.ra
+            self.dec = image.dec
+            self.calculate_coordinates()
+            for radec in [ 'ra', 'dec' ]:
+                for good in [ '', 'good_' ]:
+                    for minmax in [ 'min', 'max' ]:
+                        setattr( self, f'{good}{minmax}{radec}', getattr( image, f'{minmax}{radec}' ) )
+                for good in [ 'corner', 'good' ]:
+                    for corner in [ '00', '01', '10', '11' ]:
+                        setattr( self, f'{radec}_{good}_{corner}', getattr( image, f'{radec}_corner_{corner}' ) )
+        else:
+            self.ra = ra
+            self.dec = dec
+            if ( self.ra >= 0. ) and ( self.ra < 360. ) and ( self.dec >= -90. ) and ( self.dec <= 90. ):
+                self.calculate_coordinates()
+            for good in [ '', 'good_' ]:
+                setattr( self, f'{good}minra', minra )
+                setattr( self, f'{good}maxra', maxra )
+                setattr( self, f'{good}mindec', mindec )
+                setattr( self, f'{good}maxdec', maxdec )
+            for good in [ 'corner', 'good' ]:
+                setattr( self, f'ra_{good}_00', minra )
+                setattr( self, f'ra_{good}_01', minra )
+                setattr( self, f'ra_{good}_10', maxra )
+                setattr( self, f'ra_{good}_11', maxra )
+                setattr( self, f'dec_{good}_00', mindec )
+                setattr( self, f'dec_{good}_01', maxdec )
+                setattr( self, f'dec_{good}_10', mindec )
+                setattr( self, f'dec_{good}_11', maxdec )
+
+
     def _get_inverse_badness(self):
         """Get a dict with the allowed values of badness that can be assigned to this object"""
         return catalog_match_badness_inverse
@@ -105,7 +141,71 @@ class WorldCoordinates(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness, Spat
         return np.mean(pixel_scales) * 3600.0
 
 
+    def set_corners_from_wcs( self, image=None, width=None, height=None, setradec=False, mask=None ):
+        """Update the WorldCoordinates four corners (and optionally, RA/Dec)
+
+        Parameters
+        ----------
+          image: Image, default None
+             Can use this instead of giving width and height.  Must pass
+             one of image, mask, or (width and height).
+
+           width, height: int, default None
+             Size of the image, so that we can figure out where the
+             corners are.  Can omit this if image is not None or mask is
+             not None.
+
+           mask: 2d numpy array, default None
+             If given, where values are not 0, those are considered bad
+             pixels.  The "good" corner and min/max fields will be set
+             such that all pixels on the image outside that region are
+             flagged as bad.  Useful on chips where big swaths are bad
+             (e.g. if the left 200 pixels are vignetted, or something).
+
+             If this is not given, the "good" corners and min/max are
+             not set.
+
+           setradec: bool, default False
+             Set this to True to also update ra and dec (plus ecliptic
+             and galactic coordinates), not just the corners and
+             min/max.
+
+        """
+
+        mskwid = mask.shape[1] if mask is not None else None
+        mskhei = mask.shape[0] if mask is not None else None
+        imwid = None
+        imhei = None
+        if image is not None:
+            if isinstance( image, Image ):
+                imwid = image.width
+                imhei = image.height
+            else:
+                imwid = image.shape[1]
+                imhei = image.shape[0]
+
+        if ( mskwid is not None ) and ( imwid is not None ) and ( ( imwid != mskwid ) or ( imhei != mskhei ) ):
+            raise ValueError( f"Image is {imwid}×{imhei}, but mask is {mskwid}×{mskhei}, which is inconsistent." )
+
+        if ( width is not None ) and ( ( ( imwid is not None ) and ( imwid != width ) )
+                                       or
+                                       ( ( mskwid is not None ) and ( mskwid != width ) )
+                                      ):
+            raise ValueError( f"You passed width {width}, which is not consistent with the image and/or mask" )
+        if ( height is not None ) and ( ( ( imhei is not None ) and ( imhei != height ) )
+                                        or
+                                        ( ( mskhei is not None ) and ( mskhei != height ) )
+                                       ):
+            raise ValueError( f"You passed height {height}, which is not consistent with the image and/or mask" )
+
+        width = width if width is not None else imwid if imwid is not None else None
+        height = height if height is not None else imhei if imhei is not None else None
+
+        super().set_corners_from_wcs( wcs=self.wcs, width=width, height=height, mask=mask, setradec=setradec )
+
+
     def save( self, filename=None, image=None, **kwargs ):
+
         """Write the WCS data to disk.
 
         Updates self.filepath

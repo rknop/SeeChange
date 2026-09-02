@@ -948,7 +948,7 @@ def bogus_image( bogus_image_factory ):
     # Doing this manually rather than calling img.delete_from_disk_and_database
     #   because of the bogus_datastore cleanup below
     with PGDB() as pgdb:
-        pgdb.execute_nofetch( sql.SQL( "DELETE FROM images WHERE _id={imgid}" ).foramt( imgid=img.id ) )
+        pgdb.execute_nofetch( sql.SQL( "DELETE FROM images WHERE _id={imgid}" ).format( imgid=img.id ) )
         pgdb.commit()
     archive = get_archive_object()
     for comp in [ 'image', 'weight', 'flags' ]:
@@ -975,7 +975,7 @@ def bogus_sources_and_psf( bogus_image, bogus_sources_factory ):
 
     with PGDB() as pgdb:
         pgdb.execute_nofetch( sql.SQL( "DELETE FROM psfs WHERE _id={pid}" ).format( pid=psf.id ) )
-        pgdb.execute_nofetch( sql.SQL( "DELETE FROM source_lists WHERE _id={isd}" ).format( id=src.id) )
+        pgdb.execute_nofetch( sql.SQL( "DELETE FROM source_lists WHERE _id={sid}" ).format( sid=src.id) )
         pgdb.commit()
 
 
@@ -1012,8 +1012,9 @@ def bogus_wcs( bogus_sources_and_psf ):
     wcs = WorldCoordinates( sources_id=bogus_sources.id,
                             provenance_id=prov.id,
                             filepath='fake_bogus_wcs.txt',
-
                             md5sum=uuid.uuid4() )
+    wcs._fill_bogus_coordinate_fields()
+
     wcs.insert()
 
     yield wcs

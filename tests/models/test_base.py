@@ -161,6 +161,8 @@ def test_upsert( provenance_base ):
 
         image = Image( _id = uuidstodel[0],
                        provenance_id = provenance_base.id,
+                       width=1024.,
+                       height=2048.,
                        mjd = 60575.474664,
                        end_mjd = 60575.4750116,
                        exp_time = 30.,
@@ -819,6 +821,10 @@ def test_fileondisk_save_multifile_noarchive( diskfile ):
         models.base.ARCHIVE = origarchive
         config.Config._configs[ config.Config._default ] = origcfgobj
 
+
+
+# NOTE : FourCorners.set_corners_from_wcs and FourCornersWithGood.set_corners_from_wcs
+#   are tested in test_world_coordinates.py
 
 def test_fourcorners_sort_radec():
     ras = [ 0, 1, 0, 1 ]

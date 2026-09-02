@@ -143,6 +143,7 @@ def ptf_downloader(provenance_preprocessing, download_url, data_dir, ptf_cache_d
             md5sum.update( ifp.read() )
         exposure = Exposure( filepath=filename,
                              md5sum=uuid.UUID(md5sum.hexdigest()),
+                             instrument='PTF',
                              format='fits' )
 
         return exposure
@@ -153,12 +154,24 @@ def ptf_downloader(provenance_preprocessing, download_url, data_dir, ptf_cache_d
 @pytest.fixture
 def ptf_exposure(ptf_downloader):
 
-    exposure = ptf_downloader()
-    exposure.upsert()
 
-    yield exposure
+    exp = ptf_downloader()
 
-    exposure.delete_from_disk_and_database()
+    # Fill in non-null fields
+    for field in [ 'mjd', 'exp_time', 'ra', 'dec' ]:
+        if getattr( exp, field ) is None:
+            setattr( exp, field, 0. )
+    for field in [ 'project', 'target' ]:
+        if getattr( exp, field ) is None:
+            setattr( exp, field, 'unknown' )
+    if ( exp._filter is None ) and ( exp.filter_array is None ):
+        exp._filter = "R"
+
+    exp.upsert()
+
+    yield exp
+
+    exp.delete_from_disk_and_database()
 
 
 @pytest.fixture
@@ -291,6 +304,16 @@ def ptf_images_datastore_factory(ptf_urls, ptf_downloader, datastore_factory, pt
         dses = []
         for url in urls:
             exp = ptf_downloader(url)
+            # Fill in non-null fields
+            for field in [ 'mjd', 'exp_time', 'ra', 'dec' ]:
+                if getattr( exp, field ) is None:
+                    setattr( exp, field, 0. )
+            for field in [ 'project', 'target' ]:
+                if getattr( exp, field ) is None:
+                    setattr( exp, field, 'unknown' )
+            if ( exp._filter is None ) and ( exp.filter_array is None ):
+                exp._filter = "R"
+
             exp.insert()
             exp.instrument_object.fetch_sections()
             exp.md5sum = uuid.uuid4()  # this will save some memory as the exposures are not saved to archive
@@ -468,7 +491,7 @@ def ptf_ref(
                                  'instrument': 'PTF',
                                  'zp_prov_id': ptf_reference_image_datastores[0].zp.provenance_id } )
     refmaker.setup_provenances()
-    pipe = refmaker.coadd_pipeline
+    pipe = refmaker._coadd_pipeline
 
     # Copying code from Image.invent_filepath so that
     #   we know what the filenames will be

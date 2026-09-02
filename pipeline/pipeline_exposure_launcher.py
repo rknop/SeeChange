@@ -8,6 +8,7 @@ import signal
 
 from util.conductor_connector import ConductorConnector
 from util.logger import SCLogger
+import util.util
 
 from models.base import SmartSession
 from models.knownexposure import KnownExposure
@@ -219,28 +220,31 @@ class ExposureLauncher:
                 knownexp = knownexp[0]
 
                 # Figure out what step we're supposed to run through
-                through_step = None
-                conddex = None
-                mydex = None
-                if self.through_step is not None:
-                    try:
-                        mydex = Pipeline.ALL_STEPS.index( self.through_step )
-                    except ValueError:
-                        SCLogger.error( f"Unknown step {self.through_step}" )
-                        raise
-                if 'through_step' in data:
-                    try:
-                        conddex = Pipeline.ALL_STEPS.index( data['through_step'] )
-                    except ValueError:
-                        SCLogger.error( f"Unknown step {data['through_step']} given by conductor!" )
-                        raise
-                if conddex is not None:
-                    if mydex is not None:
-                        through_step = Pipeline.ALL_STEPS[ min( conddex, mydex ) ]
-                    else:
-                        through_step = data['through_step']
-                elif mydex is not None:
-                    through_step = self.through_step
+                if self.just_download:
+                    through_step = 'exposure'
+                else:
+                    through_step = None
+                    conddex = None
+                    mydex = None
+                    if self.through_step is not None:
+                        try:
+                            mydex = Pipeline.ALL_STEPS.index( self.through_step )
+                        except ValueError:
+                            SCLogger.error( f"Unknown step {self.through_step}" )
+                            raise
+                    if 'through_step' in data:
+                        try:
+                            conddex = Pipeline.ALL_STEPS.index( data['through_step'] )
+                        except ValueError:
+                            SCLogger.error( f"Unknown step {data['through_step']} given by conductor!" )
+                            raise
+                    if conddex is not None:
+                        if mydex is not None:
+                            through_step = Pipeline.ALL_STEPS[ min( conddex, mydex ) ]
+                        else:
+                            through_step = data['through_step']
+                    elif mydex is not None:
+                        through_step = self.through_step
 
                 # Run
                 logtext = ( f"Creating an ExposureProcessor for instrument {knownexp.instrument} and "
@@ -363,7 +367,7 @@ environment variable anyway.)
                                 "to the provenance, it won't be deleted." ) )
     parser.add_argument( "-t", "--through-step", default=None,
                          help=( "Only run through this step; default=run everything.  Step can be "
-                                "exposure, preprocessing, extraction, astrocal, photocal, "
+                                "preprocessing, extraction, astrocal, photocal, "
                                 "subtraction, detection, cutting, measuring, scoring.  Will run "
                                 "through the earlier of this step or the through step given by the conductor." ) )
     parser.add_argument( "--just-download", default=False, action='store_true',
@@ -383,6 +387,9 @@ environment variable anyway.)
     if args.worker_log_level.lower() not in loglookup.keys():
         raise ValueError( f"Unknown worker log level {args.worker_log_level}" )
     worker_log_level = loglookup[ args.worker_log_level.lower() ]
+
+    SCLogger.info( "pipeline_exposure_launcher run with:\n"
+                   f"{util.util.reconstruct_commandline(parser, args, 'pipeline_exposure_launcher.py')}" )
 
     posargs = [ args.cluster_id, args.node_id ]
     kwargs = { "numprocs": args.numprocs,

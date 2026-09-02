@@ -604,7 +604,7 @@ def photometry_and_diagnostics( image, noise, mask, positions, apers, measuremen
                                 psfobj=None, photutils_psf=None, fwhm_pixels=None,
                                 dobgsub=False, innerrad=None, outerrad=None,
                                 cutouts=None, noise_cutouts=None, mask_cutouts=None, cutouts_size=41,
-                                diagdist=2, distunit='fwhm' ):
+                                diagdist=2, distunit='fwhm', n_sigma_outlier=2. ):
 
     """Calculate photometry and associated diagnostics at various positions on an image.
 
@@ -624,6 +624,7 @@ def photometry_and_diagnostics( image, noise, mask, positions, apers, measuremen
                                    cutouts_size=cutouts_size, return_cutouts=True )
 
     fwhm_pixels = psfobj.fwhm_pixels if psfobj is not None else fwhm_pixels
-    diagnostics( measurements, co['image'], co['noise'], co['mask'], fwhm_pixels, diagdist=diagdist, distunit=distunit )
+    diagnostics( measurements, co['image'], co['noise'], co['mask'], fwhm_pixels,
+                 diagdist=diagdist, distunit=distunit, n_sigma_outlier=n_sigma_outlier )
 
     return measurements

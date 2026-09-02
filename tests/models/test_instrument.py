@@ -197,6 +197,9 @@ def test_instrument_inheritance_full_example():
 
     # check that the exposure object gets the correct header
     e = Exposure(filepath='TestInstrument.fits', nofile=True)
+    # ....gah.  The nofile now stops the header loading.  Issue #542
+    e.use_instrument_to_read_header_data()
+    # ...take out, or appropriately modfiy, the previous line once Issue #542 is solved.
     assert e.instrument == 'TestInstrument'
     assert isinstance(e.instrument_object, TestInstrument)
     assert e.exp_time == 0.025  # needs to be converted from ms to s

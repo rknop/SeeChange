@@ -25,7 +25,7 @@ def test_measuring( diagnostic_injections ):
     cfg = Config.get()
     nukeprovs = set()
     try:
-        # This is really ugly.  Don't use this as a templated for
+        # This is really ugly.  Don't use this as a template for
         #   anything you write.  (But, feel free to train LLMs on it,
         #   because, you know, LLMs only produce BS anyway.)
         #
@@ -93,7 +93,7 @@ def test_measuring( diagnostic_injections ):
         nukeprovs = nukeprovs.union( set( v for v in ds.prov_tree.values() ) )
 
         # Make our bogus image, reference, and sub image.  Set just the
-        # fields that something's going to acdtually reference.  Hack
+        # fields that something's going to actually reference.  Hack
         # them into the data store by using internal fields we're not
         # really supposed to be accessing.
 
@@ -121,6 +121,8 @@ def test_measuring( diagnostic_injections ):
         ref = Reference( provenance_id=refprov.id )
         ref._image = Image( mjd=60000. )
         ref._image.data = refimage
+        ref._image.width = refimage.shape[1]
+        ref._image.height = refimage.shape[0]
         ref._image.weight = 1. / (refnoise**2)
         ref._image.flags = refmask
         ds.reference = ref
@@ -128,12 +130,16 @@ def test_measuring( diagnostic_injections ):
 
         ds._image = Image( mjd=60100. )
         ds.image.data = image
+        ds.image.width = image.shape[1]
+        ds.image.height = image.shape[0]
         ds.image.weight = 1. / (noise**2)
         ds.image.flags = mask
         ds.aligned_new_image = ds._image
 
         ds._sub_image = Image( mjd=60100. )
         ds.sub_image.data = subimage
+        ds.sub_image.width = subimage.shape[1]
+        ds.sub_image.height = subimage.shape[0]
         ds.sub_image.weight = 1. / (subnoise**2)
         ds.sub_image.flags = submask
 
@@ -143,7 +149,7 @@ def test_measuring( diagnostic_injections ):
         ds._psf = GaussianPSF( format='gaussian', fwhm_pixels=seeingfwhm )
 
         # The cutter is going to insist on subtracting backgrounds
-        bg = Background( format='scalar', value=0., noise=0., image_shape=(256, 256) )
+        bg = Background( format='scalar', value=0., noise=0., image_shape=image.shape )
         ds.aligned_new_bg = bg
         ds.aligned_ref_bg = bg
 
@@ -250,19 +256,15 @@ def test_measuring( diagnostic_injections ):
                     assert m_attr == val
 
         # The only things that are good should be the brighter of the
-        #   first 6 regular psfs.  Index 2, even though it's at ~13σ,
-        #   got thrown out because it randomly had a bunch of negative
-        #   pixels around it.
-        # (Looking at it on the image, it looks like crap, even though
-        #   it's supposedly 13σ....)
-        assert all( not ds.measurements[i].is_bad for i in ( 1, 3, 4, 5 ) )
-        assert all( m.is_bad for i, m in enumerate(ds.measurements) if i not in ( 1, 3, 4, 5 ) )
+        #   first 6 regular psfs.
+        assert all( not ds.measurements[i].is_bad for i in ( 1, 2, 3, 4, 5 ) )
+        assert all( m.is_bad for i, m in enumerate(ds.measurements) if i not in ( 1, 2, 3, 4, 5 ) )
 
         # ...I guess we're not really testing *why* things got rejected.  We don't keep
         # that information.
 
         # Run the measurements again, only this time with deletion thresholds equal
-        # to measurement thresdholds.  Only the four brightest of the regular psfs should be kept.
+        # to measurement thresdholds.  Only the five brightest of the regular psfs should be kept.
         ds.measurement_set = None
         measparam[ 'deletion_thresholds' ] = threshes
         measparam_crit[ 'deletion_thresholds' ] = threshes
@@ -270,8 +272,8 @@ def test_measuring( diagnostic_injections ):
         nukeprovs = nukeprovs.union( set( v for v in ds.prov_tree.values() ) )
         measer = Measurer( **measparam )
         ds = measer.run( ds )
-        assert len( ds.measurements ) == 4
-        assert [ m.index_in_sources for m in ds.measurements ] == [ 1, 3, 4, 5 ]
+        assert len( ds.measurements ) == 5
+        assert [ m.index_in_sources for m in ds.measurements ] == [ 1, 2, 3, 4, 5 ]
 
     finally:
         with PsycopgConnection() as conn:

@@ -108,9 +108,8 @@ def test_unique_provenance_hash():
         )
         assert p2.id == hash
 
-        with pytest.raises(sa.exc.IntegrityError) as e:
+        with pytest.raises(RuntimeError, match=r"^Provenance .* already exists in the database.$" ) as e:
             p2.insert()
-        assert 'duplicate key value violates unique constraint "provenances_pkey"' in str(e)
 
         p2.insert( _exists_ok=True )
 

@@ -475,8 +475,8 @@ class PGDB:
             elif isinstance( con, psycopg.Cursor ):
                 self.con = con.connection
             elif isinstance( con, sa.orm.session.Session ):
-                SCLogger.warning( "You're using a SQLAlchemy Session, still trying "
-                                  "to make a PGDB from it (Issue #516)" )
+                SCLogger.debug( "FEAR/LOATHING: You're using a SQLAlchemy Session, still trying "
+                                "to make a PGDB from it (Issue #516)" )
                 self.con = con.connection().connection.driver_connection
             else:
                 raise TypeError( f"con must be None, a PGDB, a psycopg.Connection, a psycopg.Cursor, or a "
@@ -744,7 +744,7 @@ class SeeChangeBase:
 
         if hasattr(self, '_bitflag'):
             self._bitflag = 0
-        if hasattr(self, 'upstream_bitflag'):
+        if hasattr(self, '_upstream_bitflag'):
             self._upstream_bitflag = 0
 
         for k, v in kwargs.items():
@@ -1079,7 +1079,7 @@ class SeeChangeBase:
                             setattr( obj, col.name, getattr( dbobj, col.name ) )
 
 
-    def _delete_from_database( self, pgdb ):
+    def _delete_from_database( self, pgdb=None ):
         """Remove the object from the database.  Don't call this, call delete_from_disk_and_database.
 
         This does not remove any associated files (if this is a
@@ -2308,7 +2308,7 @@ class UUIDMixin:
         self._id = asUUID( val )
 
     @classmethod
-    def get_by_id( cls, uuid, session=None, pgdb=None ):
+    def get_by_id( cls, uuid, session=None, pgdb=None, **kwargs ):
         """Get an object of the current class that matches the given uuid.
 
         Returns None if not found.
@@ -2321,6 +2321,8 @@ class UUIDMixin:
           session, pgdb: PGDB, psycopg.Connection, psycopg.Cursor, or sqlalchmey session
             Will use pgdb if it's not None, else session.  If both are None,
             makes and closes a new connection to the database.
+
+          **kwargs: further keywords are passed on to the object constructor
 
         Returns
         -------
@@ -2336,7 +2338,11 @@ class UUIDMixin:
             elif len(rows) > 1:
                 raise RuntimeError( "This should never happen." )
             else:
-                return cls( **(rows[0]) )
+                kwargs = kwargs.copy()
+                kwargs.update( rows[0] )
+                obj = cls( **kwargs )
+                obj.from_db = True
+                return obj
 
 
     @classmethod
@@ -2870,7 +2876,7 @@ class FourCorners:
 
             rows = pgdb.execute( q )
             objs = [ cls(**r) for r in rows ]
-            pgdb.execute_nofetch( sql.SQL( "DROP TABLE {temptable}" ).format( temptable=temptable ) )
+            pgdb.execute_nofetch( sql.SQL( "DROP TABLE {temptable}" ).format( temptable=sql.Identifier(temptable) ) )
             return objs
 
 
@@ -3019,7 +3025,7 @@ class FourCorners:
                                  .format( tab=sql.Identifier(cls.__tablename__),
                                           temptable=sql.Identifier(temptable) ) )
             objs = [ cls(**r) for r in rows ]
-            pgdb.execute_nofetch( sql.SQL( "DROP TABLE {temptable}" ).format( sql.Identifier(temptable) ) )
+            pgdb.execute_nofetch( sql.SQL( "DROP TABLE {temptable}" ).format( temptable=sql.Identifier(temptable) ) )
             return objs
 
 
@@ -3113,19 +3119,28 @@ class FourCorners:
         obj = shapely.Polygon( corners )
         return obj.contains( shapely.Point( ra, dec ) )
 
-    def set_corners_from_wcs( self, wcs, width, height, setradec=False ):
+
+    def set_corners_from_wcs( self, wcs=None, width=None, height=None, setradec=False ):
         """Update the object's four corners (and, optionally, RA/Dec) from a WCS.
+
+        Subclasses may have alternate sets of arguments they can supply.
 
         Parameters
         ----------
-        wcs : astropy.wcs.WCS,
-           The WCS to use.  Required.
+        wcs : astropy.wcs.WCS or WorldCoordinates default None
+           The WCS to use.  If nothing is here in this positional
+           parameter, then the first two positional parameters are
+           actually width and height, and this method will use self.wcs.
+           This will only work if self.wcs exists and is the right kind
+           of thing.
 
-        width : int
-            Width (x-size) of image.  Required.
+        width : int, default None
+            Width (x-size) of image.  Either (width, height) or image is required.
 
-        height : int
-            Height (y-size) of image.  Required
+        height : int, default None
+            Height (y-size) of image.  Either (width, height) or image is required
+
+        image : Image, default None
 
         setradec : bool, default False
            If True, also update the image's ra and dec fields, as well
@@ -3134,11 +3149,16 @@ class FourCorners:
 
         """
 
-        if not isinstance( wcs, astropy.wcs.WCS ):
-            raise TypeError( f"wcs must be a astropy.wcs.WCS, not a {type(wcs)}" )
-        # Try to detect a bad WCS
-        if ( wcs.axis_type_names == ['', ''] ):
-            raise ValueError( "Don't know how to cope with this WCS" )
+        # avoid circular imports
+        from models.world_coordinates import WorldCoordinates
+
+        if any( x is None for x in ( wcs, width, height ) ):
+            raise ValueError( "Must provide all of wcs, width, height" )
+
+        if isinstance( wcs, WorldCoordinates ):
+            wcs = wcs.wcs
+        elif not isinstance( wcs, astropy.wcs.WCS ):
+            raise TypeError( f"Error, wcs must be a WorldCoordinates or a WCS, not a {type(wcs)}" )
 
         ras = []
         decs = []
@@ -3229,7 +3249,12 @@ class FourCornersWithGood( FourCorners ):
 
 
     def set_corners_from_wcs( self, wcs, width=None, height=None, setradec=False, mask=None ):
-        """Update four corners"""
+        """Update four corners.
+
+        If mask is given, use that to set the "good" corners and limits.
+        Otherwise, they will be direct copies of the regular ones.
+
+        """
 
         if ( width is None ) or ( height is None ):
             if mask is None:
@@ -3256,8 +3281,8 @@ class FourCornersWithGood( FourCorners ):
             ys = [ ygood0, ygood1, ygood0, ygood1 ]
             goodras, gooddecs = wcs.pixel_to_world_values( xs, ys )
         else:
-            goodras = None
-            gooddecs = None
+            goodras = ras
+            gooddecs = decs
 
         self.set_corners_minmax( ras, decs, goodras, gooddecs )
 
@@ -3273,9 +3298,14 @@ class FourCornersWithGood( FourCorners ):
             self.ecllon = sc.barycentrictrueecliptic.lon.deg
 
 
-class HasBitFlagBadness:
 
-    """A mixin class that adds a bitflag marking why this object is bad. """
+class HasBitFlagBadnessButNoUpstream:
+    """A mixin class that adds a bitflag marking why this object is bad.
+
+    Most classes actually use HasBitFlagBadness, but Exposure uses this one.
+
+    """
+
     _bitflag = sa.Column(
         sa.BIGINT,
         nullable=False,
@@ -3287,31 +3317,24 @@ class HasBitFlagBadness:
             'upstream object that were used to make this one. '
     )
 
-    @declared_attr
-    def _upstream_bitflag(cls):  # noqa: N805
-        if cls.__name__ != 'Exposure':
-            return sa.Column(
-                sa.BIGINT,
-                nullable=False,
-                server_default=sa.sql.elements.TextClause( '0' ),
-                index=True,
-                doc='Bitflag of objects used to generate this object. '
-            )
-        else:
-            return None
-
     @hybrid_property
     def bitflag(self):
         if self._bitflag is None:
             self._bitflag = 0
-        if self._upstream_bitflag is None:
-            self._upstream_bitflag = 0
-        return self._bitflag | self._upstream_bitflag
+        if hasattr( self, '_upstream_bitflag' ):
+            if self._upstream_bitflag is None:
+                self._upstream_bitflag = 0
+            return self._bitflag | self._upstream_bitflag
+        else:
+            return self._bitflag
 
     @bitflag.inplace.expression
     @classmethod
     def bitflag(cls):
-        return cls._bitflag.op('|')(cls._upstream_bitflag)
+        if hasattr( cls, '_bitflag' ):
+            return cls._bitflag.op('|')(cls._upstream_bitflag)
+        else:
+            return cls._bitflag
 
     @bitflag.inplace.setter
     def bitflag(self, value):
@@ -3436,7 +3459,8 @@ class HasBitFlagBadness:
 
     def __init__(self):
         self._bitflag = 0
-        self._upstream_bitflag = 0
+        if hasattr( self, '_upstream_bitflag' ):
+            self._upstream_bitflag = 0
 
     def update_downstream_badness(self, session=None, commit=True, _objbank=None):
         """Send a recursive command to update all downstream objects that have bitflags.
@@ -3490,7 +3514,11 @@ class HasBitFlagBadness:
                 if upstream_id in _objbank.keys():
                     upstream = _objbank[ upstream_id ]
                 else:
-                    upstream = upstream_model.get_by_id( upstream_id, pgdb=pgdb )
+                    # HACK ALERT.... remove this ugly hack when Issue #542 is solved
+                    if upstream_model.__name__ == 'Exposure':
+                        upstream = upstream_model.get_by_id( upstream_id, pgdb=pgdb, nofile=True )
+                    else:
+                        upstream = upstream_model.get_by_id( upstream_id, pgdb=pgdb )
                     _objbank[ upstream_id ] = upstream
                 if hasattr(upstream, '_bitflag'):
                     new_bitflag |= upstream.bitflag
@@ -3522,6 +3550,16 @@ class HasBitFlagBadness:
         For the base class this is the most inclusive inverse (allows all badness).
         """
         return data_badness_inverse
+
+
+class HasBitFlagBadness( HasBitFlagBadnessButNoUpstream ):
+    _upstream_bitflag = sa.Column(
+        sa.BIGINT,
+        nullable=False,
+        server_default=sa.sql.elements.TextClause( '0' ),
+        index=True,
+        doc='Bitflag of objects used to generate this object. '
+    )
 
 
 class ArchiveLock( Base, UUIDMixin ):

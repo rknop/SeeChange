@@ -23,7 +23,7 @@ from models.base import (
     FileOnDiskMixin,
     SpatiallyIndexed,
     SmartSession,
-    HasBitFlagBadness,
+    HasBitFlagBadnessButNoUpstream,
 )
 from models.instrument import Instrument
 
@@ -45,10 +45,6 @@ EXPOSURE_COLUMN_NAMES = [
     'instrument',
     'airmass',
 ]
-
-# these are header keywords that are not stored as columns of the Exposure table,
-# but are still useful to keep around inside the "info" JSONB column.
-EXPOSURE_HEADER_KEYS = ['gain']  # TODO: add more here
 
 
 class SectionData:
@@ -156,14 +152,21 @@ class ExposureImageIterator:
             raise StopIteration
 
 
-class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBadness):
+class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBadnessButNoUpstream):
     """Encapsulates one exposure, which includes many images each on different sensor sections (chips).
+
+    The assumption for any Exposure is that there's a file on disk to go
+    with it.  Unlike Image, where you might make one by passing it data
+    (e.g. extracted from an exposure), Exposures are usually assumed to
+    pre-exist, even if they aren't loaded into the database; see the
+    current_file parameter of the constructor.
 
     Access to the data is through the data, weight, and flags
     attributes, which are SectionData instances.  You can treat them as
     dictionaries, where you give the sensor section id as key.
 
-    Call clear_cache() to clear any cached data from the SectionData instances in order to free up memory.
+    Call clear_cache() to clear any cached data from the SectionData
+    instances in order to free up memory.
 
     """
 
@@ -242,13 +245,9 @@ class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBad
         JSONB,
         nullable=False,
         server_default='{}',
-        doc=(
-            "Subset of the raw exposure's header. "
-            "Only keep a subset of the keywords, "
-            "and re-key them to be more consistent. "
-            "This will only include global values, "
-            "not those associated with a specific section. "
-        )
+        doc=( "A dictionary (key:value) of additional information for the exposure.  "
+              "Probably pulled from the header.  Should NOT include anything that has "
+              "its own column (mjd, filter, exp_time, etc).  Ideally this should be small." )
     )
 
     mjd = sa.Column(
@@ -346,7 +345,7 @@ class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBad
         doc='Opaque string used by InstrumentOriginExposures to identify this exposure remotely'
     )
 
-    def __init__(self, current_file=None, invent_filepath=True, **kwargs):
+    def __init__(self, current_file=None, invent_filepath=True, nofile=False, **kwargs):
         """Initialize the exposure object.
 
         If the filepath is given (as a keyword argument), it will parse the instrument name
@@ -371,9 +370,15 @@ class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBad
            unless the global property Exposure.nofile is True (but you
            really shouldn't be playing around with that).
 
+        nofile: bool, default False
+           Set this to True if there is no actual exposure file.  This
+           should probably only be used in specific tests, given the
+           assumption (see class docstring) that there is always a file
+           that Exposure can read (at least) a header from.
+
         """
-        FileOnDiskMixin.__init__(self, **kwargs)
-        HasBitFlagBadness.__init__(self)
+        FileOnDiskMixin.__init__(self, nofile=nofile, **kwargs)
+        HasBitFlagBadnessButNoUpstream.__init__(self)
         SeeChangeBase.__init__(self)  # don't pass kwargs as they could contain non-column key-values
 
         self._data = None  # the underlying image data for each section
@@ -430,14 +435,15 @@ class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBad
             prov = self.make_provenance(self.instrument)  # a default provenance for exposures
             self.provenance_id = prov.id
 
-
         # instrument_obj is lazy loaded when first getting it
         if self.instrument_object is None:
             raise RuntimeError( "I don't know how to cope." )
-        if current_file is not None:
-            self.use_instrument_to_read_header_data( fromfile=current_file )
-        else:
-            self.use_instrument_to_read_header_data()
+
+        if not nofile:
+            if current_file is not None:
+                self.use_instrument_to_read_header_data( fromfile=current_file )
+            else:
+                self.use_instrument_to_read_header_data()
 
         # Allow passed keywords to override what's detected from the header
         self.set_attributes_from_dict( kwargs )
@@ -512,12 +518,15 @@ class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBad
             else:
                 setattr(self, k, v)
 
-        # these additional keys go into the header only
-        auxiliary_names = EXPOSURE_HEADER_KEYS + self.instrument_object.get_auxiliary_exposure_header_keys()
-        self.info = self.instrument_object.extract_header_info(
-            header=raw_header_dictionary,
-            names=auxiliary_names,
-        )
+        # Pull stuff that's suppsoed to go into the info dict
+        auxiliary_names = self.instrument_object.get_auxiliary_exposure_header_keys()
+        if len(auxiliary_names) > 0 :
+            self.info = self.instrument_object.extract_header_info(
+                header=raw_header_dictionary,
+                names=auxiliary_names,
+            )
+        else:
+            self.info = {}
 
     def check_required_attributes(self):
         """Check that this exposure has all the required attributes."""

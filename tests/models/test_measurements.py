@@ -11,7 +11,7 @@ from models.measurements import MeasurementSet, Measurements
 def test_measurements_attributes(measurer, ptf_datastore, test_config):
     ds = ptf_datastore
 
-    aper_radii = test_config.value('extraction.apertures')
+    aper_radii = test_config.value('extraction.subconfigs.subconfigs.extragalactic.apertures')
     ds.measurement_set = None
     ds = measurer.run( ds )
     # check that the measurer actually loaded the measurements from db, and not recalculated

@@ -322,8 +322,8 @@ def test_get_measurements_et_al( sim_lightcurve_complete_dses_module,
 
     # Get all measurements for the object; there should be 6, ordered by mjd:
     expected_mjd = np.array(  [ 60030.,   60032.,   60037.,    60040.,    60045.,    60055. ] )
-    expected_flux = np.array( [ 1778.684, 1861.6837, 2074.9985, 2483.354, 2879.7969, 2716.0532 ] )
-    expected_rb = np.array(   [ 0.5238,   0.5045,    0.5459,    0.5454,   0.6470,    0.5950 ] )
+    expected_flux = np.array( [1774.5055, 1840.5898, 2035.5627, 2461.621 , 2817.9155, 2689.9111] )
+    expected_rb = np.array(   [ 0.5761,   0.4593,    0.5457,    0.6235,   0.6174,    0.5644 ] )
 
     mess = objobj.get_measurements_et_al( measprovid )
     assert len( mess['measurements'] ) == 6
@@ -366,18 +366,18 @@ def test_get_measurements_et_al( sim_lightcurve_complete_dses_module,
     assert np.all( np.isclose( fluxen, expected_flux[[2,3,4]], rtol=1e-6 ) )
     assert np.all( np.isclose( rbs, expected_rb[[2,3,4]], atol=0.001 ) )
 
-    # Try to get everything with r/b > 0.55
-    mess = objobj.get_measurements_et_al( measprovid, deepprovid, min_deepscore=0.55 )
+    # Try to get everything with r/b > 0.6
+    mess = objobj.get_measurements_et_al( measprovid, deepprovid, min_deepscore=0.6 )
     mjds = np.array( [ m.mjd for m in mess['images'] ] )
     fluxen = np.array( [ m.flux_psf for m in mess['measurements'] ] )
     rbs = np.array( [ m.score for m in mess['deepscores'] ] )
-    assert np.all( np.isclose( mjds, expected_mjd[[4,5]], atol=0.1 ) )
-    assert np.all( np.isclose( fluxen, expected_flux[[4,5]], rtol=1e-6 ) )
-    assert np.all( np.isclose( rbs, expected_rb[[4,5]], atol=0.001 ) )
+    assert np.all( np.isclose( mjds, expected_mjd[[3,4]], atol=0.1 ) )
+    assert np.all( np.isclose( fluxen, expected_flux[[3,4]], rtol=1e-6 ) )
+    assert np.all( np.isclose( rbs, expected_rb[[3,4]], atol=0.001 ) )
 
-    # Combine the previous two
+    # Combine date and r/b search
     mess = objobj.get_measurements_et_al( measprovid, deepprovid, mjd_min=60044, mjd_max=60046,
-                                          min_deepscore=0.55 )
+                                          min_deepscore=0.6 )
     mjds = np.array( [ m.mjd for m in mess['images'] ] )
     fluxen = np.array( [ m.flux_psf for m in mess['measurements'] ] )
     rbs = np.array( [ m.score for m in mess['deepscores'] ] )

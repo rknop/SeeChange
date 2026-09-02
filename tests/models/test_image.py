@@ -9,18 +9,19 @@ import uuid
 import time
 import warnings
 
-import psycopg
+from psycopg import sql
+import psycopg.errors
 import numpy as np
 
 from astropy.io import fits
 from astropy.utils.exceptions import AstropyWarning
 
 import sqlalchemy as sa
-from sqlalchemy.exc import IntegrityError
 
-from models.base import SmartSession, FileOnDiskMixin, PsycopgConnection
+from models.base import SmartSession, FileOnDiskMixin, PsycopgConnection, PGDB
 from models.provenance import Provenance
 from models.instrument import Instrument
+from models.exposure import Exposure
 from models.image import Image
 from models.reference import Reference
 from models.enums_and_bitflags import image_preprocessing_inverse, string_to_bitflag, image_badness_inverse
@@ -74,7 +75,8 @@ def test_image_no_null_values(provenance_base):
         im_id = None  # make sure to delete the image if it is added to DB
 
         # md5sum is spoofed as we don't have this file saved to archive
-        image = Image(f"Demo_test_{rnd_str(5)}.fits", md5sum=uuid.uuid4(), nofile=True, section_id=1)
+        image = Image(f"Demo_test_{rnd_str(5)}.fits", md5sum=uuid.uuid4(), nofile=True,
+                      section_id=1, width=10, height=10)
 
         for i in range( len(required ) ):
             # set the exposure to the values in "added" or None if not in "added"
@@ -82,7 +84,7 @@ def test_image_no_null_values(provenance_base):
                 setattr(image, k, added.get(k, None))
 
             # without all the required columns on image, it cannot be added to DB
-            with pytest.raises( IntegrityError ) as exc:
+            with pytest.raises( psycopg.errors.NotNullViolation ) as exc:
                 image.insert()
 
             # Figure out which column screamed and yelled about being null
@@ -155,7 +157,7 @@ def test_image_must_have_md5(sim_image_uncommitted, provenance_base):
 
         im.md5sum = None
 
-        with pytest.raises(IntegrityError, match='violates check constraint'):
+        with pytest.raises(psycopg.errors.CheckViolation, match='violates check constraint'):
             im.insert()
 
         # adding md5sums should fix this problem
@@ -581,7 +583,7 @@ def test_image_enum_values( sim_image_uncommitted ):
         pass
 
 
-def test_image_preproc_bitflag( sim_image1 ):
+def test_image_preproc_bitflag( sim_image1, provenance_base ):
     # Reload the image from the database so the default values that get
     # set when the image is saved to the database are filled.
     with SmartSession() as session:
@@ -598,8 +600,11 @@ def test_image_preproc_bitflag( sim_image1 ):
     im2 = None
     try:
         # Save a new image with the preproc bitflag that we've set
+        # Because of the unique constraint on (provenance_id,exposure_id,section_id)
+        #   give this image a new provenance.
         im2 = im.copy()
         im2.id = uuid.uuid4()
+        im2.provenance_id = provenance_base.id
         im2.filepath = "delete_this_file.fits"       # Shouldn't actually get saved
         im2.insert()
 
@@ -667,6 +672,10 @@ def test_image_from_exposure( provenance_base, sim_exposure1 ):
     assert im.coadd_alignment_target is None
     assert im.filepath is None  # need to save file to generate a filename
     assert np.array_equal(im.raw_data, sim_exposure1.data[0])
+    assert im.width == 512
+    assert im.height == 1024
+    assert im.width == im.raw_data.shape[1]
+    assert im.height == im.raw_data.shape[0]
     assert im.data is None
     assert im.flags is None
     assert im.weight is None
@@ -679,12 +688,13 @@ def test_image_from_exposure( provenance_base, sim_exposure1 ):
     #  almost certainly instrument-specific code to do this.)
 
     try:
-        with pytest.raises(IntegrityError, match='null value in column .* of relation "images"'):
+        with pytest.raises(psycopg.errors.NotNullViolation, match='null value in column .* of relation "images"'):
             im.insert()
 
         # must add the provenance!
         im.provenance_id = provenance_base.id
-        with pytest.raises(IntegrityError, match='null value in column "filepath" of relation "images"'):
+        with pytest.raises(psycopg.errors.NotNullViolation,
+                           match='null value in column "filepath" of relation "images"'):
             im.insert()
 
         im.data = im.raw_data
@@ -698,7 +708,7 @@ def test_image_from_exposure( provenance_base, sim_exposure1 ):
         assert im.exposure_id is not None
         assert im.exposure_id == sim_exposure1.id
 
-        assert [ asUUID(i.id) for i in im.get_upstreams() ] == [ asUUID(sim_exposure1.id) ]
+        assert im.get_upstream_ids() == [ ( Exposure, asUUID(sim_exposure1.id) ) ]
 
     finally:
         # All necessary cleanup *should* be done in fixtures
@@ -763,6 +773,67 @@ def test_image_from_reduced_exposure( decam_reduced_origin_exposure_loaded_in_db
     assert img._flags.sum() == 266089
 
 
+def test_image_unique( sim_exposure1, provenance_base, provenance_extra ):
+    """Test the unique constraint on (provenance_id, exposure_id, section_id)."""
+    imparams = { 'exposure_id': sim_exposure1.id,
+                 'provenance_id': provenance_base.id,
+                 'width': 1024,
+                 'height': 2048,
+                 'mjd': 60000.,
+                 'end_mjd': 60000.01,
+                 'exp_time': 60.,
+                 'instrument': 'foo',
+                 'telescope': 'bar',
+                 'filter': 'r',
+                 'section_id': '0',
+                 'project': 'baz',
+                 'target': 'qux',
+                 'ra': 42.,
+                 'dec': -13.,
+                 'ra_corner_00': 41.9,
+                 'ra_corner_01': 41.9,
+                 'ra_corner_10': 42.1,
+                 'ra_corner_11': 42.1,
+                 'minra': 41.9,
+                 'maxra': 42.1,
+                 'dec_corner_00': -13.1,
+                 'dec_corner_10': -13.1,
+                 'dec_corner_01': -12.9,
+                 'dec_corner_11': -12.9,
+                 'mindec': -13.1,
+                 'maxdec': -12.9,
+                 'md5sum': uuid.uuid4()
+                }
+
+    try:
+        im1 = Image( filepath='quux.fits', **imparams )
+        im1.insert()
+
+        with pytest.raises( psycopg.errors.UniqueViolation,
+                            match='duplicate key value violates unique constraint "_image_provexpsec_uniq"' ):
+            im2 = Image( filepath='corge.fits', **imparams )
+            im2.insert()
+
+        imparams['provenance_id'] = provenance_extra.id
+        im2 = Image( filepath='corge.fits', **imparams )
+        im2.insert()
+
+        with PGDB() as pgdb:
+            rows, _cols = pgdb.execute( sql.SQL( "SELECT _id,filepath FROM images WHERE filepath=ANY(ARRAY[{paths}])" )
+                                        .format( paths=sql.SQL(",").join( ['quux.fits', 'corge.fits'] ) ) )
+        assert len(rows) == 2
+        assert set( r[0] for r in rows ) == { im1.id, im2.id }
+        assert set( r[1] for r in rows ) == { 'quux.fits', 'corge.fits' }
+
+    finally:
+        with PGDB() as pgdb:
+            pgdb.execute_nofetch( sql.SQL( "DELETE FROM images WHERE filepath=ANY(ARRAY[{paths}])" )
+                                  .format( paths=sql.SQL(",").join( ['quux.fits', 'corge.fits'] ) ) )
+            pgdb.commit()
+
+
+# This next test doesn't actually test coadding images, it tests that the
+#   database tracking of a coadded image works
 def test_image_coadd( sim_image_r1, sim_image_r2, sim_image_r3, provenance_base ):
     imgs = [ sim_image_r1, sim_image_r2, sim_image_r3 ]
     imgs.sort( key = lambda x: x.mjd )
@@ -789,6 +860,7 @@ def test_image_coadd( sim_image_r1, sim_image_r2, sim_image_r3, provenance_base 
             bgs.append( bg )
             wcs = WorldCoordinates( sources_id=sl.id, provenance_id=provenance_base.id,
                                     filepath=f'foo_wcs{i}', md5sum=uuid.uuid4() )
+            wcs._fill_bogus_coordinate_fields()
             wcs.insert()
             wcses.append( wcs )
             zp = ZeroPoint( wcs_id=wcs.id, background_id=bg.id, zp=25., dzp=0.1,
@@ -796,7 +868,7 @@ def test_image_coadd( sim_image_r1, sim_image_r2, sim_image_r3, provenance_base 
             zp.insert()
             zps.append( zp )
 
-        im = Image.from_image_zps( zps )
+        im = Image.from_image_zps( zps, width=sim_image_r1.width, height=sim_image_r1.height )
         im.provenance_id = provenance_base.id
         # Spoof the md5sum since we aren't saving anything, but want to insert
         im.md5sum = uuid.uuid4()
@@ -942,6 +1014,7 @@ def test_image_subtraction(sim_exposure1, sim_exposure2, provenance_base, proven
         im1bg.insert()
         im1wcs = WorldCoordinates( sources_id=im1sl.id, provenance_id=provenance_base.id,
                                    filepath='foo_wcs1', md5sum=uuid.uuid4() )
+        im1wcs._fill_bogus_coordinate_fields()
         im1wcs.insert()
         im1zp = ZeroPoint( wcs_id=im1wcs.id, background_id=im1bg.id, zp=25., dzp=0.1, provenance_id=provenance_base.id )
         im1zp.insert()
@@ -954,6 +1027,7 @@ def test_image_subtraction(sim_exposure1, sim_exposure2, provenance_base, proven
         im2bg.insert()
         im2wcs = WorldCoordinates( sources_id=im2sl.id, provenance_id=provenance_base.id,
                                    filepath='foo_wcs2', md5sum=uuid.uuid4() )
+        im2wcs._fill_bogus_coordinate_fields()
         im2wcs.insert()
         im2zp = ZeroPoint( wcs_id=im2wcs.id, background_id=im2bg.id, zp=25., dzp=0.1, provenance_id=provenance_base.id )
         im2zp.insert()

@@ -131,7 +131,7 @@ def verify_astrocal( astrometor, origwcs, ds, origmd5, masked=False ):
         mxvals = [ 15, 15, 2032, 2032 ]
         myvals = [ 15, 4080, 15, 4080 ]
     mras, mdecs = ds.wcs.wcs.pixel_to_world_values( mxvals, myvals )
-    mras, mdecs, mminra, mmindec, mmaxra, mmaxdec = FourCorners.sort_radec( mras, mdecs )
+    mras, mdecs, mminra, mmaxra, mmindec, mmaxdec = FourCorners.sort_radec( mras, mdecs )
     assert ds.wcs.ra_good_00 == pytest.approx( mras[0], abs=1.0/3600. )
     assert ds.wcs.ra_good_01 == pytest.approx( mras[1], abs=1.0/3600. )
     assert ds.wcs.ra_good_10 == pytest.approx( mras[2], abs=1.0/3600. )
@@ -225,15 +225,15 @@ def test_run_scamp( decam_datastore_through_extraction, astrometor ):
     with fits.open(ds.path_to_original_image) as hdu:
         origwcs = WCS(hdu[ds.section_id].header)
 
-    astrometor.pars.cross_match_catalog = 'gaia_dr3'
-    astrometor.pars.solution_method = 'scamp'
-    astrometor.pars.max_catalog_mag = [20.]
-    astrometor.pars.mag_range_catalog = 4.
-    astrometor.pars.min_catalog_stars = 50
-    astrometor.pars.max_resid = 0.15
-    astrometor.pars.crossid_radii = [2.0]
-    astrometor.pars.min_frac_matched = 0.1
-    astrometor.pars.min_matched_stars = 10
+    astrometor.pars.subconfigs['subconfigs']['extragalactic']['cross_match_catalog'] = 'gaia_dr3'
+    astrometor.pars.subconfigs['subconfigs']['extragalactic']['solution_method'] = 'scamp'
+    astrometor.pars.subconfigs['subconfigs']['extragalactic']['max_catalog_mag'] = [20.]
+    astrometor.pars.subconfigs['subconfigs']['extragalactic']['mag_range_catalog'] = 4.
+    astrometor.pars.subconfigs['subconfigs']['extragalactic']['min_catalog_stars'] = 50
+    astrometor.pars.subconfigs['subconfigs']['extragalactic']['max_resid'] = 0.15
+    astrometor.pars.subconfigs['subconfigs']['extragalactic']['crossid_radii'] = [2.0]
+    astrometor.pars.subconfigs['subconfigs']['extragalactic']['min_frac_matched'] = 0.1
+    astrometor.pars.subconfigs['subconfigs']['extragalactic']['min_matched_stars'] = 10
 
     # The datastore should object when it tries to get the provenance for astrometor
     # params that don't match what we started with

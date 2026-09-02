@@ -28,6 +28,10 @@ def test_measuring_background( decam_datastore_through_preprocessing ):
                  .filter( SourceList.image_id==ds.image.id )
                 ).first() is None
 
+    # ...the fact that I have to do this like this scares me a little bit.  But, I'm accessing an
+    #   underscore variable, so I guess I shouldn't expect it to be user friendly.
+    ds._pipeline.extractor.pars.subconfig_update( ds )
+    ds._pipeline.extractor.make_backgrounder()
     backgrounder = ds._pipeline.extractor.backgrounder
     bg = backgrounder.run( ds )
 
@@ -132,6 +136,8 @@ def test_compare_sep_sextr_crowded_image( provenance_base, provenance_extra ):
 
 def test_warnings_and_exceptions( decam_datastore_through_preprocessing ):
     ds = decam_datastore_through_preprocessing
+    ds._pipeline.extractor.pars.subconfig_update( ds )
+    ds._pipeline.extractor.make_backgrounder()
     backgrounder = ds._pipeline.extractor.backgrounder
 
     if not SKIP_WARNING_TESTS:

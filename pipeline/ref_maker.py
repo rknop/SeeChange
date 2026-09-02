@@ -415,7 +415,7 @@ class RefMaker:
         coadd_dict['astrocal'].update( kwargs.pop( 'astrocal', {} ) )
         coadd_dict['photocal'].update( config.value( 'referencing.coaddition.photocal', {} ) )
         coadd_dict['photocal'].update( kwargs.pop( 'photocal', {} ) )
-        self.coadd_pipeline = CoaddPipeline( **coadd_dict )
+        self._coadd_pipeline = CoaddPipeline( **coadd_dict )
 
         maker_dict = config.value('referencing.maker')
         if 'maker' in kwargs:
@@ -432,11 +432,11 @@ class RefMaker:
         #   the referencing provenance actually changes when something material about making
         #   the reference changes.
         maker_dict.update( { "coadd_pipeline":
-                             { "pipeline": self.coadd_pipeline.pars.get_critical_pars(),
-                               "coaddition": self.coadd_pipeline.coadder.pars.get_critical_pars(),
-                               "extraction": self.coadd_pipeline.extractor.pars.get_critical_pars(),
-                               "astrocal": self.coadd_pipeline.astrometor.pars.get_critical_pars(),
-                               "photocal": self.coadd_pipeline.photometor.pars.get_critical_pars()
+                             { "pipeline": self._coadd_pipeline.pars.get_critical_pars(),
+                               "coaddition": self._coadd_pipeline.coadder.pars.get_critical_pars(),
+                               "extraction": self._coadd_pipeline.extractor.pars.get_critical_pars(),
+                               "astrocal": self._coadd_pipeline.astrometor.pars.get_critical_pars(),
+                               "photocal": self._coadd_pipeline.photometor.pars.get_critical_pars()
                               }
                             } )
         self.pars = ParsRefMaker(**maker_dict )
@@ -499,12 +499,12 @@ class RefMaker:
         #  could change the images we chose to put into the coadd.
         upstreams.append( self.ref_prov )
 
-        self.coadd_pipeline.datastore = DataStore()
-        abswcs = ( self.coadd_pipeline.coadder.pars.alignment_index=='absolute' )
-        self.coadd_provs = self.coadd_pipeline.make_provenance_tree( None,
-                                                                     absolute_alignment_wcs=abswcs,
-                                                                     upstream_provs=upstreams,
-                                                                     pgdb=session )
+        self._coadd_pipeline.datastore = DataStore()
+        abswcs = ( self._coadd_pipeline.coadder.pars.alignment_index=='absolute' )
+        self.coadd_provs = self._coadd_pipeline.make_provenance_tree( None,
+                                                                      absolute_alignment_wcs=abswcs,
+                                                                      upstream_provs=upstreams,
+                                                                      pgdb=session )
 
 
 
@@ -580,7 +580,11 @@ class RefMaker:
             # Check to see if the refset already exists
             row = _get_refset( self.pars.name )
 
-            if row is None:
+            if row is not None:
+                self.refset = RefSet()
+                self.refset.set_attributes_from_dict( row )
+
+            else:
                 # Gotta make it. To avoid race conditions, lock the table,
                 #   check *again* if it exists, and make it if it doesn't.
                 try:
@@ -671,32 +675,43 @@ class RefMaker:
 
         """
 
-        self.image = image
         if image is not None:
             if any ( i is not None for i in [ ra, dec, minra, maxra, mindec, maxdec ] ):
                 raise ValueError( "If you pass image to RefMaker.run, you can't pass any coordinates." )
 
-            with PGDB( dictcursor=True ) as pgdb:
-                rows = pgdb.execute( sql.SQL( textwrap.dedent(
-                    """\
-                    SELECT _id, mjd, ra, dec, minra, maxra, mindec, maxdec FROM images
-                    WHERE filepath LIKE {perimg} OR _id::text={img}
-                    """
-                ) ).format( img=str(image), perimg=f'%%{image}%%' ) )
-                if len(rows) == 0:
-                    raise FileNotFoundError( f"Could not find image {image}" )
-                elif len(rows) > 1:
-                    raise RuntimeError( f"More than one image matched {image}; be more specific." )
-                imgid = rows[0]['_id']
-                mjd = rows[0]['mjd'] if mjd is None else mjd
-                imgra = rows[0]['ra']
-                imgdec = rows[0]['dec']
-                imgminra = rows[0]['minra']
-                imgmaxra = rows[0]['maxra']
-                imgmindec = rows[0]['mindec']
-                imgmaxdec = rows[0]['maxdec']
+            if isinstance( image, Image ):
+                imgid = image.id
+                mjd = image.mjd
+                imgra = image.ra
+                imgdec = image.dec
+                imgminra = image.minra
+                imgmaxra = image.maxra
+                imgmindec = image.mindec
+                imgmaxdec = image.maxdec
 
-                if image_zp_prov_id is not None:
+            else:
+                with PGDB( dictcursor=True ) as pgdb:
+                    rows = pgdb.execute( sql.SQL( textwrap.dedent(
+                        """\
+                        SELECT _id, mjd, ra, dec, minra, maxra, mindec, maxdec FROM images
+                        WHERE filepath LIKE {perimg} OR _id::text={img}
+                        """
+                    ) ).format( img=str(image), perimg=f'%%{image}%%' ) )
+                    if len(rows) == 0:
+                        raise FileNotFoundError( f"Could not find image {image}" )
+                    elif len(rows) > 1:
+                        raise RuntimeError( f"More than one image matched {image}; be more specific." )
+                    imgid = rows[0]['_id']
+                    mjd = rows[0]['mjd'] if mjd is None else mjd
+                    imgra = rows[0]['ra']
+                    imgdec = rows[0]['dec']
+                    imgminra = rows[0]['minra']
+                    imgmaxra = rows[0]['maxra']
+                    imgmindec = rows[0]['mindec']
+                    imgmaxdec = rows[0]['maxdec']
+
+            if image_zp_prov_id is not None:
+                with PGDB( dictcursor=True ) as pgdb:
                     rows = pgdb.execute( sql.SQL( textwrap.dedent(
                         """\
                         SELECT w.good_minra, w.good_maxra, w.good_mindec, w.good_maxdec
@@ -777,7 +792,7 @@ class RefMaker:
 
         Returns
         -------
-           images, match_pos, match_count
+           images, match_pos, match_count, match_pos_images
 
            images: list of Image
              List of images that can be included in the sum.
@@ -1044,9 +1059,9 @@ class RefMaker:
 
         alignment_target_datastore = None
         alignment_wcs = None
-        if self.coadd_pipeline.coadder.pars.alignment_index == 'other':
+        if self._coadd_pipeline.coadder.pars.alignment_index == 'other':
             raise NotImplementedError( "Gotta do this." )
-        elif self.coadd_pipeline.coadder.pars.alignment_index == 'absolute':
+        elif self._coadd_pipeline.coadder.pars.alignment_index == 'absolute':
             # Gotta figure out the center ra and dec of the image we build
             # THOGUHT REQUIRED : does this align them where we want on heavily
             #   masked images?
@@ -1063,8 +1078,8 @@ class RefMaker:
 
             # Right... I hope I know what I'm doing.
             alignment_wcs = astropy.wcs.WCS(
-                { 'CRPIX1': self.coadd_pipeline.coadder.pars.absolute_width / 2.,
-                  'CRPIX2': self.coadd_pipeline.coadder.pars.absolute_height / 2.,
+                { 'CRPIX1': self._coadd_pipeline.coadder.pars.absolute_width / 2.,
+                  'CRPIX2': self._coadd_pipeline.coadder.pars.absolute_height / 2.,
                   'CRVAL1': ra,
                   'CRVAL2': dec,
                   # 'CDELT1': -self.pars.absolute_pixel_scale / 3600.,
@@ -1088,7 +1103,6 @@ class RefMaker:
                   'CUNIT1': 'deg',
                   'CUNIT2': 'deg' } )
 
-        import pdb; pdb.set_trace()
         # TODO : right now, we set always_build=True, because we had a
         #   case where exactly the same set of images were going to be
         #   coadded as had been previously, but they were not centered

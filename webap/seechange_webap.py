@@ -291,7 +291,7 @@ class Exposures( BaseView ):
                        SUM( CASE WHEN t.subid IS NULL THEN 0 ELSE 1 END ) AS num_subs,
                        SUM( CASE WHEN t.num_sources IS NULL THEN 0 ELSE t.num_sources END ) AS num_sources,
                        SUM( CASE WHEN t.num_measurements IS NULL THEN 0 ELSE num_measurements END )
-                         AS num_measuREMENTS
+                         AS num_measurements
                 INTO TEMP TABLE temp_imgs_2
                 FROM temp_imgs t
                 GROUP BY t._id, t.filepath, t.mjd, t.airmass, t.target, t.project,
@@ -307,7 +307,7 @@ class Exposures( BaseView ):
             #   the reports join do everything and only need to get
             #   results at the end of that.
             app.logger.debug( "Exposures getting results" )
-            exposureinfo = pgdb.execute( "SELECT * FROM temp_imgs_2" )
+            exposureinfo = pgdb.execute( "SELECT * FROM temp_imgs_2 ORDER BY mjd" )
 
             # Run a third query to count reports.  Tried using
             #   models/report.py::Report.query_for_reports, but it
@@ -591,28 +591,28 @@ class ExposureImages( BaseView ):
         for imagerow in imagerows:
             myreports = [ r for r in reports if r['section_id'] == imagerow['section_id'] ]
             if len(myreports) == 0:
-                imagerow['report'] == { 'exposure_id': None,
-                                        'section_id': None,
-                                        'start_time': datetime.datetime( 1970, 1, 1 ),
-                                        'finish_time': None,
-                                        'success': False,
-                                        'node_id': None,
-                                        'cluster_id': None,
-                                        'error_type': None,
-                                        'error_step': None,
-                                        'error_message': None,
-                                        'warnings': None,
-                                        'process_memory': {},
-                                        'process_runtime': {},
-                                        'progress_steps_bitflag': 0,
-                                        'products_exist_bitflag': 0,
-                                        'products_committed_bitflag': 0,
-                                        'created_at': datetime.datetime( 1970, 1, 1 ),
-                                        'modiifed': datetime.datetime( 1970, 1, 1 ),
-                                        '_id': None,
-                                        'image_id': None,
-                                        'process_provid': None
-                                       }
+                imagerow['report'] = { 'exposure_id': None,
+                                       'section_id': None,
+                                       'start_time': datetime.datetime( 1970, 1, 1 ),
+                                       'finish_time': None,
+                                       'success': False,
+                                       'node_id': None,
+                                       'cluster_id': None,
+                                       'error_type': None,
+                                       'error_step': None,
+                                       'error_message': None,
+                                       'warnings': None,
+                                       'process_memory': {},
+                                       'process_runtime': {},
+                                       'progress_steps_bitflag': 0,
+                                       'products_exist_bitflag': 0,
+                                       'products_committed_bitflag': 0,
+                                       'created_at': datetime.datetime( 1970, 1, 1 ),
+                                       'modiifed': datetime.datetime( 1970, 1, 1 ),
+                                       '_id': None,
+                                       'image_id': None,
+                                       'process_provid': None
+                                      }
             else:
                 imagerow['report'] = myreports[0]
                 for report in myreports[1:]:

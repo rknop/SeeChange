@@ -36,6 +36,9 @@ extraction:
     subconfigs:
       extragalactic:
         backgrounding:
+          format: map
+          method: sep
+          poly_order: 1
           box_size: 128
           filt_size: 3
       galactic:

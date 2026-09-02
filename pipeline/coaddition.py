@@ -1030,6 +1030,7 @@ class Coadder:
             ra_corners, dec_corners = alignment_wcs.pixel_to_world_values( xs, ys )
 
         output = Image.from_image_zps( [ d.zp for d in data_store_list ],
+                                       images=[ d.image for d in data_store_list ],
                                        index=index if index>=0 else 0,
                                        alignment_target=( alignment_target_datastore.image
                                                           if alignment_target_datastore is not None
@@ -1276,13 +1277,8 @@ class CoaddPipeline:
                 self.datastore.wcs = WorldCoordinates( sources_id=self.datastore.sources.id,
                                                        provenance_id=self.datastore.prov_tree['astrocal'].id )
                 self.datastore.wcs.wcs = alignment_wcs
-                self.datastore.wcs.set_corners_from_wcs( alignment_wcs, setradec=True,
-                                                         width=self.coadder.pars.absolute_width,
-                                                         height=self.coadder.pars.absolute_height,
-                                                         mask=self.datastore.image.flags )
-                self.datastore.image.set_corners_from_wcs( alignment_wcs, setradec=True,
-                                                           width=self.coadder.pars.absolute_width,
-                                                           height=self.coadder.pars.absolute_height )
+                self.datastore.wcs.set_corners_from_wcs( setradec=True, mask=self.datastore.image.flags )
+                self.datastore.image.set_corners_from_wcs( alignment_wcs, setradec=True )
                 self.datastore.image.astro_cal_done = True
         else:
             SCLogger.info( "CoaddPipeline doing astrometric calibration on the coadded image." )

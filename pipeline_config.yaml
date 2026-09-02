@@ -139,7 +139,7 @@ catalog_gaiadr3:
 #   is_flat (which is probably passed as a function argument)
 
 flat_bias_builder:
-  exposure_mode: True
+  exposure_mode: False
   filter: null
   section_id: null
   is_flat: False
@@ -482,7 +482,7 @@ measuring:
   use_annulus_bg_on_sub: False
   diag_box_halfsize: 2.
   diag_box_halfsize_unit: fwhm
-  negatives_n_sigma_outlier: 2.
+  negatives_n_sigma_outlier: 3.
   bad_thresholds:
     sn: 5
     psf_fit_flags_bitmask: 0x2e

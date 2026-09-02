@@ -173,6 +173,7 @@ seechange.Exposure = class
             totncutouts += imgrow['ncutout'];
             totngoodmeas += imgrow['ngoodmeas'];
             totnmeas += imgrow['nmeas'];
+            if ( imgrow.has_sub ) nsubs += 1;
         }
 
         p = rkWebUtil.elemaker( "p", this.imagesdiv,
@@ -1210,10 +1211,9 @@ seechange.Exposure = class
         rkWebUtil.elemaker( "p", this.cutouts_content_div, { "text": "Loading cutouts...",
                                                              "classes": [ "bold", "italic", "warning" ] } );
 
-        let sansmeas = ( this.cutoutssansmeasurements_checkbox.checked  ? 1 : 0 ).toString();
         this.load_cutouts( which_cutouts,
                            (which, data) => { self.show_cutouts_for_image( self.cutouts_content_div, which, data ) },
-                           sansmeas );
+                           this.cutoutssansmeasurements_checkbox.checked );
     };
 
 
