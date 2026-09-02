@@ -454,14 +454,6 @@ def _reconstruct_commandline_canonical_option( action ):
         for o in action.option_strings:
             # Try to keep the first one that starts with --
             optstr = o
-            # ...so, yeah, I think I maybe could just have done
-            #   "for optstr in ..." and not had o as a variable at all,
-            #   but a more formal part of me is a little nervous about
-            #   variable scoping and how python tries to be friendly
-            #   to the newcomer and in so doing makes it confusing to
-            #   people who know something but haven't fully internalized
-            #   all of python's quirks.  Java/C/C++ may be painful and
-            #   verbose, but that is not without some advantages.
             if ( len(o) > 1 ) and ( o[0:2] == '--' ):
                 break
         if optstr is None:
