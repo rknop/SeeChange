@@ -8,6 +8,7 @@ import signal
 
 from util.conductor_connector import ConductorConnector
 from util.logger import SCLogger
+import util.util
 
 from models.base import SmartSession
 from models.knownexposure import KnownExposure
@@ -386,6 +387,9 @@ environment variable anyway.)
     if args.worker_log_level.lower() not in loglookup.keys():
         raise ValueError( f"Unknown worker log level {args.worker_log_level}" )
     worker_log_level = loglookup[ args.worker_log_level.lower() ]
+
+    SCLogger.info( "pipeline_exposure_launcher run with:\n"
+                   f"{util.util.reconstruct_commandline(parser, args, 'pipeline_exposure_launcher.py')}" )
 
     posargs = [ args.cluster_id, args.node_id ]
     kwargs = { "numprocs": args.numprocs,
