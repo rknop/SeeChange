@@ -3,6 +3,7 @@ import pathlib
 import argparse
 import time
 import datetime
+import dateutil.parser
 import pytz
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 import multiprocessing
@@ -49,7 +50,7 @@ class ParsFlatBuilder(Parameters):
 
         self.exposure_mode = self.add_par(
             'exposure_mode',
-            True,
+            False,
             bool,
             "Work on raw exposures rather than images.",
             critical=False
@@ -214,7 +215,7 @@ class ParsFlatBuilder(Parameters):
             'nightly',
             str,
             ( "The calibrator_set for the CalibratorFile created.  One of unknown, externally_supplied, "
-              "general, or nightly" ),
+              "general, nightly, roughly_weekly, or roughly_monthly" ),
         )
 
         self.flat_type = self.add_par(
@@ -303,14 +304,33 @@ class ParsFlatBuilder(Parameters):
             critical=False
         )
 
+        self.validity_start = self.add_par(
+            'validity_start',
+            None,
+            ( datetime.datetime, str, None ),
+            ( "The flat or bias should be valid starting at this time.  Irrelevant if save_to_db is False.  "
+              "Make both this and valdity_start_offset None to be valid from the beginning of time." ),
+            critical=False
+        )
+
+        self.validity_end = self.add_par(
+            'validity_end',
+            None,
+            ( datetime.datetime, str, None ),
+            ( "The flat or bias should be valid until this time.  Irrelevant if save_to_db is False.  "
+              "Make both this and valdity_end_offset None to valid until the end of time." ),
+            critical=False
+        )
+
         self.validity_start_offset = self.add_par(
             'validity_start_offset',
             1.0,
             ( float, type(None) ),
             ( "The time of the flat or bias is defined as the average of the earliest and latest "
               "mjd of the images combined together to make the flat or bias.  The CalibratorFile "
-              "will have a validity_start that is this many days BEFORE that time.  Make this "
-              "None to have no validity_start." ),
+              "will have a validity_start that is this many days BEFORE that time.  Ignored if "
+              "validity_start is not None.  Make both this and validity_start None to have no "
+              "validity_start.  irrelevant if save_to_db is False." ),
             critical=False
         )
 
@@ -480,7 +500,13 @@ class FlatBuilder:
             cursor.execute( q )
             rows = cursor.fetchall()
             if len(rows) < self.pars.nmin:
-                raise RuntimeError( f"Only found {len(rows)} {table} that matched, which is < {self.pars.nmin}" )
+                baseerr = f"Only found {len(rows)} {table} that matched, which is < {self.pars.nmin}"
+                if SCLogger.getEffectiveLevel() <= logging.DEBUG:
+                    nlsp = '\n      '
+                    SCLogger.error( f"{baseerr}\n    Files:\n      {nlsp.join(r['filepath'] for r in rows)}" )
+                else:
+                    SCLogger.error( baseerr )
+                raise RuntimeError( baseerr )
 
             if self.pars.dup_reject is not None:
                 oldrows = rows
@@ -869,7 +895,35 @@ class FlatBuilder:
             # SCARY AND THOUGHT REQUIRED
             #   min_mjd and max_mjd should be the same for all sections in an exposure!
             #   But, there might have been failures.  Hope not.
+            # Because of that, consider not using the _offset parameters.
+
             t = pytz.utc.localize( astropy.time.Time( results['min_mjd'], format='mjd' ).datetime )
+            if self.pars.validity_start is not None:
+                if isinstance( self.pars.validity_start, str ):
+                    validity_start = dateutil.parser.parse( self.pars.validity_start )
+                else:
+                    validity_start = self.pars.validity_start
+            elif self.pars.validity_start_offset is not None:
+                validity_start = t - datetime.timedelta( days=self.pars.validity_start_offset )
+            else:
+                validity_start = None
+
+            if ( validity_start is not None ) and ( validity_start.tzinfo is None ):
+                validity_start = pytz.utc.localize( validity_start )
+
+            if self.pars.validity_end is not None:
+                if isinstance( self.pars.validity_end, str ):
+                    validity_end = dateutil.parser.parse( self.pars.validity_end )
+                else:
+                    validity_end = self.pars.validity_end
+            elif self.pars.validity_end_offset is not None:
+                validity_end = t + datetime.timedelta( days=self.pars.validity_end_offset )
+            else:
+                validity_end = None
+
+            if ( validity_end is not None ) and ( validity_end.tzinfo is None ):
+                validity_end = pytz.utc.localize( validity_end )
+
             cf = CalibratorFile( type='flat' if self.pars.is_flat else 'zero',
                                  calibrator_set=self.pars.calibrator_set,
                                  flat_type=self.pars.flat_type,
@@ -877,10 +931,8 @@ class FlatBuilder:
                                  sensor_section=results['section_id'],
                                  image_id=imgobj.id,
                                  datafile_id=None,
-                                 validity_start=( None if self.pars.validity_start_offset is None
-                                                  else t - datetime.timedelta( days=self.pars.validity_start_offset ) ),
-                                 validity_end=( None if self.pars.validity_end_offset is None
-                                                else t + datetime.timedelta( days=self.pars.validity_end_offset ) )
+                                 validity_start=validity_start,
+                                 validity_end=validity_end
                                 )
             cf.insert()
             SCLogger.debug( f"Returning True for save of {results['section_id']}" )
@@ -1136,14 +1188,13 @@ def main():
     parser.add_argument( "--nodb", default=False, action='store_true',
                          help=( "By default, input images are all in the database and you must give database ids "
                                 "or database filepaths.  With --nodb, instead just give paths to images." ) )
-    parser.add_argument( "--section_keyword", default=None,
-                         help=( "If using --nodb and --exposure-mode, this is the header keyword to figure out "
-                                "which HDU of an exposure has the data for a given sensor section." ) )
 
     parser.add_argument( "-f", "--find-images", default=argparse.SUPPRESS, action='store_true',
                          help=( "Instead of specifying files, search the database for images and/or exposures." ) )
-    parser.add_argument( "--prov-id", default=None, help="Find images/exposures with this provenance id" )
-    parser.add_argument( "--prov-tag", default=None, help="Find images/exposures with this provenance tag" )
+    parser.add_argument( "--prov-id", default=argparse.SUPPRESS,
+                         help="Find images/exposures with this provenance id" )
+    parser.add_argument( "--prov-tag", default=argparse.SUPPRESS,
+                         help="Find images/exposures with this provenance tag" )
     parser.add_argument( "--section-id", default=argparse.SUPPRESS,
                          help=( "When finding images, find images of this secton id.  Do not use when in "
                                 "exposure mode, but required when not in exposure mode." ) )
@@ -1216,10 +1267,20 @@ def main():
                          help=( "Added to the 'image_list_annotation' parameter that goes into the provenance. "
                                 "Use this to force a new provenance.  Leave it None if you don't know what "
                                 "you're doing." ) )
+    parser.add_argument( "--validity-start", default=argparse.SUPPRESS,
+                         help=( "Flats or biases built should be tagged in the CalibratorFile entry as valid "
+                                "starting at this time.  If you set neither this nor --validity-start-offset, "
+                                "that entry will be left at None (meaning valid from the beginning of time).  "
+                                "(Use an ISO formatted datetime string.)" ) )
+    parser.add_argument( "--validity-end", default=argparse.SUPPRESS,
+                         help=( "Flats or biases built should be tagged in the CalibratorFile entry as valid "
+                                "ending at this time.  If you set neither this nor --validity-end-offset, "
+                                "that entry will be left at None (meaning valid until the end of time).  "
+                                "(Use an ISO formatted datetime string.)" ) )
     parser.add_argument( "--validity-start-offset", default=argparse.SUPPRESS, type=float,
-                         help=( "In the CalibreatorFile entry, tag the validity_start of this as the midpoint mjd "
-                                "of the combined images MINUS this offset.  If this is not given, validity_start "
-                                "will be left unset." ) )
+                         help=( "In the CalibratorFile entry, tag the validity_start of this as the midpoint mjd "
+                                "of the combined images MINUS this offset.  Ignored if --validity-start is given. "
+                                "If neither this nor --validity-start is given, validity_start will be left unset." ) )
     parser.add_argument( "--validity-end-offset", default=argparse.SUPPRESS, type=float,
                          help="Just like --validity-start-offset, only for validity_end" )
     parser.add_argument( "--calibrator-set", default=argparse.SUPPRESS,

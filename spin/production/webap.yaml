@@ -31,7 +31,7 @@ spec:
         workload.user.cattle.io/workloadselector: deployment-ls4-production-webap
     spec:
       containers:
-      - image: registry.nersc.gov/m4616/seechange-webap:ls4-production-20260804e
+      - image: registry.nersc.gov/m4616/seechange-webap:20260901b
         # command: [ "tail", "-f", "/etc/issue" ]
         imagePullPolicy: IfNotPresent
         name: seechange-webap
