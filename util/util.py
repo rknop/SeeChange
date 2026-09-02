@@ -459,9 +459,10 @@ def _reconstruct_commandline_canonical_option( action ):
         if optstr is None:
             # by constructon
             raise RuntimeError( "This should never happen." )
-        if re.search( r"\s", optstr ):
-            raise ValueError( "Some of the arguments you sent to ArgumentParser.add_argument "
-                              "have whitespace in them!  Why would you do that?!?!?" )
+        if re.search( r"[\s\'\"\\]", optstr ):
+            raise ValueError( "Some of the option strings you sent to ArgumentParser.add_argument "
+                              "have whitespace and/or quotes and/or backspaces in them!  "
+                              "Why would you do that?!?!?" )
     return optstr
 
 
