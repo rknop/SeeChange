@@ -217,6 +217,10 @@ def test_reconstruct_commandline():
 
     rndstr = "".join( random.choices( "ABCDEFGHIJKLMNOPQRSTUVWXYZ", k=10 ) )
     rndval = "".join( random.choices( "abcdefghijklmnopqrstuvwxyz", k=10 ) )
+    while True:
+        missingrndstr = "".join( random.choices( "ABCDEFGHIJKLMNOPQRSTUVWXYZ", k=10 ) )
+        if missingrndstr not in os.environ:
+            break
 
     try:
         os.environ[ rndstr ] = rndval
@@ -256,6 +260,16 @@ def test_reconstruct_commandline():
                    ( [],  "" ),
                    ( [ "HOME", rndstr ], f'  HOME="/home/seechange"\n  {rndstr}="{rndval}"' )
                   ]
+
+        # Test environment failure before the massive loop
+        parser = argparse.ArgumentParser()
+        args = parser.parse_args( [] )
+        with pytest.raises( ValueError, match="You asked to print some env vars" ):
+            reconstruct_commandline( parser, args, envs=[missingrndstr], error_on_unknown_env=True )
+
+        cmdstr = reconstruct_commandline( parser, args, envs=[missingrndstr] )
+        assert cmdstr == ( '\nKey environment variables:\n'
+                           '  SEECHANGE_CONFIG="/seechange/tests/seechange_config_test.yaml"\n' )
 
         # omg it's a four-loop
         for cmd in cmds:

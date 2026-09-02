@@ -465,7 +465,9 @@ def _reconstruct_commandline_canonical_option( action ):
     return optstr
 
 
-def reconstruct_commandline( argparser, args, executable=None, envs=[], showdefaults=False ):
+def reconstruct_commandline( argparser, args, executable=None,
+                             envs=[], error_on_unknown_env=False,
+                             showdefaults=False ):
     """Try to reconstruct a command line based on parsed args.
 
     Parameters
@@ -481,10 +483,20 @@ def reconstruct_commandline( argparser, args, executable=None, envs=[], showdefa
 
       envs: list, default []
          A list of key environment variables to output.
-         SEECHANGE_CONFIG will always be prepended to this list.
+         SEECHANGE_CONFIG will always be prepended to this list (if it's
+         defined).  Only those environment variables that actually exist
+         in os.environ will be printed; set error_on_unknown_env=True if
+         you want an exception raised if you ask for something that's
+         not set.
+
+      error_on_unknown_env: bool, default False
+         If one of the environment variables passed in envs isn't
+         actually defined (i.e. isn't in os.environ), normally it will
+         be silently dropped from the output.  Set this parameter to
+         True to trigger an exception instead.
 
       showdefaults: bool, default False
-         Normally, of args.{option} is at the default value found in
+         Normally, if args.{option} is at the default value found in
          argparser, then {option} will not be included in the returned
          command string.  Set this to True to include everything.
 
@@ -506,10 +518,14 @@ def reconstruct_commandline( argparser, args, executable=None, envs=[], showdefa
         else:
             return f'"{v}"'
 
-    if 'SEECHANGE_CONFIG' not in envs:
+    if ( 'SEECHANGE_CONFIG' not in envs ) and ( 'SEECHANGE_CONFIG' in os.environ ):
         envs.insert( 0, 'SEECHANGE_CONFIG' )
 
     strio = io.StringIO()
+    if error_on_unknown_env and any( e not in os.environ for e in envs ):
+        raise ValueError( f"You asked to print some env vars, but the following ones aren't defined: "
+                          f"{set(envs) - set(os.environ.keys())}" )
+    envs = [ e for e in envs if e in os.environ ]
     if len(envs) > 0:
         nlsp = "\n  "
         strio.write( f"\nKey environment variables:\n  "
