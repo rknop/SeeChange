@@ -556,6 +556,8 @@ class Reference(Base, UUIDMixin, HasBitFlagBadness):
         if not all( r.zp_id in imdict.keys() for r in references ):
             raise RuntimeError( "Didn't get back the images expected; this should not happen!" )
         images = [ imdict[r.zp_id] for r in references ]
+        for r, i in zip( references, images ):
+            r._image = i
 
         # Deal with overlapfrac if relevant
 
@@ -563,7 +565,9 @@ class Reference(Base, UUIDMixin, HasBitFlagBadness):
             retref = []
             retim = []
             for r, i in zip( references, images ):
-                if FourCorners.get_overlap_frac( fcobj, i ) >= overlapfrac:
+                ovfrac = ( wcs.get_overlap_frac( wcs, r.wcs ) if wcs is not None
+                           else FourCorners.get_overlap_frac( fcobj, i ) )
+                if ovfrac >= overlapfrac:
                     retref.append( r )
                     retim.append( i )
             references = retref

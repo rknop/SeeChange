@@ -740,6 +740,13 @@ class SeeChangeBase:
     type_annotation_map = { UUID: sqlUUID }
 
     def __init__(self, **kwargs):
+        # THIS NEXT ONE IS ILL-CONSIDERED.
+        # For it to really be right, we need to go everywhere through the code
+        #    and make sure we're setting it.  Perhaps this worked if you only
+        #    ever used SQLAlchemy to pull things from the database (in which case
+        #    __init__ isn't called), but that would be such a nightmare world to
+        #    live in that I don't even want to think about it.
+        # Should be removed as part if Issue #516.
         self.from_db = False  # let users know this object was newly created
 
         if hasattr(self, '_bitflag'):
