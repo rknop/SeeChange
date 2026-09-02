@@ -14,7 +14,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.schema import CheckConstraint
+from sqlalchemy.schema import CheckConstraint, UniqueConstraint
 
 from astropy.time import Time
 from astropy.wcs import WCS
@@ -64,6 +64,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             CheckConstraint( sqltext='NOT(md5sum IS NULL AND '
                                '(md5sum_components IS NULL OR array_position(md5sum_components, NULL) IS NOT NULL))',
                                name=f'{cls.__tablename__}_md5sum_check' ),
+            UniqueConstraint( 'provenance_id', 'exposure_id', 'section_id', name='_image_provexpsec_uniq' ),
             sa.Index(f"{cls.__tablename__}_q3c_ang2ipix_idx", sa.func.q3c_ang2ipix(cls.ra, cls.dec)),
         )
 
@@ -219,11 +220,14 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         JSONB,
         nullable=False,
         server_default='{}',
-        doc=(
-            "Additional information on this image. "
-            "Only keep a subset of the header keywords, "
-            "and re-key them to be more consistent. "
-        )
+        doc=( "A dictionary (key:value) of additional information from the image.  "
+              "Some of this may have been pulled from the image header.  This should "
+              "NOT include anything that has its own columN (mjd, filter, target, "
+              "instrument, etc.).  A few standard keys include: zero, dark, flat, "
+              "illumination, linearity.  All of these have values that are UUIDs that "
+              "point to the calibrator_files table (though they're not formal SQL foreign "
+              "keys).  If that preprocessing step hasn't been done, then probably the key "
+              "will not be present in the dict." )
     )
 
     width = sa.Column(
@@ -751,7 +755,6 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             new.maxdec = dec1
 
         new.info = header_info  # save any additional header keys into a JSONB column
-
 
         return new
 

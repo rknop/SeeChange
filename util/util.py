@@ -1,6 +1,8 @@
 import collections.abc
 import numbers
 import os
+import io
+import re
 import pathlib
 import time
 from datetime import datetime, date
@@ -444,3 +446,125 @@ def retry_with_sleep( func, sleepmin=0.1, sleept=0.5, sleepfac=2, sleepfuzz=0.1,
             raise RuntimeError( f"Failed {failmessage} after {t1-t0:.2f}s and {tries} tries." )
         else:
             return retval_on_fail
+
+
+def _reconstruct_commandline_canonical_option( action ):
+    optstr = None
+    if len( action.option_strings) > 0:
+        for o in action.option_strings:
+            # Try to keep the first one that starts with --
+            optstr = o
+            if ( len(o) > 1 ) and ( o[0:2] == '--' ):
+                break
+        if optstr is None:
+            # by constructon
+            raise RuntimeError( "This should never happen." )
+        if re.search( r"[\s\'\"\\]", optstr ):
+            raise ValueError( "Some of the option strings you sent to ArgumentParser.add_argument "
+                              "have whitespace and/or quotes and/or backspaces in them!  "
+                              "Why would you do that?!?!?" )
+    return optstr
+
+
+def reconstruct_commandline( argparser, args, executable=None,
+                             envs=[], error_on_unknown_env=False,
+                             showdefaults=False ):
+    """Try to reconstruct a command line based on parsed args.
+
+    Parameters
+    ----------
+      argparser: argparse.ArgumentParser
+         The parser object that did the parsing.
+
+      args: ...
+         The thing that as returned by argparser.parse_args()
+
+      executable: str, default None
+         If not None, put this at the beginning of the returned command string
+
+      envs: list, default []
+         A list of key environment variables to output.
+         SEECHANGE_CONFIG will always be prepended to this list (if it's
+         defined).  Only those environment variables that actually exist
+         in os.environ will be printed; set error_on_unknown_env=True if
+         you want an exception raised if you ask for something that's
+         not set.
+
+      error_on_unknown_env: bool, default False
+         If one of the environment variables passed in envs isn't
+         actually defined (i.e. isn't in os.environ), normally it will
+         be silently dropped from the output.  Set this parameter to
+         True to trigger an exception instead.
+
+      showdefaults: bool, default False
+         Normally, if args.{option} is at the default value found in
+         argparser, then {option} will not be included in the returned
+         command string.  Set this to True to include everything.
+
+    Returns
+    -------
+      str
+
+        Intended for human consumption, not machine parsing.  Just log it.
+
+    """
+
+    def valprint( v ):
+        if ( isinstance( v, str ) and '"' in v ):
+            if "'" in v:
+                raise RuntimeError( "This function is not sophisticated enough to cope with "
+                                    "things specified on the command line that have both single "
+                                    "and double quotes." )
+            return f"'{v}'"
+        else:
+            return f'"{v}"'
+
+    if ( 'SEECHANGE_CONFIG' not in envs ) and ( 'SEECHANGE_CONFIG' in os.environ ):
+        envs.insert( 0, 'SEECHANGE_CONFIG' )
+
+    strio = io.StringIO()
+    if error_on_unknown_env and any( e not in os.environ for e in envs ):
+        raise ValueError( f"You asked to print some env vars, but the following ones aren't defined: "
+                          f"{set(envs) - set(os.environ.keys())}" )
+    envs = [ e for e in envs if e in os.environ ]
+    if len(envs) > 0:
+        nlsp = "\n  "
+        strio.write( f"\nKey environment variables:\n  "
+                     f"{nlsp.join( f'{v}={valprint(os.getenv(v))}' for v in envs )}\n" )
+
+    if executable is None:
+        cmdline = ""
+        spaces = "  "
+    else:
+        cmdline = executable
+        spaces = "    "
+
+    # I feel a little queasy using an underscore property of an object....
+    for action in argparser._actions:
+        if action.dest in args:
+            val = getattr( args, action.dest )
+            if ( ( val != action.default ) or
+                    ( showdefaults and ( action.default is not None ) and
+                        ( not isinstance( action.nargs, int ) or ( action.nargs > 0 ) )
+                     )
+                 ):
+                if len(cmdline) > 0:
+                    cmdline += f" \\\n{spaces}"
+                optstr = _reconstruct_commandline_canonical_option( action )
+                if optstr is not None:
+                    cmdline += optstr
+                    sp = " "
+                else:
+                    sp = ""
+
+                if action.nargs in ( '*', '+' ):
+                    for v in val:
+                        cmdline += sp + valprint( v )
+                        sp = " "
+                elif action.nargs != 0:
+                    cmdline += sp + valprint( val )
+
+    if len( cmdline ) > 0:
+        strio.write( f"\nCommand line:\n  {cmdline}\n" )
+
+    return strio.getvalue()
