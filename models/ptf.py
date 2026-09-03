@@ -37,14 +37,14 @@ class PTF(Instrument):
     def get_filename_regex(cls):
         return [ cls._file_re ]
 
-    def get_section_ids(self):
+    def get_section_ids(self, includebad=False):
         """Get a list of SensorSection identifiers for this instrument.
 
         Includes all 12 CCDs.
         """
         return [str(sid) for sid in range(0, 12)]
 
-    def check_section_id(self, section_id):
+    def check_section_id(self, section_id, mustbegood=False):
         """Check that the type and value of the section is compatible with the instrument.
 
         In this case, it must be an integer in the range [0, 11].

@@ -448,18 +448,28 @@ class Instrument:
         raise NotImplementedError("This method must be implemented by the subclass.")
 
 
-    def get_section_ids(self):
+    def get_section_ids(self, includebad=False):
         """Get a list of SensorSection identifiers for this instrument.
+
+        Parameters
+        ----------
+          includebad: bool, default False
+             Normally, instruments will omit hopeless chips (i.e. things
+             that have data in data files but whose data is not usable)
+             from the list.  This is not per-exposure, but "known" for
+             the instrument.  (...This also assumes the list of bad
+             chips is static.)  Set this to True to include those section_ids.
 
         Returns
         -------
            list of str
 
         THIS METHOD MUST BE OVERRIDEN BY THE SUBCLASS.
+
         """
         raise NotImplementedError("This method must be implemented by the subclass.")
 
-    def check_section_id(self, section_id):
+    def check_section_id(self, section_id, mustbegood=False):
         """Check that the type and value of the section is compatible with the instrument.
 
         For example, many instruments will key the section by a running
@@ -2310,7 +2320,7 @@ class DemoInstrument(Instrument):
         return [ re.compile(r'^Demo') ]
 
 
-    def get_section_ids(self):
+    def get_section_ids(self, includebad=False):
         """Get a list of SensorSection identifiers for this instrument.
 
         See Instrument.get_section_ids for interface.
@@ -2318,7 +2328,7 @@ class DemoInstrument(Instrument):
 
         return [ '0' ]
 
-    def check_section_id(self, section_id):
+    def check_section_id(self, section_id, mustbegood=False):
         """Check if the section_id is valid for this instrument.
 
         The demo instrument only has one section, so the section_id must be 0.

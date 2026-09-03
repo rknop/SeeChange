@@ -1,4 +1,5 @@
 import re
+import io
 import pathlib
 import argparse
 import time
@@ -12,13 +13,12 @@ import logging
 import tracemalloc
 
 import numpy as np
-import psycopg.rows
 from psycopg import sql
 
 from astropy.io import fits
 import astropy.time
 
-from models.base import PsycopgConnection
+from models.base import PGDB
 from models.provenance import Provenance
 from models.instrument import Instrument
 from models.calibratorfile import CalibratorFile
@@ -52,8 +52,34 @@ class ParsFlatBuilder(Parameters):
             'exposure_mode',
             False,
             bool,
-            "Work on raw exposures rather than images.",
+            ( "If True, do entire exposures at once.  In this case, it will multiprocess using numproc.  "
+              "It can either work on raw exposures, or (if using the database) on images from those exposures.  "
+              "Set exposure_mode_use_images to True to tell it to find images in the database rather than "
+              "using the exposures.  TODO: if exposure_mode_use_images is False, then the preprocessing that's "
+              "done may not match find_provenance_id or find_provenance_tag!  Think about this and lazy "
+              "loading.  For now, exposure_mode_use_images is critical so that the provenance will be different.  "
+              "If exposure_mode is False, then this is working on individual images, and will not multiprocess." ),
             critical=False
+        )
+
+        self.exposure_mode_use_images = self.add_par(
+            name = 'exposure_mode_use_images',
+            default = False,
+            par_types = bool,
+            docstring = "See exposure_mode docstring.  This is irrelevant if not using the database.",
+            critical = True
+        )
+
+        self.ok_if_num_files_per_section_mismatch = self.add_par(
+            name = 'ok_if_num_files_per_section_mismatch',
+            default = False,
+            par_types = bool,
+            docstring = ( "Irrelevant unless you're in exposure mode, using the database, and "
+                          "exposure_mode_use_images is True.  If not all chips find the same number "
+                          "of images, then either a warning is issued (if this is True) or "
+                          "an exception is raised (if this is False).  Additionally, if this is True, "
+                          "it will only issue a warning if any chips are completely missing." ),
+            critical = True
         )
 
         self.is_flat = self.add_par(
@@ -82,10 +108,13 @@ class ParsFlatBuilder(Parameters):
 
         self.numproc = self.add_par(
             'numproc',
-            32,
+            16,
             int,
             ( "When in exposure mode, launch this many worker processes.  Ignored in image mode.  "
-              "Think about memory, that will likely limit you more than CPUs." ),
+              "Think about memory, that will likely limit you more than CPUs.  To estimate memory usage "
+              "in GB for one process, try width*height*nmax*28 / (1024^3).  (Why 28?  4 if it is because "
+              "a 32-bit float uses 4 bytes per pixel.  The other factor of 7... is mostly somewhere "
+              "inside np.nanmedian" ),
             critical=False
         )
 
@@ -347,23 +376,24 @@ class ParsFlatBuilder(Parameters):
 
 
 class FlatBuilder:
-    """Despite the name, this can be used for  both flats and biases--  default paramters are for biases."""
+    """Despite the name, this can be used for both flats and biases--  default paramters are for biases."""
 
     nmad_k = 1.4826
 
     def __init__( self, nodb=False, section_keyword=None, **kwargs ):
         """Make a FlatBuilder.
 
-        The default of numproc=32 is based on the following considerations:
+        The default of numproc=16 is based on the following considerations:
 
            * A NERSC Perlmutter CPU node has 512GB of RAM
-           * A single 2048x4096 image, double precision, takes 64MiB of RAM
-           * Let's say we're going to combine 99 images, conservatively
-           * That means one chip takes ~6GB (a bit more) of memory to
-           *    store the full stack.
-           * LS4 has 32 chips
-           * That's a total of ~200GB of memory
-           * ...so we can do all chips at once!  W00t!
+           * Empirically, combining 121 2048×4096 images uses 27-28GB of RAM
+           * 512/27 = just under 19
+           * 18 is probably too many because of overhead
+           * 16 is a power of 2 and so a nice round number.  Plus, LS4
+                has 32 chips, so that divides nicely.  (...well, LS4
+                has 30 good chips, so, never mind).
+
+        See the docstring on numproc above.
 
         If you're on a system with less memory, that could well be the
         limiting factor, rather than the number of CPUs, dpeending on
@@ -436,18 +466,24 @@ class FlatBuilder:
         if self.pars.exposure_mode:
             if self.pars.section_id is not None:
                 raise ValueError( "Can't give a find sec_id in exposure mode" )
+            # ...yes, this is hazardous variable naming
             self.section_ids = self.instrument.get_section_ids()
-            table = 'exposures'
+            self.section_id = None
+            if self.pars.exposure_mode_use_images:
+                table = 'images'
+            else:
+                table = 'exposures'
         else:
             if self.pars.section_id is None:
                 raise ValueError( "Must give a section_id when not in exposure mode" )
+            self.section_ids = None
             self.section_id = self.pars.section_id
             table = 'images'
 
-        with PsycopgConnection() as con:
-            cursor = con.cursor( row_factory=psycopg.rows.dict_row )
-            q = ( sql.SQL( "SELECT m._id, m.filepath, m.ra, m.dec FROM {table} m\n" )
-                  .format( table=sql.Identifier( table ) ) )
+        with PGDB( dictcursor=True ) as pgdb:
+            q = ( sql.SQL( "SELECT m._id, m.filepath, {secid}m.ra, m.dec FROM {table} m\n" )
+                  .format( table=sql.Identifier( table ),
+                           secid=sql.Identifier("section_id")+sql.SQL(", ") if table=='images' else "" ) )
             if self.pars.find_provenance_id is not None:
                 if self.pars.find_provenance_tag is not None:
                     raise ValueError( "Only specify one of find_provenance_id or find_provenance_tag" )
@@ -496,19 +532,71 @@ class FlatBuilder:
                 q += sql.SQL( "ORDER BY m.mjd DESC\n" )
 
             SCLogger.debug( f"Searching for input files with:\n{q.as_string()}" )
+            rows = pgdb.execute( q )
 
-            cursor.execute( q )
-            rows = cursor.fetchall()
-            if len(rows) < self.pars.nmin:
-                baseerr = f"Only found {len(rows)} {table} that matched, which is < {self.pars.nmin}"
-                if SCLogger.getEffectiveLevel() <= logging.DEBUG:
-                    nlsp = '\n      '
-                    SCLogger.error( f"{baseerr}\n    Files:\n      {nlsp.join(r['filepath'] for r in rows)}" )
+        def _check_files_by_chip( files_by_chip, chip0, prefix="" ):
+            if not all( len(files_by_chip[c]) == len(files_by_chip[chip0]) for c in files_by_chip.keys() ):
+                strio = io.StringIO()
+                strio.write( f"{prefix}The same number of images were not found for all chips:" )
+                for chip in self.section_ids:
+                    strio.write( f"\n   {chip:>12s} : {len(files_by_chip[chip])}" )
+                if self.pars.ok_if_num_files_per_section_mismatch:
+                    SCLogger.warning( strio.getvalue() )
                 else:
-                    SCLogger.error( baseerr )
-                raise RuntimeError( baseerr )
+                    raise RuntimeError( strio.getvalue() )
 
-            if self.pars.dup_reject is not None:
+        def _check_enough( rows, files_by_chip, postfix="" ):
+            if files_by_chip is not None:
+                nmin = min( len(v) for v in files_by_chip.values() )
+                if nmin < self.pars.nmin:
+                    baseerr = f"At least one chip had <{self.pars.nmin} matches ({nmin}){postfix}"
+                    strio = io.StringIO()
+                    strio.write( baseerr )
+                    if SCLogger.getEffectiveLevel() <= logging.DEBUG:
+                        nlsp = '\n      '
+                        if ( table == 'images' ) and self.pars.exposure_mode:
+                            chipnlsp = '\n    '
+                            for chip in self.section_ids:
+                                strio.write( f"{chipnlsp}Section: {chip} ({len(files_by_chip[chip])} images)" )
+                                strio.write( f"{nlsp}{nlsp.join(str(f['filepath']) for f in files_by_chip[chip])}")
+                    SCLogger.error( strio.getvalue() )
+                    raise RuntimeError( baseerr )
+            else:
+                if len(rows) < self.pars.nmin:
+                    err = f"{table} had<{self.pars.nmin} matches ({len(rows)}){postfix}"
+                    SCLogger.error( err )
+                    raise RuntimeError( err )
+
+        if ( table == 'images' ) and self.pars.exposure_mode:
+            files_by_chip = {}
+            chip0 = None
+            for row in rows:
+                if row['section_id'] not in self.section_ids:
+                    continue
+                chip0 = row['section_id'] if chip0 is None else chip0
+                if row['section_id'] in files_by_chip:
+                    files_by_chip[ row['section_id'] ].append( row )
+                else:
+                    files_by_chip[ row['section_id'] ] = [ row ]
+            if set( files_by_chip.keys() ) != set( self.section_ids ):
+                errmsg = ( f"Didn't find files for all chips!  Missing: "
+                           f"{set(self.section_ids) - set(files_by_chip.keys())}" )
+                if self.pars.ok_if_num_files_per_section_mismatch:
+                    SCLogger.warning( errmsg )
+                else:
+                    raise RuntimeError( errmsg )
+            _check_files_by_chip( files_by_chip, chip0,
+                                  prefix="Before dup reject: " if self.pars.dup_reject is not None else "" )
+
+        else:
+            files_by_chip = None
+            chip0 = None
+
+        _check_enough( rows, files_by_chip,
+                       postfix=" before dup reject" if self.pars.dup_reject is not None else "" )
+
+        if self.pars.dup_reject is not None:
+            def _dup_reject( rows ):
                 oldrows = rows
                 rows = []
                 # There is probably a cleverer way to do this with numpy
@@ -519,14 +607,46 @@ class FlatBuilder:
                            ):
                         continue
                     rows.append( row )
-                if len(rows) < self.pars.min:
-                    raise RuntimeError( f"Found {len(oldrows)} {table}, but after duplicate rejection, "
-                                        f"only {len(rows)} were left, which is < {self.pars.nmin}" )
-                SCLogger.info( f"Found {len(oldrows)} {table}, {len(rows)} left after ra/dec duplicate rejection." )
-                if ( self.pars.nmax is not None ) and ( len(rows) > self.pars.nmax ):
-                    SCLogger.info( f"Reducing to {self.pars.nmax} images as specified" )
-                    rows = rows[:self.pars.nmax]
+                return rows
 
+            if files_by_chip is not None:
+                for chip in files_by_chip.keys():
+                    files_by_chip[chip] = _dup_reject( files_by_chip[chip] )
+                _check_files_by_chip( files_by_chip, chip0, prefix="After dup reject: " )
+
+            else:
+                rows = _dup_reject( rows )
+
+            _check_enough( rows, files_by_chip, postfix=" after dup reject" )
+
+        if self.pars.nmax is not None:
+            if files_by_chip is not None:
+                if any( len(v) > self.pars.nmax for v in files_by_chip.values() ):
+                    SCLogger.info( f"Reducing all chips to {self.pars.nmax} images as specified" )
+                    for chip in files_by_chip.keys():
+                        if len( files_by_chip[chip] ) > self.pars.nmax:
+                            files_by_chip[chip] = files_by_chip[chip][:self.pars.nmax]
+        else:
+            if len(rows) > self.pars.nmax:
+                SCLogger.info( f"Reducing to {self.pars.nmax} {table} as specified" )
+                rows = rows[:self.pars.nmax]
+
+
+        if files_by_chip is not None:
+            self.files_by_chip = { k: [ row['_id'] for row in v ] for k, v in files_by_chip.items() }
+            self.files = None
+
+            strio = io.StringIO()
+            strio.write( "Going to combine the following images: " )
+            nlsp = '\n      '
+            chipnlsp = '\n    '
+            for chip in self.section_ids:
+                strio.write( f"{chipnlsp}Section: {chip} ({len(files_by_chip[chip])} images)" )
+                strio.write( f"{nlsp}{nlsp.join(pathlib.Path(r['filepath']).name for r in files_by_chip[chip])}" )
+            SCLogger.debug( strio.getvalue() )
+
+        else:
+            self.files_by_chip = None
             self.files = [ r['_id'] for r in rows ]
 
             _nl = "\n"
@@ -537,6 +657,8 @@ class FlatBuilder:
 
 
     def set_input_files( self, i_know_what_im_doing=False ):
+        self.files_by_chip = None
+
         if self.pars.images is None:
             if self.pars.image_list_file is None:
                 raise ValueError( "Gotta give me files" )
@@ -583,15 +705,16 @@ class FlatBuilder:
 
 
         else:
-            with PsycopgConnection() as con:
-                cursor = con.cursor( row_factory=psycopg.rows.row_factory )
+            with PGDB( dictcursor=True ) as pgdb:
                 if self.pars.exposure_mode:
+                    if self.pars.exposure_mode_use_images:
+                        raise NotImplementedError( "Need to implement exposure_mode_use_images when giving "
+                                                   "an explicit list of exposures." )
                     q = "SELECT _id, instrument FROM exposures WHERE _id=ANY(%(flist)s) OR filepath=ANY(%(flist)s)"
                 else:
                     q = ( "SELECT filepath, instrument, telescope, section_id FROM images "
                           "WHERE _id=ANY(%(flist)s) OR filepath=ANY(%(flist)s)" )
-                cursor.execute( q, { 'flist': self.files } )
-                rows = cursor.fetchall()
+                rows = pgdb.execute( q, { 'flist': self.files } )
                 if len(rows) != len(self.files):
                     raise RuntimeError( f"Specified {len(self.files)} files, but found {len(rows)} "
                                         f"matches in the database." )
@@ -624,14 +747,14 @@ class FlatBuilder:
         min_mjd = None
         max_mjd = None
 
-        if section_id is not None:
-            SCLogger.info( f"Reading {len(self.files)} images for section_id {section_id}" )
-        else:
-            SCLogger.info( f"Reading {len(self.files)} images" )
-
         if self.nodb:
             # At the very least, need to generate an all-True mask
             raise RuntimeError( "nodb is broken at the moment" )
+            if section_id is not None:
+                SCLogger.info( f"Reading {len(self.files)} images for section_id {section_id}" )
+            else:
+                SCLogger.info( f"Reading {len(self.files)} images" )
+
             for i, fname in enumerate( self.files ):
                 with fits.open( fname ) as hdul:
                     if self.pars.exposure_mode:
@@ -681,66 +804,85 @@ class FlatBuilder:
                         'del': 0.,
                         'tot': 0.
                        }
-            with PsycopgConnection() as con:
-                for i, objid in enumerate( self.files ):
 
-                    if self.pars.exposure_mode:
-                        expobj = Exposure.get_by_id( objid, session=con )
-                        fname = expobj.filepath
-                        mjd = expobj.mjd
-                        data = expobj.data[ section_id ]
-                        if data is None:
-                            raise RuntimeError( f"Failed to find section data {section_id} in exposure {fname}" )
-                        header = expobj.section_headers[ section_id ]
-                        if header is None:
-                            raise RuntimeError( f"Failed to find section header {section_id} in exposure {fname}" )
-                        del expobj
-                        data = self.instrument.overscan_and_trim( header, data )
-                        flags = np.zeros( data.shape, dtype=np.int16 )
-                    else:
-                        t0 = time.perf_counter()
-                        imgobj = Image.get_by_id( objid, session=con )
-                        t1 = time.perf_counter()
-                        fname = imgobj.filepath
-                        t2 = time.perf_counter()
-                        mjd = imgobj.mjd
-                        t3 = time.perf_counter()
-                        data = imgobj.data
-                        t4 = time.perf_counter()
-                        flags = imgobj.flags
-                        t5 = time.perf_counter()
-                        del imgobj
-                        t6 = time.perf_counter()
+            # Don't open a database connection and hold it open, because all the file I/O here; we don't
+            # want lots of idle connections sitting around, as the database can run out of connections.
+            # Just let each get_by_id call open a new connection.  That will *probably* be
+            # small compared to file I/O.  I hope.
+            readingexposures = ( self.pars.exposure_mode ) and ( self.files_by_chip is None )
+            files = self.files if self.files_by_chip is None else self.files_by_chip[ section_id ]
 
-                        timings['get'] += t1 - t0
-                        timings['fname'] += t2 - t1
-                        timings['mjd'] += t3 - t2
-                        timings['data'] += t4 - t3
-                        timings['flags'] += t5 - t4
-                        timings['del'] += t6 - t5
-                        timings['tot'] += t6 - t0
+            if section_id is not None:
+                SCLogger.info( f"Reading {len(files)} {'exposures' if readingexposures else 'images'} "
+                               f"for section_id {section_id}" )
+            else:
+                SCLogger.info( f"Reading {len(files)} {'exposures' if readingexposures else 'images'}" )
 
-                    if massive_stack is None:
-                        # I'm not using a masked array for two reasons.  First, I think if we can do
-                        #  np.nanmedian, memory use will be less than doing a median on a masked array
-                        #  (We shall see.)  Second, I want the data to be there even where it is masked.
-                        massive_stack = np.empty( ( len(self.files), data.shape[0], data.shape[1] ),
-                                                  dtype=_massive_stack_dtype )
-                        massive_stack_mask = np.full( ( len(self.files), data.shape[0], data.shape[1] ), False )
-                    if data.shape != massive_stack.shape[1:3]:
-                        raise RuntimeError( f"First image had shape {massive_stack.shape[1:3]}, but "
-                                            f"{fname} has shape {data.shape}" )
-                    massive_stack[ i ] = data
-                    massive_stack_mask[ i ] = ( flags != 0 )
-                    if min_mjd is None:
-                        min_mjd = mjd
-                        max_mjd = mjd
-                    else:
-                        min_mjd = min( mjd, min_mjd )
-                        max_mjd = max( mjd, max_mjd )
 
-                    if ( i % 10 == 0 ) and ( i > 0 ):
-                        SCLogger.debug( f"Read {i} of {len(self.files)} images" )
+            for i, objid in enumerate( files ):
+
+                if readingexposures:
+                    # WARNING THOUGHT REQUIRED.
+                    # If the image is not available, we're doing preprocessing stuff.
+                    # We should verify that the provenance of what we've done matches
+                    # the find_provenance_tag!
+                    # First see if the image is avialable
+                    expobj = Exposure.get_by_id( objid )
+                    fname = expobj.filepath
+                    mjd = expobj.mjd
+                    data = expobj.data[ section_id ]
+                    if data is None:
+                        raise RuntimeError( f"Failed to find section data {section_id} in exposure {fname}" )
+                    header = expobj.section_headers[ section_id ]
+                    if header is None:
+                        raise RuntimeError( f"Failed to find section header {section_id} in exposure {fname}" )
+                    del expobj
+                    data = self.instrument.overscan_and_trim( header, data )
+                    flags = np.zeros( data.shape, dtype=np.int16 )
+                else:
+                    t0 = time.perf_counter()
+                    imgobj = Image.get_by_id( objid )
+                    t1 = time.perf_counter()
+                    fname = imgobj.filepath
+                    t2 = time.perf_counter()
+                    mjd = imgobj.mjd
+                    t3 = time.perf_counter()
+                    data = imgobj.data
+                    t4 = time.perf_counter()
+                    flags = imgobj.flags
+                    t5 = time.perf_counter()
+                    del imgobj
+                    t6 = time.perf_counter()
+
+                    timings['get'] += t1 - t0
+                    timings['fname'] += t2 - t1
+                    timings['mjd'] += t3 - t2
+                    timings['data'] += t4 - t3
+                    timings['flags'] += t5 - t4
+                    timings['del'] += t6 - t5
+                    timings['tot'] += t6 - t0
+
+                if massive_stack is None:
+                    # I'm not using a masked array for two reasons.  First, I think if we can do
+                    #  np.nanmedian, memory use will be less than doing a median on a masked array
+                    #  (We shall see.)  Second, I want the data to be there even where it is masked.
+                    massive_stack = np.empty( ( len(files), data.shape[0], data.shape[1] ),
+                                              dtype=_massive_stack_dtype )
+                    massive_stack_mask = np.full( ( len(files), data.shape[0], data.shape[1] ), False )
+                if data.shape != massive_stack.shape[1:3]:
+                    raise RuntimeError( f"First image had shape {massive_stack.shape[1:3]}, but "
+                                        f"{fname} has shape {data.shape}" )
+                massive_stack[ i ] = data
+                massive_stack_mask[ i ] = ( flags != 0 )
+                if min_mjd is None:
+                    min_mjd = mjd
+                    max_mjd = mjd
+                else:
+                    min_mjd = min( mjd, min_mjd )
+                    max_mjd = max( mjd, max_mjd )
+
+                if ( i % 10 == 0 ) and ( i > 0 ):
+                    SCLogger.debug( f"Read {i} of {len(files)} images" )
 
             if not self.pars.exposure_mode:
                 SCLogger.debug( f"Read timings: {', '.join(f'{k}={v:.2f}' for k, v in timings.items())}" )
@@ -751,6 +893,7 @@ class FlatBuilder:
     def calculate_flat( self, massive_stack, massive_stack_mask, section_id=None ):
         """Warning: destroys massive_stack."""
 
+        files = self.files if self.files_by_chip is None else self.files_by_chip[ section_id ]
         for_section_id = '' if section_id is None else f' for {section_id}'
 
         instrument_mask = None
@@ -763,7 +906,7 @@ class FlatBuilder:
         self.memdump( "Before normalization" )
         if self.pars.normalize_mode is not None:
             SCLogger.info( f"Normalizing all images{for_section_id}..." )
-            for i in range(len(self.files)):
+            for i in range(len(files)):
                 if self.pars.normalize_mode == 'median':
                     # Make a copy of the image so that we can NaNify the bad pixels
                     #   without nuking the corresponding pixels in massive_stack
@@ -862,11 +1005,12 @@ class FlatBuilder:
         header['COMMENT'] = "Image combined with SeeChange flat_bias_builder.py"
         header['COMMENT'] = f"...normalize_mode={self.pars.normalize_mode}"
         header['COMMENT'] = f"...combine_mode={self.pars.combine_mode}"
-        header['COMMENT'] = f"Median nmad: {self.nmad_median:.3g}"
+        header['COMMENT'] = f"Median nmad: {results['nmad_median']:.3g}"
         if self.pars.bad_threshold is not None:
             header['COMMENT'] = f"Masked nmad >= {self.pars.bad_threshold} x median nmad"
         header['COMMENT'] = "Files combined:"
-        for f in self.files:
+        files = self.files if self.files_by_chip is None else self.files_by_chip[ section_id ]
+        for f in files:
             header['COMMENT'] = f"  {f}"
         return header
 
@@ -971,16 +1115,18 @@ class FlatBuilder:
                     imkwargs[f'ra_corner_{x}{y}'] = 0.
                     imkwargs[f'dec_corner_{x}{y}'] = 0.
 
+        success = True
         if self.pars.exposure_mode:
             if self.pars.numwriteproc == 1:
                 SCLogger.info( f"Writing {len(self.section_ids)} sections serially." )
                 for sec_id in self.section_ids:
                     if sec_id in self.results:
-                        self._save_and_insert_image( imkwargs, self.results[sec_id], parentproc=True )
+                        if not self._save_and_insert_image( imkwargs, self.results[sec_id], parentproc=True ):
+                            success = False
                     else:
                         SCLogger.warning( f"No results for {sec_id}, not saving it." )
             else:
-                SCLogger.info( f"Writing {len(self.section_ids)} sections in {self.pars.numwriteproc} processes." )
+                SCLogger.info( f"Writing {len(self.section_ids)} sections in {self.pars.numwriteproc} threads." )
                 doer = functools.partial( FlatBuilder._save_and_insert_image, self, imkwargs )
                 # I think threads, not processes, are sufficient here, because these should
                 #   be entirely I/O bound.
@@ -994,10 +1140,13 @@ class FlatBuilder:
                 if not all( r[1] for r in res ):
                     failed = [ r[0] for r in res if not r[1] ]
                     SCLogger.error( f"The following sections failed to save: {failed}" )
+                    success = False
                 pool.shutdown()
 
         else:
-            self._save_and_insert_image( imkwargs, self.results, parentproc=True )
+            success = self._save_and_insert_image( imkwargs, self.results, parentproc=True )
+
+        return success
 
 
     def write_combination( self, outfile="flat", outmask=None, nmad=None ):
@@ -1052,14 +1201,15 @@ class FlatBuilder:
             self.memdump( "After calculate_flat" )
             del massive_stack
             del massive_stack_mask
-            return section_id, self.combined, self.combined_mask, self.nmad, min_mjd, max_mjd, None
+            return section_id, self.combined, self.combined_mask, self.nmad, self.nmad_median, min_mjd, max_mjd, None
         except Exception as ex:
             SCLogger.exception( f"Exception in process running chip {section_id}" )
-            return section_id, None, None, None, None, None, str(ex)
+            return section_id, None, None, None, None, None, None, str(ex)
 
 
     def __call__( self, i_know_what_im_doing=False ):
         self.memdump( "Starting traced memory" )
+        exitval = 0
 
         if self.pars.find_images:
             self.find_input_files( i_know_what_im_doing=i_know_what_im_doing )
@@ -1085,6 +1235,7 @@ class FlatBuilder:
                             'comb': self.combined,
                             'comb_mask': self.combined_mask,
                             'nmad': self.nmad,
+                            'nmad_median': self.nmad_median,
                             'min_mjd': min_mjd,
                             'max_mjd': max_mjd
                         }
@@ -1093,7 +1244,7 @@ class FlatBuilder:
                         SCLogger.exception( f"Exception working on section {sec}, skipping it." )
                         if sec in collected_results:
                             del collected_results[sec]
-
+                        exitval = 1
                         failed.append( sec )
 
             else:
@@ -1103,7 +1254,7 @@ class FlatBuilder:
                                             mp_context=multiprocessing.get_context('fork') )
                 for sec, res in zip( self.section_ids,
                                      pool.map( doer, self.section_ids, timeout=self.pars.timeout ) ):
-                    sec_id, comb, comb_mask, nmad, min_mjd, max_mjd, errmsg = res
+                    sec_id, comb, comb_mask, nmad, nmad_median, min_mjd, max_mjd, errmsg = res
                     if sec_id != sec:
                         raise RuntimeError( "This should never happen." )
                     if errmsg is not None:
@@ -1112,11 +1263,13 @@ class FlatBuilder:
                             # ... this really shouldn't be the case...
                             del collected_results[ sec ]
                         failed.append( sec )
+                        exitval = 1
                     collected_results[sec_id] = {
                         'section_id': sec,
                         'comb': comb,
                         'comb_mask': comb_mask,
                         'nmad': nmad,
+                        'nmad_median': nmad_median,
                         'min_mjd': min_mjd,
                         'max_mjd': max_mjd
                     }
@@ -1137,8 +1290,11 @@ class FlatBuilder:
                     SCLogger.error( "Because some chips failed, saving nothing to the database." )
                 else:
                     SCLogger.info( "Saving successful chips to database..." )
-                    self.save_to_db()
-                    SCLogger.info( "...done saving." )
+                    if self.save_to_db():
+                        SCLogger.info( "...done saving." )
+                    else:
+                        SCLogger.error( "...error saving!" )
+                        exitval = 1
 
                 self.memdump( "After saving to database" )
 
@@ -1164,12 +1320,16 @@ class FlatBuilder:
 
             if self.pars.save_to_db:
                 SCLogger.info( "Saving to database..." )
-                self.save_to_db()
-                SCLogger.info( "...done saving" )
+                if self.save_to_db():
+                    SCLogger.info( "...done saving" )
+                else:
+                    SCLogger.error( "...error saving!" )
+                    exitval = 1
                 self.memdump( "After save_to_db" )
 
         SCLogger.info( "flat_bias_builder all done" )
 
+        return exitval
 
 
 # ======================================================================
@@ -1232,6 +1392,14 @@ def main():
                          help=( "Normally, works on images which have already been overscanned and trimmed "
                                 "(and maybe more).  Use this to work on raw exposures.  Maybe want to "
                                 "set numproc > 1 in that case." ) )
+    parser.add_argument( "--exposure-mode-use-images", action='store_true', default=argparse.SUPPRESS,
+                         help=( "If in exposure mode, and using the database, and there are images preprocessed "
+                                "enough to be inputs for the bias or flat building in the database, then specify "
+                                "this to use those images rather than manually preprocessing the raw exposures." ) )
+    parser.add_argument( "--ok-if-num-files-per-section-mismatch", action='store_true', default=argparse.SUPPRESS,
+                         help=( "If --exposure-mode-use-images is given, and the same number of images aren't "
+                                "found for all good sensor sections, then normally an exceptionis raised.  "
+                                "Specify this to turn that into a warning." ) )
     parser.add_argument( "--section-keyword", default=argparse.SUPPRESS,
                          help=( "Normally, use the image record in the database to figure out the sensor section. "
                                 "If this is set, instead read it from this keyword of the FITS header.  Required "
@@ -1316,12 +1484,14 @@ def main():
         SCLogger.setLevel( 'INFO' )
 
     builder = FlatBuilder( **kwargs )
-    builder( i_know_what_im_doing=mainargs['i_know_what_im_doing'] )
+    exitval = builder( i_know_what_im_doing=mainargs['i_know_what_im_doing'] )
 
     if any( mainargs[i] is not None for i in [ 'outfile', 'outmask', 'nmad' ] ):
         SCLogger.info( "Writing manual output files." )
         builder.write_combination( mainargs['outfile'], mainargs['outmask'], mainargs['nmad'] )
         SCLogger.info( "Done writing manual output files." )
+
+    return exitval
 
 
 # ======================================================================

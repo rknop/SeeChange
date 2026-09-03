@@ -102,16 +102,18 @@ class LS4Cam(Instrument):
         return [ cls._file_re ]
 
 
-    def get_section_ids( self ):
+    def get_section_ids( self, includebad=False ):
         """LS4 chip ids."""
 
         seclist = []
         for quadrant in [ 'NE', 'NW', 'SE', 'SW' ]:
             for chipinquad in [ 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H' ]:
-                seclist.append( f"{quadrant}_{chipinquad}" )
+                chip = f"{quadrant}_{chipinquad}"
+                if includebad or ( chip not in ( "NE_H", "SE_D" ) ):
+                    seclist.append( f"{quadrant}_{chipinquad}" )
         return seclist
 
-    def check_section_id( self, section_id ):
+    def check_section_id( self, section_id, mustbegood=False ):
         """Raise an exception if section_id is not valid."""
         if not isinstance( section_id, str ):
             raise ValueError( f"The section_id must be a string.  Got {type(section_id)}." )
@@ -123,6 +125,8 @@ class LS4Cam(Instrument):
             raise ValueError( f"section_id[2] must be _, not {section_id[2]}." )
         if section_id[3] not in [ 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H' ]:
             raise ValueError( f"section_id[3] must be in the range A..H, not {section_id[3]}." )
+        if mustbegood and ( section_id in ( "NE_H", "SE_D" ) ):
+            raise ValueError( f"Section {section_id} is bad and mustbegood=True" )
 
     def _make_new_section( self, section_id ):
         """Make a SensorSection for the LS4 instrument."""

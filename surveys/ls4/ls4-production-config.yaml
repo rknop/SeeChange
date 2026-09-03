@@ -1,0 +1,6 @@
+preloads:
+  - /seechange/default_config.yaml
+
+overrides:
+  - /home/ls4-production-pipeline-config.yaml
+  - /home/ls4-production-site-config.yaml
