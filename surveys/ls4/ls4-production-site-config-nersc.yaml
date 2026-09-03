@@ -24,7 +24,7 @@ catalog_gaiadr3:
   server_timeout_sec: 120.
 
 flat_bias_builder:
-  numproc: 32
+  numproc: 16
   numwriteproc: 8
   
 pipeline:

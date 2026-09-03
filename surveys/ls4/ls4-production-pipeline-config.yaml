@@ -33,6 +33,8 @@ flat_bias_builder:
   validity_end_offset: null
   flat:
     find_images: true
+    exposure_mode_use_images: true
+    ok_if_num_files_per_section_mismatch: true
     find_provenance_tag: justzero_20260901
     searchtype: Sci
     flat_type: sky
@@ -47,6 +49,8 @@ flat_bias_builder:
     savetype: ComSkyFlat
   bias:
     find_images: true
+    exposure_mode_use_image: false
+    ok_if_num_files_per_section_mismatch: false
     find_provenance_tag: justov_20260901
     searchtype: Bias
     timewindow: 2.
@@ -66,7 +70,7 @@ preprocessing:
   overscan_kwargs: { 'order': 3, 'sigcut': 3. }
   flattype: sky
   zero_provtag: proc20260901
-  flat_provtag: FIX_THIS
+  flat_provtag: flat20260903
   use_base_mask: true
   use_zero_mask: true
   use_flat_mask: true
