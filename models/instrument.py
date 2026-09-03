@@ -529,7 +529,7 @@ class Instrument:
         """
         raise NotImplementedError("Subclass this base class to add methods that are unique to each instrument.")
 
-    def get_section(self, section_id):
+    def get_section(self, section_id, mustbegood=False):
         """Get a section from the sections dictionary.
 
         The section_id is first checked for type and value compatibility,
@@ -539,7 +539,7 @@ class Instrument:
 
         THIS METHOD SHOULD GENERALLY NOT BE OVERRIDEN BY SUBCLASSES.
         """
-        self.check_section_id(section_id)
+        self.check_section_id(section_id, mustbegood=mustbegood)
 
         if self.sections is None:
             raise RuntimeError("No sections loaded for this instrument. Use fetch_sections() first.")
@@ -610,7 +610,7 @@ class Instrument:
         """
 
         if self.sections is None:
-            self.sections = { s: self._make_new_section(s) for s in self.get_section_ids() }
+            self.sections = { s: self._make_new_section(s) for s in self.get_section_ids(includebad=True) }
 
         return self.sections
 

@@ -186,15 +186,21 @@ def test_instrument_inheritance_full_example():
     inst = TestInstrument()
     inst.fetch_sections()  # there are no sections on DB, so make new ones
 
-    assert len(inst.sections) == 10
-    for i in range(10):
+    assert len(inst.sections) == 11
+    for i in range(11):
         assert inst.sections[str(i)].identifier == str(i)
         assert inst.sections[str(i)].offset_x == 0
         if i > 0:
             assert inst.sections[str(i)].offset_y > 0
 
     with pytest.raises(ValueError, match='section_id must be between 0 and 9'):
-        inst.get_section(10)
+        inst.get_section(10, mustbegood=True)
+
+    with pytest.raises(ValueError, match='section_id must be between 0 and 10'):
+        inst.get_section(11, mustbegood=False)
+
+    with pytest.raises(ValueError, match='section_id must be between 0 and 10'):
+        inst.get_section(11)
 
     inst.sections['1'].gain = 1.6
     assert inst.get_property(0, 'gain') == 1.2

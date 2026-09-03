@@ -994,10 +994,10 @@ class LS4Cam(Instrument):
             obs_type = None
             hdus = []
             exphdrinfo = None
-            known_chips = set( self.get_section_ids() )
+            known_chips = set( self.get_section_ids( includebad=True ) )
             found_chips = set()
 
-            def process_hdu( hdu ):
+            def process_hdu( hdu, hdui ):
                 nonlocal hdu0, ra, dec, obs_type, hdus, exphdrinfo, isdualamp
                 hdr = hdu.header
                 if hdr['CCD_LOC'] not in known_chips:
@@ -1042,9 +1042,10 @@ class LS4Cam(Instrument):
                         if ( expinfo.isfz and ( len(hdul) != 2 ) ) or ( ( not expinfo.isfz ) and ( len(hdul) != 1 ) ):
                             raise RuntimeError( f"Unexpected number of HDUs in file {fitsfile.name}: "
                                                 f"expected {2 if expinfo.isfz else 1} but got {len(hdul)}" )
-                        hdu = hdul[1] if expinfo.isfz else hdul[0]
+                        hdui = 1 if expinfo.isfz else 0
+                        hdu = hdul[ hdui ]
                         # TODO, verify chip and controller vs. filename!!!
-                        process_hdu( hdu )
+                        process_hdu( hdu, hdui )
 
             else:  # not expinfo.manyfiles
                 if isdualamp:
@@ -1065,7 +1066,7 @@ class LS4Cam(Instrument):
                         if hdui == 0:
                             # Exposure header, not an image
                             continue
-                        process_hdu( hdu )
+                        process_hdu( hdu, hdui )
 
             if found_chips != known_chips:
                 raise RuntimeError( f"Didn't find all the expected chips in exposure {filepath.name}; "
