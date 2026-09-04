@@ -1,0 +1,9 @@
+preloads:
+  - ls4-production-config.yaml
+
+pipeline:
+  through_step: preprocessing
+  provenance_tag: justov_20260901
+
+preprocessing:
+  steps_required: [ 'overscan' ]

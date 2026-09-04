@@ -1,0 +1,13 @@
+preloads:
+  - ls4-production-config.yaml
+
+pipeline:
+  through_step: preprocessing
+  provenance_tag: justzero_20260901
+
+preprocessing:
+  steps_required: [ 'overscan', 'zero' ]
+  zero_provtag: proc20260901
+  # flat_provtag here because it was in included things, and
+  #    we want it to stay the same for provenance reasons;
+  flat_provtag: proc20260901

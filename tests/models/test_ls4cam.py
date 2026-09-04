@@ -101,9 +101,17 @@ def test_section_stuff():
         for chipinquad in [ 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H' ]:
             expectedsecs.append( f"{quadrant}_{chipinquad}" )
 
-    assert ls4cam.get_section_ids() == expectedsecs
+    assert ls4cam.get_section_ids( includebad=True ) == expectedsecs
     for sec in expectedsecs:
         ls4cam.check_section_id( sec )
+
+    expectedsecs.remove( 'NE_H' )
+    expectedsecs.remove( 'SE_D' )
+    assert ls4cam.get_section_ids() == expectedsecs
+    for sec in expectedsecs:
+        ls4cam.check_section_id( sec, mustbegood=True )
+
+
     with pytest.raises( ValueError, match=r'section_id must start with one of .*, not AB' ):
         ls4cam.check_section_id( 'AB_C' )
     with pytest.raises( ValueError, match=r'section_id\[2\] must be _, not -' ):
@@ -114,6 +122,10 @@ def test_section_stuff():
         ls4cam.check_section_id( 'foo' )
     with pytest.raises( ValueError, match=r'The section_id must be a string.  Got' ):
         ls4cam.check_section_id( 1 )
+    with pytest.raises( ValueError, match=r'Section NE_H is bad and mustbegood=True' ):
+        ls4cam.check_section_id( 'NE_H', mustbegood=True )
+    with pytest.raises( ValueError, match=r'Section SE_D is bad and mustbegood=True' ):
+        ls4cam.check_section_id( 'SE_D', mustbegood=True )
 
     sec = ls4cam._make_new_section( 'NE_A' )
     assert isinstance( sec, SensorSection )

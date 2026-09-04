@@ -115,7 +115,9 @@ class SCLogger:
                 'level': _default_log_level if level is None else level,
                 'handler': handler
             }
+        _using_default_handler = False if handler is not None else cls._instance._using_default_handler
         cls._instance = cls( **kwargs )
+        cls._instance._using_default_handler = _using_default_handler
         return cls._instance
 
     @classmethod
@@ -127,8 +129,9 @@ class SCLogger:
 
         if ( ( cls._instance is not None ) and ( not cls._instance._using_default_handler ) and
              ( "handler" not in kwargs ) ):
-            raise RuntimeError( "If you use multiprocessing_replace and you aren't using the "
-                                "default handler, you need to pass a handler created in the subprocess." )
+            raise RuntimeError( f"If you use multiprocessing_replace and you aren't using the "
+                                f"default handler, you need to pass a handler created in the subprocess.  "
+                                f"_using_default_handler={cls._instance._using_default_handler}." )
 
         me = multiprocessing.current_process()
         # Usually processes are named things like ForkPoolWorker-{number}, or something
