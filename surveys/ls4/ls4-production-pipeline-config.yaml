@@ -59,8 +59,8 @@ flat_bias_builder:
     savetype: ComBias
   
 pipeline:
-  through_step: scoring
-  provenance_tag: UNKNOWN
+  through_step: photocal
+  provenance_tag: proc20260903
   
 preprocessing:
   # TODO: this may change later!  We may have linearity, and we may have illumination
