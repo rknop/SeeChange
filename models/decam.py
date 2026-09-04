@@ -157,7 +157,7 @@ class DECam(Instrument):
         return [ cls._file_re ]
 
 
-    def get_section_ids(self):
+    def get_section_ids(self, includebad=False):
         """Get a list of SensorSection identifiers for this instrument.
 
         We are using the names of the FITS extensions (e.g., N12, S22, etc.).
@@ -165,11 +165,11 @@ class DECam(Instrument):
         """
         # CCDs 31 (S7) and 61 (N30) are bad CCDS
         # https://noirlab.edu/science/index.php/programs/ctio/instruments/Dark-Energy-Camera/Status-DECam-CCDs
-        n_list = [ f'N{i}' for i in range(1, 32) if i != 30 ]
-        s_list = [ f'S{i}' for i in range(1, 32) if i != 7 ]
+        n_list = [ f'N{i}' for i in range(1, 32) if ( ( i != 30 ) or includebad ) ]
+        s_list = [ f'S{i}' for i in range(1, 32) if ( ( i != 7 ) or includebad ) ]
         return n_list + s_list
 
-    def check_section_id(self, section_id):
+    def check_section_id(self, section_id, mustbegood=False):
         """Check that the type and value of the section is compatible with the instrument.
 
         In this case, it must be a string starting with 'N' or 'S' and a number between 1 and 31.
@@ -185,6 +185,9 @@ class DECam(Instrument):
 
         if not 1 <= number <= 31:
             raise ValueError(f"The section_id number must be in the range [1, 31]. Got {number}. ")
+
+        if mustbegood and ( section_id in ( "N30", "S7" ) ):
+            raise ValueError( f"Section {section_id} is bad and mustbegood=True" )
 
 
     def _make_new_section(self, section_id):

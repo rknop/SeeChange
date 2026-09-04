@@ -139,7 +139,9 @@ catalog_gaiadr3:
 #   is_flat (which is probably passed as a function argument)
 
 flat_bias_builder:
-  exposure_mode: False
+  exposure_mode: false
+  exposure_mode_use_images: false
+  ok_if_num_files_per_section_mismatch: false
   filter: null
   section_id: null
   is_flat: False
@@ -175,7 +177,6 @@ flat_bias_builder:
   validity_end_offset: 2.0
   bias: { }
   flat:
-    exposure_mode: False
     searchtype: TwiFlat
     savetype: ComTwiFlat
     flat_type: twilight

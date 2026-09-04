@@ -1,0 +1,47 @@
+path:
+  data_root: /data   # /global/scratch/users/raknop/seechange-data-ls4-production
+  data_temp: /temp   # /global/scratch/users/raknop/seechange-temp-ls4-production
+ 
+db:
+  # 5432 contacts the server directly, 6432 goes through pgbouncer
+  port: 5432
+  # port: 6432
+  echoqueries: False
+
+archive:
+  # archive_url: https://ls4-archive.lbl.gov/
+  # verify_cert: true
+  # local_read_dir: null
+  # local_write_dir: null
+  archive_url: null
+  local_read_dir: /archive_read
+  local_write_dir: /archive_write
+  path_base: base/
+  token: null
+  token_file: /secrets/ls4-production-archive-token
+ 
+catalog_gaiadr3:
+  server_timeout_sec: 120.
+
+flat_bias_builder:
+  numproc: 16
+  numwriteproc: 8
+  
+pipeline:
+  save_after_each_step: false
+  save_after_steps: ['extraction']
+  
+extraction:
+  subconfigs_noncritical:
+    subconfigs:
+      extragalactic:
+        psf_timeout: 300.
+      galactic:
+        psf_timeout: 600.
+
+astrocal:
+  astrometry_net_indexdir: /astrometry.net/data
+        
+subtraction:
+  alignment:
+    scamp_timeout: 300

@@ -1,0 +1,195 @@
+db:
+  user: ls4_production
+  password: null
+  password_file: /secrets/ls4-production-db-passwd
+  host: ls4db.lbl.gov
+  database: ls4_production
+  sa_connect_timeout: 60
+
+storage:
+  images:
+    format: fitsfz
+    single_file: false
+    name_convention: "{inst_name}/{date}/{time}/{inst_name}_{date}_{time}_{section_id}_{filter}_{im_type}_{prov_hash:.6s}"
+ 
+  exposures:
+    name_convention: "{inst_name}/exposures/{date}/{inst_name}_{date}_{time}_{prov_hash:.6s}"
+
+conductor:
+  conductor_url: https://ls4-pipeline.lbl.gov/
+  username: rknop
+  password: null
+  password_file: /secrets/ls4-production-webap-rknop
+ 
+webap:
+  webap_url: https://ls4-pipeline.lbl.gov/
+
+flat_bias_builder:
+  instrument: LS4Cam
+  calibrator_set: roughly_weekly
+  validity_start: null
+  validity_end: null
+  validity_start_offset: null
+  validity_end_offset: null
+  flat:
+    find_images: true
+    exposure_mode_use_images: true
+    ok_if_num_files_per_section_mismatch: true
+    find_provenance_tag: justzero_20260901
+    searchtype: Sci
+    flat_type: sky
+    timewindow: 7.
+    minexptime: 30.
+    maxexptime: null
+    bad_threshold: 2.0
+    use_instrument_mask: true
+    # Need lots of flats for a night-sky flat to look good, but too many is slow and will run out of memory
+    nmin: 71
+    nmax: 121
+    savetype: ComSkyFlat
+  bias:
+    find_images: true
+    exposure_mode_use_image: false
+    ok_if_num_files_per_section_mismatch: false
+    find_provenance_tag: justov_20260901
+    searchtype: Bias
+    timewindow: 2.
+    nmin: 7
+    nmax: 21
+    savetype: ComBias
+  
+pipeline:
+  through_step: photocal
+  provenance_tag: proc20260903
+  
+preprocessing:
+  # TODO: this may change later!  We may have linearity, and we may have illumination
+  steps_required: [ 'overscan', 'zero', 'flat' ]
+  calibset: roughly_weekly
+  overscan_method: polymedrej
+  overscan_kwargs: { 'order': 3, 'sigcut': 3. }
+  flattype: sky
+  zero_provtag: proc20260901
+  flat_provtag: flat20260903
+  use_base_mask: true
+  use_zero_mask: true
+  use_flat_mask: true
+  masked_pixels_to_replace: [ 'bad chip', 'out of bounds', 'vignetting', 'edge' ]
+  masked_pixel_replacement: { 'bad chip': 0, 'out of bounds': 0, 'vignetting': 0, 'edge': 0 }
+
+extraction:
+  subconfigs:
+    subconfigs:
+      extragalactic:
+        initial_threshold: 1.5
+        sextr_threshold: 1.5
+        snr_threshold: 3.0
+        psf_method: psfex
+        psf_params:
+          fwhm_min: 0.5
+          fwhm_max_to_try: [ 5.0, 10.0 ]
+          psf_init_size: 13
+          psf_final_size: null
+      galactic:
+        initial_threshold: 3.0
+        sextr_threshold: 3.0
+        snr_threshold: 10.0
+
+astrocal:
+  subconfigs:
+    subconfigs:
+      extragalactic:
+        solution_method: astrometry.net
+        cross_match_catalog: astrometry.net
+        max_arcsec_residual: 0.75
+        # Don't trust image ra/dec (this is the default)
+        # astrometry_net_image_radec: false
+        #
+        # Don't trust exposure ra/dec, let astrometry.net go wild. (This is the default)
+        # astrometry_net_exposure_radec: false
+        #
+        # # Try to help astrometry.net by
+        # #   letting it start at exposure ra/dec
+        # astrometry_net_exposure_radec: true
+        # # This is a bit generous because we know that the
+        # #   telescope ra/dec is not centered, plus the
+        # #   ra of the telescope vs. where it's *really*
+        # #   pointing varies with dec by up to a chip width.
+        # astrometry_net_radius: 2.0
+  
+photocal:
+  subconfigs:
+    subconfigs:
+      extragalactic:
+        cross_match_catalog: gaia_dr3
+        max_catalog_mag: [20.0]
+        mag_range_catalog: 5.0
+        min_catalog_stars: 50
+      galactic:
+        max_catalog_mag: [18.0, 19.0]
+        mag_range_catalog: 3.0
+
+referencing:
+  maker:
+    name: UNKNOWN
+    ignore_config_use_config_from_refset: false
+    refset_must_already_exist: false
+    description: "FILL THIS IN"
+    validity_start: null
+    validity_end: null
+    delta_days_validity_start: 8
+    delta_days_validity_end: null
+    zp_prov_id: UNKNOWN
+    start_time: 2026-04-01T00:00 # FIX THIS
+    end_time: 2026-05-16T00:00 # FIX THIS
+    instrument: LS4Cam
+    max_seeing_by_filter:
+      g: 3.0
+      i: 2.6
+      z: 2.6
+    min_exp_time: 30
+    min_number: 3
+    center_min_number: 5
+    max_number: 30
+    corner_distance: 0.8
+    overlap_fraction: 0.9
+    coadd_overlap_fraction: 0.1
+    save_new_refs: true
+  coaddition:
+    coaddition:
+      alignment_index: absolute
+      alignment_zp: 26.5
+      # Make the summed image a bit bigger than an original image;  About 77 pixels padding on each side.
+      absolute_width: 2200
+      absolute_height: 4250
+    astrocal:
+      solution_method: astrometry.net
+      cross_match_catalog: astrometry.net
+      max_arcsec_residual: 0.75
+      astrometry_net_exposure_radec: false
+
+coaddition:
+  coaddition:
+    method: swarp
+    noise_estimator: sep
+    
+subtraction:
+  refset: FILL THIS IN
+  method: zogy
+  # method: hotpants
+  alignment:
+    max_sources_to_use: 500
+
+detection:
+  subconfigs:
+    subconfigs:
+      extragalactic:
+        # Use "filter" with subtraction.method=zogy and "sextractor" with subtraction.method=hotpants
+        method: filter
+        # method: sextractor
+      galactic:
+        snr_threshold: 10.0
+
+alerts:
+  send_alerts: false
+  methods: {}

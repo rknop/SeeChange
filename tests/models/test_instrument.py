@@ -105,12 +105,16 @@ def test_instrument_inheritance_full_example():
             Instrument.__init__(self, **kwargs)
 
         @classmethod
-        def get_section_ids(cls):
+        def get_section_ids(cls, includebad=False):
             """Get a list of SensorSection identifiers for this instrument."""
-            return [ str(i) for i in range(10) ]  # let's assume this instrument has 10 sections
+            # let's assume this instrument has 11 sections, 10 good
+            if includebad:
+                return [ str(i) for i in range(11) ]
+            else:
+                return [ str(i) for i in range(10) ]
 
         @classmethod
-        def check_section_id(cls, section_id):
+        def check_section_id(cls, section_id, mustbegood=False):
             """Check if the section_id is valid for this instrument.
 
             The section identifier must be between 0 and 9.
@@ -121,8 +125,9 @@ def test_instrument_inheritance_full_example():
             except ValueError:
                 raise ValueError(f"section_id must be an integer or a stringified integer. "
                                  f"Got{type(section_id)} instead.")
-            if section_id < 0 or section_id > 9:
-                raise ValueError(f"section_id must be between 0 and 9. Got {section_id} instead.")
+            maxsec = 9 if mustbegood else 10
+            if ( section_id < 0 ) or ( section_id > maxsec ):
+                raise ValueError(f"section_id must be between 0 and {maxsec}. Got {section_id} instead.")
 
         def _make_new_section(self, identifier):
             return SensorSection(
@@ -181,15 +186,21 @@ def test_instrument_inheritance_full_example():
     inst = TestInstrument()
     inst.fetch_sections()  # there are no sections on DB, so make new ones
 
-    assert len(inst.sections) == 10
-    for i in range(10):
+    assert len(inst.sections) == 11
+    for i in range(11):
         assert inst.sections[str(i)].identifier == str(i)
         assert inst.sections[str(i)].offset_x == 0
         if i > 0:
             assert inst.sections[str(i)].offset_y > 0
 
     with pytest.raises(ValueError, match='section_id must be between 0 and 9'):
-        inst.get_section(10)
+        inst.get_section(10, mustbegood=True)
+
+    with pytest.raises(ValueError, match='section_id must be between 0 and 10'):
+        inst.get_section(11, mustbegood=False)
+
+    with pytest.raises(ValueError, match='section_id must be between 0 and 10'):
+        inst.get_section(11)
 
     inst.sections['1'].gain = 1.6
     assert inst.get_property(0, 'gain') == 1.2

@@ -11,7 +11,6 @@ import uuid
 import json
 
 import numpy as np
-import sqlalchemy as sa
 
 from astropy.time import Time
 
@@ -200,6 +199,7 @@ def parse_session(*args, **kwargs):
     session: SmartSession or SQLAlchemy session or None
         The session found in the arguments or kwargs.
     """
+    import sqlalchemy as sa
     session = None
     sessions = [arg for arg in args if isinstance(arg, sa.orm.session.Session)]
     if len(sessions) > 0:
