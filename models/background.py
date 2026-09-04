@@ -14,6 +14,7 @@ from models.base import Base, SeeChangeBase, SmartSession, UUIDMixin, FileOnDisk
 from models.image import Image
 from models.source_list import SourceList
 from models.enums_and_bitflags import BackgroundFormatConverter, BackgroundMethodConverter, bg_badness_inverse
+from util.util import asUUID
 
 # from util.logger import SCLogger
 
@@ -442,9 +443,9 @@ class Background(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
 
         newbg = Background( _format = bg._format,
                             _method = bg._method,
-                            _sources_id = None,
+                            sources_id = None,
                             value = bg.value,
-                            noisg = bg.noise,
+                            noise = bg.noise,
                            )
         if bg.format == 'map':
             newbg.counts = bg.counts.copy()
@@ -453,6 +454,25 @@ class Background(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
             newbg.coeffs = bg.coeffs.copy()
             newbg.x_degree = bg.coeffs.copy()
             newbg.y_degree = bg.coeffs.copy()
+
+        return newbg
+
+    def trim( self, x0, y0, x1, y1, trimmed_sources=None, value=None, noise=None ):
+        """Make a new Background that is for an image that's trimmed from the image the current Background is for."""
+        
+        newbg = Background( _format = bg._format,
+                            _method = bg._method,
+                            value = value if value is not None else bg.value,
+                            noise = noise if noise is not None else bg.noise,
+                            sources_id = ( trimmed_sources.id if isinstance( trimmed_sources, SourceList )
+                                           else None if trimmed_sources is None
+                                           else asUUID( trimmed_sources ) )
+                           )
+        if bg.format == "map":
+            newbg.counts = bg.counts[y0:y1, x0:x1].copy()
+            newbg.rms = bg.rms[y0:y1, x0:x1].copy()
+        elif bg.format == "polynomial":
+            raise NotImplementedError( "Trimming background not yet implemented for polynomial background." )
 
         return newbg
 

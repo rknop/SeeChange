@@ -1241,6 +1241,66 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
     def __str__(self):
         return self.__repr__()
 
+
+    @classmethod
+    def get_trim_provs( cls, width, height, wcs_prov=None, zp_prov=None,
+                        upstreams=[], save=False, provtag=None, pgdb=None ):
+        with PGDB( pgdb ) as pgdb:
+            upstreams = upstreams.copy()
+
+            if ( wcs_prov is not None ) and ( not isintance( wcs_prov, Provenance ) ):
+                wcs_prov = Provenance.get_by_id( wcs_prov, pgdb=pgdb )
+                upstreams.append( wcs_prov )
+                
+            trimimprov = Provenance( code_version_id=Provenance.get_code_version( 'Image.trim', pgdb=pgdb ).id,
+                                     process='Image.trim',
+                                     parameters={ 'width': width, 'height': height, 'used_wcs': use_wcs },
+                                     upstreams=upstreams )
+            if wcs_prov is not None:
+                # OK... the database has a sources_id field, but in this case we might not actually
+                #   have an actual source list.  So, we've invented the concept of a "null format"
+                #   source list that exists only as a link between wcs and image.
+                # Probably a todo: would be to make a source list trimmer that filters down the objects?
+                #   complicated.
+                trimsrcprov = Provenance( code_version_id=Provenance.get_code_version( 'Image.trim.nullsources',
+                                                                                       pgdb=pgdb ).id,
+                                          process='Image.trim.nullsources',
+                                          upstreams=[trimimprov] )
+                trimwcsprov = Provenance( code_version_id=Provenance.get_code_version( 'Image.trim.wcs',
+                                                                                       pgdb=pgdb ).id,
+                                          process='Image.trim.wcs',
+                                          upstreams=[trimsrcprov, wcs_prov] )
+            else:
+                trimsrcprov = None
+                trimwcsprov = None
+
+            if zp_prov is not None:
+                trimzpprov = Provenance( code_verson_id=Provenance.get_code_version( 'Image.trim.zp',
+                                                                                     pgdb=pgdb ).id,
+                                         process='Image.trim.zp',
+                                         upstreams=[zp_prov] )
+            else:
+                trimzpprov = None
+
+            if save:
+                provs = [ improv ]
+                improv.insert_if_needed( session=pgdb )
+                if wcs_prov is not None:
+                    provs.extend( [ trimsrcprov, trimwcsprov ] )
+                    trimsrcprov.insert_if_needed( session=pgdb )
+                    trimwcsprov.insert_if_needed( session=pgdb )
+                if zp_prov is not None:
+                    provs.append( trimzpprov )
+                    trimzpprov.insert_if_needed( sesson=pgdb )
+                if provtag is not None:
+                    Provenance.addtag( provtag, provs, pgdb=pgdb )
+            else:
+                if provtag is not None:
+                    SCLogger.warning( "provtag was not None, but save was False, so provtag was ignored." )
+                    
+        return trimimprov, trimsrcprov, trimwcsprov, trimzpprov
+
+
     def trim( self, x0, x1, y0, y1, wcs=None, save_prov=False, provtag=None,
               provenance=None, save_to_db=False, pgdb=None ):
         """Return an Image (etc.) that's a cutout of this image.

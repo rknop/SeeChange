@@ -571,7 +571,7 @@ class Subtractor:
                 shutil.rmtree( tmpdir )
 
 
-    def run(self, *args, do_not_load=True, **kwargs):
+    def run(self, *args, do_not_load=True, trust_datastore_reference=False, **kwargs):
         """Get a reference image and subtract it from the new image.
 
         Arguments are parsed by the DataStore.parse_args() method.
@@ -591,25 +591,36 @@ class Subtractor:
 
             # get the provenance for this step:
             with SmartSession() as session:
-                # look for a reference that has to do with the current image and refset
-                if self.pars.refset is None:
-                    raise ValueError('No reference set given for subtraction')
-                refset = session.scalars(sa.select(RefSet).where(RefSet.name == self.pars.refset)).first()
-                if refset is None:
-                    raise ValueError(f'Cannot find a reference set with name {self.pars.refset}')
 
-                if self.pars.reference['must_match_section'] or self.pars.reference['must_match_target']:
-                    # TODO : just remove these options.  Issue #424
-                    SCLogger.warning( "must_match_section and must_match target are not implemented!" )
-                ref = ds.get_reference( provenances=refset.provenance,
-                                        min_overlap=self.pars.reference['minovfrac'],
-                                        match_instrument=self.pars.reference['must_match_instrument'],
-                                        session=session )
-                if ref is None:
-                    raise ValueError(
-                        f'Cannot find a reference image corresponding to the datastore inputs: {ds.inputs_str}; '
-                        f'referencing prov = {ds.prov_tree["referencing"]}'
-                    )
+                if trust_datastore_refrence:
+                    ref = ds.reference
+                    if ref is None:
+                        raise ValueError( "trust_datastore_reference given, but datastore has no reference." )
+                    elif ref.provenance_id != ds.prov_tree["referencing"]:
+                        raise ValueError( f"trust_datastore_reference should have been trust_but_verify_....  "
+                                          f"The datastore's provenance tree referencing id "
+                                          f"{ds.prov_tree['referencing']} does not match the datastore'ss "
+                                          f"reference provenance id {ref.provenance_id}" )
+                else:
+                    # look for a reference that has to do with the current image and refset
+                    if self.pars.refset is None:
+                        raise ValueError('No reference set given for subtraction')
+                    refset = session.scalars(sa.select(RefSet).where(RefSet.name == self.pars.refset)).first()
+                    if refset is None:
+                        raise ValueError(f'Cannot find a reference set with name {self.pars.refset}')
+
+                    if self.pars.reference['must_match_section'] or self.pars.reference['must_match_target']:
+                        # TODO : just remove these options.  Issue #424
+                        SCLogger.warning( "must_match_section and must_match target are not implemented!" )
+                    ref = ds.get_reference( provenances=refset.provenance,
+                                            min_overlap=self.pars.reference['minovfrac'],
+                                            match_instrument=self.pars.reference['must_match_instrument'],
+                                            session=session )
+                    if ref is None:
+                        raise ValueError(
+                            f'Cannot find a reference image corresponding to the datastore inputs: {ds.inputs_str}; '
+                            f'referencing prov = {ds.prov_tree["referencing"]}'
+                        )
 
                 prov = ds.get_provenance('subtraction', self.pars.get_critical_pars())
                 sub_image = None if do_not_load else ds.get_sub_image( prov, session=session )

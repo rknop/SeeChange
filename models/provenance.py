@@ -117,8 +117,8 @@ class CodeVersion(Base, UUIDMixin):
 
 
     @classmethod
-    def get_by_id( cls, cvid, session=None ):
-        with PGDB( session, dictcursor=True ) as pgdb:
+    def get_by_id( cls, cvid, pgdb=None, session=None ):
+        with PGDB( pgdb if pgdb is not None else session, dictcursor=True ) as pgdb:
             rows = pgdb.execute(
                 sql.SQL( "SELECT * FROM code_versions WHERE _id={cvid}" )
                 .format( cvid=cvid )
@@ -384,9 +384,10 @@ class Provenance(Base):
 
 
     @classmethod
-    def get( cls, provid, session=None ):
+    def get( cls, provid, pgdb=None, session=None ):
         """Get a provenance given an id, or None if it doesn't exist."""
-        with PGDB( session, dictcursor=True ) as pgdb:
+        pgdb = pgdb if pgdb is not None else session
+        with PGDB( pgdb, dictcursor=True ) as pgdb:
             rows = pgdb.execute( sql.SQL( "SELECT * FROM provenances WHERE _id={provid}" )
                                  .format( provid=provid ) )
             if len(rows) == 0:
@@ -408,7 +409,7 @@ class Provenance(Base):
 
 
     @classmethod
-    def get_for_tag( cls, tag, process=None, conn=None ):
+    def get_for_tag( cls, tag, process=None, pgdb=None ):
         """Return either the provenance for a tag and process, or all provenances for a tag.
 
         Parameters
@@ -437,7 +438,7 @@ class Provenance(Base):
           provenance tag is not defined).
 
         """
-        with PGDB( conn, dictcursor=True ) as pgdb:
+        with PGDB( pgdb, dictcursor=True ) as pgdb:
             q = sql.SQL( textwrap.dedent(
                 """\
                 SELECT p.* FROM provenances
@@ -488,7 +489,7 @@ class Provenance(Base):
 
 
     @classmethod
-    def get_code_version(cls, process, session=None, nocommit=False):
+    def get_code_version(cls, process, pgdb=None, session=None, nocommit=False):
         """Get the most relevant or latest code version.
 
         Searches the DB to check if the codeversion matching the current
@@ -496,7 +497,10 @@ class Provenance(Base):
 
         Parameters
         ----------
-        session: PGDB, psycopg.Connection, psycopg.Cursor, or (shudder) sa Session, default None
+        process : str
+           Process for code version
+        
+        pgdb, session: PGDB, psycopg.Connection, psycopg.Cursor, or (shudder) sa Session, default None
             Databse connection.  If None, a new session is created, and
             closed as soon as the function finishes.  WARNING : will
             commit or rollback unless nocommit=True.  Use both this and nocomit with care;
@@ -513,7 +517,8 @@ class Provenance(Base):
             CodeVersion._code_version_cache = { i: None for i in CodeVersion.CODE_VERSION_DICT }
 
         if CodeVersion._code_version_cache[process] is None:
-
+            pgdb = pgdb if pgdb is not None else session
+            
             # down the line may want to perform a comparison with the most recent using a search like this
             # with SmartSession( session ) as session:
             #     if code_version is None:
@@ -527,7 +532,7 @@ class Provenance(Base):
 
             codebase_semver = CodeVersion.CODE_VERSION_DICT[process]  # (major, minor, patch) eg. (2,0,1)
 
-            with PGDB( session, dictcursor=True ) as pgdb:
+            with PGDB( pgdb, dictcursor=True ) as pgdb:
                 # To minimize use of locks, first see if the code version exists, and if it does, be happy.
                 # If not, lock the table, check *again* to see if it exists (because another process
                 # might have created it in the mean time!), and create it if it doesn't.

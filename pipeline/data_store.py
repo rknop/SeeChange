@@ -1564,14 +1564,14 @@ class DataStore:
 
         if not upstream_is_list:
             q = ( sql.SQL( "SELECT * FROM {tab} WHERE {upat}={upval}" )
-                  .format( tab=sql.Identifier(cls.__table__),
-                           upat=sql.Identifier(cls_upstream_id_att),
+                  .format( tab=sql.Identifier(cls.__tablename__),
+                           upat=sql.Identifier(cls_upstream_id_att.name),
                            upval=upstreamobj._id ) )
         else:
             upstream_ids = [obj.id for obj in upstreamobj]
             q = ( sql.SQL( "SELECT * FROM {tab} WHERE {upat}=ANY(ARRAY[{vals}])" )
-                  .format( tab=sql.Identifier(cls.__table__),
-                           upat=sql.Identifier(cls_upstream_id_att),
+                  .format( tab=sql.Identifier(cls.__tablename__),
+                           upat=sql.Identifier(cls_upstream_id_att.name),
                            vals=sql.SQL(',').join(upstream_ids) ) )
 
         if match_prov:
@@ -1672,6 +1672,7 @@ class DataStore:
                       dec=None,
                       target=None,
                       section_id=None,
+                      filter=None,
                       provenances=None,
                       match_instrument=True,
                       match_filter=True,
@@ -1729,6 +1730,10 @@ class DataStore:
             search_by is not 'target/section'.  If not given, will use
             the fields from the DAtaStore's image.
 
+        filter : str, the filter to search for
+            If not given, and image is not None, will use image.filter.
+            If neither are given, will get references for all filters.
+        
         provenances: list of Provenance objects, list of UUID, or None
             A list of provenances (or provenance ids) to use to identify
             a reference.  Any found references must have one of these
@@ -1755,11 +1760,12 @@ class DataStore:
             reference.
 
         max_dist: float, default None
-            The maximum distance the ra/dec of the reference can be from
-            either the ra and dec arguments, or from the Image's ra and
-            dec (if the ra and dec arguments aren't given).  It almost
-            never makes sense to have both this and min_overlap
-            non-None, as they represent two different ways of operating.
+            The maximum distance (in degrees) the ra/dec of the
+            reference can be from either the ra and dec arguments, or
+            from the Image's ra and dec (if the ra and dec arguments
+            aren't given).  It almost never makes sense to have both
+            this and min_overlap non-None, as they represent two
+            different ways of operating.
 
         skip_bad: bool, default True
             If True, will skip references that are marked as bad.
@@ -1823,6 +1829,8 @@ class DataStore:
             dec = dec if dec is not None else image.dec
             target = target if target is not None else image.target
             section_id = section_id if section_id is not None else image.section_id
+            filter = filter if filter is not None else image.filter
+            # TODO: think about instrument canonical filter names
 
         if not ( ( ( search_by == 'image' ) and ( image is not None ) )
                  or
@@ -1832,6 +1840,9 @@ class DataStore:
                 ):
             raise ValueError( "Not enough information given to find a reference." )
 
+        if match_filter and ( filter is None ):
+            raise ValueError( "match_filter is true, but neither a filter or an image was passed" )
+        
         if provenances is None:  # try to get it from the prov_tree
             if ( self.prov_tree is not None ) and ( 'referencing' in self.prov_tree ):
                 provenances = self.prov_tree[ 'referencing' ]
@@ -1851,7 +1862,7 @@ class DataStore:
             elif skip_bad and ( self.reference.bitflag != 0 ):
                 self.reference = None
 
-            elif match_filter and self.reference.image.filter != image.filter:
+            elif match_filter and self.reference.image.filter != filter
                 self.reference = None
 
             elif match_instrument and self.reference.image.instrument != image.instrument:
@@ -1905,7 +1916,7 @@ class DataStore:
             arguments['section_id'] = image.section_id
 
         if match_filter:
-            arguments['filter'] = image.filter
+            arguments['filter'] = filter
 
         if match_instrument:
             arguments['instrument'] = image.instrument

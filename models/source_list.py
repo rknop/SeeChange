@@ -1,4 +1,5 @@
 import os
+import uuid
 
 import numpy as np
 import pandas as pd
@@ -20,7 +21,7 @@ from models.enums_and_bitflags import (
     SourceListFormatConverter,
     source_list_badness_inverse,
 )
-from util.util import ensure_file_does_not_exist
+from util.util import ensure_file_does_not_exist, asUUID
 from util.logger import SCLogger
 import util.ldac
 
@@ -124,6 +125,10 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         """Get a dict with the allowed values of badness that can be assigned to this object"""
         return source_list_badness_inverse
 
+    _sextractor_x_coord_cols = { 'XMIN_IMAGE', 'XMAX_IMAGE', 'X_IMAGE', 'XPEAK_IMAGE', 'XWIN_IMAGE' }
+    _sextractor_y_coord_cols = { 'YMIN_IMAGE', 'YMAX_IMAGE', 'Y_IMAGE', 'YPEAK_IMAGE', 'YWIN_IMAGE' }
+
+    
     def __init__(self, *args, **kwargs):
         FileOnDiskMixin.__init__(self, *args, **kwargs)
         HasBitFlagBadness.__init__(self)
@@ -199,7 +204,7 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         astropy.io.fits.header.Header)
 
         """
-        if self.__format == 0:
+        if self._format == 0:
             # null format
             return None
 
@@ -660,6 +665,64 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
             limMagEst = None
             return limMagEst
 
+    def trim(self, x0, y0, x1, y1, trimmed_image=None ):
+        """Return a new SourceList that tries to be for a cutout image."""
+
+        if any( i is None for i in (x0, x1, y0, y1) ):
+            raise ValueError( "x0, x1, y0, y1 must all be given" )
+
+        if self._format == 0:
+            # Null format
+            return
+
+        elif self.format in [ 'sepnpy', 'filter' ]:
+            raise NotImplementedError( f"trim not implemented for format={self.format}" )
+
+        elif self.format == 'sextrfits':
+            # OK, I'm a little afraid of this.
+            dex = ( ( self.data['X_IMAGE'] >= x0 ) & ( self.data['X_IMAGE'] < x1 ) &
+                    ( self.data['Y_IMAGE'] >= y0 ) & ( self.data['Y_IMAGE'] < y1 ) )
+            if isinstance( self.data, np.ndarray ):
+                xcols = SourceList._sextractor_x_coord_cols.insersection( set(self.data.dtype.names) )
+                ycols = SourceList._sextractor_y_coord_cols.insersection( set(self.data.dtype.names) )
+                # I'm pretty sure this does a copy, not a view.  I really hope so.
+                subdata = self.data[ dex ]
+            elif isinstance( trimdata, astropy.table.Table ):
+                xcols = SourceList._sextractor_x_coord_cols.insersection( set(self.data.columns) )
+                ycols = SourceList._sextractor_y_coord_cols.insersection( set(self.data.columns) )
+                # ... TODO make sure the semantics here are what I thnk they are
+                subdata = astropy.table.Table( arr[dex] )
+            else:
+                raise RuntimeError( f"self.data is of unknown type {type(self.data)}" )
+            
+            for xcol in xcols:
+                subdata[xcol] += x0
+            for ycol in ycols:
+                subdata[ycol] += y0
+
+        else:
+            raise ValueError( f"Unrecognized format {self.format}" )
+                
+
+        newsl = SourceList()
+        newsl._format = self._format
+        newsl.aper_rads = self.aper_rads
+        newsl.inf_aper_num = self.inf_aper_num
+        newsl.set_aper_num = self.best_aper_num
+        newsl.num_sources = len(subdata)
+        newsl._data = subdata
+        # I'm afraid of this next one
+        newsl._info = self.info.copy()
+        
+        if isinstance( trimmed_image, Image ):
+            newsl.image_id = trimmed_image.id
+        elif isinstance( trimmed_image, (str, uuid.UUID) ):
+            newsl.image_id = asUUID( trimmed_image )
+        else:
+            raise TypeError( f"trimmed_image must be an Image or an Image id, not a {type(trimmed_image)}" )
+        
+        return newsl
+
 
     def load(self, filepath=None):
         """Load this source list from the file.
@@ -872,15 +935,16 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         -------
           A copy of arr, with pixel positions incremented by 1
         """
-        cols = { 'XMIN_IMAGE', 'XMAX_IMAGE', 'YMIN_IMAGE', 'YMAX_IMAGE',
-                 'X_IMAGE', 'Y_IMAGE', 'XPEAK_IMAGE', 'YPEAK_IMAGE',
-                 'XWIN_IMAGE', 'YWIN_IMAGE' }
+
+        cols = SourceList._sextractor_x_coord_cols.union( SourceList._sextractor_y_coord_cols )
         if isinstance( arr, np.ndarray ):
             cols = cols.intersection( set(arr.dtype.names) )
             arr = np.copy( arr, subok=True )
         elif isinstance( arr, astropy.table.Table ):
             cols = cols.intersection( set(arr.columns) )
             arr = astropy.table.Table( arr )
+        else:
+            raise RuntimeError( f"arr is of an unknown type {type(arr)}" 
 
         for col in cols:
             arr[col] +=1

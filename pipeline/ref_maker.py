@@ -2,6 +2,7 @@ import io
 import copy
 import datetime
 import pytz
+import dateutil.parser
 import textwrap
 import argparse
 
@@ -23,7 +24,7 @@ from models.refset import RefSet
 
 from util.config import Config
 from util.logger import SCLogger
-from util.util import parse_dateobs
+from util.util import parse_dateobs, reconstruct_commandline
 
 
 class ParsRefMaker(Parameters):
@@ -144,20 +145,25 @@ class ParsRefMaker(Parameters):
         self.validity_start = self.add_par(
             'vaidity_start_date',
             None,
-            (None, datetime),
+            (None, str),
             ( "When creating a reference, set its validity_start to this time.  If both this parameter "
-              "and validity_start_delta_days are non-None, this one takes precedence." ),
+              "and validity_start_delta_days are non-None, this one takes precedence.  This can either be "
+              "an ISO time string, or a float; if the latter, it's interpreted as MJD.  (But, be aware that "
+              "specifying equivalent things different ways *will* give you a different provenance!" ),
             critical=True
         )
 
         self.validity_end = self.add_par(
             'validity_end',
             None,
-            (None, datetime),
+            (None, str),
             ( "When creating a reference, set its validity_end to this time.  If both this parameter "
               "and validity_end_delta_days are non-None, this one takes precedence.  If through these or "
               "the *delta* parameters you end up with validity_end < validity_start, then your reference "
-              "will never be used, and you should probably re-evaluate your choices for the parameters." ),
+              "will never be used, and you should probably re-evaluate your choices for the parameters.  "
+              "This can either be an ISO time strng, or a float; if the latter, it's interpreted as MJD.  "
+              "(But, be aware that specifying equivalent things different ways *will* give you a different "
+              "provenance!" ),
             critical=True
         )
 
@@ -617,7 +623,7 @@ class RefMaker:
 
     # ======================================================================
 
-    def parse_arguments( self, image=None, image_zp_prov_id=None, zp_prov_id=None, ra=None, dec=None,
+    def parse_arguments( self, image=None, image_zp_prov_id=None, ra=None, dec=None,
                              minra=None, maxra=None, mindec=None, maxdec=None,
                              target=None, section_id=None, mjd=None, filter=None ):
         """Parse arguments for the RefMaker.
@@ -638,7 +644,7 @@ class RefMaker:
           is aligned to NS/EW.
 
         Parameters
-        ----------
+       ----------
           image: str or None
             The id of the image, or a substring of the filepath of the
             image.  If the substring is not unique (i.e. there are
@@ -671,7 +677,8 @@ class RefMaker:
           mjd: float or None
             Find references suitable for an image at this mjd.  If None,
             and image is not None, will pull the mjd from teh database
-            record for the image.
+            record for the image.  THIS IS NOT USED, THIS PARAMETER SHOULD
+            BE REMOVED.
 
         """
 
@@ -966,22 +973,24 @@ class RefMaker:
         self.make_refset()
 
         # look for the reference at the given location in the sky (via ra/dec or target/section_id)
-        refsandimgs = Reference.get_references(
-            minra=self.minra,
-            maxra=self.maxra,
-            mindec=self.mindec,
-            maxdec=self.maxdec,
-            ra=self.ra,
-            dec=self.dec,
-            target=self.target,
-            section_id=self.section_id,
-            filter=self.filter,
-            provenance_ids=self.ref_prov.id,
-            for_image_mjd=self.mjd,
-            overlapfrac=self.subtraction_minovfrac
-        )
-
-        refs, _ = refsandimgs
+        if self.ra is not None:
+            SCLogger.warning( "NOT IMPLEMENTED: finding existing references when you give ra/dec" )
+            refs = []
+        else:
+            refs, _ = Reference.get_references(
+                minra=self.minra,
+                maxra=self.maxra,
+                mindec=self.mindec,
+                maxdec=self.maxdec,
+                ra=self.ra,
+                dec=self.dec,
+                target=self.target,
+                section_id=self.section_id,
+                filter=self.filter,
+                provenance_ids=self.ref_prov.id,
+                for_image_mjd=self.mjd,
+                overlapfrac=self.subtraction_minovfrac
+            )
 
         # if found a reference, can skip the next part of the code!
         if len(refs) == 1:
@@ -1114,14 +1123,20 @@ class RefMaker:
         #   because somebody was making a ref, and we would have found
         #   it above.  This is scary... somebody might make coadds for
         #   other reasons.  Issue #541.
-        coadd_ds = self.coadd_pipeline.run( dses, prov_tree=self.coadd_provs,
-                                            alignment_target_datastore=alignment_target_datastore,
-                                            alignment_wcs=alignment_wcs, always_build=True )
+        coadd_ds = self._coadd_pipeline.run( dses, prov_tree=self.coadd_provs,
+                                             alignment_target_datastore=alignment_target_datastore,
+                                             alignment_wcs=alignment_wcs, always_build=True )
         t0 = None
         if self.pars.validity_start is not None:
             t0 = self.pars.validity_start
-            if t0.tzinfo is None:
-                t0 = pytz.utc.localize( t0 )
+            try:
+                t0 = float( t0 )
+            except ValueError:
+                t0 = dateutil.parser.parse( t0 )
+                if t0.tzinfo is None:
+                    t0 = pytz.utc.localize( t0 )
+            else:
+                t0 = pytz.utc.localize( astropy.time.Time(t0, format='mjd').datetime )
         elif self.pars.delta_days_validity_start is not None:
             dt = self.pars.delta_days_validity_start
             t0 = pytz.utc.localize( astropy.time.Time( dses[0 if dt < 0 else -1].image.mjd, format='mjd' ).datetime )
@@ -1130,8 +1145,14 @@ class RefMaker:
         t1 = None
         if self.pars.validity_end is not None:
             t1 = self.pars.validity_end
-            if t1.tzinfo is None:
-                t1 = pytz.utc.localize( t1 )
+            try:
+                t1 = float( t1 )
+            except ValueError:
+                t1 = dateutil.parser.parse( t1 )
+                if t1.tzinfo is None:
+                    t1 = pytz.utc.localize( t1 )
+            else:
+                t1 = pytz.utc.localize( astropy.time.Time(t1, format='mjd').datetime )
         elif self.pars.delta_days_validity_end is not None:
             dt = self.pars.delta_days_pars.validity_end
             t1 = pytz.utc.localize( astropy.time.Time( dses[0 if dt < 0 else -1].image.mjd, format='mjd' ).datetime )
@@ -1163,18 +1184,64 @@ def main():
                                       description="Build a reference",
                                       formatter_class=ArgFormatter,
                                       epilog="Rob write help" )
-    parser.add_argument( "-r", "--ra", type=float, default=None,
+    parser.add_argument( "-r", "--ra", type=float, default=argparse.SUPPRESS,
                          help="RA to make a reference for; decimal degrees.  See description above." )
-    parser.add_argument( "-d", "--dec", type=float, default=None,
+    parser.add_argument( "-d", "--dec", type=float, default=argparse.SUPPRESS,
                          help="RA to make a reference for; decimal degrees.  See description above." )
-    parser.add_argument( "-i", "--image", type=str, default=None,
+    parser.add_argument( "-i", "--image", type=str, default=argparse.SUPPRESS,
                          help="filepath or uuid of image to make a reference for." )
-    parser.add_argument( "-z", "--image-zp-prov-id", type=str, default=None, help="See description above." )
-    parser.add_argument( "--minra", type=float, default=None, help="See description above." )
-    parser.add_argument( "--maxra", type=float, default=None, help="See description above." )
-    parser.add_argument( "--mindec", type=float, default=None, help="See description above." )
-    parser.add_argument( "--maxdec", type=float, default=None, help="See description above." )
+    parser.add_argument( "--image-zp-prov-id", type=str, default=None, help="See description above." )
+    parser.add_argument( "--minra", type=float, default=argparse.SUPPRESS, help="See description above." )
+    parser.add_argument( "--maxra", type=float, default=argparse.SUPPRESS, help="See description above." )
+    parser.add_argument( "--mindec", type=float, default=argparse.SUPPRESS, help="See description above." )
+    parser.add_argument( "--maxdec", type=float, default=argparse.SUPPRESS, help="See description above." )
     parser.add_argument( "-f", "--filter", type=str, required=True, help="Filter name." )
+
+    parser.add_argument( "--name", default=argparse.SUPPRESS,
+                         help="Name of the reference set to put this reference in." )
+    parser.add_argument( "--description", default=argparse.SUPPRESS,
+                         help="Description of the refset; only used if the refset is newly created." )
+    parser.add_argument( "--refset-must-already-exist", default=argparse.SUPPRESS,
+                         help=( "Raise an exception if the refset doesn't already exist.  Only makes sense "
+                                "if you give name (either here or in config).  You probably want to this if "
+                                "you use --ignore-config-use-config-from-refset" ) )
+    parser.add_argument( "--ignore-config-use-config-from-refset", action='store_true', default=argparse.SUPPRESS,
+                         help="...er, read the ParsRefMaker.ignore...refset docstring." )
+
+    parser.add_argument( "--instrument", default=argparse.SUPPRESS, help="TODO" )
+    parser.add_argument( "-z", "--zp-prov-id", default=argparse.SUPPRESS, help="TODO" )
+
+    parser.add_argument( "--start-time", default=argparse.SUPPRESS, help="TODO" )
+    parser.add_argument( "--end-time", default=argparse.SUPPRESS, help="TODO" )
+    parser.add_argument( "--validity-start", default=argparse.SUPPRESS, help="TODO" )
+    parser.add_argument( "--validity-end", default=argparse.SUPPRESS, help="TODO" )
+    parser.add_argument( "--corner-distance", type=float, default=argparse.SUPPRESS, help="TODO" )
+    parser.add_argument( "--corner-distance-none", action='store_true', default=False )
+    parser.add_argument( "--overlap-fraction", type=float, default=argparse.SUPPRESS, help="TODO" )
+    parser.add_argument( "--coadd-overlap-fraction", type=float, default=argparse.SUPPRESS, help="TODO" )
+
+    parser.add_argument( "--min-airmass", type=float, default=argparse.SUPPRESS, help="TODO" )
+    parser.add_argument( "--max-airmass", type=float, default=argparse.SUPPRESS, help="TODO" )
+    parser.add_argument( "--min-background", type=float, default=argparse.SUPPRESS, help="TODO" )
+    parser.add_argument( "--max-background", type=float, default=argparse.SUPPRESS, help="TODO" )
+    parser.add_argument( "--min-seeing", type=float, default=argparse.SUPPRESS, help="TODO" )
+    parser.add_argument( "--max-seeing", type=float, default=argparse.SUPPRESS, help="TODO" )
+    parser.add_argument( "--seeing-quality-factor", type=float, default=argparse.SUPPRESS, help="TODO" )
+    parser.add_argument( "--min-lim-mag", type=float, default=argparse.SUPPRESS, help="TODO" )
+    parser.add_argument( "--max-lim-mag", type=float, default=argparse.SUPPRESS, help="TODO" )
+    parser.add_argument( "--min-exp-time", type=float, default=argparse.SUPPRESS, help="TODO" )
+    parser.add_argument( "--max-exp-time", type=float, default=argparse.SUPPRESS, help="TODO" )
+
+    parser.add_argument( "--min-number", type=int, default=argparse.SUPPRESS, help="TODO" )
+    parser.add_argument( "--center-min-number", type=int, default=argparse.SUPPRESS, help="TODO" )
+    parser.add_argument( "--max-number", type=int, default=argparse.SUPPRESS, help="TODO" )
+
+    parser.add_argument( "--coadd-alignment-index", default=argparse.SUPPRESS, help="TODO" )
+    parser.add_argument( "--coadd-alignment-zp", type=float, default=argparse.SUPPRESS, help="TODO" )
+    parser.add_argument( "--coadd-absolute-width", type=int, default=argparse.SUPPRESS, help="TODO" )
+    parser.add_argument( "--coadd-absolute-height", type=int, default=argparse.SUPPRESS, help="TODO" )
+    parser.add_argument( "--absolute-pixel-scale", type=float, default=argparse.SUPPRESS, help="TODO" )
+
     parser.add_argument( "-n", "--no-build", default=False, action="store_true",
                          help="Don't build a reference if one isn't found" )
     parser.add_argument( "-l", "--list-images", default=False, action="store_true",
@@ -1184,35 +1251,45 @@ def main():
     parser.add_argument( "-v", "--verbose", default=False, action="store_true",
                          help="Set log level to DEBUG (default INFO)" )
 
-    # TODO : add arugments that let us override what's in the config file?  Or just rely on config file?
-    # (Probably we want this, so we can do one-offs, but put in warnings or require a --override-config
-    # so that we don't do it willy-nilly.)
-    # parser.add_argument( "-n", "--name", required=True, help="Name of refset" )
-    # parser.add_argument( "-d", "--description", default="",
-    #                      help="Description of refset.  Only used if the refset is newly created." )
-    # parser.add_argument( "-s", "--start-time", type=str, default=None,
-    #                      help=( "YYYY-MM-DDTHH:MM:SS (may omit THH:MM:SS).  Only use images taken "
-    #                             "after this time (inclusive)" ) )
-    # parser.add_argument( "-e", "--end-time", type=str, default=None,
-    #                      help=( "YYYY-MM-DDTHH:MM:SS (may omit THH:MM:SS).  Only use images taken "
-    #                             "before this time (inclusive)" ) )
-
     args = parser.parse_args()
+    SCLogger.info( "ref_maker run with:\n"
+                   f"{reconstruct_commandline(parser, args, 'ref_maker.py')}" )
+
     kwargs = vars(args).copy()
 
     SCLogger.setLevel( "DEBUG" if kwargs['verbose'] else "INFO" )
     del kwargs['verbose']
 
-    kwargs['do_not_build'] = kwargs['no_build']
-    kwargs['identify_even_if_not_building'] = kwargs['list_images']
+    # ugly hack... but we need a way to override config defaults to None
+    if kwargs[ 'corner_distance_none' ]:
+        kwargs[ 'corner_distance' ] = None
+        kwargs[ 'overlap_fraction' ] = None
+        kwargs[ 'coadd_overlap_fraction' ] = None
+    del kwargs[ 'corner_distance_none' ]
+    
+    runkwargs = {}
+    for k in [ 'ra', 'dec', 'image', 'image_zp_prov_id', 'minra', 'maxra', 'mindec', 'maxdec', 'filter' ]:
+        if k in kwargs:
+            runkwargs[k] = kwargs[k]
+            del kwargs[k]
+    runkwargs['do_not_build'] = kwargs['no_build']
+    runkwargs['identify_even_if_not_building'] = kwargs['list_images']
     del kwargs['no_build']
     del kwargs['list_images']
 
-    refmaker = RefMaker()
+    coaddkwargs = {}
+    for k in ( 'alignment_index', 'alignment_zp', 'absolute_width', 'absolute_height' ):
+        if f'coadd_{k}' in kwargs:
+            coaddkwargs[k] = kwargs[ f'coadd_{k}' ]
+            del kwargs[ f'coadd_{k}' ]
+
+    SCLogger.debug( f"Arguments:\n    kwargs={kwargs}\n    coaddkwargs={coaddkwargs}\n    arunkwargs={runkwargs}" )
+
+    refmaker = RefMaker( maker=kwargs, coaddition=coaddkwargs )
 
     # TODO : Process arguments that override the config file.  (See TODO above.)
 
-    ref = refmaker.run( **kwargs )
+    ref = refmaker.run( **runkwargs )
 
     if ref is None:
         SCLogger.warning( "No ref built or returned." )
