@@ -383,11 +383,14 @@ subtraction:
   alignment:
     method: swarp
   reference:
-    minovfrac: 0.85
-    must_match_instrument: true
-    must_match_filter: true
-    must_match_section: false
-    must_match_target: false
+    search_by: image
+    match_instrument: true
+    match_filter: true
+    min_overlap: 0.85
+    max_dist: null
+    skip_bad: true
+    multiple_ok: true
+    choice_criteria: [ 'overlap' ]
 
 # ======================================================================#
 # Detection
@@ -683,7 +686,25 @@ referencing:
 #      mag_range_catalog: 6.0
 #      min_catalog_stars: 50
 
+# ======================================================================
+# ======================================================================
+# ======================================================================
+# Forced photometry
 
+lightcurve:
+  subtraction_confing:
+    method: zogy
+    refset: null
+    match_instrument: true
+    match_filter: true
+    min_overlap: null
+    max_dist: 0.00833333   # 30¨
+    skip_bad: true
+    multiple_ok: false
+    choice_criteria: [ 'distance', 'unconstrained' ]
+  crop_image: [ 100, 100 ]
+    
+    
 # ======================================================================
 # ======================================================================
 # ======================================================================-

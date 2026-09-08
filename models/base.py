@@ -889,7 +889,7 @@ class SeeChangeBase:
         return cols, values
 
 
-    def insert( self, session=None, nocommit=False ):
+    def insert( self, pgdb=None, session=None, nocommit=False ):
         """Insert the object into the database.
 
         Does not do any saving to disk, only saves the database record.
@@ -905,9 +905,10 @@ class SeeChangeBase:
 
         Parameters
         ----------
-          session: PGDB, psycopg.Connection, psycogp.Cursor, or sqlalchemy Session, or None
+          pgdb, session: PGDB, psycopg.Connection, psycogp.Cursor, or sqlalchemy Session, or None
             Usually you do not want to pass this; it's mostly for other
-            upsert etc. methods that cascade to this.
+            upsert etc. methods that cascade to this.  The two things
+            are synoyms; if both are given, pgdb takes precedence.
 
           nocommit: bool, default False
             If True, run the statement to insert the object, but don't
@@ -918,6 +919,8 @@ class SeeChangeBase:
 
         """
 
+        pgdb = pgdb if pgdb is not None else session
+        
         _ = self.id    # Make sure id is generated
 
         # Do this manually.  SQLAlchemy's Session.add was doing all
@@ -931,7 +934,7 @@ class SeeChangeBase:
         cols, values = self._get_cols_and_vals_for_insert()
         subdict = { c: v for c,v in zip( cols, values ) if c != 'modified' }
 
-        with PGDB( session ) as pgdb:
+        with PGDB( pgdb ) as pgdb:
             q = sql.SQL( "INSERT INTO {tab}({fields}) VALUES ({vals})"
                         ).format( tab=sql.Identifier(self.__tablename__),
                                   fields=sql.SQL(",").join( sql.Identifier(c) for c in subdict.keys() ),

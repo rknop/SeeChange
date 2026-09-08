@@ -1448,7 +1448,8 @@ class DataStore:
                                     f"section={self.secton_id}, and provenance={provenance._id}; "
                                     f"this should never happen." )
             else:
-                return Image( **(rows[0]) )
+                self.image = Image( **(rows[0]) )
+                return self.image
 
 
     def _get_data_product( self,
@@ -1673,15 +1674,18 @@ class DataStore:
                       target=None,
                       section_id=None,
                       filter=None,
+                      instrument=None,
+                      mjd0=None,
+                      mjd1=None,
                       provenances=None,
                       match_instrument=True,
                       match_filter=True,
                       min_overlap=0.85,
                       max_dist=None,
                       skip_bad=True,
-                      reload=False,
                       multiple_ok=False,
                       choice_criteria=['overlap'],
+                      reload=False,
                       pgdb=None,
                       session=None ):
         """Get the reference for this image.
@@ -1730,10 +1734,21 @@ class DataStore:
             search_by is not 'target/section'.  If not given, will use
             the fields from the DAtaStore's image.
 
-        filter : str, the filter to search for
-            If not given, and image is not None, will use image.filter.
-            If neither are given, will get references for all filters.
-        
+        filter : str, default None
+            The filter to find references for if not given and
+            not None, will use image.filter.
+
+        instrument : str, default None
+            If not given and image is not None, will use
+            self.image.instrument.  If not given and image is None,
+            and match_instrument is True, then it's impossible
+            to get a reference and there will be an exception.
+
+        mjd0, mjd1 : float, default None
+            The minimum and maximum mjd to use when looking at reference
+            validity dates.  Will find a reference whose validity_start
+            and validity_end include this range.
+
         provenances: list of Provenance objects, list of UUID, or None
             A list of provenances (or provenance ids) to use to identify
             a reference.  Any found references must have one of these
@@ -1822,17 +1837,48 @@ class DataStore:
             self.reference = None
             self.sub_image = None
 
-        image = self.get_image( pgdb=_pgdb )
-        wcs = self.get_wcs( pgdb=_pgdb )
-        if image is not None:
-            ra = ra if ra is not None else image.ra
-            dec = dec if dec is not None else image.dec
-            target = target if target is not None else image.target
-            section_id = section_id if section_id is not None else image.section_id
-            filter = filter if filter is not None else image.filter
-            # TODO: think about instrument canonical filter names
+        # If we need it, make sure the image is loaded
+        if any( [ search_by == 'image',
+                  ra is None,
+                  dec is None,
+                  ( filter is None ) and match_filter,
+                  ( instrument is None ) and match_instrument,
+                  ( min_overlap is not None ) and ( min_overlap > 0.),
+                  mjd0 is None,
+                  mjd1 is None,
+                  'overlap' in choice_criteria,
+                  'overlap_frac' in choice_criteria,
+                  'overlap_fraction' in choice_criteria,
+                  'overlapfrac' in choice_criteria,
+                  'overlapfratcion' in choice_criteria,
+                  ( search_by == 'target/section' ) and ( ( target is None ) or ( section is None ) ),
+                 ] ):
+            self.get_image( pgdb=_pgdb )
+            if self.image is None:
+                raise RuntimeError( "Couldn't find datastore image and we need it" )
 
-        if not ( ( ( search_by == 'image' ) and ( image is not None ) )
+        # If we need it, try to load the wcs.  In this case, if it's None, shrug and move on
+        if any( [ ( min_overlap is not None ) and ( min_overlap > 0. ),
+                  'overlap' in choice_criteria,
+                  'overlap_frac' in choice_criteria,
+                  'overlap_fraction' in choice_criteria,
+                  'overlapfrac' in choice_criteria,
+                  'overlapfratcion' in choice_criteria,
+                 ] ):
+            self.get_wcs( pgdb=_pgdb )
+            
+        if self.image is not None:
+            ra = ra if ra is not None else self.image.ra
+            dec = dec if dec is not None else self.image.dec
+            instrument = instrument if instrument is not None else self.image.instrument
+            mjd0 = mjd0 if mjd0 is not None else self.image.mjd
+            mjd1 = mjd1 if mjd1 is not None else self.image.mjd
+            # TODO: think about instrument canonical filter names
+            filter = filter if filter is not None else self.image.filter
+            target = target if target is not None else self.image.target
+            section_id = section_id if section_id is not None else self.image.section_id
+
+        if not ( ( ( search_by == 'image' ) and ( self.image is not None ) )
                  or
                  ( ( search_by == 'ra/dec' ) and ( ra is not None ) and ( dec is not None ) )
                  or
@@ -1865,23 +1911,23 @@ class DataStore:
             elif match_filter and self.reference.image.filter != filter
                 self.reference = None
 
-            elif match_instrument and self.reference.image.instrument != image.instrument:
+            elif match_instrument and self.reference.image.instrument != instrument:
                 self.reference = None
 
             elif ( ( search_by in [ 'target/section', 'target/section_id' ] ) and
-                   ( ( self.reference.imagetarget != image.target ) or
-                     ( self.reference.imagesection_id != image.section_id ) )
+                   ( ( self.reference.imagetarget != target ) or
+                     ( self.reference.imagesection_id != section_id ) )
                   ):
                 self.reference = None
 
             elif ( ( self.reference.validity_start is not None ) and
-                   ( pytz.utc.localize( astropy.time.Time(self.image.mjd, format='mjd').datetime )
-                     < self.reference.validity_start )
+                   ( pytz.utc.localize( astropy.time.Time(min(mjd0, mjd1), format='mjd').datetime )
+                       < self.reference.validity_start )
                   ):
                 self.reference = None
 
             elif ( ( self.reference.validity_end is not None ) and
-                   ( pytz.utc.localize( astropy.time.Time(self.image.mjd, format='mjd').datetime )
+                   ( pytz.utc.localize( astropy.time.Time(max(mjd0, mjd1), format='mjd').datetime )
                      > self.reference.validity_end )
                   ):
                 self.reference = None
@@ -1889,8 +1935,8 @@ class DataStore:
             elif ( min_overlap is not None ) and ( min_overlap > 0 ):
                 # Make sure this one is last since it has an if inside it!
                 SCLogger.warning( "I think this next line of code needs to be rethought given good sections!" )
-                ovfrac = ( wcs.get_overlap_frac( wcs, self.reference.wcs ) if wcs is not None
-                           else image.get_overlap_frac( image, self.reference.image ) )
+                ovfrac = ( self.wcs.get_overlap_frac( self.wcs, self.reference.wcs ) if self.wcs is not None
+                           else self.image.get_overlap_frac( self.image, self.reference.image ) )
                 if ovfrac < min_overlap:
                     self.reference = None
 
@@ -1906,20 +1952,25 @@ class DataStore:
 
         arguments = {}
         if search_by == 'image':
-            arguments['image'] = image
+            arguments['image'] = self.image
             arguments['overlapfrac'] = min_overlap
         elif search_by == 'ra/dec':
-            arguments['ra'] = image.ra
-            arguments['dec'] = image.dec
+            arguments['ra'] = ra
+            arguments['dec'] = dec
         elif search_by in [ 'target/section', 'target/section_id' ]:
-            arguments['target'] = image.target
-            arguments['section_id'] = image.section_id
+            arguments['target'] = target
+            arguments['section_id'] = section_id
+
+        if ( mjd0 is not None ) or ( mjd1 is not None ):
+            arguments['mjds'] = ( [ mjd0, mjd1 ] if ( mjd0 is not None ) and ( mjd1 is not None )
+                                  else [ mjd0 ] if mjd0 is not None
+                                  else [ mjd1 ] )
 
         if match_filter:
             arguments['filter'] = filter
 
         if match_instrument:
-            arguments['instrument'] = image.instrument
+            arguments['instrument'] = instrument
 
         if skip_bad:
             arguments['skip_bad'] = True
@@ -1936,8 +1987,8 @@ class DataStore:
 
         if ( search_by != 'image' ) and ( min_overlap is not None ) and ( min_overlap > 0 ):
             # Didn't filter by overlap fraction previously, so do that here
-            ovfrac = [ ( wcs.get_overlap_frac( wcs, r.wcs ) if wcs is not None
-                         else image.get_overlap_frac( image, i ) )
+            ovfrac = [ ( self.wcs.get_overlap_frac( self.wcs, r.wcs ) if self.wcs is not None
+                         else image.get_overlap_frac( self.image, i ) )
                        for r, i in zip( refs, imgs ) ]
             refs = [ r for o, r in zip(ovfrac, refs) if o >= min_overlap ]
             imgs = [ i for o, i in zip(ovfrac, imgs) if o >= min_overlap ]
@@ -1961,8 +2012,8 @@ class DataStore:
             # Sort by criterea, allowing for duplicates
             for cdex, criterion in enumerate( choice_criteria ):
                 if criterion in ( 'overlap', 'overlap_frac', 'overlap_fraction', 'overlapfrac', 'overlapfraction' ):
-                    ovfrac = np.array( [ ( wcs.get_overlap_frac( wcs, r.wcs ) if wcs is not None
-                                           else image.get_overlap_frac( image, i ) )
+                    ovfrac = np.array( [ ( self.wcs.get_overlap_frac( self.wcs, r.wcs ) if self.wcs is not None
+                                           else self.image.get_overlap_frac( self.image, i ) )
                                          for r, i in zip( refs, imgs ) ] )
                     maxdex = np.argmax( ovfrac )
                     refs = [ refs[i] for i, o in enumerate(ovfrac) if o == ovfrac[maxdex] ]
@@ -1992,7 +2043,7 @@ class DataStore:
             return self.reference
 
 
-    def get_sub_image(self, provenance=None, reload=False, session=None):
+    def get_sub_image(self, provenance=None, reload=False, pgdb=pgdb, session=None):
         """Get a subtraction Image, either from memory or from database.
 
         If sub_image is not None, return that.  Otherwise, if
@@ -2015,10 +2066,7 @@ class DataStore:
         reload: bool, default False
             Set .sub_image to None, and always try to reload from the database.
 
-        session: sqlalchemy.orm.session.Session
-            An optional session to use for the database query.  If not
-            given, will open a new session and close it at the end of
-            the function.
+        pgdb, session : ROB WRITE DOCS
 
         Returns
         -------
@@ -2054,24 +2102,26 @@ class DataStore:
             #   get_reference() that it's safer to make the user do it
             raise RuntimeError( "Can't get a subtraction without a reference; try calling get_reference" )
 
-        with SmartSession( session ) as sess:
+        with PGDB( pgdb if pgdb is not None else session, dictcursor=True ) as pgdb:
             if self.image_id is None:
-                self.get_image( session=sess )
+                self.get_image( pgdb=pgdb )
             if self.image_id is None:
                 raise RuntimeError( "Can't get sub_image, don't have an image_id" )
 
-            imgs = ( sess.query( Image )
-                     .join( image_subtraction_components, Image._id==image_subtraction_components.c.image_id )
-                     .filter( Image.provenance_id==provenance.id )
-                     .filter( image_subtraction_components.c.new_zp_id==self.zp.id )
-                     .filter( image_subtraction_components.c.ref_id==self.reference.id )
-                     .filter( Image.is_sub ) ).all()
-            if len(imgs) > 1:
+            q = ( sql.SQL( "SELECT i.* FROM images i "
+                           "INNER JOIN image_subtraction_components c ON c.image_id=i._id "
+                           "WHERE i.provenance_id={prov} "
+                           "  AND c.new_zp_id={zpid} "
+                           "  AND c.ref_id={refid} "
+                           "  AND i.is_sub"
+                          ).format( prov=provenance.id, zpid=self.zp.id, ref=self.reference.id ) )
+            rows = pgdb.execute( q )
+            if len(rows) > 1:
                 raise RuntimeError( "Found more than one matching sub_image in the database!  This shouldn't happen!" )
-            if len(imgs) == 0:
+            if len(rows) == 0:
                 self.sub_image = None
             else:
-                self.sub_image = imgs[0]
+                self.sub_image = Image( **(rows[0]) )
 
         return self.sub_image
 

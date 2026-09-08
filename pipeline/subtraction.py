@@ -7,6 +7,7 @@ import subprocess
 import numpy as np
 import pandas
 import sqlalchemy as sa
+from psycopg import sql
 
 from astropy.io import fits
 import astropy.coordinates
@@ -15,7 +16,7 @@ import astropy.units as units
 from pipeline.parameters import Parameters
 from pipeline.data_store import DataStore
 
-from models.base import SmartSession, FileOnDiskMixin
+from models.base import SmartSession, FileOnDiskMixin, PGDB
 from models.image import Image
 from models.source_list import SourceList
 from models.psf import PSF
@@ -67,13 +68,16 @@ class ParsSubtractor(Parameters):
 
         self.reference = self.add_par(
             'reference',
-            {'minovfrac': 0.85,
-             'must_match_instrument': True,
-             'must_match_filter': True,
-             'must_match_section': False,
-             'must_match_target': False },
+            { 'search_by': 'image',
+              'match_instrument': True,
+              'match_filter': True,
+              'min_overlap': 0.85,
+              'max_dist': None,
+              'skip_bad': True,
+              'multiple_ok': True,
+              'choice_criteria': [ 'overlap' ] },
             dict,
-            'Parameters passed to DataStore.get_reference for identifying references'
+            'Parameters (sorta) passed to DataStore.get_reference for identifying references'
         )
 
         self.inpainting = self.add_par(
@@ -571,12 +575,14 @@ class Subtractor:
                 shutil.rmtree( tmpdir )
 
 
-    def run(self, *args, do_not_load=True, trust_datastore_reference=False, **kwargs):
+    def run(self, *args, ra=None, dec=None, do_not_load=True, trust_datastore_reference=False, **kwargs):
         """Get a reference image and subtract it from the new image.
 
-        Arguments are parsed by the DataStore.parse_args() method.
+        Most arguments are parsed by the DataStore.parse_args() method.
+        "ra" and "dec" are used by the forced photometry pipeline.
 
         Returns a DataStore object with the products of the processing.
+
         """
         self.has_recalculated = False
 
@@ -590,7 +596,7 @@ class Subtractor:
             self.pars.do_warning_exception_hangup_injection_here()
 
             # get the provenance for this step:
-            with SmartSession() as session:
+            with PGDB( dictcursor=True ) as pgdb:
 
                 if trust_datastore_refrence:
                     ref = ds.reference
@@ -605,29 +611,40 @@ class Subtractor:
                     # look for a reference that has to do with the current image and refset
                     if self.pars.refset is None:
                         raise ValueError('No reference set given for subtraction')
-                    refset = session.scalars(sa.select(RefSet).where(RefSet.name == self.pars.refset)).first()
-                    if refset is None:
+                    q = sql.SQL( "SELECT * FROM refsets WHERE name={name}" ).format( name=self.pars.refset )
+                    rows = pgdb.execute( q )
+                    if len(rows) == 0:
                         raise ValueError(f'Cannot find a reference set with name {self.pars.refset}')
+                    elif len(rows) > 1:
+                        raise RuntimeError( f'Database corruption, >1 refset with name {self.pars.refset}' )
 
-                    if self.pars.reference['must_match_section'] or self.pars.reference['must_match_target']:
+                    refset = RefSet( **(rows[0]) )
+                    
+                    kwargs = self.pars.reference.copy()
+                    if ( ( 'must_match_section' in kwargs and kwargs['must_match_section'] ) or
+                         ( 'must_match_target' in kwargs and kwargs['must_match_target'] )
+                        ):
                         # TODO : just remove these options.  Issue #424
                         SCLogger.warning( "must_match_section and must_match target are not implemented!" )
-                    ref = ds.get_reference( provenances=refset.provenance,
-                                            min_overlap=self.pars.reference['minovfrac'],
-                                            match_instrument=self.pars.reference['must_match_instrument'],
-                                            session=session )
+                    if 'must_match_section' in kwargs:
+                        del kwargs['must_match_section']
+                    if 'must_match_target' in kwargs:
+                        del kwargs['must_match_target' ]
+                    ref = ds.get_reference( ra=ra, dec=dec, pgdb=pgdb, **kwargs )
                     if ref is None:
                         raise ValueError(
                             f'Cannot find a reference image corresponding to the datastore inputs: {ds.inputs_str}; '
-                            f'referencing prov = {ds.prov_tree["referencing"]}'
+                            f'get_reference parmeters: {kwargs}; '
+                            f'referencing prov = {ds.prov_tree["referencing"]}; '
+                            f'(ra,dec) = ({ra}, {dec})'
                         )
 
                 prov = ds.get_provenance('subtraction', self.pars.get_critical_pars())
-                sub_image = None if do_not_load else ds.get_sub_image( prov, session=session )
+                sub_image = None if do_not_load else ds.get_sub_image( prov, pgdb=pgdb )
                 if sub_image is None:
                     self.has_recalculated = True
-                    image = ds.get_image(session=session)
-                    zp = ds.get_zp(session=session)
+                    image = ds.get_image(pgdb=pgdb)
+                    zp = ds.get_zp(pgdb=pgdb)
                     if zp is None:
                         raise ValueError(f'Cannot find an zeropoint corresponding to the datastore inputs: '
                                          f'{ds.inputs_str}')

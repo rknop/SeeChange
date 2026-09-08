@@ -87,8 +87,10 @@ class CodeVersion(Base, UUIDMixin):
         'positioning': (0,2,0),
         'flat_bias_builder': (0,5,0),
         'Image.trim': (0,1,0),
-        'Image.trim.nullsources': (0,1,0),
+        'Image.trim.sources': (0,1,0),
         'Image.trim.wcs': (0,1,0),
+        'Image.trim.zp': (0,1,0),
+        'forcedphot': (0,1,0),
 
         # The next couple are processes whose direct data products
         #   are not saved to the database.  If their versions change,
@@ -251,11 +253,11 @@ class Provenance(Base):
     @property
     def upstreams( self ):
         if self._upstreams is None:
-            self._upstreams = self.get_upstreams()
+            self.get_upstreams( save_to_object=True )
         return self._upstreams
 
 
-    def __init__(self, dont_update_id=False, _id=None, **kwargs):
+    def __init__(self, dont_update_id=False, _id=None, pgdb=pgdb, **kwargs):
         """Create a provenance object.
 
         Parameters
@@ -336,7 +338,7 @@ class Provenance(Base):
             else:
                 self.code_version_id = code_version_id
         else:
-            cv = Provenance.get_code_version( process=self.process )
+            cv = Provenance.get_code_version( process=self.process, pgdb=pgdb )
             self.code_version_id = cv.id
 
         self.parameters = kwargs.get('parameters', {})
@@ -589,20 +591,23 @@ class Provenance(Base):
         return CodeVersion._code_version_cache[process]
 
 
-    def insert( self, session=None, _exists_ok=False, nocommit=False ):
+    def insert( self, pgdb=pgdb, session=None, _exists_ok=False, nocommit=False ):
         """Insert the provenance into the database.
 
         Will raise a constraint violation if the provenance ID already exists in the database.
 
         Parameters
         ----------
-          session : PGDB, psycpog.Connection, psycopg.Cursor, or SQLAlchmey sesion, or None
+          pgdb, session : PGDB, psycpog.Connection, psycopg.Cursor, or SQLAlchmey sesion, or None
             Usually you don't want to use this.  Warning: commits or
-            rollbacks unless nocommit is True.
+            rollbacks unless nocommit is True.  Two arguments are
+            synonyms; if both are given, pgdb is used.
 
         """
 
-        with PGDB( session ) as pgdb:
+        pgdb = pgdb if pgdb is not None else session
+        
+        with PGDB( pgdb ) as pgdb:
             # Lock the table so we don't have a disaster of two different processes inserting the
             #  provenance and the upstreams all at the same time.  But, because any use of database
             #  locks is just asking for a deadlock, first search without locking, and if it exists,
@@ -654,20 +659,21 @@ class Provenance(Base):
                     pgdb.rollback()
 
 
-    def insert_if_needed( self, session=None, nocommit=False ):
+    def insert_if_needed( self, pgdb=None, session=None, nocommit=False ):
         """Insert the provenance into the database if it's not already there.
 
         Parameters
         ----------
-          session : PGDB, psycopg.Connection, psycopg.Cursor, sa Session, or None
+          pgdb, session : PGDB, psycopg.Connection, psycopg.Cursor, sa Session, or None
             Usually you don't want to use this.  Warning: commits unless nocommit=True.
 
         """
 
-        self.insert( session=session, _exists_ok=True, nocommit=nocommit )
+        pgdb = pgdb if pgdb is not None else session
+        self.insert( pgdb=pgdb, _exists_ok=True, nocommit=nocommit )
 
 
-    def get_upstreams( self, pgdb=None ):
+    def get_upstreams( self, pgdb=None, save_to_object=False ):
         with PGDB( pgdb, dictcursor=True ) as pgdb:
             q = sql.SQL( textwrap.dedent(
                 """\
@@ -678,7 +684,10 @@ class Provenance(Base):
                 """
             ) ).format( me=self.id )
             rows = pgdb.execute( q )
-            return [ Provenance(dont_update_id=True, **row) for row in rows ]
+            upstreams = [ Provenance(dont_update_id=True, **row) for row in rows ]
+            if save_to_object:
+                self._upstreams = upstreams
+            return upstreams
 
     def get_downstreams( self, pgdb=None ):
         with PGDB( pgdb, dictcursor=True ) as pgdb:

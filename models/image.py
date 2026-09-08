@@ -1248,37 +1248,28 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         with PGDB( pgdb ) as pgdb:
             upstreams = upstreams.copy()
 
-            if ( wcs_prov is not None ) and ( not isintance( wcs_prov, Provenance ) ):
-                wcs_prov = Provenance.get_by_id( wcs_prov, pgdb=pgdb )
+            if wcs_prov is not None:
+                if not isintance( wcs_prov, Provenance ):
+                    wcs_prov = Provenance.get_by_id( wcs_prov, pgdb=pgdb )
                 upstreams.append( wcs_prov )
                 
-            trimimprov = Provenance( code_version_id=Provenance.get_code_version( 'Image.trim', pgdb=pgdb ).id,
-                                     process='Image.trim',
+            trimimprov = Provenance( process='Image.trim',
                                      parameters={ 'width': width, 'height': height, 'used_wcs': use_wcs },
                                      upstreams=upstreams )
             if wcs_prov is not None:
-                # OK... the database has a sources_id field, but in this case we might not actually
-                #   have an actual source list.  So, we've invented the concept of a "null format"
-                #   source list that exists only as a link between wcs and image.
-                # Probably a todo: would be to make a source list trimmer that filters down the objects?
-                #   complicated.
-                trimsrcprov = Provenance( code_version_id=Provenance.get_code_version( 'Image.trim.nullsources',
-                                                                                       pgdb=pgdb ).id,
-                                          process='Image.trim.nullsources',
-                                          upstreams=[trimimprov] )
-                trimwcsprov = Provenance( code_version_id=Provenance.get_code_version( 'Image.trim.wcs',
-                                                                                       pgdb=pgdb ).id,
-                                          process='Image.trim.wcs',
-                                          upstreams=[trimsrcprov, wcs_prov] )
+                trimsrcprov = Provenance( process='Image.trim.sources', upstreams=[trimimprov] )
+                trimwcsprov = Provenance( process='Image.trim.wcs', upstreams=[trimsrcprov] )
             else:
                 trimsrcprov = None
                 trimwcsprov = None
 
             if zp_prov is not None:
-                trimzpprov = Provenance( code_verson_id=Provenance.get_code_version( 'Image.trim.zp',
-                                                                                     pgdb=pgdb ).id,
-                                         process='Image.trim.zp',
-                                         upstreams=[zp_prov] )
+                # This one's a little weird... at least as of right now, zeropoint assumes
+                #   a constant zeropoint for the whole image.  So, the trimmed zeropoint
+                #   will be numerically identical to the original image zeroppoint.  That
+                #   means nothing in the trimming is part of the trimmed zeropoint provenance
+                #   upstreams.
+                trimzpprov = Provenance( process='Image.trim.zp', upstreams=[zp_prov] )
             else:
                 trimzpprov = None
 
@@ -1301,8 +1292,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         return trimimprov, trimsrcprov, trimwcsprov, trimzpprov
 
 
-    def trim( self, x0, x1, y0, y1, wcs=None, save_prov=False, provtag=None,
-              provenance=None, save_to_db=False, pgdb=None ):
+    def trim( self, x0, x1, y0, y1, sources=None, wcs=None, save_prov=False, provtag=None,
+              trimprovs=None, save_to_db=False, pgdb=None ):
         """Return an Image (etc.) that's a cutout of this image.
 
         Returns a new Image with a trimmed data, weight, and flags
@@ -1335,10 +1326,14 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
              The minimum (inclusive)/maximum (exclusive) pixel limits of
              the trimmed region.
 
+          sources: SoureList, default None
+             SourceList that goes with wcs.  Required if wcs is not None.
+        
           wcs: WorldCoordinates, default None
-             If given, will update all coordinate fields of the object
-             to be right for the trimmed object (assuming the wcs is
-             right).  Will also return the wcs for the trimmed image.
+             If given, will update all coordinate fields of the image to
+             be right for the trimmed image (assuming the wcs is right).
+             Will also return the wcs for the trimmed image.  Requieres
+             sources.
 
           save_prov: bool, default False
              If True, make sure the Provenance of the trimmed image is
@@ -1348,10 +1343,13 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
              If not None, tag the Provenance of the trimmed image with
              this tag.  Requires save_prov to be True.
 
-          provenance: Provenance, default None Just for efficiency; pass
-             the Provenance that goes with self.provenance_id here.  If
-             this is None, and the Provenance is needed, it will call
-             Provenance.get_by_id.
+          trimprovs: [ Provenance, Provenance, Provenance ], default None
+             Here for convenience.  If give, the provenances to assign
+             to the trimmed image, sources, and wcs.  The second and
+             third elements are ignored (and can be None) if wcs is
+             None.  WARNINIG: these are not verified to be right, so
+             use with care!  If not given, they are determined using
+             the get_trim_provs class method.
 
           save_to_db: bool, default False
              If True, then save everything created to the database.  If
@@ -1410,72 +1408,55 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
 
         # Make the subset wcs if necessary
         if wcs is not None:
-            # Imports here to avoid circular imports
-            from models.source_list import SourceList
+            if sources is None:
+                raise ValueError( "Passing wcs requires passing sources" )
+            if ( wcs.sources_id != sources.id ) or ( sources.image_id != self.id ):
+                raise ValueError( "Passed inconsistent image, sources, wcs." )
+            newsources = sources.trim( x0, x1, y0, y1, trimmed_image=newimage )
             newwcs = wcs[ y0:y1, x0:x1 ]
-            newsources = SourceList( image=newimage, format='null' )
             newwcs.sources_id = newsources.id
             newwcs.set_corners_from_wcs( newwcs.wcs, width=x1-x0, height=y1-y0, setradec=True, mask=newimage.flags )
             newimage.set_corners_from_wcs( newwcs.wcs, width=x1-x0, height=y1-y0, setradec=True, mask=newimage.flags )
 
         # Make the provenances if necessary
-        improv = None
-        provs = []
         if self.provenance_id is not None:
-            with PGDB( _pgdb ) as pgdb:
-                improv = Provenance( code_version_id=Provenance.get_code_version( 'Image.trim', session=pgdb ).id,
-                                     process='Image.trim',
-                                     parameters={ 'width': x1-x0, 'height': y1-y0, 'used_wcs': wcs is not None },
-                                     upstreams=[ ( provenance if provenance is not None
-                                                   else Provenance.get_by_id( self.provenance_id, session=pgdb ) ) ]
-                                    )
-                provs.append( improv )
-                if save_prov:
-                    improv.insert_if_needed( session=pgdb )
-
+            if trimprovs is not None:
+                ( trimimprov, trimsrcprov, trimwcsprov, _ ) = trimprovs
+            else:
+                provenance = Provenance.get_by_id( self.provenance_id, pgdb=pgdb )
+                wcsprov = None
                 if wcs is not None:
-                    srcprov = Provenance( code_version_id=Provenance.get_code_version( 'Image.trim.nullsources',
-                                                                                       session=pgdb ).id,
-                                          process='Image.trim.nullsources',
-                                          upstreams=[ improv ] )
-                    wcsprov = Provenance( code_version_id=Provenance.get_code_version( 'Image.trim.wcs',
-                                                                                       session=pgdb ).id,
-                                          process='Image.trim.wcs',
-                                          upstreams=[ srcprov ] )
-                    provs.append( srcprov )
-                    provs.append( wcsprov )
-                    if save_prov:
-                        srcprov.insert_if_needed( session=pgdb )
-                        wcsprov.insert_if_needed( session=pgdb )
+                    wcsprov = Provenance.get_by_id( wcs.provenance_id, pgdb=pgdb )
 
-                if provtag is not None:
-                    Provenance.addtag( provtag, provs, pgdb=pgdb )
+                ( trimimprov,
+                  trimsrcprov,
+                  trimwcsprov,
+                  _ ) = self.get_trim_provs( x1-x0, y1-y0, process='Image.trim', upstreams=[provenance],
+                                             wcs_prov=wcsprov, save=save_prov, provtag=provtag, pgdb=pgdb )
 
-                if save_to_db:
-                    # It's safe to have this inside the "if
-                    # self.provenance_id is not None" block because the
-                    # validation at the top of this function will have
-                    # (indirectly) caused an error if save_to_db is true
-                    # and self.provenance_id is not.
-                    newimage.save()
-                    newimage.insert( session=pgdb, nocommit=True )
-                    if wcs is not None:
-                        # newsources is a null souce list so there's
-                        #   nothing to save.  However, the database
-                        #   requires a non-null filepath, so make one.
-                        #   (It will have extension ".no_file".)
-                        newsources.filepath = newsources.invent_filepath( image=newimage, provenance=srcprov )
-                        newsources.insert( session=pgdb, nocommit=True )
-                        newwcs.save( image=newimage )
-                        newwcs.insert( session=pgdb, nocommit=True )
+            provs = [ trimimprov ] if wcs is None else [ trimimprov, trimsrcprov, trimwcsprov ]
 
-                    pgdb.execute( sql.SQL( "INSERT INTO image_trim_parent(image_id,parent_image_id,parent_wcs_id) "
-                                           "VALUES ({imid},{parid},{wcsid})" )
-                                  .format( imid=newimage.id,
-                                           parid=self.id,
-                                           wcsid=wcs.id if wcs is not None else None )
-                                 )
-                    pgdb.commit()
+            newimage.provenance_id = trimimprov.id
+            if wcs is not None:
+                newsources.provenance_id = trimsrcprov.id
+                newwcs.provenance_id = trimwcsprov.id
+                
+            if save_to_db:
+                newimage.save()
+                newimage.insert( session=pgdb, nocommit=True )
+                if wcs is not None:
+                    newsources.save( image=newimage )
+                    newsources.insert( session=pgdb, nocommit=True )
+                    newwcs.save( image=newimage )
+                    newwcs.insert( session=pgdb, nocommit=True )
+
+                pgdb.execute( sql.SQL( "INSERT INTO image_trim_parent(image_id,parent_image_id,parent_wcs_id) "
+                                       "VALUES ({imid},{parid},{wcsid})" )
+                              .format( imid=newimage.id,
+                                       parid=self.id,
+                                       wcsid=wcs.id if wcs is not None else None )
+                             )
+                pgdb.commit()
 
         if wcs is None:
             return newimage, improv

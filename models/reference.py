@@ -219,7 +219,7 @@ class Reference(Base, UUIDMixin, HasBitFlagBadness):
             section_id=None,
             instrument=None,
             filter=None,
-            for_image_mjd=None,
+            mjds=None,
             refset=None,
             provenance_ids=None,
             skip_bad=True,
@@ -290,10 +290,10 @@ class Reference(Base, UUIDMixin, HasBitFlagBadness):
             Filter of the reference image.
             If not given, will return references with any filter.
 
-        for_image_mjd: float, optional
-            MJD of the image that this is to be a reference for.  If
-            given, only find references where this mjd is between
-            validity_start and validity_end.
+        mjds: list of float, optional
+            MJDs that we want to use this reference for.  If given,
+            only find references where all of these mjds are between
+            validity_start and validity_end
 
         refset: string, list of String, or None
             If not None, will only find references that have a
@@ -520,11 +520,14 @@ class Reference(Base, UUIDMixin, HasBitFlagBadness):
             if filter is not None:
                 q += sql.SQL( "  AND i.filter={filter}\n" ).format( filter=filter )
 
-            if for_image_mjd is not None:
-                q += sql.SQL( "  AND ( r.validity_start IS NULL OR {t}>=validity_start )\n"
-                              "  AND ( r.validity_end IS NULL OR {t}<=validity_end )\n"
-                             ).format( t=pytz.utc.localize( astropy.time.Time( for_image_mjd,
-                                                                               format='mjd' ).datetime ) )
+            if mjds is not None:
+                mjds = listify( mjds )
+                q += sql.SQL( "  AND ( r.validity_start IS NULL OR {tmin}>=validity_start )\n"
+                              "  AND ( r.validity_end IS NULL OR {tmax}<=validity_end )\n"
+                             ).format( tmin=pytz.utc.localize( astropy.time.Time( min(mjds),
+                                                                                  format='mjd' ).datetime ),
+                                       tmax=pytz.utc.localize( astropy.time.Time( max(mjds),
+                                                                                  format='mjd' ).datetime ) )
             if skip_bad:
                 q += sql.SQL( "  AND r._bitflag=0 AND r._upstream_bitflag=0" )
 
