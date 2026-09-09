@@ -1036,7 +1036,7 @@ def test_image_subtraction(sim_exposure1, sim_exposure2, provenance_base, proven
         ref.insert()
 
         # make a subtraction image from the two
-        im = Image.from_ref_and_new(ref, im2zp)
+        im = Image.from_ref_and_new( ref=ref, image_zp=im2zp )
 
         assert im._id is None
         assert im.exposure_id is None

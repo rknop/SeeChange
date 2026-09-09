@@ -62,7 +62,7 @@ def test_properties( bogus_fakeset_saved ):
         reset_fakeset_props()
         with pytest.raises( TypeError, match=f"{prop} must be a.*not a" ):
             setattr( fakeset, prop, 5 )
-        obj = cls()
+        obj = cls.create()
         _ = obj.id
         # PSF needs a bit of special handling in this test
         if prop == 'psf':

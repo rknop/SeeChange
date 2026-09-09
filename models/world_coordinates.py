@@ -74,7 +74,7 @@ class WorldCoordinates(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness, Spat
     def __getitem__( self, subset ):
         if not ( isinstance( subset, tuple ) and ( len(subset) == 2) and
                  isinstance( subset[0], slice ) and isinstance( subset[1], slice ) and
-                 ( subset[0].step is None ) and ( subset[1] is None ) and
+                 ( subset[0].step is None ) and ( subset[1].step is None ) and
                  isinstance( subset[0].start, numbers.Integral ) and
                  isinstance( subset[0].stop, numbers.Integral ) and
                  isinstance( subset[1].start, numbers.Integral ) and

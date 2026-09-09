@@ -601,7 +601,7 @@ class Subtractor:
                     ref = ds.reference
                     if ref is None:
                         raise ValueError( "trust_datastore_reference given, but datastore has no reference." )
-                    elif ref.provenance_id != ds.prov_tree["referencing"]:
+                    elif ref.provenance_id != ds.prov_tree["referencing"].id:
                         raise ValueError( f"trust_datastore_reference should have been trust_but_verify_....  "
                                           f"The datastore's provenance tree referencing id "
                                           f"{ds.prov_tree['referencing']} does not match the datastore'ss "
@@ -652,7 +652,7 @@ class Subtractor:
                     SCLogger.debug( f"Making new subtraction from image {image.id} path {image.filepath} , "
                                     f"reference {ds.reference.id} refimage {ds.ref_image.id} "
                                     f"path {ds.ref_image.filepath}" )
-                    sub_image = Image.from_ref_and_new(ds.reference, zp)
+                    sub_image = Image.from_ref_and_new( ref=ds.reference, new_image_zp=zp, new_image=ds.image )
                     sub_image.is_sub = True
                     sub_image.provenance_id = prov.id
                     sub_image.set_coordinates_to_match_target( image )

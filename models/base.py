@@ -739,6 +739,16 @@ class SeeChangeBase:
 
     type_annotation_map = { UUID: sqlUUID }
 
+    @classmethod
+    def create( cls, **kwargs ):
+        """Create an object.  Usually use this instead of the object constructor directly.
+
+        For most objects, it just calls the object constructor.  Some classes may subclass this
+        so that they can create objects of different classes based on what's passed.
+
+        """
+        return cls( **kwargs )
+
     def __init__(self, **kwargs):
         # THIS NEXT ONE IS ILL-CONSIDERED.
         # For it to really be right, we need to go everywhere through the code
@@ -1130,7 +1140,7 @@ class SeeChangeBase:
                 rows = pgdb.execute( q )
                 if len(rows) != 1:
                     raise RuntimeError( "This should never happen." )
-                upstreams.append( cls( **(rows[0]) ) )
+                upstreams.append( cls.create( **(rows[0]) ) )
         return upstreams
 
     def get_downstream_ids(self, pgdb=None):
@@ -1148,7 +1158,7 @@ class SeeChangeBase:
                 rows = pgdb.execute( q )
                 if len(rows) != 1:
                     raise RuntimeError( "This should never happen." )
-                downstreams.append( cls( **(rows[0]) ) )
+                downstreams.append( cls.create( **(rows[0]) ) )
         return downstreams
 
     def delete_everything_in_provtag( self, tag, models=[], remove_folders=True,
@@ -1383,7 +1393,7 @@ class SeeChangeBase:
         if created_at is not None:
             dictionary['created_at'] = datetime.datetime.fromisoformat(created_at)
 
-        return cls(**dictionary)
+        return cls.create(**dictionary)
 
     def to_json(self, filename):
         """Translate a row object's column values to a JSON file.
@@ -2350,7 +2360,7 @@ class UUIDMixin:
             else:
                 kwargs = kwargs.copy()
                 kwargs.update( rows[0] )
-                obj = cls( **kwargs )
+                obj = cls.create( **kwargs )
                 obj.from_db = True
                 return obj
 
@@ -2386,9 +2396,9 @@ class UUIDMixin:
             rows = pgdb.execute( q )
 
         if return_dict:
-            return { r['_id']: cls(**r) for r in rows }
+            return { r['_id']: cls.create(**r) for r in rows }
         else:
-            return [ cls(**r) for r in rows ]
+            return [ cls.create(**r) for r in rows ]
 
 
     @classmethod
@@ -2414,7 +2424,7 @@ class UUIDMixin:
                                  .format( tab=sql.Identifier(cls.__tablename__),
                                           field=sql.Identifier(field),
                                           vals=sql.SQL(",").join(values) ) )
-        return [ cls(**r) for r in rows ]
+        return [ cls.create(**r) for r in rows ]
 
 
 
@@ -2483,7 +2493,7 @@ class SpatiallyIndexed:
             q = q.format( tab=sql.Identifier(cls.__tablename__), ra=ra, dec=dec, rad=radius/3600. )
             rows = pgdb.execute( q )
 
-        return [ cls(**row) for row in rows ]
+        return [ cls.create(**row) for row in rows ]
 
 
     @hybrid_method
@@ -2885,7 +2895,7 @@ class FourCorners:
                         ra=ra, dec=dec )
 
             rows = pgdb.execute( q )
-            objs = [ cls(**r) for r in rows ]
+            objs = [ cls.create(**r) for r in rows ]
             pgdb.execute_nofetch( sql.SQL( "DROP TABLE {temptable}" ).format( temptable=sql.Identifier(temptable) ) )
             return objs
 
@@ -3034,7 +3044,7 @@ class FourCorners:
             rows = pgdb.execute( sql.SQL( "SELECT i.* FROM {tab} i INNER JOIN {temptable} t ON i._id=t._id" )
                                  .format( tab=sql.Identifier(cls.__tablename__),
                                           temptable=sql.Identifier(temptable) ) )
-            objs = [ cls(**r) for r in rows ]
+            objs = [ cls.create(**r) for r in rows ]
             pgdb.execute_nofetch( sql.SQL( "DROP TABLE {temptable}" ).format( temptable=sql.Identifier(temptable) ) )
             return objs
 

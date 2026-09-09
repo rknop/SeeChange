@@ -147,6 +147,7 @@ class Reference(Base, UUIDMixin, HasBitFlagBadness):
         self._image = None
         self._sources = None
         self._bg = None
+        self._psf = None
         self._wcs = None
         self._zp = None
 
@@ -156,41 +157,46 @@ class Reference(Base, UUIDMixin, HasBitFlagBadness):
         self._image = None
         self._sources = None
         self._bg = None
+        self._psf = None
         self._wcs = None
         self._zp = None
 
 
-    def _load_ref_data_products(self, session=None):
+    def _load_ref_data_products(self, always_reload=False, pgdb=None, session=None):
         """Load the (SourceList, Background, PSF, WorldCoordinates, Zeropoint) assocated with self.image_id
 
         Only works if the all of the upstream dataproducts (image,
-        sources, bg, wcs, zp) have been committed ot the database.
+        sources, bg, wcs, zp) have been committed ot the database.  (Or
+        if the object already has all of them and always_reload is
+        False.)
 
         """
 
-        with PGDB( session, dictcursor=True ) as sess:
-            self._zp = ZeroPoint.get_by_id( self.zp_id, session=sess )
-            self._wcs = WorldCoordinates.get_by_id( self._zp.wcs_id, session=sess )
-            self._sources = SourceList.get_by_id( self._wcs.sources_id, session=sess )
-            self._image = Image.get_by_id( self._sources.image_id, session=sess)
+        if always_reload or ( getattr( self, x ) is None for x in ( '_zp', '_wcs', '_sources',
+                                                                    '_image', '_psf', '_bg' ) ):
+            with PGDB( pgdb if pgdb is not None else session, dictcursor=True ) as pgdb:
+                if always_reload or ( self._zp is None ):
+                    self._zp = ZeroPoint.get_by_id( self.zp_id, pgdb=pgdb )
+                if always_reload or ( self._wcs is None ):
+                    self._wcs = WorldCoordinates.get_by_id( self._zp.wcs_id, pgdb=pgdb )
+                if always_reload or ( self._sources is None ):
+                    self._sources = SourceList.get_by_id( self._wcs.sources_id, pgdb=pgdb )
+                if always_reload or ( self._image is None ):
+                    self._image = Image.get_by_id( self._sources.image_id, pgdb=pgdb)
 
-            self._psf = PSF.get_by_field_value( "sources_id", self._sources.id, pgdb=sess )
-            if len(self._psf) == 0:
-                # ...is this allowed?
-                self._psf = None
-            elif len(self._psf) > 1:
-                raise RuntimeError( "This should never happen" )
-            else:
-                self._psf = self._psf[0]
+                if always_reload or ( self._psf is None ):
+                    self._psf = PSF.get_by_field_value( "sources_id", self._sources.id, pgdb=pgdb )
+                    if len(self._psf) > 1:
+                        raise RuntimeError( "This should never happen" )
+                    else:
+                        self._psf = self._psf[0]
 
-            self._bg = Background.get_by_field_value( "sources_id", self._sources.id, pgdb=sess )
-            if len(self._bg) == 0:
-                # ... is this allowed?
-                self._bg = None
-            elif len(self._bg) > 1:
-                raise RuntimeError( "This should nevner happen" )
-            else:
-                self._bg = self._bg[0]
+                if always_reload or ( self._bg is None ):
+                    self._bg = Background.get_by_field_value( "sources_id", self._sources.id, pgdb=pgdb )
+                    if len(self._bg) > 1:
+                        raise RuntimeError( "This should nevner happen" )
+                    else:
+                        self._bg = self._bg[0]
 
 
     def get_upstream_ids( self, pgdb=None ):
@@ -524,8 +530,8 @@ class Reference(Base, UUIDMixin, HasBitFlagBadness):
 
             if mjds is not None:
                 mjds = listify( mjds )
-                q += sql.SQL( "  AND ( r.validity_start IS NULL OR {tmin}>=validity_start )\n"
-                              "  AND ( r.validity_end IS NULL OR {tmax}<=validity_end )\n"
+                q += sql.SQL( "  AND ( r.validity_start IS NULL OR {tmin}>=r.validity_start )\n"
+                              "  AND ( r.validity_end IS NULL OR {tmax}<=r.validity_end )\n"
                              ).format( tmin=pytz.utc.localize( astropy.time.Time( min(mjds),
                                                                                   format='mjd' ).datetime ),
                                        tmax=pytz.utc.localize( astropy.time.Time( max(mjds),

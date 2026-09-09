@@ -457,10 +457,11 @@ class Background(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
 
         return newbg
 
-    def trim( self, x0, y0, x1, y1, trimmed_sources=None, value=None, noise=None ):
+    def trim( self, x0, x1, y0, y1, trimmed_sources=None, value=None, noise=None ):
         """Make a new Background that is for an image that's trimmed from the image the current Background is for."""
 
-        newbg = Background( _format = self._format,
+        newbg = Background( image_shape=(y1-y0, x1-x0),
+                            _format = self._format,
                             _method = self._method,
                             value = value if value is not None else self.value,
                             noise = noise if noise is not None else self.noise,

@@ -665,7 +665,7 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
             limMagEst = None
             return limMagEst
 
-    def trim(self, x0, y0, x1, y1, trimmed_image=None ):
+    def trim(self, x0, x1, y0, y1, trimmed_image=None ):
         """Return a new SourceList that tries to be for a cutout image."""
 
         if any( i is None for i in (x0, x1, y0, y1) ):
@@ -683,22 +683,22 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
             dex = ( ( self.data['X_IMAGE'] >= x0 ) & ( self.data['X_IMAGE'] < x1 ) &
                     ( self.data['Y_IMAGE'] >= y0 ) & ( self.data['Y_IMAGE'] < y1 ) )
             if isinstance( self.data, np.ndarray ):
-                xcols = SourceList._sextractor_x_coord_cols.insersection( set(self.data.dtype.names) )
-                ycols = SourceList._sextractor_y_coord_cols.insersection( set(self.data.dtype.names) )
+                xcols = SourceList._sextractor_x_coord_cols.intersection( set(self.data.dtype.names) )
+                ycols = SourceList._sextractor_y_coord_cols.intersection( set(self.data.dtype.names) )
                 # I'm pretty sure this does a copy, not a view.  I really hope so.
                 subdata = self.data[ dex ]
             elif isinstance( self.data, astropy.table.Table ):
-                xcols = SourceList._sextractor_x_coord_cols.insersection( set(self.data.columns) )
-                ycols = SourceList._sextractor_y_coord_cols.insersection( set(self.data.columns) )
+                xcols = SourceList._sextractor_x_coord_cols.intersection( set(self.data.columns) )
+                ycols = SourceList._sextractor_y_coord_cols.intersection( set(self.data.columns) )
                 # ... TODO make sure the semantics here are what I thnk they are
                 subdata = astropy.table.Table( self.data[dex] )
             else:
                 raise RuntimeError( f"self.data is of unknown type {type(self.data)}" )
 
             for xcol in xcols:
-                subdata[xcol] += x0
+                subdata[xcol] -= x0
             for ycol in ycols:
-                subdata[ycol] += y0
+                subdata[ycol] -= y0
 
         else:
             raise ValueError( f"Unrecognized format {self.format}" )

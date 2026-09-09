@@ -271,6 +271,28 @@ class PSF(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         """Get a dict with the allowed values of badness that can be assigned to this object"""
         return psf_badness_inverse
 
+
+    @classmethod
+    def create( cls, **kwargs ):
+        if '_format' in kwargs:
+            psfformat = kwargs['_format']
+        elif 'format' in kwargs:
+            psfformat = PSFFormatConverter.to_int( kwargs['format'] )
+            kwargs['_format'] = psfformat
+            del kwargs['format']
+        else:
+            raise ValueError( "Can't make a PSF without a format" )
+
+        # Note!  Gotta use PSF here, not cls, so we get all the subclasses of PSF
+        #   even if this is called on a different class.
+        for subclass in PSF.__subclasses__():
+            # These particular variable names vestigal from transitioning away from SQLAZlchemy
+            if subclass.__mapper_args__[ "polymorphic_identity" ] == psfformat:
+                return subclass( **kwargs )
+
+        raise ValueError( f"Unknown psf _format {psfformat}" )
+
+
     def __init__( self, *args, **kwargs ):
         FileOnDiskMixin.__init__( self, **kwargs )
         HasBitFlagBadness.__init__(self)
@@ -707,8 +729,9 @@ class PSF(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         # Now that we aren't going to pass x and y off to any other functions,
         #   correct for offset
 
-        x += self.offset_x
-        y += self.offset_y
+        if self.offset_x is not None:
+            x += self.offset_x
+            y += self.offset_y
 
         # round() isn't the right thing to use here, because it will
         #   behave differently when x - round(x) = 0.5 based on whether

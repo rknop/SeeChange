@@ -772,7 +772,7 @@ class ObjectCatalogMatch:
         matches = []
         if len(rows) > 0:
             found_existing = True
-            matches = [ cls( **r ) for r in rows ]
+            matches = [ cls.create( **r ) for r in rows ]
             matches.sort( key=lambda o: o.dist )
         else:
             cursor.execute( f"SELECT * FROM {cls.nomatchtable} WHERE object_id=%(objid)s AND match_radius=%(rad)s ",

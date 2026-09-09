@@ -188,7 +188,7 @@ class ProvenanceTree(dict):
                                     f"when bulding the provenance tree!  Tried to add {prov.id}, "
                                     f"but the provenance tree already had {self[process].id}." )
             found_upstreams = ( set() if process in noupstreams
-                                else set( p if p not in processmap else processmap[p]
+                                else set( p.process if p.process not in processmap else processmap[p.process]
                                           for p in prov.upstreams ) )
             if found_upstreams != expected_upstreams:
                 raise RuntimeError( f"Process {process} came up with inconsistent upstream "
@@ -1703,7 +1703,7 @@ class DataStore:
 
         with PGDB( _pgdb, dictcursor=True ) as pgdb:
             rows = pgdb.execute( q )
-            obj = [ cls(**r) for r in rows ]
+            obj = [ cls.create(**r) for r in rows ]
 
         if is_list:
             setattr( self, att, None if len(obj)==0 else list(obj) )
@@ -2021,7 +2021,7 @@ class DataStore:
         if ( provenances is None ) or ( len(provenances) == 0 ):
             raise RuntimeError( "DataStore can't get a reference, no provenances to search" )
 
-        provenance_ids = [ p.id if isinstance(p, Provenance) else asUUID(p) for p in provenances ]
+        provenance_ids = [ p.id if isinstance(p, Provenance) else p for p in provenances ]
 
         # first, some checks to see if existing reference is ok
         if self.reference is not None:

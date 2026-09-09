@@ -177,7 +177,8 @@ class ImageCleanup:
 
         image.save(no_archive=not archive)
 
-        return cls(image, archive=archive)  # don't use this, but let it sit there until going out of scope of the test
+        return cls.create(image, archive=archive)  # don't use this, but let it sit there
+                                                   #     until going out of scope of the test
 
     def __init__(self, image, archive=True):
         self.image = image
@@ -939,14 +940,8 @@ def sim_lightcurve_image_datastore_maker_factory( sim_lightcurve_image_parameter
         ds.prov_tree = pip.make_provenance_tree( ds, no_provtag=True, ok_no_ref_prov=True )
 
         ds = pip.extractor.run( ds, input_psf=refds.psf )
-        ds.sources.save( image=ds.image )
-        ds.sources.insert()
         # Fix the psf sources_id now that we have a sources
         ds.psf.sources_id = ds.sources.id
-        ds.psf.save( image=ds.image, sources=ds.sources )
-        ds.psf.insert()
-        ds.bg.save( image=ds.image, sources=ds.sources )
-        ds.bg.insert()
 
         # The WCS is the same as the reference image wcs
         # Make a fake WCS, because these sources are simulated so don't match the sky
@@ -954,11 +949,9 @@ def sim_lightcurve_image_datastore_maker_factory( sim_lightcurve_image_parameter
         ds.wcs.wcs = refds.wcs.wcs
         ds.wcs.sources_id = ds.sources.id
         ds.wcs.provenance_id = ds.prov_tree['astrocal'].id
-        ds.wcs.save( image=ds.image )
         ds.wcs._fill_bogus_coordinate_fields( ra=imageargs['ra'], dec=imageargs['dec'],
                                               minra=imageargs['minra'], maxra=imageargs['maxra'],
                                               mindec=imageargs['mindec'], maxdec=imageargs['maxdec'] )
-        ds.wcs.insert()
 
         # Likewise, make a fake zeropoint, cheating again on provenance
         # (Sad about the number of stars for aperture correction; probably
@@ -967,6 +960,18 @@ def sim_lightcurve_image_datastore_maker_factory( sim_lightcurve_image_parameter
         ds.zp = ZeroPoint( wcs_id=ds.wcs.id, zp=27.50, dzp=0.02,
                            aper_cor_radii=ds.sources.aper_rads, aper_cors=apercors,
                            provenance_id=ds.prov_tree['photocal'].id )
+
+        # Save all the things
+        ds.image.save()
+        ds.image.insert()
+        ds.sources.save( image=ds.image )
+        ds.sources.insert()
+        ds.bg.save( image=ds.image, sources=ds.sources )
+        ds.bg.insert()
+        ds.psf.save( image=ds.image, sources=ds.sources )
+        ds.psf.insert()
+        ds.wcs.save( image=ds.image )
+        ds.wcs.insert()
         ds.zp.insert()
 
         dsentocleanup.append( ds )
@@ -1036,8 +1041,6 @@ def _do_sim_lightcurve_new_ds_factory( imageinfo, imageargs, refds, sources, wcs
         wcsparm['CRVAL1'] += rng.normal( 0., 20./3600. )
         wcsparm['CRVAL2'] += rng.normal( 0., 20./3600. )
         image._header = fits.Header( wcsparm )
-        image.save()
-        image.insert()
 
         ds = maker( image )
         dsentodel.append( ds )

@@ -1,5 +1,6 @@
 import numbers
 import uuid
+import textwrap
 
 import numpy as np
 from psycopg import sql
@@ -9,16 +10,18 @@ import models.object
 from models.base import PGDB
 from models.provenance import Provenance
 from models.object import ObjectPosition
-from moels.image import Image
+from models.image import Image
 from models.source_list import SourceList
-from models.zero_point import ZeroPoint
+from models.background import Background
+from models.psf import PSF
 from models.refset import RefSet
+from models.forcedphot import ForcedPhot
 from util.config import Config, NoValue
-from util.logging import SCLogger
+from util.logger import SCLogger
 from util.util import listify
 from pipeline.parameters import Parameters
 from pipeline.data_store import ProvenanceTree, DataStore
-from pipeline.subtration import Subtractor
+from pipeline.subtraction import Subtractor
 
 
 class ParsLightcurve(Parameters):
@@ -118,7 +121,7 @@ class ParsLightcurve(Parameters):
 
         self.crop_image = self.add_par(
             name = "crop_image",
-            default = [ 100, 100 ],
+            default = [ 150, 150 ],
             par_types = ( list, None ),
             docstring = ( "If given, 2-element list (width, height).  Science images will be trimmed to at most "
                           "this size before being fed to subtractions.  If None, use full-size images "
@@ -151,7 +154,7 @@ class ParsLightcurve(Parameters):
             docstring = "The instrument that we're building a lightcurve for.  Only do one instrument at a time.",
             # Not critical because the forced phot upstream provs will have an image prov that (effectively)
             #   specifies instrument
-            critcal = False
+            critical = False
         )
 
         self.filters = self.add_par(
@@ -175,6 +178,15 @@ class ParsLightcurve(Parameters):
             default = None,
             par_types = ( str, None ),
             docstring ="The name of the object to build a lightcurve for.  Ignored if object_id is given.",
+            critical = False
+        )
+
+        self.save_to_db = self.add_par(
+            name = "save_to_db",
+            default = False,
+            par_types = bool,
+            docstring = ( "Set True to save newly created photometry to the database.  In *any* event, "
+                          "subtractions and trimmed images and so forth are going to get saved.  I think." ),
             critical = False
         )
 
@@ -212,7 +224,7 @@ class Lightcurve:
 
         self.pars.object_id = object_id if not isinstance( object_id, NoValue ) else self.pars.object_id
         self.pars.object_name = object_name if not isinstance( object_name, NoValue ) else self.pars.object_name
-        self.pars.mjd0 = mjd0 if not isinstance( mjd0, NoValue ) else self.pars.object_mjd0
+        self.pars.mjd0 = mjd0 if not isinstance( mjd0, NoValue ) else self.pars.mjd0
         self.pars.mjd1 = mjd1 if not isinstance( mjd1, NoValue ) else self.pars.mjd1
         self.pars.filters = listify(filters) if not isinstance( filters, NoValue ) else self.pars.filters
 
@@ -270,15 +282,15 @@ class Lightcurve:
                                           f"tag {self.pars.object_position_prov_tag} and "
                                           f"process { self.pars.object_position_prov_tag_process}" )
 
-            if self.subtractor.refset is None:
+            if self.subtractor.pars.refset is None:
                 raise ValueError( "Subtractor has no refset defined!" )
             self.refset = RefSet.get_by_name( self.subtractor.pars.refset, pgdb=pgdb )
             if self.refset is None:
                 raise ValueError( f"Can't find refset {self.subtractor.pars.refset}" )
 
-            rows = pgdb.execute( sql.SQL( "SELECT * FROM objects WHERE {col}={val}" )
-                                 .format( col=sql.Identifier(objcol), val=objval  ) )
-            if len(rows) > 0:
+            q = sql.SQL( "SELECT * FROM objects WHERE {col}={val}" ).format( col=sql.Identifier(objcol), val=objval )
+            rows = pgdb.execute( q )
+            if len(rows) > 1:
                 raise RuntimeError( "This should never happen" )
             elif len(rows) == 0:
                 raise ValueError( f"Could not find object with {objcol}={objval}" )
@@ -291,8 +303,8 @@ class Lightcurve:
                                               "WHERE object_id={objid} AND provenance_id={provid} "
                                              ).format( objid=self.object.id,
                                                        provid=self.object_position_prov.id ) )
-                if len(rows) > 0:
-                    raise RuntimeError( "This should never hapen, I don't think, but I'm not really sure." )
+                if len(rows) > 1:
+                    raise RuntimeError( "This should never happen, I don't think, but I'm not really sure." )
                 elif len(rows) == 0:
                     raise ValueError( f"Could not find object position for object {self.object.id} "
                                       f"and object position provenacne {self.object_position_prov.id}" )
@@ -313,27 +325,25 @@ class Lightcurve:
         # Get trim image provenances
         if self.pars.crop_image is not None:
             trim_processes = [ 'Image.trim', 'Image.trim.sources', 'Image.trim.wcs', 'Image.trim.zp' ]
-            trimprovs = Image.get_trim_provs( self.pars.crop_image[0], self.pars.crop_image[1],
-                                              upstreams=[ provtree['starting_point'] ],
-                                              wcs_prov=provtree['astrocal'], zp_prov=provtree['photocal'],
-                                              save=False )
-            trimprovs.append( Provenance( process='photocal', upstreams=[ provtree['photocal'] ] ) )
-
+            trimupsteps = { 'Image.trim':         [ 'starting_point', 'astrocal' ],
+                            'Image.trim.sources': [ 'Image.trim' ],
+                            'Image.trim.wcs':     [ 'Image.trim.sources' ],
+                            'Image.trim.zp':      [ 'photocal' ] }
+            trimprovs = list( Image.get_trim_provs( self.pars.crop_image[0], self.pars.crop_image[1],
+                                                    upstreams=[ provtree['starting_point'] ],
+                                                    wcs_prov=provtree['astrocal'], zp_prov=provtree['photocal'],
+                                                    save=False ) )
             if 'Image.trim' in provtree:
                 if any( provtree[trim_processes[i]].id != trimprovs[i].id for i in range(4) ):
                     raise ValueError( "Pre-existing image trim provenances don't match what what "
                                       "they should have been given config." )
-                trimupsteps = { 'Image.trim':        [ 'starting_point', 'astrocal' ],
-                                'Image.trm.sources': [ 'Image.trim' ],
-                                'Image.trim.wcs':    [ 'Image.trim.sources' ],
-                                'Image.trim.zp':     [ 'photocal' ] }
                 if any( set( trimupsteps[trim_processes[i]] ) != set( provtree.upstream_steps[trim_processes[i]] )
                         for i in range(4) ):
                     raise ValueError( "Pre-existing trim upstream steps weren't what was expected." )
             else:
                 # This next if should be False by construction.  If it's True, it
                 #   means that there is a code error either here or in Image.get_trim_provs
-                if ( len( trimprovs[0].upstreams == 2 ) != 0
+                if ( len( trimprovs[0].upstreams ) != 2
                      or ( 'astrocal' not in [ p.process for p in trimprovs[0].upstreams ] )
                      or  any( set( u.process for u in trimprovs[i].upstreams )
                               != set( trimupsteps[trim_processes[i]] )
@@ -345,7 +355,7 @@ class Lightcurve:
             # photocal as an upstream, so we don't tag the image
             # provenance by just tagging the Image.trim.zp
             # provenance.
-            subups.append( [ trimprovs[2], trimprovs[3] ] )
+            subups.extend( [ trimprovs[2], trimprovs[3] ] )
             subupsteps.extend( [ 'Image.trim.wcs', 'Image.trim.zp' ] )
 
         else:
@@ -366,12 +376,12 @@ class Lightcurve:
                 raise ValueError( "Subtraction upstream steps mismatch." )
 
         # Get the forced photometry provenance
-        ups = [ provtree['subtraction'] ]
+        ups = [ subprov ]
         upsteps = [ 'subtraction' ]
-        if ( self.objectposition_prov is not None ) or ( self.object_position_prov_tag is not None ):
+        if self.object_position_prov is not None:
             ups.append( provtree['positioning'] )
             upsteps.append( 'positioning' )
-        forcedprov = Provenance( code_version_id=Provenance.get_code_version('forcedphot', pgdb=pgdb).it,
+        forcedprov = Provenance( code_version_id=Provenance.get_code_version('forcedphot', pgdb=pgdb).id,
                                  process='forcedphot', parameters=self.pars.get_critical_pars(),
                                  upstreams=ups )
         if 'forcedphot' in provtree:
@@ -457,7 +467,8 @@ class Lightcurve:
         trim_procs = [ 'Image.trim', 'Image.trim.sources', 'Image.trim.wcs', 'Image.trim.zp']
 
         provtree = ProvenanceTree( noupstreams=['positioning', 'referencing', 'starting_point'],
-                                   processmap={'preprocessing': 'starting_piont'} )
+                                   processmap={'preprocessing': 'starting_point',
+                                               'test_image': 'starting_point'} )
         with PGDB( pgdb_in ) as pgdb:
             # First, see if we can find the forced photometry tag
             if provtag is not None:
@@ -487,7 +498,7 @@ class Lightcurve:
                                         "provenance tag {provtag}" )
 
                 # Based on config, we know what processes are legal
-                if self.pars.crop_iamge is not None:
+                if self.pars.crop_image is not None:
                     all_procs = all_procs.union( trim_procs )
                 if ( ( self.pars.object_position_prov is not None ) or
                      ( self.pars.object_position_prov_tag is not None )
@@ -498,7 +509,7 @@ class Lightcurve:
                 # First, there's *gotta* be a reference provenances, or we won't be able to do anything
                 # (Use Provenance.get_by_id here rather than self.refset.provenance property, so that
                 # we can use pgdb.)
-                refprov = Provenance.get_by_id( self.refset.provenance_id, pgdb=pgdb )
+                refprov = Provenance.get( self.refset.provenance_id, pgdb=pgdb )
                 if refprov is None:
                     raise RuntimeError( f"Failed to find provenance {self.refset.provenance_id} for "
                                         f"refset {self.refset.name}" )
@@ -525,7 +536,7 @@ class Lightcurve:
                 posprov = None
                 notfound = False
                 if self.pars.object_position_prov is not None:
-                    posprov = Provenance.get_by_id( self.pars.object_position_prov, pgdb=pgdb )
+                    posprov = Provenance.get( self.pars.object_position_prov, pgdb=pgdb )
                     if posprov is None:
                         notfound = True
                     elif posprov.process != 'positioning':
@@ -606,7 +617,7 @@ class Lightcurve:
                     if self.pars.crop_image is not None:
                         provs.extend( provtree[p] for p in [ 'Image.trim', 'Image.trim.sources',
                                                              'Image.trim.wcs', 'Image.trim.zp' ] )
-                    provs = [ provtree['subtraction'], provtree['forcedphot'] ]
+                    provs.extend( [ provtree['subtraction'], provtree['forcedphot'] ] )
                     for prov in provs:
                         prov.insert_if_needed( pgdb=pgdb, nocommit=True )
                     pgdb.commit()
@@ -623,7 +634,7 @@ class Lightcurve:
             ra = self.object.ra
             dec = self.object.dec
 
-        kwargs = self.pars.reference.copy()
+        kwargs = self.subtractor.pars.reference.copy()
         kwargs['instrument'] = self.pars.instrument
         kwargs['provenances'] = self.refset.provenance_id
         kwargs['ra'] = ra
@@ -636,7 +647,7 @@ class Lightcurve:
 
         refs = {}
         for filt in filters:
-            ref = ds.get_reference( ra=ra, dec=dec, filter=filt, pgdb=pgdb, **kwargs )
+            ref = ds.get_reference( filter=filt, pgdb=pgdb, **kwargs )
             if ref is None:
                 raise RuntimeError( f"Cannot find a reference at ({ra:.rf, dec:.4f}) for instrument "
                                     f"{self.pars.instrument}, filter {filt}, and parameters {kwargs}" )
@@ -644,15 +655,127 @@ class Lightcurve:
 
         return refs
 
-    def process_one_image( self, img ):
-        pass
+    def process_one_image( self, imgdex ):
+        img = self.imgs[ imgdex ]
+        ds = DataStore( img )
+        ds.prov_tree = self.provtree
+        ds.reference = self.refs[ img.filter ]
+        with PGDB( dictcursor=True ) as pgdb:
+            ds.sources = SourceList.get_by_id( self.wcsen[img.id].sources_id, pgdb=pgdb )
+            rows = pgdb.execute( sql.SQL( "SELECT * FROM backgrounds WHERE sources_id={src}" )
+                                 .format( src=ds.sources.id ) )
+            ds.bg = Background.create( **(rows[0]) )
+            rows = pgdb.execute( sql.SQL( "SELECT * FROM psfs WHERE sources_id={src}" )
+                                 .format( src=ds.sources.id ) )
+            ds.psf = PSF.create( **(rows[0]) )
+        ds.wcs = self.wcsen[ img.id ]
+        ds.zp = self.zps[ img.id ]
 
-    def run( self ):
+        # Trim if we have to
+        if self.pars.crop_image is not None:
+            xctr, yctr = ds.wcs.wcs.world_to_pixel_values( self.ra, self.dec )
+            ixctr = int( np.floor( xctr + 0.5 ) )
+            iyctr = int( np.floor( yctr + 0.5 ) )
+            x0 = ixctr - ( self.pars.crop_image[0] // 2 )
+            x1 = x0 + self.pars.crop_image[0]
+            y0 = iyctr - ( self.pars.crop_image[1] // 2 )
+            y1 = y0 + self.pars.crop_image[1]
+
+            trimmed = img.trim( x0, x1, y0, y1, sources=ds.sources, bg=ds.bg, psf=ds.psf,
+                                wcs=ds.wcs, zp=ds.zp, adjust_limits=True )
+
+            cropprovs = trimmed['provenances']
+            x0, x1, y0, y1 = trimmed['limits']
+            # Offset xctr and yctr so they're on the trimmed image
+            xctr -= x0
+            yctr -= y0
+
+            if ( ( cropprovs['image'].id != ds.prov_tree['Image.trim'].id ) or
+                 ( cropprovs['sources'].id != ds.prov_tree['Image.trim.sources'].id ) or
+                 ( cropprovs['wcs'].id != ds.prov_tree['Image.trim.wcs'].id ) or
+                 ( cropprovs['zp'].id != ds.prov_tree['Image.trim.zp'].id ) ):
+                raise ValueError( "Image trim provenances didn't match!  This should never happen." )
+
+            cropds = DataStore( trimmed['image'] )
+            cropds.prov_tree = ds.prov_tree
+            cropds.reference = ds.reference
+            cropds.sources = trimmed['sources']
+            cropds.bg = trimmed['bg']
+            cropds.psf = trimmed['psf']
+            cropds.wcs = trimmed['wcs']
+            cropds.zp = trimmed['zp']
+            ds = cropds
+
+        ds = self.subtractor.run( ds, ra=self.ra, dec=self.dec, trust_datastore_reference=True )
+        if self.pars.save_to_db:
+            ds.save_and_commit( overwrite=False )
+        sub_image = ds.get_sub_image()
+
+        # See if we can load pre-existing forced photometry from the database
+        forcedphot = None
+        with PGDB( dictcursor=True ) as pgdb:
+            q = sql.SQL( textwrap.dedent(
+                """\
+                SELECT * FROM forced_photometry
+                WHERE object_id={obj}
+                  AND provenance_id={prov}
+                  AND subtraction_id={sub}
+                  AND object_position_id{posclause}
+                """
+            ) ).format( obj=self.object.id,
+                        prov=ds.prov_tree['forcedphot'].id,
+                        sub=sub_image.id,
+                        posclause=( sql.SQL( "={posid}".format(posid=self.object_position.id) )
+                                    if self.object_position is not None
+                                    else sql.SQL( " IS NULL" ) ) )
+            rows = pgdb.execute( q )
+            if len(rows) > 1:
+                raise RuntimeError( "Database corruption, forced phot multiply defined." )
+            elif len(rows) == 1:
+                forcedphot = ForcedPhot( **(rows[0]) )
+
+        if forcedphot is None:
+            # Now actually do photometry
+            # First, make things the way photutils wants them
+            sub_mask = np.full_like( sub_image.flags, False, dtype=bool )
+            sub_mask[ sub_image.flags != 0 ] = True
+            sub_mask[ sub_image.weight <= 0. ] = True
+            sub_noise = 1. /np.sqrt( sub_image.weight )
+            sub_noise[ sub_mask ] = np.nan
+
+            new_zp = ds.get_zp()
+            # TODO FIGURE THIS OUT (Issue #194)
+            new_psf = ds.get_psf()
+
+            measurements = improc.photometry.photometry( sub_image.data, sub_noise, sub_mask, positions=[(xctr, yctr)],
+                                                         psfobj=new_psf, apers=new_zp.aper_cor_radii )
+            measurements = measurements[0]
+
+            forcedphot = ForcedPhot(
+                object_id=self.object.id,
+                object_position_id=None if self.object_position is None else self.object_position_id,
+                provenance_id=ds.prov_tree['forcedphot'].id,
+                subtraction_id=sub_image.id,
+                flux_psf=measurements.flux_psf,
+                flux_psf_err=measurements.flux_psf_err,
+                flux_apertures=measurements.flux_apertures,
+                flux_apertures_err=measurements.flux_apertures_err
+            )
+
+            if self.pars.save_to_db:
+                forcedphot.insert()
+
+        return forcedphot
+
+
+    def run( self, *args, **kwargs ):
+        self.setup( *args, **kwargs )
         self.provtree = self.make_prov_tree( save=True )
 
         if self.pars.filter is None:
             imgs, wcsen, zps = Image.find_images( ra=self.ra, dec=self.dec, type='Sci',
-                                                  provenance_ids=self.provtree['photocal'], provenance_ids_are_zp=True,
+                                                  provenance_ids=self.provtree['photocal'].id,
+                                                  provenance_ids_are_zp=True,
                                                   instrument=self.pars.instrument,
                                                   min_mjd=self.pars.mjd0, max_mjd=self.pars.mjd1,
                                                   order_by='earliest', return_wcs=True, return_zeropoints=True )
@@ -679,66 +802,15 @@ class Lightcurve:
             SCLogger.warning( "No images found to build a lightcurve for!" )
             return None
 
+        self.imgs = imgs
+        self.wcsen = wcsen
+        self.zps = zps
+        self.forced_phots = [ None ] * len(imgs)
+
         # Make an empty datastore to do use for finding references.  (Issue #550)
         ds = DataStore()
         ds.prov_tree = self.provtree
-        refs = self.find_refs( ds, filters=filters, mjd0=imgs[0].mjd, mjd1=imgs[1].mjd )
+        self.refs = self.find_refs( ds, filters=filters, mjd0=imgs[0].mjd, mjd1=imgs[1].mjd )
 
-        for img in imgs:
-            ds = DataStore( img )
-            ds.prov_tree = self.provtree
-            ds.reference = refs[ img.filter ]
-            ds.sources = SourceList.get_by_id( wcsen[img.id].sources_id )
-            ds.wcs = wcsen[ img.id ]
-            ds.zp = zps[ img.id ]
-
-            # Trim if we have to
-            if self.pars.crop_image is not None:
-                xctr, yctr = ds.wcs.wcs.pixel_to_world_values( self.ra, self.dec )
-                ixctr = int( np.floor( xctr + 0.5 ) )
-                iyctr = int( np.floor( yctr + 0.5 ) )
-                x0 = ixctr - ( self.pars.crop_image[0] / 2 )
-                x1 = x0 + self.pars.crop_image[0]
-                y0 = iyctr - ( self.pars.crop_image[1] / 2 )
-                y1 = y0 + self.pars.crop_image[1]
-                ( cropim, cropsrc,
-                  cropwcs, cropprovs ) = img.trim( x0, x1, y0, y1,
-                                                   sources=ds.sources, wcs=ds.wcs,
-                                                   trimprovs=[ self.provtree['Image.trim'],
-                                                               self.provtree['Image.trim.sources'],
-                                                               self.provtree['Image.trim.wcs']
-                                                              ] )
-                cropbg = ds.get_bg().trim( x0, x1, y0, y1, trimmed_sources=cropsrc )
-                croppsf = ds.get_psf().trim( x0, x1, y0, y1, trimmed_sources=cropsrc )
-                ds.get_zp()
-                cropzp = ZeroPoint( zp=ds.zp.zp, dzp=ds.zp.dzp, aper_cor_radii=ds.zp.aper_cor_radii,
-                                    aper_cors=ds.aper_cors.copy(), provenance_id=self.provtree['Image.trim.zp'] )
-                ds.image = cropim
-                ds.image_id = cropim.id
-                ds.sources = cropsrc
-                ds.bg = cropbg
-                ds.psf = croppsf
-                ds.wcs = cropwcs
-                ds.zp = cropzp
-
-            ds = self.subtractor.run( ds, self.ra, self.dec, trust_datastore_reference=True )
-            ds.save_and_commit( overwrite=False )
-
-            # Now actually do photometry
-            # First, make things the way photutils wants them
-            sub_image = ds.get_sub_image()
-            sub_mask = np.full_like( sub_image.flags, False, dtype=bool )
-            sub_mask[ sub_image.flags != 0 ] = True
-            sub_mask[ sub_image.weight <= 0. ] = True
-            sub_noise = 1. /np.sqrt( sub_image.weight )
-            sub_noise[ sub_mask ] = np.nan
-
-            new_zp = ds.get_zp()
-            new_wcs = ds.get_wcs()
-            # TODO FIGURE THIS OUT (Issue #194)
-            new_psf = ds.get_psf()
-
-            measurements = improc.photometry( sub_image, sub_noise, sub_mask, positions=[(xctr, yctr)],
-                                              pfsobj=newpsf, apers=new_zp.aper_cor_radii )
-
-            # ROB YOU WERE HERE
+        for i in range( len(self.imgs) ):
+            self.forced_phots[i] = self.process_one_image(i)

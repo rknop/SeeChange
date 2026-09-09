@@ -683,7 +683,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             raise RuntimeError( "Exposure id can't be none to use Image.from_exposure" )
 
 
-        new = cls()
+        new = cls.create()
 
         new.exposure_id = exposure.id
 
@@ -833,6 +833,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             'telescope',
             'filter',
             'section_id',
+            'width',
+            'height',
             'project',
             'target',
             'preproc_bitflag',
@@ -852,7 +854,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             '_format',
             '_type',
         ]
-        new = cls()
+        new = cls.create()
         for att in copy_attributes:
             if att == 'image':
                 if ( not no_copy_data ) and ( image.data is not None ):
@@ -1084,11 +1086,11 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         return output
 
     @classmethod
-    def from_ref_and_new(cls, ref, new_image):
-        return cls.from_new_and_ref(new_image, ref)
+    def from_ref_and_new(cls, **kwargs):
+        return cls.from_new_and_ref( **kwargs )
 
     @classmethod
-    def from_new_and_ref(cls, new_image_zp, ref, new_image=None, width=None, height=None):
+    def from_new_and_ref(cls, new_image_zp=None, ref=None, new_image=None, width=None, height=None):
         """Create a new Image object from a Reference object and a new Image object.
         This is the first step in making a difference image.
 
@@ -1313,8 +1315,15 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         return trimimprov, trimsrcprov, trimwcsprov, trimzpprov
 
 
-    def trim( self, x0, x1, y0, y1, sources=None, wcs=None, save_prov=False, provtag=None,
-              save_to_db=False, no_load=False, pgdb=None ):
+    def trim( self, x0, x1, y0, y1,
+              adjust_limits=False,
+              sources=None,
+              bg=None,
+              psf=None,
+              wcs=None,
+              zp=None,
+              save_to_db=False, save_prov=False, provtag=None, no_load=False,
+              pgdb=None ):
         """Return an Image (etc.) that's a cutout of this image.
 
         Returns a new Image with a trimmed data, weight, and flags
@@ -1350,11 +1359,21 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
           sources: SoureList, default None
              SourceList that goes with wcs.  Required if wcs is not None.
 
+          bg: Background, default None
+             Background that goes with SourceList
+
+          psf: PSF, default None
+             PSF that goes with SourceList
+
           wcs: WorldCoordinates, default None
              If given, will update all coordinate fields of the image to
              be right for the trimmed image (assuming the wcs is right).
-             Will also return the wcs for the trimmed image.  Requieres
-             sources.
+             Will also return the wcs for the trimmed image.  Requires
+             sources.  Warning: if wcs is not given, then ra, dec,
+             etc. in the image will all be wrong!
+
+          zp: ZeroPoint, default None
+             yadda yadda yadda
 
           save_prov: bool, default False
              If True, make sure the Provenance of the trimmed image is
@@ -1384,25 +1403,32 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
              always generate it.  If no_load is True, save_to_db must be
              False.
 
+          adjust_limits: bool, default False
+             Normally, if x0, x1, y0, or y1 are outside the bounds of
+             the image, an exception will be raised.  Set this to True
+             to instead just have it pull in that limit.
+
           pgdb: PGDB, psycopg.Connection, psycopg.Cursor, or sa Session, default None
              Database connection to use.  If not given, will open and
              close a new one if one is needed.
 
         Returns
         -------
-          ( Image, Provenance ) or ( Image, SourceList, WorldCoordinates, [Provenance, Provenance, Provenance] )
+           dict with keys:
+              'image' : Image, the trimmed image
+              'sources': SourceList, the trimmed sources, *if* sources was passed
+              'bg': Background, the trimmed background, *if* bg was passed
+              'psf': PSF, the trimmed PSF, *if* psf was passed
+              'wcs': WorldCoordinates, the trimmed wcs, *if* wcs was passed
+              'zp': ZeroPoint, the trimmed zeropoint, *if* zp was passed
+              provenances: dict of { str: Provenance or None }
+                           with keys 'image', 'sources', 'wcs', 'zp'
+              limits: ( x0, x1, y0, y1 )
 
-            If wcs is None, just returns an Image and the new image
-            Provenance (or None if there is no provenance for the new
-            image).  If wcs is non-None, returns the image, a SourceList
-            (which will be a null-type source list with no actual
-            sources, only used for database bookkeeping) and a
-            WorldCoordinates, and then a list of the three provenances
-            in order.
-
-            If self.provenance_id is None, then no provenances are
-            created for the trimmed image etc., so the final argument
-            will be None or an array of Nones.
+              limits are the limits actually used.  These will be the
+              same as the passed x0, x1, y0, y1, unless adjust_limits
+              was True and the passed limits went off of the edge of the
+              image.
 
         """
 
@@ -1417,28 +1443,38 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             raise ValueError( "save_prov was set but self.provenance_id is None" )
         if ( provtag is not None ) and ( not save_prov ):
             raise ValueError( "Passing a provtag requires save_prov=True" )
-        if not all( isinstance( numbers.Integral, i ) for i in [ x0, x1, y0 ,y1 ] ):
+        if not all( isinstance( i, numbers.Integral ) for i in [ x0, x1, y0 ,y1 ] ):
             raise TypeError( "x0, x1, y0, y1 must all be integers." )
-        if ( x0 < 0 ) or ( x1 > self.data.shape[1] ) or ( y0 < 0 ) or ( y1 > self.data.shape[0] ):
-            raise ValueError( "Trim limits [{x0}:{x1}, {y0}:y1}] are outside image borders." )
+        for val, name in zip( [ bg, psf, wcs ], [ 'bg', 'psf', 'wcs' ] ):
+            if ( val is not None ) and ( sources is None ):
+                raise ValueError( f"Passing {name} requires passing sources" )
+        if ( zp is not None ) and ( wcs is None ):
+            raise ValueError( "Passing zp requires passing wcs" )
+        if adjust_limits:
+            x0 = max( x0, 0 )
+            x1 = min( x1, self.data.shape[1] )
+            y0 = max( y0, 0 )
+            y1 = min( y1, self.data.shape[0] )
+        else:
+            if ( x0 < 0 ) or ( x1 > self.data.shape[1] ) or ( y0 < 0 ) or ( y1 > self.data.shape[0] ):
+                raise ValueError( "Trim limits [{x0}:{x1}, {y0}:y1}] are outside image borders." )
 
         xcen = int( np.floor( (x0 + x1) / 2. ) )
         ycen = int( np.floor( (y0 + y1) / 2. ) )
-        trimimprov = None
-        trimsrcprov = None
-        trimwcsprov = None
+        trimimprov = trimsrcprov = trimwcsprov = None
+        trimim = trimsrc = trimbg = trimpsf = trimwcs = trimzp = None
+
         if self.provenance_id is not None:
             # Make the provenances
-            provenance = Provenance.get_by_id( self.provenance_id, pgdb=pgdb )
-            wcsprov = None
-            if wcs is not None:
-                wcsprov = Provenance.get_by_id( wcs.provenance_id, pgdb=pgdb )
-            ( trimimprov,
-              trimsrcprov,
-              trimwcsprov,
-              _ ) = self.get_trim_provs( x1-x0, y1-y0, upstreams=[provenance], wcs_prov=wcsprov,
-                                         save=save_prov, provtag=provtag, pgdb=pgdb )
-            provs = [ trimimprov ] if wcs is None else [ trimimprov, trimsrcprov, trimwcsprov ]
+            with PGDB( pgdb ) as tmppgdb:
+                provenance = Provenance.get( self.provenance_id, pgdb=tmppgdb )
+                wcsprov = None if wcs is None else Provenance.get( wcs.provenance_id, pgdb=tmppgdb )
+                zpprov = None if zp is None else Provenance.get( zp.provenance_id, pgdb=tmppgdb )
+                ( trimimprov,
+                  trimsrcprov,
+                  trimwcsprov,
+                  trimzpprov ) = self.get_trim_provs( x1-x0, y1-y0, upstreams=[provenance], wcs_prov=wcsprov,
+                                                      zp_prov=zpprov, save=save_prov, provtag=provtag, pgdb=tmppgdb )
 
             # Try to load the image unless told not to.
             # Note that just having xcen and ycen, without width and height, still uniquely
@@ -1448,8 +1484,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                 with PGDB( pgdb_in, dictcursor=True ) as pgdb:
                     q = sql.SQL( textwrap.dedent(
                         """\
-                        SELECT i.* FROM images
-                        INNER JOIN image_trim_parent t ON i._id=image_trim_parent.image_id
+                        SELECT i.* FROM images i
+                        INNER JOIN image_trim_parent t ON i._id=t.image_id
                         WHERE i.provenance_id={prov}
                           AND t.parent_image_id={parentim}
                           AND t.parent_wcs_id{wcscondition}
@@ -1457,123 +1493,137 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                           AND t.trim_ycen={ycen}
                         """
                     ) ).format( prov=trimimprov.id, parentim=self.id, xcen=xcen, ycen=ycen,
-                                wcscondition=( sql.SQL("={wcsid}").format(wcs.id) if wcs is not None
+                                wcscondition=( sql.SQL("={wcsid}").format(wcsid=wcs.id) if wcs is not None
                                                else sql.SQL( " IS NULL" ) ) )
                     rows = pgdb.execute( q )
                     if len(rows) > 1:
                         raise RuntimeError( "Database corruption, trimmed image is in database more than once." )
                     elif len(rows) == 1:
-                        trimim = Image( **(rows[0]) )
+                        trimim = Image.create( **(rows[0]) )
 
-                        if wcs is None:
-                            if save_prov and ( provtag is not None ):
-                                # Just in case
-                                Provenance.addtag( provtag, [trimimprov], pgdb=pgdb )
-                            return trimim, trimimprov
+                        # Avoid circular imports
+                        from models.source_list import SourceList
+                        from models.background import Background
+                        from models.psf import PSF
+                        from models.world_coordinates import WorldCoordinates
+                        from models.zero_point import ZeroPoint
 
-                        else:
-                            # Avoid circular imports
-                            from models.source_list import SourceList
-                            from models.world_coordinates import WorldCoordinates
-
-                            q = sql.SQL( textwrap.dedent(
-                                """\
-                                SELECT s.* FROM source_lists s
-                                WHERE s.image_id={imid}
-                                  AND s.provenance_id={srcprov}
-                                """
-                            ) ).format( imid=trimim.id, srcprov=trimsrcprov )
+                        def _get_the_thing( pgdb, cls, parentcol, parentid, provid=None ):
+                            table = cls.__tablename__
+                            q = ( sql.SQL( "SELECT t.* FROM {table} t WHERE t.{parentcol}={parentid}" )
+                                  .format( table=sql.Identifier(table), parentcol=sql.Identifier(parentcol),
+                                           parentid=parentid ) )
+                            if provid is not None:
+                                q += sql.SQL( " AND t.provenance_id={prov}" ).format( prov=provid )
                             rows = pgdb.execute( q )
                             if len(rows) > 1:
-                                raise RuntimeError( "Database corruption, trimmed sources is "
-                                                    "in database more than once." )
-                            elif len(rows) == 0:
-                                raise RuntimeError( "Trimmed image in database but not trimmed sources!" )
-                            trimsrc = SourceList( **(rows[0]) )
+                                raise RuntimeError( "Databse corrumption trimmed {table} is in the "
+                                                    "database more than once." )
+                            return cls.create( **(rows[0]) ) if len(rows) == 1 else None
 
-                            q = sql.sql( textwrap.dedent(
-                                """\
-                                SELECT w.* FROM world_coordinates w
-                                WHERE w.sources_id={srcid}
-                                  AND w.provenance_id={wcsprov}
-                                """
-                            ) ).format( srcid=trimsrc.id, wcsprov=trimwcsprov )
-                            rows = pgdb.execute( q )
-                            if len(rows) > 1:
-                                raise RuntimeError( "Database corruption, trimmed wcs is "
-                                                    "in database more than once." )
-                            elif len(rows) == 0:
-                                raise RuntimeError( "Trimmed image and sources in database, but not trimmed wcs!" )
-                            trimwcs = WorldCoordinates( **(rows[0]) )
+                        if sources is not None:
+                            trimsrc = _get_the_thing( pgdb, SourceList, "image_id", trimim.id, trimsrcprov.id )
+                            if trimsrc is not None:
+                                trimbg = _get_the_thing( pgdb, Background, "sources_id", trimsrc.id )
+                                trimpsf = _get_the_thing( pgdb, PSF, "sources_id", trimsrc.id )
 
-                            if save_prov and ( provtag is not None ):
-                                # Just in case
-                                Provenance.addtag( provtag, [trimimprov, trimsrcprov, trimwcsprov], pgdb=pgdb )
-                                return trimim, trimsrc, trimwcs, [trimimprov, trimsrcprov, trimwcsprov]
+                            if ( trimsrc is not None ) and ( wcs is not None ):
+                                trimwcs = _get_the_thing( pgdb, WorldCoordinates, "sources_id", trimsrc.id,
+                                                          trimwcsprov.id )
 
-        # If we get here, we know we didn't load the image (etc.) from the database
+                            if ( trimwcs is not None ) and ( zp is not None ):
+                                trimzp = _get_the_thing( pgdb, ZeroPoint, "wcs_id", trimwcs.id,
+                                                         trimzpprov.id )
 
-        # Make the image
-        newimage = Image.copy( self, no_copy_data=True )
-        newimage.data = self.data[ y0:y1, x0:x1 ].copy()
-        newimage.weight = self.weight[ y0:y1, x0:x1 ].copy() if self.weight is not None else None
-        newimage.flags = self.flags[ y0:y1, x0:x1 ].copy() if self.flags is not None else None
+        # Make the image stuff we didn't load
+        to_save = []
 
-        newimage.filepath = newimage.invent_filepath( extra=f"_{xcen}_{ycen}" )
+        if trimim is None:
+            to_save.append( { 'image': {} } )
+            trimim = Image.copy_image( self, no_copy_data=True )
+            trimim.data = self.data[ y0:y1, x0:x1 ].copy()
+            trimim.weight = self.weight[ y0:y1, x0:x1 ].copy() if self.weight is not None else None
+            trimim.flags = self.flags[ y0:y1, x0:x1 ].copy() if self.flags is not None else None
+            trimim.width = trimim.data.shape[1]
+            trimim.height = trimim.data.shape[0]
+            if trimimprov is not None:
+                trimim.provenance_id = trimimprov.id
+                trimim.filepath = trimim.invent_filepath( extra=f"_{xcen}_{ycen}" )
+            else:
+                trimim.provenance_id = None
+                trimim.filepath = None
 
-        # Make the subset wcs if necessary
-        if wcs is not None:
-            if sources is None:
-                raise ValueError( "Passing wcs requires passing sources" )
-            if ( wcs.sources_id != sources.id ) or ( sources.image_id != self.id ):
-                raise ValueError( "Passed inconsistent image, sources, wcs." )
-            newsources = sources.trim( x0, x1, y0, y1, trimmed_image=newimage )
-            newwcs = wcs[ y0:y1, x0:x1 ]
-            newwcs.sources_id = newsources.id
-            newwcs.set_corners_from_wcs( newwcs.wcs, width=x1-x0, height=y1-y0, setradec=True, mask=newimage.flags )
-            newimage.set_corners_from_wcs( newwcs.wcs, width=x1-x0, height=y1-y0, setradec=True, mask=newimage.flags )
+        if sources is not None:
+            if trimsrc is None:
+                to_save.append( { 'sources': { 'image': trimim } } )
+                trimsrc = sources.trim( x0, x1, y0, y1, trimmed_image=trimim )
+                trimsrc.provenance_id = None if trimsrcprov is None else trimsrcprov.id
 
-        # Set provenance
-        if self.provenance_id is not None:
-            newimage.provenance_id = trimimprov.id
-            if wcs is not None:
-                newsources.provenance_id = trimsrcprov.id
-                newwcs.provenance_id = trimwcsprov.id
+            if trimbg is None:
+                to_save.append( { 'bg': { 'image': trimim, 'sources': trimsrc } } )
+                trimbg = bg.trim( x0, x1, y0, y1, trimmed_sources=trimsrc )
 
-            if save_to_db:
-                # OMG RACE CONDITION
-                # It's conceivable that two processes will generate the
-                #   same trimmed image at once.
-                # I'm just going to hope that hardly ever happens.  If
-                #   it does, we'll get an exception below on
-                #   pgdb.commit() because of the unique constraint on
-                #   filepath.  Perhaps we should catch that exception
-                #   and verify that the thing that got saved is the same
-                #   as what we just generated.
-                newimage.save()
-                if wcs is not None:
-                    newsources.save( image=newimage )
-                    newwcs.save( image=newimage )
-                with PGDB( pgdb_in ) as pgdb:
-                    newimage.insert( session=pgdb, nocommit=True )
-                    if wcs is not None:
-                        newsources.insert( session=pgdb, nocommit=True )
-                        newwcs.insert( session=pgdb, nocommit=True )
+            if trimpsf is None:
+                to_save.append( { 'psf': { 'image': trimim, 'sources': trimsrc } } )
+                trimpsf = psf.trim( x0, x1, y0, y1, trimmed_sources=trimsrc )
 
-                    q = sql.SQL( "INSERT INTO image_trim_parent(image_id,parent_image_id,parent_wcs_id,xcen,ycen) "
-                                 "VALUES ({imid},{parid},{wcsid},{xcen},{ycen})"
-                                ).format( imid=newimage.id,
-                                          parid=self.id,
-                                          xcen=xcen,
-                                          ycen=ycen,
-                                          wcsid=wcs.id if wcs is not None else None )
-                    pgdb.execute_nofetch( q )
-                    pgdb.commit()
+            if ( trimwcs is None ) and ( wcs is not None ):
+                to_save.append( { 'wcs': { 'image': trimim } } )
+                trimwcs = wcs[ y0:y1, x0:x1 ]
+                trimwcs.sources_id = trimsrc.id
+                trimwcs.provenance_id = None if trimwcsprov is None else trimwcsprov.id
+                trimwcs.set_corners_from_wcs( trimim, width=x1-x0, height=y1-y0, setradec=True, mask=trimim.flags )
+                trimim.set_corners_from_wcs( trimwcs.wcs, width=x1-x0, height=y1-y0, setradec=True )
 
-        if wcs is None:
-            return newimage, trimim
-        else:
-            return newimage, newsources, newwcs, provs
+            if ( trimzp is None ) and ( trimwcs is not None ) and ( zp is not None ):
+                to_save.append( { 'zp': None } )
+                from models.zero_point import ZeroPoint
+                trimzp = ZeroPoint.create( zp=zp.zp, dzp=zp.dzp, aper_cor_radii=zp.aper_cor_radii,
+                                           aper_cors=zp.aper_cors, provenance_id=zp.provenance_id,
+                                           wcs_id=trimwcs.id )
+                trimzp.provenance_id = None if trimzpprov is None else trimzpprov.id
+
+        retval = { 'image': trimim,
+                   'sources': trimsrc,
+                   'bg': trimbg,
+                   'psf': trimpsf,
+                   'wcs': trimwcs,
+                   'zp': trimzp,
+                   'provenances': { 'image': trimimprov,
+                                    'sources': trimsrcprov,
+                                    'wcs': trimwcsprov,
+                                    'zp': trimzpprov },
+                   'limits': ( x0, x1, y0, y1 )
+                  }
+
+        if save_to_db:
+            # OMG RACE CONDITION
+            # It's conceivable that two processes will generate the
+            #   same trimmed image at once.
+            # I'm just going to hope that hardly ever happens.  If
+            #   it does, we'll get an exception below on
+            #   pgdb.commit() because of the unique constraint on
+            #   filepath.  Perhaps we should catch that exception
+            #   and verify that the thing that got saved is the same
+            #   as what we just generated.
+            for which, kwargs in to_save.items():
+                if kwargs is not None:
+                    retval[which].save( **kwargs )
+            with PGDB( pgdb_in ) as pgdb:
+                for which in to_save.keys():
+                    retval[which].insert( pgdb=pgdb, noncommit=True )
+                    if which == 'image':
+                        q = sql.SQL( "INSERT INTO image_trim_parent(image_id,parent_image_id,parent_wcs_id,xcen,ycen) "
+                                     "VALUES ({imid},{parid},{wcsid},{xcen},{ycen})"
+                                    ).format( imid=trimim.id,
+                                              parid=self.id,
+                                              xcen=xcen,
+                                              ycen=ycen,
+                                              wcsid=wcs.id if wcs is not None else None )
+                pgdb.execute_nofetch( q )
+                pgdb.commit()
+
+        return retval
 
 
     def invent_filepath( self, name_convention=None, extra=None ):

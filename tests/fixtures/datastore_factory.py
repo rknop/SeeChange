@@ -581,7 +581,7 @@ def datastore_factory(data_dir, request, test_config):
             if use_cache:  # try to find the subtraction image in the cache
                 SCLogger.debug( "make_datstore looking for subtraction image in cache..." )
 
-                sub_im = Image.from_new_and_ref( ds.zp, ds.reference )
+                sub_im = Image.from_new_and_ref( image_zp=ds.zp, ref=ds.reference )
                 sub_im.provenance_id = ds.prov_tree['subtraction'].id
                 cache_sub_name = pathlib.Path( sub_im.invent_filepath() )
 

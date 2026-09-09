@@ -41,7 +41,7 @@ class ForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
     )
 
     subtraction_id = sa.Column(
-        sa.ForeignKey( 'images._id', ondelete='RESTRING', name='forcedphot_subtraction_id_fkey' ),
+        sa.ForeignKey( 'images._id', ondelete='RESTRICT', name='forcedphot_subtraction_id_fkey' ),
         nullable = False,
         index = True,
         doc = ( "ID of the subtraction this forced phot was performed on." )

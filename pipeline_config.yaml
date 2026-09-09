@@ -692,17 +692,22 @@ referencing:
 # Forced photometry
 
 lightcurve:
-  subtraction_confing:
+  subtraction_config:
     method: zogy
     refset: null
-    match_instrument: true
-    match_filter: true
-    min_overlap: null
-    max_dist: 0.00833333   # 30¨
-    skip_bad: true
-    multiple_ok: false
-    choice_criteria: [ 'distance', 'unconstrained' ]
-  crop_image: [ 100, 100 ]
+    reference:
+      search_by: ra/dec
+      match_instrument: true
+      match_filter: true
+      min_overlap: null
+      max_dist: 0.00833333   # 30¨
+      skip_bad: true
+      multiple_ok: false
+      choice_criteria: [ 'distance', 'unconstrained' ]
+    alignment:
+      method: swarp
+      min_matched: 10
+  crop_image: [ 256, 256 ]
     
     
 # ======================================================================
