@@ -18,6 +18,7 @@ from models.enums_and_bitflags import PSFFormatConverter, psf_badness_inverse
 from models.image import Image
 from models.source_list import SourceList
 from util.logger import SCLogger
+from util.util import asUUID
 
 
 class PSF(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
@@ -104,7 +105,7 @@ class PSF(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         server_default=None,
         doc='Height of the trimmed image this PSF is for.'
     )
-    
+
 
     # ****************************************
     # end of schema definition
@@ -455,9 +456,9 @@ class PSF(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
 
         if any( i is None for i in (x0, x1, y0, y1) ):
             raise ValueError( "x0, x1, y0, y1 must all be given" )
-        
+
         newpsf = self.copy()
-        newpsf.offset_x = x0 if newpsf.offset_x is None else newpsf.offset_x + x0 
+        newpsf.offset_x = x0 if newpsf.offset_x is None else newpsf.offset_x + x0
         newpsf.offset_y = y0 if newpsf.offset_y is None else newpsf.offset_y + y0
         newpsf.trimmed_width = x1 - x0
         newpsf.trimmed_height = y1 - y0
@@ -466,8 +467,8 @@ class PSF(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
                               else None if trimmed_sources is None
                               else asUUID(trimmed_sources) )
         return newpsf
-        
-    
+
+
     def free( self ):
         """Free loaded PSF memory.
 
@@ -708,7 +709,7 @@ class PSF(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
 
         x += self.offset_x
         y += self.offset_y
-        
+
         # round() isn't the right thing to use here, because it will
         #   behave differently when x - round(x) = 0.5 based on whether
         #   floor(x) is even or odd.  What we *want* is for the psf to
@@ -870,7 +871,7 @@ class PSFExPSF(PSF):
     }
 
     _supports_offset_psf = True
-    
+
     def __init__( self, *args, **kwargs ):
         super().__init__( *args, **kwargs )
         self.format = 'psfex'
@@ -903,9 +904,9 @@ class PSFExPSF(PSF):
         ysc = float( self.header['POLSCAL2'] )
 
         if self.offset_x is not None:
-            x += offset_x
-            y += offset_y
-        
+            x += self.offset_x
+            y += self.offset_y
+
         psfbase = np.zeros_like( self.data[0,:,:], dtype=dtype )
         off = 0
         for j in range( psforder+1 ) :
@@ -1000,7 +1001,7 @@ class DeltaPSF(PSF):
 
     # Supporting offset PSF here is trivial becasue the PSF is not spatially varaible
     _supports_offset_psf = True
-    
+
     def __init__( self, *args, **kwargs ):
         super().__init__( *args, **kwargs )
         self.format = 'delta'
@@ -1085,7 +1086,7 @@ class GaussianPSF(PSF):
 
     # Supporting offset PSF here is trivial becasue the PSF is not spatially varaible
     _supports_offset_psf = True
-    
+
     def __init__( self, *args, **kwargs ):
         super().__init__( *args, **kwargs )
         self.format = 'gaussian'
@@ -1148,7 +1149,7 @@ class ImagePSF(PSF):
 
     # Supporting offset PSF here is near-trivial becasue the PSF is not spatially varaible
     _supports_offset_psf = True
-    
+
     def __init__( self, *args, **kwargs ):
         super().__init__( *args, **kwargs )
         self.format = 'image'
@@ -1254,7 +1255,7 @@ class ImagePSF(PSF):
         with h5py.File( psfpath, 'r' ) as h5f:
             if 'psf' not in h5f:
                 raise ValueError( "No psf group found in the file" )
-            
+
             if self.offset_x is None:
                 self._image_shape = ( h5f["psf"].attrs["image_shape_0"], h5f["psf"].attrs["image_shape_1"] )
             else:

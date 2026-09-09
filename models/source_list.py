@@ -128,7 +128,7 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
     _sextractor_x_coord_cols = { 'XMIN_IMAGE', 'XMAX_IMAGE', 'X_IMAGE', 'XPEAK_IMAGE', 'XWIN_IMAGE' }
     _sextractor_y_coord_cols = { 'YMIN_IMAGE', 'YMAX_IMAGE', 'Y_IMAGE', 'YPEAK_IMAGE', 'YWIN_IMAGE' }
 
-    
+
     def __init__(self, *args, **kwargs):
         FileOnDiskMixin.__init__(self, *args, **kwargs)
         HasBitFlagBadness.__init__(self)
@@ -687,14 +687,14 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
                 ycols = SourceList._sextractor_y_coord_cols.insersection( set(self.data.dtype.names) )
                 # I'm pretty sure this does a copy, not a view.  I really hope so.
                 subdata = self.data[ dex ]
-            elif isinstance( trimdata, astropy.table.Table ):
+            elif isinstance( self.data, astropy.table.Table ):
                 xcols = SourceList._sextractor_x_coord_cols.insersection( set(self.data.columns) )
                 ycols = SourceList._sextractor_y_coord_cols.insersection( set(self.data.columns) )
                 # ... TODO make sure the semantics here are what I thnk they are
-                subdata = astropy.table.Table( arr[dex] )
+                subdata = astropy.table.Table( self.data[dex] )
             else:
                 raise RuntimeError( f"self.data is of unknown type {type(self.data)}" )
-            
+
             for xcol in xcols:
                 subdata[xcol] += x0
             for ycol in ycols:
@@ -702,7 +702,7 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
 
         else:
             raise ValueError( f"Unrecognized format {self.format}" )
-                
+
 
         newsl = SourceList()
         newsl._format = self._format
@@ -713,14 +713,14 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         newsl._data = subdata
         # I'm afraid of this next one
         newsl._info = self.info.copy()
-        
+
         if isinstance( trimmed_image, Image ):
             newsl.image_id = trimmed_image.id
         elif isinstance( trimmed_image, (str, uuid.UUID) ):
             newsl.image_id = asUUID( trimmed_image )
         else:
             raise TypeError( f"trimmed_image must be an Image or an Image id, not a {type(trimmed_image)}" )
-        
+
         return newsl
 
 
@@ -944,7 +944,7 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
             cols = cols.intersection( set(arr.columns) )
             arr = astropy.table.Table( arr )
         else:
-            raise RuntimeError( f"arr is of an unknown type {type(arr)}" 
+            raise RuntimeError( f"arr is of an unknown type {type(arr)}" )
 
         for col in cols:
             arr[col] +=1

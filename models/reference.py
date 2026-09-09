@@ -18,6 +18,8 @@ from models.psf import PSF
 from models.background import Background
 from models.world_coordinates import WorldCoordinates
 from models.zero_point import ZeroPoint
+from util.util import listify
+
 
 # It's a little bit excessive to have this table, since there is a 1:1
 # correspondence between a sub image and it's parent reference, and

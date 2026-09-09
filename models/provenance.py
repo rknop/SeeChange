@@ -257,7 +257,7 @@ class Provenance(Base):
         return self._upstreams
 
 
-    def __init__(self, dont_update_id=False, _id=None, pgdb=pgdb, **kwargs):
+    def __init__(self, dont_update_id=False, _id=None, pgdb=None, **kwargs):
         """Create a provenance object.
 
         Parameters
@@ -501,7 +501,7 @@ class Provenance(Base):
         ----------
         process : str
            Process for code version
-        
+
         pgdb, session: PGDB, psycopg.Connection, psycopg.Cursor, or (shudder) sa Session, default None
             Databse connection.  If None, a new session is created, and
             closed as soon as the function finishes.  WARNING : will
@@ -520,7 +520,7 @@ class Provenance(Base):
 
         if CodeVersion._code_version_cache[process] is None:
             pgdb = pgdb if pgdb is not None else session
-            
+
             # down the line may want to perform a comparison with the most recent using a search like this
             # with SmartSession( session ) as session:
             #     if code_version is None:
@@ -591,7 +591,7 @@ class Provenance(Base):
         return CodeVersion._code_version_cache[process]
 
 
-    def insert( self, pgdb=pgdb, session=None, _exists_ok=False, nocommit=False ):
+    def insert( self, pgdb=None, session=None, _exists_ok=False, nocommit=False ):
         """Insert the provenance into the database.
 
         Will raise a constraint violation if the provenance ID already exists in the database.
@@ -606,7 +606,7 @@ class Provenance(Base):
         """
 
         pgdb = pgdb if pgdb is not None else session
-        
+
         with PGDB( pgdb ) as pgdb:
             # Lock the table so we don't have a disaster of two different processes inserting the
             #  provenance and the upstreams all at the same time.  But, because any use of database
@@ -673,21 +673,49 @@ class Provenance(Base):
         self.insert( pgdb=pgdb, _exists_ok=True, nocommit=nocommit )
 
 
-    def get_upstreams( self, pgdb=None, save_to_object=False ):
-        with PGDB( pgdb, dictcursor=True ) as pgdb:
-            q = sql.SQL( textwrap.dedent(
-                """\
-                SELECT p.* FROM provenances p
-                INNER JOIN provenance_upstreams pu ON p._id=pu.upstream_id
-                WHERE pu.downstream_id={me}
-                ORDER BY p._id
-                """
-            ) ).format( me=self.id )
-            rows = pgdb.execute( q )
-            upstreams = [ Provenance(dont_update_id=True, **row) for row in rows ]
-            if save_to_object:
-                self._upstreams = upstreams
-            return upstreams
+    def get_upstreams( self, pgdb=None, save_to_object=False, always_reload=True ):
+        """Get the upstream provenances of this provenance.
+
+        Parameters
+        ----------
+           pgdb: PGDB, psycopg.connection, or psycopg.cursor, default None
+             Database connection.  If not given, will open and close
+             connections as necessary.  (This can also be a
+             base.PsycopgConnection or base.Session, but those are
+             deprecated and should not be used in new code.)
+
+           save_to_object: bool, default False
+             If True, then update self._upstreams with what is found.
+             (This defaults to False for backwards compatibility.)
+
+           always_reload: bool, default True
+             If False and self._upstreams is not None, then just return
+             that.  If True, always go to the database.  (This defalts
+             to True for backwards compatiblity.)
+
+        Returns
+        -------
+           list of Provenance
+
+        """
+
+        if ( not always_reload ) and ( self._upstreams is not None ):
+            return self._upstreams
+        else:
+            with PGDB( pgdb, dictcursor=True ) as pgdb:
+                q = sql.SQL( textwrap.dedent(
+                    """\
+                    SELECT p.* FROM provenances p
+                    INNER JOIN provenance_upstreams pu ON p._id=pu.upstream_id
+                    WHERE pu.downstream_id={me}
+                    ORDER BY p._id
+                    """
+                ) ).format( me=self.id )
+                rows = pgdb.execute( q )
+                upstreams = [ Provenance(dont_update_id=True, **row) for row in rows ]
+                if save_to_object:
+                    self._upstreams = upstreams
+                return upstreams
 
     def get_downstreams( self, pgdb=None ):
         with PGDB( pgdb, dictcursor=True ) as pgdb:

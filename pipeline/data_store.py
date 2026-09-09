@@ -23,7 +23,7 @@ from models.psf import PSF
 from models.background import Background
 from models.world_coordinates import WorldCoordinates
 from models.zero_point import ZeroPoint
-from models.reference import Reference, image_subtraction_components
+from models.reference import Reference
 from models.cutouts import Cutouts
 from models.measurements import Measurements, MeasurementSet
 from models.deepscore import DeepScore, DeepScoreSet
@@ -62,7 +62,10 @@ class ProvenanceTree(dict):
 
     """
 
-    def __init__( self, provs={}, upstream_steps={} ):
+    def __init__( self, provs={}, upstream_steps={},
+                  noupstreams=['positioning', 'referencing', 'coaddition', 'starting_point'],
+                  processmap={'preprocessing': 'starting_point'}
+                 ):
         """Create a ProvenanceTree.
 
         Once created, the provences can be accessed from the
@@ -76,14 +79,130 @@ class ProvenanceTree(dict):
             A dictionary of processname : provenance
 
           upstream_steps : dict
-            A dictionary of processname : list of upstream process
-            names.  This dictionary must be ordered, so that all of the
-            upstreams of a process are earlier in the upstream_steps
-            dictionary.
+            A dictionary of process name : list of upstream process names
+
+          noupstreams : list of str, default ['positioning', 'referenceing', 'coaddition', 'starting_point']
+            Used in append_provenance (cf).
+
+          processmap: dict of str: str, default {'preprocessing': 'starting_point'}
+            Used in append_provenance (cf)
+
 
         """
         super().__init__( provs )
         self.upstream_steps = upstream_steps
+        self._noupstreams = noupstreams
+        self._processmap = processmap
+
+    @property
+    def sorted_processes( self ):
+        """Get a list of processes, in order such that if a is upstream of b, a is earlier than b in the list."""
+
+        # TODO: caching so we don't sort every time we access this property?
+        # We'd have to also have a "dirty" flag to mark if the dict or the upstream_steps were changed.
+
+        # There's probably a more elegant way to do this than the manual insertion sort I've written here.
+        def _isupstream( process_down, process_up ):
+            if len( self.upstream_steps[ process_down ] ) == 0:
+                return False
+            if process_up in self.upstream_steps[ process_down ]:
+                return True
+            else:
+                for test_up in self.upstream_steps[ process_down ]:
+                    if _isupstream( test_up, process_up ):
+                        return True
+                return False
+
+        allprocs = list( self.upstream_steps.keys() )
+        sortedprocs = [ allprocs[0] ]
+        for proc in allprocs[1:]:
+            did = False
+            for dex in range( len(sortedprocs) ):
+                if _isupstream( proc, sortedprocs[dex] ):
+                    sortedprocs.insert( dex, proc )
+                    did = True
+                    break
+            if not did:
+                sortedprocs.append( proc )
+
+        return sortedprocs
+
+    @property
+    def sorted_provenances( self ):
+        """Get a list of provenances, sorted from upstream to downstream."""
+        return [ self[p] for p in self.sorted_processes ]
+
+
+    def append_provenance( self, prov, pgdb=None, noupstreams=None, processmap=None, nodb=False ):
+        """Recursively build a provenance tree.  Append the Provenance and all* of its upstreams.
+
+        * see parameter noupstreams
+
+        Tries to be smart when given a provenance that's already in the
+        tree, by checking that it's consistent with what's already there
+        and not adding it.
+
+        Parameters
+        ----------
+          prov: Provenance
+              The provenance to add to the provenance tree.
+
+          noupstreams: list of str, default None
+             Provenance from these processes (modified by processmap,
+             below) will *not* have their upstreams added to the
+             ProvenanceTree (or to self.upstream_steps).  If None, uses
+             the noupstreams given to the object constructor.
+
+          processmap: dict of str: str, default None
+             If a Provenance has a process that's a key in this
+             dictionary, then use the corresponding value as the key in
+             the ProvenanceTree (and in self.upstream_steps) rather than
+             the Provenanece's process.  If None, uses the processmap
+             that was given to the object constructor.
+
+          pgdb: PGDB, psycopg.connection, or psycopg.cursor; default None
+             Database connection.  If None, then database connectons
+             will be opened and closed as needed.
+
+          nodb: bool, default False
+             Mostly for debugging.  If this is True and the function
+             would contact the database, raise an exception.
+
+        """
+
+        noupstreams = noupstreams if noupstreams is not None else self._noupstreams
+        processmap = processmap if processmap is not None else self._processmap
+
+        process = processmap[prov.process] if prov.process in processmap else prov.process
+        if prov.process in noupstreams:
+            expected_upstreams = set()
+        else:
+            if nodb and ( prov._upstreams is None ):
+                raise RuntimeError( "nodb but contacting database" )
+            expected_upstreams = { processmap[p.process] if p.process in processmap else p.process
+                                   for p in prov.upstreams }
+
+        if process in self.keys():
+            if prov.id != self[process].id:
+                raise RuntimeError( f"Process {process} came up with inconsistent values "
+                                    f"when bulding the provenance tree!  Tried to add {prov.id}, "
+                                    f"but the provenance tree already had {self[process].id}." )
+            found_upstreams = ( set() if process in noupstreams
+                                else set( p if p not in processmap else processmap[p]
+                                          for p in prov.upstreams ) )
+            if found_upstreams != expected_upstreams:
+                raise RuntimeError( f"Process {process} came up with inconsistent upstream "
+                                    f"steps when building the provenance tree!  "
+                                    f"Found: {found_upstreams}, expected: {expected_upstreams}" )
+        else:
+            useproc = processmap[process] if process in processmap else process
+            self[useproc] = prov
+            self.upstream_steps[useproc] = expected_upstreams
+
+        if process not in noupstreams:
+            for upprov in prov.upstreams:
+                self.append_provenance( upprov, noupstreams=noupstreams, processmap=processmap, pgdb=pgdb )
+
 
 
 class DataStore:
@@ -724,6 +843,8 @@ class DataStore:
         provenance tag you're loading is consistent with the provenance
         image or exposure used to initialize the database.
 
+        TODO: can this use ProvenanceTree.append_provenance?
+
         Parameters
         ----------
           provenance_tag : str
@@ -845,8 +966,10 @@ class DataStore:
             self.prov_tree = ProvenanceTree( processprovdict, upstream_steps )
 
 
+
     def make_prov_tree( self, pars, steps=None, provtag=None, ok_no_ref_prov=False, upstream_steps=None,
                         starting_point=None, pgdb=None ):
+
         """Create the DataStore's provenance tree.
 
         Also creates provenances and saves them to the database if
@@ -1851,7 +1974,7 @@ class DataStore:
                   'overlap_fraction' in choice_criteria,
                   'overlapfrac' in choice_criteria,
                   'overlapfratcion' in choice_criteria,
-                  ( search_by == 'target/section' ) and ( ( target is None ) or ( section is None ) ),
+                  ( search_by == 'target/section' ) and ( ( target is None ) or ( section_id is None ) ),
                  ] ):
             self.get_image( pgdb=_pgdb )
             if self.image is None:
@@ -1866,7 +1989,7 @@ class DataStore:
                   'overlapfratcion' in choice_criteria,
                  ] ):
             self.get_wcs( pgdb=_pgdb )
-            
+
         if self.image is not None:
             ra = ra if ra is not None else self.image.ra
             dec = dec if dec is not None else self.image.dec
@@ -1888,7 +2011,7 @@ class DataStore:
 
         if match_filter and ( filter is None ):
             raise ValueError( "match_filter is true, but neither a filter or an image was passed" )
-        
+
         if provenances is None:  # try to get it from the prov_tree
             if ( self.prov_tree is not None ) and ( 'referencing' in self.prov_tree ):
                 provenances = self.prov_tree[ 'referencing' ]
@@ -1908,7 +2031,7 @@ class DataStore:
             elif skip_bad and ( self.reference.bitflag != 0 ):
                 self.reference = None
 
-            elif match_filter and self.reference.image.filter != filter
+            elif match_filter and self.reference.image.filter != filter:
                 self.reference = None
 
             elif match_instrument and self.reference.image.instrument != instrument:
@@ -1988,7 +2111,7 @@ class DataStore:
         if ( search_by != 'image' ) and ( min_overlap is not None ) and ( min_overlap > 0 ):
             # Didn't filter by overlap fraction previously, so do that here
             ovfrac = [ ( self.wcs.get_overlap_frac( self.wcs, r.wcs ) if self.wcs is not None
-                         else image.get_overlap_frac( self.image, i ) )
+                         else self.image.get_overlap_frac( self.image, i ) )
                        for r, i in zip( refs, imgs ) ]
             refs = [ r for o, r in zip(ovfrac, refs) if o >= min_overlap ]
             imgs = [ i for o, i in zip(ovfrac, imgs) if o >= min_overlap ]
@@ -2043,7 +2166,7 @@ class DataStore:
             return self.reference
 
 
-    def get_sub_image(self, provenance=None, reload=False, pgdb=pgdb, session=None):
+    def get_sub_image(self, provenance=None, reload=False, pgdb=None, session=None):
         """Get a subtraction Image, either from memory or from database.
 
         If sub_image is not None, return that.  Otherwise, if

@@ -1,7 +1,8 @@
 import sqlalchemy as sa
 from sqlalchemy import orm
+from psycopg import sql
 
-from models.base import Base, SeeChangeBase, UUIDMixin, SmartSession, PGDB
+from models.base import Base, SeeChangeBase, UUIDMixin, PGDB
 from models.provenance import Provenance
 
 
@@ -33,8 +34,7 @@ class RefSet(Base, UUIDMixin):
     def get_by_name( cls, name, pgdb=None, session=None ):
         pgdb = pgdb if pgdb is not None else session
         with PGDB( pgdb, dictcursor=True ) as pgdb:
-            rows = pgdb.execute( sql.SQL( "SELECT * FROM refsets WHERE name={name}" )
-                                 f.format( name=name ) )
+            rows = pgdb.execute( sql.SQL( "SELECT * FROM refsets WHERE name={name}" ).format( name=name ) )
             if len(rows) == 0:
                 return None
             else:

@@ -3,7 +3,7 @@ from sqlalchemy.schema import UniqueConstraint
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.ext.declarative import declared_attr
 
-from models base import Base, SeeChangeBase, UUIDMixin, HasBitFlagBadness
+from models.base import Base, SeeChangeBase, UUIDMixin, HasBitFlagBadness
 import models.object # OMG why did we name one of our classes Object????
 from models.object import ObjectPosition
 from models.image import Image
@@ -14,11 +14,11 @@ class ForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
     __tablename__ = 'forced_photometry'
 
     @declared_attr
-    def __table_args__( cls ):
+    def __table_args__( cls ):    # noqa: N805
         return (
             UniqueConstraint( 'object_id', 'subtraction_id', 'provenance_id', name='forcedphot_unique' ),
         )
-    
+
     object_id = sa.Column(
         sa.ForeignKey( 'objects._id', ondelete='RESTRICT', name='forcedphot_object_id_fkey' ),
         nullable = False,
@@ -28,11 +28,11 @@ class ForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
 
     object_position_id = sa.Column(
         sa.ForeignKey( 'object_positions._id', ondelete='RESTRICT', name='forcedphot_object_position_id_fkey' ),
-        nullable = True
+        nullable = True,
         index = True,
         doc = "ID (if any) of the object position used for this forced photometry."
     )
-    
+
     provenance_id = sa.Column(
         sa.ForeignKey( 'provenances._id', ondelete='CASCADE', name='forcedphot_provenance_id_fkey' ),
         nullable = False,
@@ -83,8 +83,8 @@ class ForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
         self.set_attributes_from_dict( kwargs )
 
     def _get_inverse_badness( self ):
-        return measurements_basdness_inverse
-        
+        return measurements_badness_inverse
+
     def get_upstream_ids( self, pgdb=None ):
         upstrs = [ ( models.object.Object, self.object_id ),
                    ( Image, self.subtraction_id ) ]

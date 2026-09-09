@@ -1266,7 +1266,7 @@ def main():
         kwargs[ 'overlap_fraction' ] = None
         kwargs[ 'coadd_overlap_fraction' ] = None
     del kwargs[ 'corner_distance_none' ]
-    
+
     runkwargs = {}
     for k in [ 'ra', 'dec', 'image', 'image_zp_prov_id', 'minra', 'maxra', 'mindec', 'maxdec', 'filter' ]:
         if k in kwargs:

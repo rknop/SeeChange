@@ -920,7 +920,7 @@ class SeeChangeBase:
         """
 
         pgdb = pgdb if pgdb is not None else session
-        
+
         _ = self.id    # Make sure id is generated
 
         # Do this manually.  SQLAlchemy's Session.add was doing all

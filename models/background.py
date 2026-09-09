@@ -460,18 +460,18 @@ class Background(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
     def trim( self, x0, y0, x1, y1, trimmed_sources=None, value=None, noise=None ):
         """Make a new Background that is for an image that's trimmed from the image the current Background is for."""
 
-        newbg = Background( _format = bg._format,
-                            _method = bg._method,
-                            value = value if value is not None else bg.value,
-                            noise = noise if noise is not None else bg.noise,
+        newbg = Background( _format = self._format,
+                            _method = self._method,
+                            value = value if value is not None else self.value,
+                            noise = noise if noise is not None else self.noise,
                             sources_id = ( trimmed_sources.id if isinstance( trimmed_sources, SourceList )
                                            else None if trimmed_sources is None
                                            else asUUID( trimmed_sources ) )
                            )
-        if bg.format == "map":
-            newbg.counts = bg.counts[y0:y1, x0:x1].copy()
-            newbg.rms = bg.rms[y0:y1, x0:x1].copy()
-        elif bg.format == "polynomial":
+        if self.format == "map":
+            newbg.counts = self.counts[y0:y1, x0:x1].copy()
+            newbg.rms = self.rms[y0:y1, x0:x1].copy()
+        elif self.format == "polynomial":
             raise NotImplementedError( "Trimming background not yet implemented for polynomial background." )
 
         return newbg

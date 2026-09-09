@@ -6,7 +6,6 @@ import subprocess
 
 import numpy as np
 import pandas
-import sqlalchemy as sa
 from psycopg import sql
 
 from astropy.io import fits
@@ -16,7 +15,7 @@ import astropy.units as units
 from pipeline.parameters import Parameters
 from pipeline.data_store import DataStore
 
-from models.base import SmartSession, FileOnDiskMixin, PGDB
+from models.base import FileOnDiskMixin, PGDB
 from models.image import Image
 from models.source_list import SourceList
 from models.psf import PSF
@@ -598,7 +597,7 @@ class Subtractor:
             # get the provenance for this step:
             with PGDB( dictcursor=True ) as pgdb:
 
-                if trust_datastore_refrence:
+                if trust_datastore_reference:
                     ref = ds.reference
                     if ref is None:
                         raise ValueError( "trust_datastore_reference given, but datastore has no reference." )
@@ -619,8 +618,9 @@ class Subtractor:
                         raise RuntimeError( f'Database corruption, >1 refset with name {self.pars.refset}' )
 
                     refset = RefSet( **(rows[0]) )
-                    
+
                     kwargs = self.pars.reference.copy()
+                    kwargs['provenances'] = [ refset.provenance_id ]
                     if ( ( 'must_match_section' in kwargs and kwargs['must_match_section'] ) or
                          ( 'must_match_target' in kwargs and kwargs['must_match_target'] )
                         ):

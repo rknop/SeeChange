@@ -4,18 +4,21 @@ import uuid
 import numpy as np
 from psycopg import sql
 
+import improc
+import models.object
 from models.base import PGDB
 from models.provenance import Provenance
-import models.object
 from models.object import ObjectPosition
-from models.reference import Reference
-from models.refset import RefSet
+from moels.image import Image
 from models.source_list import SourceList
+from models.zero_point import ZeroPoint
+from models.refset import RefSet
 from util.config import Config, NoValue
 from util.logging import SCLogger
 from util.util import listify
 from pipeline.parameters import Parameters
-from pipeline.data_store import ProvenanceTree
+from pipeline.data_store import ProvenanceTree, DataStore
+from pipeline.subtration import Subtractor
 
 
 class ParsLightcurve(Parameters):
@@ -49,7 +52,7 @@ class ParsLightcurve(Parameters):
             docstring = "The process to use when searching provenance tags for the zeropoint provenance.",
             critical = False
         )
-        
+
         self.object_position_prov = self.add_par(
             name = 'object_position_prov',
             default = None,
@@ -63,7 +66,7 @@ class ParsLightcurve(Parameters):
         self.object_position_prov_tag = self.add_par(
             name = 'object_position_prov_tag',
             default = None,
-            par_types = ( str, None )
+            par_types = ( str, None ),
             docstring = ( "Provenance tag for object positions to use for finding the object's position.  "
                           "Ignored if object_positon_prov is given." ),
             critical=False
@@ -87,7 +90,7 @@ class ParsLightcurve(Parameters):
         )
 
         # On to actual critical parameters
-        
+
         self.subtraction_config = self.add_par(
             name = "subtraction_config",
             default = {
@@ -107,24 +110,24 @@ class ParsLightcurve(Parameters):
             },
             par_types = dict,
             docstring = ( "A dictionary with subtraction config.  Will override what's in config files "
-                          "and defaults for subtraction." )
+                          "and defaults for subtraction." ),
             # Not critical because a subtraction provenance will be in the upstreams of the forced
             #   phot provenance
             critical = False
         )
-        
+
         self.crop_image = self.add_par(
-            name = "crop_image"
+            name = "crop_image",
             default = [ 100, 100 ],
             par_types = ( list, None ),
             docstring = ( "If given, 2-element list (width, height).  Science images will be trimmed to at most "
                           "this size before being fed to subtractions.  If None, use full-size images "
-                          "(which is *usually* not what you want)." )
+                          "(which is *usually* not what you want)." ),
             critical=True
         )
 
         # Finally, non-critical parameters that say what to actually do
-        
+
         self.mjd0 = self.add_par(
             name = "mjd0",
             default = None,
@@ -150,7 +153,7 @@ class ParsLightcurve(Parameters):
             #   specifies instrument
             critcal = False
         )
-        
+
         self.filters = self.add_par(
             name = "filters",
             default = None,
@@ -188,7 +191,7 @@ class Lightcurve:
 
         cfg = Config.get()
 
-        self.pars = ParsPipeline( **(cfg.value('lightcurve', {})) )
+        self.pars = ParsLightcurve( **(cfg.value('lightcurve', {})) )
         self.pars.augment( kwargs )
 
         subtraction_config = cfg.value( 'subtraction', {} )
@@ -201,18 +204,18 @@ class Lightcurve:
         self.zp_prov = None
         self.refset = None
         self.refs = {}
-        
-        
+
+
     def setup( self, object_id=NoValue(), object_name=NoValue(), mjd0=NoValue(),
                mjd1=NoValue(), filters=NoValue(), pgdb=None ):
         pgdb_in = pgdb
-        
+
         self.pars.object_id = object_id if not isinstance( object_id, NoValue ) else self.pars.object_id
         self.pars.object_name = object_name if not isinstance( object_name, NoValue ) else self.pars.object_name
         self.pars.mjd0 = mjd0 if not isinstance( mjd0, NoValue ) else self.pars.object_mjd0
         self.pars.mjd1 = mjd1 if not isinstance( mjd1, NoValue ) else self.pars.mjd1
         self.pars.filters = listify(filters) if not isinstance( filters, NoValue ) else self.pars.filters
-        
+
         self.object = None
         if self.pars.object_id is not None:
             objcol = "_id"
@@ -261,7 +264,7 @@ class Lightcurve:
                 else:
                     self.object_position_prov = Provenance.get_by_tag( self.pars.object_position_prov_tag,
                                                                        self.pars.object_position_prov_tag_process,
-                                                                       pgdb=pgdg_in )
+                                                                       pgdb=pgdb_in )
                     if self.object_position_prov is None:
                         raise ValueError( f"Could not find object position provenance for "
                                           f"tag {self.pars.object_position_prov_tag} and "
@@ -269,16 +272,16 @@ class Lightcurve:
 
             if self.subtractor.refset is None:
                 raise ValueError( "Subtractor has no refset defined!" )
-            self.refset = Refset.get_by_name( self.subtractor.pars.refset, pgdb=pgdb )
+            self.refset = RefSet.get_by_name( self.subtractor.pars.refset, pgdb=pgdb )
             if self.refset is None:
                 raise ValueError( f"Can't find refset {self.subtractor.pars.refset}" )
-                    
+
             rows = pgdb.execute( sql.SQL( "SELECT * FROM objects WHERE {col}={val}" )
                                  .format( col=sql.Identifier(objcol), val=objval  ) )
             if len(rows) > 0:
                 raise RuntimeError( "This should never happen" )
             elif len(rows) == 0:
-                raise ValueError( f"Could not find object with {col}={objval}" )
+                raise ValueError( f"Could not find object with {objcol}={objval}" )
             else:
                 self.object = models.object.Object( **(rows[0]) )
 
@@ -303,239 +306,314 @@ class Lightcurve:
                 self.dec = self.object.dec
 
 
-    def make_prov_tree( self, just_read=False, save=True,
-                        provtag=None, process=None,
-                        zp_provtag=None, zp_process=None,
-                        pos_provtag=None, pos_process=None,
-                        sub_provtag=None, sub_process=None,
-                        trim_provtag=None, trim_processes=None,
-                        pgdb=None ):
+    def _generate_provenances( self, provtree, pgdb=None ):
+        subups = [ provtree['referencing'] ]
+        subupsteps = [ 'referencing' ]
+
+        # Get trim image provenances
+        if self.pars.crop_image is not None:
+            trim_processes = [ 'Image.trim', 'Image.trim.sources', 'Image.trim.wcs', 'Image.trim.zp' ]
+            trimprovs = Image.get_trim_provs( self.pars.crop_image[0], self.pars.crop_image[1],
+                                              upstreams=[ provtree['starting_point'] ],
+                                              wcs_prov=provtree['astrocal'], zp_prov=provtree['photocal'],
+                                              save=False )
+            trimprovs.append( Provenance( process='photocal', upstreams=[ provtree['photocal'] ] ) )
+
+            if 'Image.trim' in provtree:
+                if any( provtree[trim_processes[i]].id != trimprovs[i].id for i in range(4) ):
+                    raise ValueError( "Pre-existing image trim provenances don't match what what "
+                                      "they should have been given config." )
+                trimupsteps = { 'Image.trim':        [ 'starting_point', 'astrocal' ],
+                                'Image.trm.sources': [ 'Image.trim' ],
+                                'Image.trim.wcs':    [ 'Image.trim.sources' ],
+                                'Image.trim.zp':     [ 'photocal' ] }
+                if any( set( trimupsteps[trim_processes[i]] ) != set( provtree.upstream_steps[trim_processes[i]] )
+                        for i in range(4) ):
+                    raise ValueError( "Pre-existing trim upstream steps weren't what was expected." )
+            else:
+                # This next if should be False by construction.  If it's True, it
+                #   means that there is a code error either here or in Image.get_trim_provs
+                if ( len( trimprovs[0].upstreams == 2 ) != 0
+                     or ( 'astrocal' not in [ p.process for p in trimprovs[0].upstreams ] )
+                     or  any( set( u.process for u in trimprovs[i].upstreams )
+                              != set( trimupsteps[trim_processes[i]] )
+                              for i in (1, 2, 3) )
+                    ):
+                    raise RuntimeError( "I am surprised." )
+            # Gotta include both Image.trim.wcs and
+            # Image.trim.zp because Image.trim.zp has only
+            # photocal as an upstream, so we don't tag the image
+            # provenance by just tagging the Image.trim.zp
+            # provenance.
+            subups.append( [ trimprovs[2], trimprovs[3] ] )
+            subupsteps.extend( [ 'Image.trim.wcs', 'Image.trim.zp' ] )
+
+        else:
+            trimprovs = None
+            subups.append( provtree['photocal'] )
+            subupsteps.append( 'photocal' )
+
+        # Get subtraction provenance
+        subprov = Provenance( code_version_id=Provenance.get_code_version('subtraction', pgdb=pgdb).id,
+                              process='subtraction',
+                              parameters=self.subtractor.pars.get_critical_pars(),
+                              upstreams=subups )
+        if 'subtraction' in provtree:
+            if subprov.id != provtree['subtraction'].id:
+                raise ValueError( f"Found provenance for subtraction {provtree['subtraction'].id} does not "
+                                  f"match what this pipeline will create {subprov.id}" )
+            if set( subupsteps ) != set( provtree.upstream_steps['subtraction'] ):
+                raise ValueError( "Subtraction upstream steps mismatch." )
+
+        # Get the forced photometry provenance
+        ups = [ provtree['subtraction'] ]
+        upsteps = [ 'subtraction' ]
+        if ( self.objectposition_prov is not None ) or ( self.object_position_prov_tag is not None ):
+            ups.append( provtree['positioning'] )
+            upsteps.append( 'positioning' )
+        forcedprov = Provenance( code_version_id=Provenance.get_code_version('forcedphot', pgdb=pgdb).it,
+                                 process='forcedphot', parameters=self.pars.get_critical_pars(),
+                                 upstreams=ups )
+        if 'forcedphot' in provtree:
+            if forcedprov.id != provtree['forcedphot'].id:
+                raise ValueError( f"Found provenance for forced photometry {provtree['forcedphot'].id} does not "
+                                  f"match what this pipeline will create {forcedprov.id}" )
+            if set( upsteps ) != set( provtree.upstream_steps['forcedphot'] ):
+                raise ValueError( "Forced photometry upstream steps mismatch." )
+
+        return forcedprov, subprov, trimprovs
+
+
+    def make_prov_tree( self, just_read=False, save=True, save_tag=True, provtag=None, pgdb=None,
+                        ok_if_preexisting_prov_tag_without_forcedphot=False ):
+        """Make a provenance tree for the Lightcurve.
+
+        Datastore.make_prov_tree is designed specifically for use with
+        top_level, and is not easy to use here.  Probably that code
+        should be moved to top_level.py.
+
+        Parameters
+        ----------
+           just_read : bool, default False
+              Normally, the provenance tree will be generated looking at
+              the parameters attached to the Lightcurve object, and
+              attached to the Subtractor object that the Lightcurve
+              object makes.  Provenances will be generated for all of
+              forcedphot, subtraction, Image.trim, Image.trim.sources,
+              Image.trm.wcs, and Image.trim.zp.  If just_read is true,
+              all of that is thrown out, and instead the provenances are
+              read from the database using provtag.  WARNING: if you do
+              this, then don't generate new forced photometry, just read
+              what's there!
+
+           save : bool, default True
+              Save any generated provenances to the database?  Must be
+              False if just_read is True.
+
+           provtag : str, default None
+              The provenance tag to use to find existing subtraction and
+              forcedphot provenances.  If save and save_tags are both
+              true, than any newly generated provenacnes will be tagged
+              with this provenacne tag.  If just_read is False, then if
+              preexisting provenances in the database with this tag are
+              inconsistent with the ones generated using the object's
+              configured parameters, an exception will be raised.
+
+           save_tag : bool, default True
+              Ignored if save is False.  If True, then all provenances
+              saved to the database are also tagged with the provenance
+              tag given in provtag.
+
+           pgdb : base.PGDB, default None
+              A database connection.  If not given, one will be created
+              and closed as necesary.
+
+        Returns
+        -------
+          data_store.ProvenanceTree
+
+        """
+
+        if just_read and save:
+            raise ValueError( "Can't use just_read and save together." )
+
+        if just_read and ( provtag is None ):
+            raise ValueError( "just_read requires provtag" )
+
+        if save_tag and ( not save ):
+            SCLogger.warning( "save_tag is True but save is False, ignoring save_tag." )
+
         # Build a full provenance tree for DataStore to chew on
         # DataStore.make_prov_tree is designed for use with top_level, and is
         #   not easy to use here, so just make one manually.
 
         pgdb_in = pgdb
-        
-        process = process if process is not None else self.pars.forced_phot_prov
-        zp_process = zp_process if zp_process is not None else self.pars.zp_prov_tag_process
-        pos_process = pos_process if pos_process is not None else self.pars.object_position_prov_tag_process
-        sub_process = sub_process if sub_process is not None else 'subtraction'
-        trim_processes = ( trim_processes if trim_processes is not None
-                           else [ 'Image.trim', 'Image.trim.sources', 'Image.trim.wcs', 'Image.trim.zp' ] )
 
-        # The arduous process of reading all the provenances from the
-        #   database, recursively trolling upstreams
+        # Read any existing provenances from the databaes.  First make some sets
+        #   of what we must have to do anything, and what is allowed.
 
-        def _append_provs( prov, provs, upstream_procs, procs, pgdb ):
-            # Special case handling for referencing and positioning
-            if prov.process in ( 'positioning', pos_process, 'referencing' ):
-                expected_upstreams = []
-            else:
-                expected_upstreams = [ p.process for p in prov.get_upstreams( pgdb=pgdb, save_to_object=True ) ]
+        must_have_procs = { 'starting_point', 'extraction', 'astrocal', 'photocal', 'referencing' }
+        all_procs = must_have_procs.union( { 'subtraction', 'forcedphot' } )
+        trim_procs = [ 'Image.trim', 'Image.trim.sources', 'Image.trim.wcs', 'Image.trim.zp']
 
-            if prov.process in provs.keys():
-                if prov.id != provs[prov.process].id:
-                    raise RuntimeError( f"Process {prov.process} came up with inconsistent values "
-                                        f"when bulding the provenance tree!" )
-                if upstream_procs[prov.process] != expected_upstreams:
-                    raise RuntimeError( f"Process {prov.process} came up with inconsistent upstream "
-                                        f"processes when building the provenance tree!" )
-            else:
-                provs[prov.process] = prov
-                upstream_procs[prov.process] = expected_upstreams
-
-            if prov.process not in ( 'positioning', pos_process, 'referencing' ):
-                for upproc in prov.upstreams:
-                    _append_provs( upproc, provs, upstream_procs, procs, pgdb )
-
-        db_provs = {}
-        db_upstream_procs = {}
-        must_have_procs = { 'starting_point', 'extraction', 'astrocal', zp_process, 'referencing', sub_process }
-        allowed_procs = must_have_procs.union( set( trim_processes ) )
-        allowed_procs.add( pos_process )
-
+        provtree = ProvenanceTree( noupstreams=['positioning', 'referencing', 'starting_point'],
+                                   processmap={'preprocessing': 'starting_piont'} )
         with PGDB( pgdb_in ) as pgdb:
             # First, see if we can find the forced photometry tag
-            if ( provtag is None ) and ( self.pars.forced_phot_prov is not None ):
-                found_prov = Provenance.get( self.pars.forced_phot_prov, pgdb=pgdb )
-            elif provtag is not None:
-                found_prov = Provenance.get_for_tag( provtag, process, pgdb=pgdb )
+            if provtag is not None:
+                found_prov = Provenance.get_for_tag( provtag, 'forcedphot', pgdb=pgdb )
             else:
                 found_prov = None
 
             if found_prov is not None:
-                _append_provs( found_prov, db_provs, db_upstream_procs, procs, pgdb )
-                must_have_procs.add( process )
-                
+                # This will build the whole tree, adding all the upstreams
+                provtree.append_provenance( found_prov, pgdb=pgdb )
+                if not just_read:
+                    # If we're not just reading, then we know which optional processes should be there
+                    if self.pars.crop_image is not None:
+                        all_procs = all_procs.union( trim_procs )
+                    if ( ( self.pars.object_position_prov is not None ) or
+                         ( self.pars.object_position_prov_tag is not None )
+                        ):
+                        all_procs.add( 'positioning' )
+                    must_have_procs = all_procs
+                else:
+                    # Generate expected provenances for later validation
+                    forcedprov, subprov, trimprovs = self._generate_provenances( provtree )
+
             else:
                 if just_read:
-                    raise RuntimeError( "just_read is true, but could not find forced photomtery provenance for "
-                                        "provenance tag {provtag} and process {process}" )
+                    raise RuntimeError( "just_read is true, but could not find forced photometry provenance for "
+                                        "provenance tag {provtag}" )
+
+                # Based on config, we know what processes are legal
+                if self.pars.crop_iamge is not None:
+                    all_procs = all_procs.union( trim_procs )
+                if ( ( self.pars.object_position_prov is not None ) or
+                     ( self.pars.object_position_prov_tag is not None )
+                    ):
+                    all_procs.add( 'positioning' )
 
                 # OK... didn't find an existing forcedphot provenance so try to read as much as we can
                 # First, there's *gotta* be a reference provenances, or we won't be able to do anything
-                db_provs['referencing'] = Provenance.get_by_id( self.refset.provenance_id, pgdb=pgdb )
-                db_upstream_procs['referencing'] = {}
-                if db_provs['referencing'] is None:
+                # (Use Provenance.get_by_id here rather than self.refset.provenance property, so that
+                # we can use pgdb.)
+                refprov = Provenance.get_by_id( self.refset.provenance_id, pgdb=pgdb )
+                if refprov is None:
                     raise RuntimeError( f"Failed to find provenance {self.refset.provenance_id} for "
                                         f"refset {self.refset.name}" )
+                provtree.append_provenance( refprov, pgdb=pgdb )
 
                 # Likewise, there must be a zeropoint provenance
-                if zp_provtag is not None:
-                    zpprov = Provenance.get_for_tag( zp_provtag, zp_process, pgdb=pgdb )
-                    if zpprov is None:
-                        raise RuntimeError( f"Failed to find provenance for passed "
-                                            f"tag {zp_provtag} process {zp_process}" )
-                elif self.pars.zp_prov is not None:
+                if self.pars.zp_prov is not None:
                     zpprov = Provenance.get( self.pars.zp_prov, pgdb=pgdb )
-                    if zpprov is None:
-                        raise RuntimeError( f"Failed to find zeropoint provenance {self.pars.zpprov}" )
                 elif self.pars.zp_prov_tag is not None:
-                    zpprov = Provenance.get_for_tag( self.pars.zp_prov_tag, zp_process, pgdb=pgdb )
-                    if zpprov is None:
-                        raise RuntimeError( f"Failed to find provenance for configured tag "
-                                            f"{self.pars.zp_prov_tag} process {zp_process}" )
+                    zpprov = Provenance.get_for_tag( self.pars.zp_prov_tag, 'photocal', pgdb=pgdb )
                 else:
-                    raise ValueError( f"Must pass zp_provtag, or must configure zp_prov or zp_prov_tag" )
+                    raise ValueError( "Must have one of zp_prov or zp_prov_tag" )
+                if zpprov is None:
+                    raise RuntimeError( f"Failed to find the zeropoint provenance for "
+                                        f"zp_prov={self.pars.zp_prov} and zp_prov_tag={self.pars.zp_prov_tag}" )
+                elif zpprov.process != 'photocal':
+                    raise RuntimeError( f"zeropoint provenance process is {zpprov.process}, "
+                                        f"expected 'photocal'" )
 
-                # Get the zeropoint prov upstreams; they should exist, since the zeropoint provenance does!
-                _append_provs( zpprov, db_provs, db_upstream_procs, procs, pgdb )
-                
+                # This will also add the astrocal, soruces, and preprocessing (starting_point) provenances
+                provtree.append_provenance( zpprov, pgdb=pgdb )
+
                 # Get the object position provenance if any
-                if pos_provtag is not None:
-                    db_provs[pos_process] = Provenance.get_for_tag( pos_provtag, pos_process, pgdb=pgdb )
-                elif self.pars.object_position_prov is not None:
-                    db_provs[pos_process] = Provenance.get_by_id( self.pars.object_position_prov, pgdb=pgdb )
+                posprov = None
+                notfound = False
+                if self.pars.object_position_prov is not None:
+                    posprov = Provenance.get_by_id( self.pars.object_position_prov, pgdb=pgdb )
+                    if posprov is None:
+                        notfound = True
+                    elif posprov.process != 'positioning':
+                        raise ValueError( f"The process of provenance {self.pars.object_positon_prov} is "
+                                          f"{posprov.process}, but should be 'positioning'." )
                 elif self.pars.object_position_prov_tag is not None:
-                    db_provs[pos_process] = Provenance.get_for_tag( self.pars.object_position_prov_tag,
-                                                                    pos_process, pgdb=pgdb )
-                if pos_process in db_provs:
-                    if db_provs[pos_process] is None:
-                        raise RuntimeError( f"Failed to find object positioning provenance (process {posproc})" )
-                    db_upstream_procs[posproc] = []
+                    posprov = Provenance.get_for_tag( self.pars.object_position_prov_tag, 'positioning', pgdb=pgdb )
+                    notfound = posprov is None
+                if notfound:
+                    raise RuntimeError( f"Failed to find object positioning provenance given "
+                                        f"object_position_prov={self.pars.object_position_prov} and "
+                                        f"object_position_prov_tag={self.pars.object_position_prov_tag}" )
+                if posprov is not None:
+                    provtree.append_provenance( posprov, pgdb=pgdb )
 
-                # Get the subtraction provenance if any
-                if sub_provtag is not None:
-                    subprov = Provenance.get_for_tag( sub_provtag, sub_process, pgdb=pgdb )
-                elif self.pars.subtraction_prov_tag is not None:
-                    subbprov = Provenance.get_for_tag( self.pars.subtraction_prov_tag, sub_process, pgdb=pgdb )
+                if provtag is not None:
+                    # Get the trim provenances if any
+                    found_trimprovs = []
+                    for proc in [ 'Image.trim', 'Image.trim.sources', 'Image.trim.wcs', 'Image.trim.zp' ]:
+                        found_trimprovs.append( Provenance.get_for_tag( provtag, proc, pgd=pgdb ) )
+                    if any( i is not None for i in found_trimprovs ):
+                        if not all( i is not None for i in found_trimprovs ):
+                            raise RuntimeError( f"Database corruption: found some, but not all, image trim provs "
+                                                f"in provtag {provtag}" )
+                        for prov in found_trimprovs:
+                            provtree.append_provenance( prov, pgdb=pgdb )
 
-                if subbprov is not None:
-                    # Add the subtraction provenacne and its upstreams.  Most (all?) of the upstreams
-                    #   will have already been added above, but _append_provs (supposedly) handles that.
-                    _append_provs( subprov, db_provs, db_upstream_procs, procs, pgdb )
+                    # Get the subtraction provenance if any
+                    found_subprov = Provenance.get_for_tag( provtag, 'subtraction', pgdb=pgdb )
+                    if found_subprov is not None:
+                        # Add the subtraction provenacne and its upstreams.  Most (all?) of the upstreams
+                        #   will have already been added above, but _append_provs (supposedly) handles that.
+                        provtree.append_provenance( found_subprov, pgdb=pgdb )
+
+                # ...and we don't need to get the forced phot prov here because we wouldn't be
+                #   inside this "else" if it could be found.
 
             # Make sure stuff we read out of the database has processes we expected
-            have_procs = set( db_provs.keys() )
-            missing_procs = zero_offset_procs - have procs
-            unknown_procs = have_procs - allowed_procs
+            have_procs = set( provtree.keys() )
+            missing_procs = must_have_procs - have_procs
+            unknown_procs = have_procs - all_procs
             if ( len(missing_procs) > 0 ) or ( len(unknown_procs) > 0 ):
-                raise RuntimeError( f"Failure trawling the database for provenances, unexpected processes.  "
+                raise RuntimeError( f"Failure building provtree, unexpected processes.  "
                                     f"missing: {missing_procs} ; unknown: {unknown_procs}" )
 
-            if just_read:
-                # We're done
-                return ProvenanceTree( db_provs, db_upstream_procs )
-
-            else:
-                # OK!  db_provs now has all known provenances, including at *least* referencing and zeropoint
+            # If just_read is True, then we're done!
+            if not just_read:
+                # OK!  provtree now has all known provenances, including at *least* referencing and zeropoint
                 # Make the provenances for the things this pipeline will create; if they were found in
                 #   the database, make sure they match.
 
-                upstream_steps = db_upstream_procs
-                provs = db_provs
-                subups = [ self.refset.provenance ]
-                subupsteps = [ 'referencing' ]
+                forcedprov, subprov, trimprovs = self._generate_provenances( provtree, pgdb=pgdb )
 
-                # Get trim image provenances
-                
-                trimprovs = None
-                if self.pars.crop_image is not None:
-                    trimupsteps = { trim_processes[0]: [ 'starting_point', 'astrocal' ],
-                                    trim_processes[1]: [ 'Image.trim' ],
-                                    trim_processes[2]: [ trimprocs[1], 'astrocal' ],
-                                    trim_processes[3]: [ zp_process ] ] )
+                # Add the generated provenances to the provenance tree.  Do this piece by piece,
+                #   so that self-consistency will be checeked.  (It does mean redundant database
+                #   queries... I think.)
+                if trimprovs[0] is not None:
+                    for p in trimprovs:
+                        provtree.append_provenance( p, nodb=True )
+                    must_have_procs = must_have_procs.union( trim_procs )
+                provtree.append_provenance( subprov, nodb=True )
+                provtree.append_provenance( forcedprov, nodb=True )
+                must_have_procs = must_have_procs.union( { 'subtraction', 'forcedphot' } )
 
-                    trimprovs = Image.get_trim_provs( self.pars.crop_image[0], self.pars.crop_image[1],
-                                                      upstreams=[ provs['starting_point'] ],
-                                                      wcs_prov=provs['astrocal'], zp_prov=provs[zp_process],
-                                                      save=save, provtag=provtag, pgdb=pgdb )
-                    trimprovs.append( Provenance( process=zp_process, upstreams=[ provs[zp_process] ] ) )
-                        
-                    if trim_processes[0] in provs:
-                        if any( provs[trim_processes[i]].id != trimprovs[i].id for i in range(4) ):
-                            raise ValueError( "Pre-existing image trim provenances don't match what what "
-                                              "they should have been given config." )
-                        if any( set( trimupsteps[trim_processes[i]] ) != set( upstream_steps[trim_proceses[i]] )
-                                for i in range(4) ):
-                            raise ValueError( "Pre-existing trim upstream steps weren't what was expected." )
-                    else:
-                        # This next if should be False by construction.  If it's True, it
-                        #   means that there is a code error either here or in Image.get_trim_provs
-                        if ( len( trimprovs[0].upstreams == 2 ) != 0
-                             or ( 'astrocal' not in [ p.process for p in trimprovs[0].upstreams ] )
-                             or  any( set( u.process for u in trimprovs[i].upstreams )
-                                      != set( trimupsteps[trim_processes[i]] ) )
-                                      for i in (1, 2, 3) )
-                            ):
-                            raise RuntimeError( "I am surprised." )
-                        upstream_steps.update( trimupsteps )
-                        for i in range(4):
-                            provs[ trim_processes[i] ] = [ trimprovs[i] ]
-                            if save:
-                                trimprovs[i].insert( pgdb=pgdb, nocommit=True )
-                        if save:
-                            pgdb.commit()
+                # So... the provenance three thinks it's self consistent.  Let's check again
+                #    that the expected provenances are there, and they should ALL be there now.
+                have_procs = set( provtree.keys() )
+                missing_procs = must_have_procs - have_procs
+                unknown_procs = have_procs - must_have_procs
+                if ( len(missing_procs) > 0 ) or ( len(unknown_procs) > 0 ):
+                    raise RuntimeError( f"Failure trawling the database for provenances, unexpected processes.  "
+                                        f"missing: {missing_procs} ; unknown: {unknown_procs}" )
 
-                    subups.append( trimprovs[0] )
-                    subupsteps.extend( [ trim_processes[0], trim_processes[3] ] )
 
-                else:
-                    subups.append( provs[zp_process] )
-                    subupsteps.append( zp_process )
+                # Save them if necessary.  Do this in the right order so upstreams exist.
+                if save:
+                    provs = []
+                    if self.pars.crop_image is not None:
+                        provs.extend( provtree[p] for p in [ 'Image.trim', 'Image.trim.sources',
+                                                             'Image.trim.wcs', 'Image.trim.zp' ] )
+                    provs = [ provtree['subtraction'], provtree['forcedphot'] ]
+                    for prov in provs:
+                        prov.insert_if_needed( pgdb=pgdb, nocommit=True )
+                    pgdb.commit()
+                    if provtag is not None:
+                        Provenance.addtag( provtag, provs, pgdb=pgdb )
 
-                # Get subtraction provenance
-                subprov = Provenance( code_version_id=Provenance.get_code_version('subtraction', pgdb=pgdb).id,
-                                      process=sub_process,
-                                      parameters=self.subtractor.pars.get_critical_pars(),
-                                      upstreams=subups )
-                if sub_process in provs:
-                    if subprov.id != provs[sub_process].id:
-                        raise ValueError( f"Found provenance for subtraction {provs[sub_process].id} does not "
-                                          f"match what this pipeline will create {subprov.id}" )
-                    if set( subupsteps ) != set( upstream_steps[sub_process] ):
-                        raise ValueError( f"Subtraction upstream steps mismatch" )
-                else:
-                    provs[sub_process] = subprov
-                    upstream_stemps[sub_process] = subupsteps
-                    if save:
-                        subprov.insert( pgdb=pgdb )
-                
-                # Get the forced photometry provenance
-                ups = [ provs[sub_process] ]
-                upsteps = [ sub_process ]
-                if pos_process in provs:
-                    ups.append( provs[pos_process] )
-                    upsteps.append( pos_process )
-                forcedprov = Provenance( code_version_id=Provenance.get_code_version('forcedphot', pgdb=pgdb).it,
-                                         process=process, parameters=self.pars.get_critical_pars(),
-                                         upstreams_ups )
-                if process in provs:
-                    if forcedprov.id != provs[process].id:
-                        raise ValueError( f"Found provenance for forced photometry {provs[process].id} does not "
-                                          f"match what this pipeline will create {forcedprov.id}" )
-                    if set( upsteps ) != set( upstream_steps[process] ):
-                        raise ValueError( "Forced photometry upstream steps mismatch" )
-                else:
-                    provs[process] = forcedprov
-                    upstream_steps[process] = upsteps
-                    if save:
-                        forcedprov.save( pgdb=pgdb )
-
-                return ProvenanceTree( provs, upstream_steps )
-
-        raise RuntimeError( "This should never happen." )
-
+        return provtree
 
     def find_refs( self, ds, filters=None, mjd0=None, mjd1=None, pgdb=None ):
         if self.object_position is not None:
@@ -561,20 +639,20 @@ class Lightcurve:
             ref = ds.get_reference( ra=ra, dec=dec, filter=filt, pgdb=pgdb, **kwargs )
             if ref is None:
                 raise RuntimeError( f"Cannot find a reference at ({ra:.rf, dec:.4f}) for instrument "
-                                    f"{instrument}, filter {filt}, and parameters {kwargs}" )
+                                    f"{self.pars.instrument}, filter {filt}, and parameters {kwargs}" )
             refs[filt] = ref
 
         return refs
 
+    def process_one_image( self, img ):
+        pass
 
     def run( self ):
-        provtree = self.make_prov_tree( save=True )
+        self.provtree = self.make_prov_tree( save=True )
 
-
-        
         if self.pars.filter is None:
             imgs, wcsen, zps = Image.find_images( ra=self.ra, dec=self.dec, type='Sci',
-                                                  provenance_ids=provtree['photocal'], provenance_ids_are_zp=True,
+                                                  provenance_ids=self.provtree['photocal'], provenance_ids_are_zp=True,
                                                   instrument=self.pars.instrument,
                                                   min_mjd=self.pars.mjd0, max_mjd=self.pars.mjd1,
                                                   order_by='earliest', return_wcs=True, return_zeropoints=True )
@@ -586,7 +664,7 @@ class Lightcurve:
             filters = self.pars.filter
             for filt in filters:
                 thisimgs, thiswcsen, thiszps = Image.find_images( ra=self.ra, dec=self.dec, type='Sci',
-                                                                  provenance_ids=provtree['photocal'],
+                                                                  provenance_ids=self.provtree['photocal'],
                                                                   provenance_ids_are_zp=True,
                                                                   instrument=self.pars.instrument,
                                                                   min_mjd=self.pars.mjd0, max_mjd=self.pars.mjd1,
@@ -596,19 +674,19 @@ class Lightcurve:
                 wcsen.update( thiswcsen )
                 zps.update( thiszps )
                 imgs.sort( key=lambda x: x.mjd )
-        
+
         if len(imgs) == 0:
             SCLogger.warning( "No images found to build a lightcurve for!" )
             return None
 
         # Make an empty datastore to do use for finding references.  (Issue #550)
         ds = DataStore()
-        ds.prov_tree = provtree
+        ds.prov_tree = self.provtree
         refs = self.find_refs( ds, filters=filters, mjd0=imgs[0].mjd, mjd1=imgs[1].mjd )
-        
+
         for img in imgs:
-            ds = DataStore( image )
-            ds.prov_tree = provtree
+            ds = DataStore( img )
+            ds.prov_tree = self.provtree
             ds.reference = refs[ img.filter ]
             ds.sources = SourceList.get_by_id( wcsen[img.id].sources_id )
             ds.wcs = wcsen[ img.id ]
@@ -626,30 +704,26 @@ class Lightcurve:
                 ( cropim, cropsrc,
                   cropwcs, cropprovs ) = img.trim( x0, x1, y0, y1,
                                                    sources=ds.sources, wcs=ds.wcs,
-                                                   trimprovs=[ provtree['Image.trim'],
-                                                               provtree['Image.trim.sources'],
-                                                               provtree['Image.trim.wcs']
+                                                   trimprovs=[ self.provtree['Image.trim'],
+                                                               self.provtree['Image.trim.sources'],
+                                                               self.provtree['Image.trim.wcs']
                                                               ] )
                 cropbg = ds.get_bg().trim( x0, x1, y0, y1, trimmed_sources=cropsrc )
-                croppfs = ds.get_psf().trim( x0, x1, y0, y1, trimmed_sources=cropsrc )
+                croppsf = ds.get_psf().trim( x0, x1, y0, y1, trimmed_sources=cropsrc )
                 ds.get_zp()
                 cropzp = ZeroPoint( zp=ds.zp.zp, dzp=ds.zp.dzp, aper_cor_radii=ds.zp.aper_cor_radii,
-                                    aper_cors=ds.aper_cors.copy(), provenacne_id=provtree )
-                                    
-
-                
+                                    aper_cors=ds.aper_cors.copy(), provenance_id=self.provtree['Image.trim.zp'] )
                 ds.image = cropim
                 ds.image_id = cropim.id
-                ds.sources = crompsrc
+                ds.sources = cropsrc
                 ds.bg = cropbg
                 ds.psf = croppsf
                 ds.wcs = cropwcs
-                ds.zp = ZeroPoint( wcs_id=cropwcs.id, zp=ds.zp.ap, aper_cor_radii=ds.zp.aper_cor_radii,
-                                   aper_cors=ds.zp.aper_cors, provenance_id=provtree[zp_process].id )
-                
+                ds.zp = cropzp
+
             ds = self.subtractor.run( ds, self.ra, self.dec, trust_datastore_reference=True )
             ds.save_and_commit( overwrite=False )
-            
+
             # Now actually do photometry
             # First, make things the way photutils wants them
             sub_image = ds.get_sub_image()
@@ -664,9 +738,7 @@ class Lightcurve:
             # TODO FIGURE THIS OUT (Issue #194)
             new_psf = ds.get_psf()
 
-            measurements = photometry( sub_image, sub_noise, sub_mask, positions=[(xctr, yctr)],
-                                       pfsobj=newpsf, apers=new_zp.aper_cor_radii )
+            measurements = improc.photometry( sub_image, sub_noise, sub_mask, positions=[(xctr, yctr)],
+                                              pfsobj=newpsf, apers=new_zp.aper_cor_radii )
 
             # ROB YOU WERE HERE
-            
-            
