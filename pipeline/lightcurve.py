@@ -190,6 +190,16 @@ class ParsLightcurve(Parameters):
             critical = False
         )
 
+        self.numprocs = self.add_par(
+            name = "numprocs",
+            default = 1,
+            par_types = int,
+            docstring = ( "Number of processes to run.  All file identification (news, refs) and ref reading is "
+                          "done in the parent process.  It then forks nprocs subprocesses to do the subtractions "
+                          "and photometry.  If nprocs=1, it's all done serially." ),
+            critical=False
+        )
+
         self._enforce_no_new_attrs = True
         self.override( kwargs )
 
@@ -649,7 +659,7 @@ class Lightcurve:
         for filt in filters:
             ref = ds.get_reference( filter=filt, pgdb=pgdb, **kwargs )
             if ref is None:
-                raise RuntimeError( f"Cannot find a reference at ({ra:.rf, dec:.4f}) for instrument "
+                raise RuntimeError( f"Cannot find a reference at ({ra:.4f}, {dec:.4f}) for instrument "
                                     f"{self.pars.instrument}, filter {filt}, and parameters {kwargs}" )
             refs[filt] = ref
 
@@ -707,9 +717,13 @@ class Lightcurve:
             ds = cropds
 
         ds = self.subtractor.run( ds, ra=self.ra, dec=self.dec, trust_datastore_reference=True )
+        sub_image = ds.get_sub_image()
+
+        # Save to database if requested
+        # WARNING.  THis is broken.  If the trimmed image pre-existed, then we're
+        #   going to get errors when we try to overwrite!
         if self.pars.save_to_db:
             ds.save_and_commit( overwrite=False )
-        sub_image = ds.get_sub_image()
 
         # See if we can load pre-existing forced photometry from the database
         forcedphot = None
@@ -772,6 +786,7 @@ class Lightcurve:
         self.setup( *args, **kwargs )
         self.provtree = self.make_prov_tree( save=True )
 
+        SCLogger.info( "Lightcurve finding images." )
         if self.pars.filter is None:
             imgs, wcsen, zps = Image.find_images( ra=self.ra, dec=self.dec, type='Sci',
                                                   provenance_ids=self.provtree['photocal'].id,
@@ -807,10 +822,21 @@ class Lightcurve:
         self.zps = zps
         self.forced_phots = [ None ] * len(imgs)
 
+        SCLogger.info( f"Lightcurve finding refs for {len(filters)} filters." )
         # Make an empty datastore to do use for finding references.  (Issue #550)
         ds = DataStore()
         ds.prov_tree = self.provtree
         self.refs = self.find_refs( ds, filters=filters, mjd0=imgs[0].mjd, mjd1=imgs[1].mjd )
+        oks = [ f for f, r in self.refs.items() if r is not None ]
+        missings = [ f for f, r in self.refs.items() if r is None ]
+        if len(missings) > 0:
+            SCLogger.error( f"Failed to find refs for filters {missings}; did find refs for {oks}" )
+            raise RuntimeError( "Some refs missing filters." )
+        else:
+            SCLogger.info( f"Found refs for all filters: {oks}" )
 
+        SCLogger.info( f"Lightcurve doing forced photometry on {len(imgs)} images." )
         for i in range( len(self.imgs) ):
             self.forced_phots[i] = self.process_one_image(i)
+
+        return self.forced_phots

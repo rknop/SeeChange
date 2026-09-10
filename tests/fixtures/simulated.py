@@ -671,6 +671,7 @@ def sim_lightcurve_image_parameters():
                   'refexptime': 600.,
                   'refmjdend': 60000. + 600. / 3600. / 24.,
                   'refskye-': 200.,
+                  'mjdoffs': np.array( [ 30., 32., 37., 40., 45., 55. ] )
                  }
     imageargs = { 'ra': ra,
                   'dec': dec,
@@ -1111,11 +1112,12 @@ def sim_lightcurve_new_ds_factory_module( sim_lightcurve_image_parameters,
 #   oh well.  Code for the general case, watch it be inefficient in
 #   a specific case.
 @pytest.fixture
-def sim_lightcurve_news( sim_lightcurve_new_ds_factory, sim_lightcurve_rng ):
+def sim_lightcurve_news( sim_lightcurve_new_ds_factory, sim_lightcurve_rng,
+                         sim_lightcurve_image_parameters ):
     rng = sim_lightcurve_rng
 
     dses = []
-    mjdoffs = np.array( [ 30., 32., 37., 40., 45., 55. ] )
+    mjdoffs = sim_lightcurve_image_parameters[0]['mjdoffs']
     for mjdoff in mjdoffs:
         nextrafluxes = rng.integers( 1, 4 )
         extrafluxes = rng.uniform( 2000., 20000., size=nextrafluxes )
@@ -1127,11 +1129,12 @@ def sim_lightcurve_news( sim_lightcurve_new_ds_factory, sim_lightcurve_rng ):
 
 # Same as previous fixture, but module scope
 @pytest.fixture( scope='module' )
-def sim_lightcurve_news_module( sim_lightcurve_new_ds_factory_module, sim_lightcurve_rng_module ):
+def sim_lightcurve_news_module( sim_lightcurve_new_ds_factory_module, sim_lightcurve_rng_module,
+                                sim_lightcurve_image_parmaeters ):
     rng = sim_lightcurve_rng_module
 
     dses = []
-    mjdoffs = np.array( [ 30., 32., 37., 40., 45., 55. ] )
+    mjdoffs = sim_lightcurve_image_parameters[0]['mjdoffs']
     for mjdoff in mjdoffs:
         nextrafluxes = rng.integers( 1, 4 )
         extrafluxes = rng.uniform( 2000., 20000., size=nextrafluxes )

@@ -2103,10 +2103,6 @@ class DataStore:
         # SCLogger.debug( f"DataStore calling Reference.get_references with arguments={arguments}" )
 
         refs, imgs = Reference.get_references( **arguments, pgdb=_pgdb )
-        if len(refs) == 0:
-            # SCLogger.debug( f"DataStore: Reference.get_references returned nothing." )
-            self.reference = None
-            return None
 
         if ( search_by != 'image' ) and ( min_overlap is not None ) and ( min_overlap > 0 ):
             # Didn't filter by overlap fraction previously, so do that here
@@ -2122,7 +2118,12 @@ class DataStore:
             refs = [ r for d, r in zip(dist, refs) if d <= max_dist ]
             imgs = [ i for d, i in zip(dist, imgs) if d <= max_dist ]
 
-        if len(refs) == 1:
+        if len(refs) == 0:
+            # SCLogger.debug( f"Datastore: Reference.get_reference returned nothing." )
+            self.reference = None
+            return None
+
+        elif len(refs) == 1:
             # One reference found.  Return it if it's OK.
             self.reference = refs[0]
             return self.reference

@@ -345,9 +345,22 @@ class WorldCoordinates(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness, Spat
         return [ ( SourceList, self.sources_id ) ]
 
     def get_downstream_ids(self, pgdb=None):
-        """Get ids of zeropoints downstream of this wcs."""
+        """Get downstreams of this wcs.
+
+        This will include zeropoints and (maybe) images (which were trimmed).
+
+        """
+        downstreams = []
+
         from models.zero_point import ZeroPoint
         with PGDB() as pgdb:
             rows, _cols = pgdb.execute( sql.SQL( "SELECT _id FROM zero_points WHERE wcs_id={wcs}" )
                                  .format( wcs=self.id ) )
-            return [ ( ZeroPoint, row[0] ) for row in rows ]
+            downstreams.extend( [ ( ZeroPoint, row[0] ) for row in rows ] )
+
+            rows, _cols = pgdb.execute(
+                sql.SQL( "SELECT image_id FROM image_trim_parent WHERE parent_wcs_id={wcs}" )
+                .format( wcs=self.id ) )
+            downstreams.extend( [ ( Image, row[0] ) for row in rows ] )
+
+        return downstreams

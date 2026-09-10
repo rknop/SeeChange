@@ -179,6 +179,14 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         doc='Is this a subtraction image.'
     )
 
+    is_trim = sa.Column(
+        sa.Boolean,
+        nullable=False,
+        server_default='false',
+        index=False,
+        doc='Is this image the result of a call to Image.trim'
+    )
+
     @property
     def ref_id( self ):
         if not self.is_sub:
@@ -1546,6 +1554,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             trimim.flags = self.flags[ y0:y1, x0:x1 ].copy() if self.flags is not None else None
             trimim.width = trimim.data.shape[1]
             trimim.height = trimim.data.shape[0]
+            trimim.is_trim = True
             if trimimprov is not None:
                 trimim.provenance_id = trimimprov.id
                 trimim.filepath = trimim.invent_filepath( extra=f"_{xcen}_{ycen}" )
@@ -2018,47 +2027,145 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                 setattr( self, f'_{prop}', None )
 
 
-    def get_upstream_ids(self, pgdb=None):
+    def get_upstream_ids(self, full_chain=False, _seen=None, pgdb=None):
         """Get the ids immediate upstreams of this image.
 
         This may include an exposure (for most images), zeropoints (if
         this is subtraction or coadd image), and/or a reference (if this
-        is a subtraction).
+        is a subtraction).  If full_chain is True, then this can also
+        include world coordinates, source lists, and images.
+
+        Parameters
+        ----------
+          full_chain: bool, default False
+            Normally this only returns the immediate upstreams.  Set
+            full_chain to True to get everything all the way back to the
+            beginning.  WARNING, these are not sorted in any way.
+
+            WARNING : this is not tested, and (I think) not even used in
+            the code base right now.  TODO: write tests.
+
+          seen: set
+              Used internally for recursion if full_chain is True.
 
         Returns
         -------
         upstreams: list of [ ( class, id ) ]
-            The upstream Exposure, ZeroPoint, and Reference objects that
+            The upstream Exposure, ZeroPoint, and Reference ids that
             were used to create this image.  For most images, it will be
-            (at most) a single Exposure.  For coadds, it will be a bunch
-            of ZeroPoints.  For a subtraction, will be one ZeroPoint and
-            one Reference.
+            (at most) a single Exposure id.  For coadds, it will be a
+            bunch of ZeroPoints.  For a subtraction, will be one
+            ZeroPoint and one Reference.  Don't count on the list as
+            being sorted in any particular way.  It's not fully
+            deterministic, nor is it random, but in any event it's not
+            obvious.
+
+            If full_chain is true, this list can also include
+            SourceList, WorldCoordinates, and Image ids.
 
         """
 
         # Avoid circular imports
+        from models.source_lists import SourceList
+        from models.world_coordinates import WorldCoordinates
         from models.zero_point import ZeroPoint
         from models.reference import Reference
+
+        seen = set() if _seen is None else _seen
 
         if self.exposure_id is None:
             upstreams = []
         else:
+            seen.add( self.exposure_id )
             upstreams = [ ( Exposure, self.exposure_id ) ]
 
         with PGDB( pgdb ) as pgdb:
             if self.is_sub:
                 if self.is_coadd:
                     raise ValueError( f"Database corruption, image {self.id} is both a sub and a coadd!!!!!" )
+                if self.is_trim:
+                    raise ValueError( f"Database corruption, image {self.id} is both a sub and a trim!!!!!" )
                 q = sql.SQL( "SELECT new_zp_id, ref_id FROM image_subtraction_components WHERE image_id={me}"
                              ).format( me=self.id )
                 rows, _cols = pgdb.execute( q )
-                upstreams.extend( [ ( ZeroPoint, row[0] ) for row in rows ] )
-                upstreams.extend( [ ( Reference, row[1] ) for row in rows ] )
+                for row in rows:
+                    if row[0] not in seen:
+                        upstreams.append( ( ZeroPoint, row[0] ) )
+                        seen.add( row[0] )
+                    if row[1] not in seen:
+                        upstreams.append( ( Reference, row[1] ) )
+                        seen.add( row[1] )
 
             elif self.is_coadd:
+                if self.is_trim:
+                    raise ValueError( f"Database corruption, image {self.id} is both a coadd and a trim!!!!!" )
                 q = sql.SQL( "SELECT zp_id FROM image_coadd_component WHERE coadd_image_id={me}" ).format( me=self.id )
                 rows, _cols = pgdb.execute( q )
-                upstreams.extend( [ ( ZeroPoint, row[0] ) for row in rows ] )
+                for row in rows:
+                    if row[0] not in seen:
+                        upstreams.append( ( ZeroPoint, row[0] ) )
+                        seen.add( row[0] )
+
+            elif self.is_trim:
+                q = sql.SQL( "SELECT parent_image_id, parent_wcs_id FROM image trim_parent "
+                             "WHERE image_id={me}" ).formt( me=self.id )
+                rows, _cols = pgdb.execute( q )
+                for row in rows:
+                    if row[0] not in seen:
+                        upstreams.append( ( Image, row[0] ) )
+                        seen.add( row[0] )
+                    if row[1] not in seen:
+                        upstreams.append( ( WorldCoordinates, row[1] ) )
+                        seen.add( row[1] )
+
+            if full_chain:
+                # Get upstreams of WorldCoordinateses.  These will be from trimmed images.
+                q = sql.SQL( textwrap.dedent(
+                    """\
+                    SELECT s._id, i._id
+                    FROM world_coordinates w
+                    INNER JOIN source_lists s ON s._id=w.sources_id
+                    INNER JOIN images i ON i._id=s.image_id
+                    WHERE w._id=ANY(ARRAY[{wcsids}])
+                    """
+                ) ).format( wcsids=sql.SQL(",").join( [ u[1] for u in upstreams if u[0] == WorldCoordinates] ) )
+                rows, _cols = pgdb.execute( q )
+                for row in rows:
+                    if row[0] not in seen:
+                        seen.add( row[0] )
+                        upstreams.append( ( SourceList, row[0] ) )
+                    if row[1] not in seen:
+                        seen.add( row[1] )
+                        upstreams.append( ( Image, row[1] ) )
+
+                # Get all upstreams back to Image of ZeroPoints.  This will come from subs and coads.
+                q = sql.SQL( textwrap.dedent(
+                    """\
+                    SELECT w._id, s._id, i._id
+                    FROM zero_points z
+                    INNER JOIN word_coordinates w ON w._id=z.wcs_id
+                    INNER JOIN source_lists s ON s._id=w.sources_id
+                    INNER JOIN images i ON s.image_id=i._id
+                    WHERE z._id=ANY(ARRAY[{zpids}])
+                    """
+                ) ).format( zpid=sql.SQL(",").join( [ u[1] for u in upstreams if u[0] == ZeroPoint ] ) )
+                rows, _cols = pgdb.execute( q )
+                for row in rows:
+                    if row[0] not in seen:
+                        upstreams.append( ( WorldCoordinates, row[0] ) )
+                        seen.add( row[0] )
+                    if row[1] not in seen:
+                        upstreams.append( ( SourceList, row[1] ) )
+                        seen.add( row[1] )
+                    if row[2] not in seen:
+                        seen.add( row[2] )
+                        upstreams.append( ( Image, row[2] ) )
+
+                # Recursively get all upstreams of Images we've collected
+                for upstream in upstreams:
+                    if upstream[0] == Image:
+                        img = Image.get_by_id( upstream[1], pgdb=pgdb )
+                        upstreams.extend( img.get_upstream_ids( full_chain=True, _seen=seen, pgdb=pgdb ) )
 
         return upstreams
 
@@ -2066,17 +2173,35 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
     def get_downstream_ids(self, pgdb=None):
         """Get ids all the data products that were created based on this image.
 
-        This will just be SourceLists.
+        This will include:
+           * source lists
+           * images (images trimmed from this image)
+           * forced photometry
 
         """
 
         # avoids circular import
         from models.source_list import SourceList
+        from models.forcedphot import ForcedPhot
+
+        downstreams = []
 
         with PGDB( pgdb ) as pgdb:
             q = sql.SQL( "SELECT _id FROM source_lists WHERE image_id={me}" ).format( me=self.id )
             rows, _cols = pgdb.execute( q )
-            return [ ( SourceList, row[0] ) for row in rows ]
+            downstreams.extend( [ ( SourceList, row[0] ) for row in rows ] )
+
+            q = sql.SQL( "SELECT _id FROM forced_photometry WHERE subtraction_id={me}" ).format( me=self.id )
+            rows, _cols = pgdb.execute( q )
+            downstreams.extend( [ ( ForcedPhot, row[0] ) for row in rows ] )
+
+            if self.is_trim:
+                q = sql.SQL( "SELECT image_id FROM image_trim_parent WHERE parent_image_id={me}"
+                            ).format( me=self.id )
+                rows, _cols = pgdb.execute( q )
+                downstreams.extend( [ ( Image, row[0] ) for row in rows ] )
+
+        return downstreams
 
 
     @staticmethod

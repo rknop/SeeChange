@@ -7,6 +7,7 @@ import functools
 import numpy as np
 
 import psycopg
+from psycopg import sql
 import sqlalchemy as sa
 from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.schema import UniqueConstraint
@@ -14,7 +15,7 @@ from sqlalchemy.schema import UniqueConstraint
 from astropy.coordinates import SkyCoord
 import astropy.units
 
-from models.base import Base, SeeChangeBase, SmartSession, PsycopgConnection, UUIDMixin, SpatiallyIndexed
+from models.base import Base, SeeChangeBase, PGDB, SmartSession, PsycopgConnection, UUIDMixin, SpatiallyIndexed
 from models.image import Image
 from models.cutouts import Cutouts
 from models.source_list import SourceList
@@ -62,6 +63,7 @@ class Object(Base, UUIDMixin, SpatiallyIndexed):
     is_bad = sa.Column(
         sa.Boolean,
         nullable=False,
+        server_default=sa.text("false"),
         index=True,
         doc='Boolean flag to indicate object is bad; only will ever be set manually.'
     )
@@ -76,6 +78,26 @@ class Object(Base, UUIDMixin, SpatiallyIndexed):
                 setattr(self, key, value)
 
         self.calculate_coordinates()
+
+
+    # By definition, objects have no upstreams
+    def get_upstream_ids( self, pgdb=None ):
+        return []
+
+    # Objects have positions downstream
+    # NOTE: they also have measurements and forced photometry downstream,
+    #   but we're not including that here.  Reason: mostly this is used
+    #   for cleanup  in tests, and those will clean up separately.  In
+    #   particular, deleting measurements is fraught because you shouldn't
+    #   do that when you aren't also deleting the parent measurement set.
+    def get_downstream_ids( self, pgdb=None ):
+        downstreams = []
+        with PGDB( pgdb ) as pgdb:
+            q = sql.SQL( "SELECT _id FROM object_positions WHERE object_id={me}" ).format( me=self.id )
+            rows, _cols = pgdb.execute( q )
+            downstreams.extend( [ r[0] for r in rows ] )
+
+        return downstreams
 
 
     def get_measurements_et_al( self, measurement_prov_id, deepscore_prov_id=None, omit_measurements=[],
