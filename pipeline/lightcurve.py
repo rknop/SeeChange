@@ -213,19 +213,31 @@ class Lightcurve:
 
         cfg = Config.get()
 
-        self.pars = ParsLightcurve( **(cfg.value('lightcurve', {})) )
-        self.pars.augment( kwargs )
+        self.pars = ParsLightcurve()
 
-        subtraction_config = cfg.value( 'subtraction', {} )
-        subtraction_config.update( self.pars.subtraction_config )
-        self.subtractor = Subtractor( **subtraction_config )
+        # We want to start with the subtraction config
+        # Let this class' defaults override that
+        # Let the lightcurve config override that
+        # Let kwargs override that.
+        self.pars.merge_configs( before=[ {'subtraction_config': cfg.get('subtraction')} ],
+                                 after=[ cfg.get('lightcurve'), kwargs ] )
+
+        self.subtractor = Subtractor( **(self.pars.subtraction_config) )
 
         self.object = None
         self.object_position_prov = None
         self.object_position = None
+        self.ra = None
+        self.dec = None
         self.zp_prov = None
         self.refset = None
         self.refs = {}
+        self.provtree = None
+        self.imgs = None
+        self.wcsen = None
+        self.zps = None
+        self.forced_phots = None
+        self.aligned_cache = None
 
 
     def setup( self, object_id=NoValue(), object_name=NoValue(), mjd0=NoValue(),
@@ -665,7 +677,7 @@ class Lightcurve:
 
         return refs
 
-    def process_one_image( self, imgdex ):
+    def process_one_image( self, imgdex, cache_aligned_images=False ):
         img = self.imgs[ imgdex ]
         ds = DataStore( img )
         ds.prov_tree = self.provtree
@@ -718,6 +730,21 @@ class Lightcurve:
 
         ds = self.subtractor.run( ds, ra=self.ra, dec=self.dec, trust_datastore_reference=True )
         sub_image = ds.get_sub_image()
+
+        aligned_cache = None
+        if cache_aligned_images:
+            aligned_cache = { 'new_image': ds.aligned_new_image,
+                              'new_sources': ds.aligned_new_sources,
+                              'new_bg': ds.aligned_new_bg,
+                              'new_psf': ds.aligned_new_psf,
+                              'new_zp': ds.aligned_new_zp,
+                              'ref_image': ds.aligned_ref_image,
+                              'ref_sources': ds.aligned_ref_sources,
+                              'ref_bg': ds.aligned_ref_bg,
+                              'ref_psf': ds.aligned_ref_psf,
+                              'ref_zp': ds.aligned_ref_zp,
+                              'wcs': ds.aligned_wcs
+                             }
 
         # Save to database if requested
         # WARNING.  THis is broken.  If the trimmed image pre-existed, then we're
@@ -779,10 +806,47 @@ class Lightcurve:
             if self.pars.save_to_db:
                 forcedphot.insert()
 
-        return forcedphot
+        return forcedphot, aligned_cache
 
 
-    def run( self, *args, **kwargs ):
+    def run( self, *args, cache_aligned_images=False, **kwargs ):
+        """Do forced photometry based on the object configuration.
+
+        Parameters
+        ----------
+          object_id : str or uuid
+          object_name : str
+          mjd0 : float
+          mjd1 : float
+          filters : list of str
+             All of these can override their corresponding parameters
+             that were set when the Lightcurve object was instantiated.
+             This will change what is in those parameters, so if you
+             call the run() method more than once on the same Lightcurve
+             object (which is in general a scary thing to do), don't
+             count on them having reverted to what you constructed
+             the Lightcurve object with!
+
+          cached_aligned_images : bool, default False
+             If true, then the aligned news and refs, as well as
+             downstream dataproducts, are saved in self.aligned_cache.
+             Useful for debugging.  (These are not normally saved to the
+             database.)  (Note that the aligned new is identical to the
+             new, since we always align to the new.)
+
+          pgdb: PGDB, default None
+             Database connection.  Connections will be opened and closed
+             as needed if this is None.
+
+        Returns
+        -------
+          List of ForcedPhot
+
+          That list is also in self.forced_phots
+
+        """
+
+
         self.setup( *args, **kwargs )
         self.provtree = self.make_prov_tree( save=True )
 
@@ -821,6 +885,7 @@ class Lightcurve:
         self.wcsen = wcsen
         self.zps = zps
         self.forced_phots = [ None ] * len(imgs)
+        self.aligned_cache = [ None ] * len(imgs) if cache_aligned_images else None
 
         SCLogger.info( f"Lightcurve finding refs for {len(filters)} filters." )
         # Make an empty datastore to do use for finding references.  (Issue #550)
@@ -837,6 +902,8 @@ class Lightcurve:
 
         SCLogger.info( f"Lightcurve doing forced photometry on {len(imgs)} images." )
         for i in range( len(self.imgs) ):
-            self.forced_phots[i] = self.process_one_image(i)
+            self.forced_phots[i], cached_aligns = self.process_one_image(i, cache_aligned_images=cache_aligned_images)
+            if cache_aligned_images:
+                self.aligned_cache[i] = cached_aligns
 
         return self.forced_phots

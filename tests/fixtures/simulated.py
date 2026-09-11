@@ -918,6 +918,45 @@ def sim_lightcurve_reference_module(  sim_lightcurve_reference_image_unsaved ):
         sim_lightcurve_reference_image_unsaved.delete_everything( do_not_clear=True )
 
 
+# This fixture is used in pipeline/test_lightcurve.py
+@pytest.fixture( scope='module' )
+def sim_lightcurve_forcedphot_references( sim_lightcurve_reference_module, sim_lightcurve_persistent_sources ):
+    _ref, ds = sim_lightcurve_reference_image_unsaved
+    refs = []
+    imgs = []
+    for obj in sim_lightcurve_persistent_sources:
+        xcen, ycen = ds.wcs.wcs.world_to_pixel( obj['ra'], obj['dec'] )
+        xcen = int( np.floor(xcen + 0.5) )
+        ycen = int( np.floor(ycen + 0.5) )
+        x0 = xcen - 75
+        x1 = x0 + 150
+        y0 = ycen - 75
+        y1 = y0 + 150
+        mess = ds.image.trim( x0, x1, y0, y1, adjust_limits=True, sources=ds.sources, bg=ds.bg,
+                              psf=ds.psf, wcs=ds.wcs, zp=ds.zp, save_prov=True, save_to_db=True )
+        imgs.append( mess['image'] )
+        refprov = Provenance( 'referencing', parameters={ 'overlap_fraction': None,
+                                                          'coadd_overlap_fraction': None,
+                                                          'instrument': ds.image.instrument,
+                                                          'zp_prov_id': ds.zp.provenance_id,
+                                                         } )
+        ref = Reference( zp_id=mess['zp'].id, provenance_id=refprov.id )
+        ref.insert()
+        refs.append( ref )
+
+    refset = RefSet( name='sim_lightcuve_forcedphot_references', provenance_id=refprov.id )
+    refset.insert()
+
+    yield refs
+
+    for ref in refs:
+        ref.delete_from_disk_and_database()
+    # We should just be able to delete the images, because that will also
+    #    delete all the downstreams
+    for img in imgs:
+        img.delete_from_disk_and_database()
+
+
 # Usually don't use this fixture directly, use the sim_lightcurve_new_ds_factory fixture
 @pytest.fixture( scope='session' )
 def sim_lightcurve_image_datastore_maker_factory( sim_lightcurve_image_parameters, sim_lightcurve_pipeline_parameters,

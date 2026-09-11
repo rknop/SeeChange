@@ -1458,6 +1458,13 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                 raise ValueError( f"Passing {name} requires passing sources" )
         if ( zp is not None ) and ( wcs is None ):
             raise ValueError( "Passing zp requires passing wcs" )
+
+        # Calculate xcen and ycen *before* adjusting for limits, because we want
+        #   the filepath to reflect the aspirational center.
+        xcen = int( np.floor( (x0 + x1) / 2. ) )
+        ycen = int( np.floor( (y0 + y1) / 2. ) )
+
+
         if adjust_limits:
             x0 = max( x0, 0 )
             x1 = min( x1, self.data.shape[1] )
@@ -1467,8 +1474,6 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             if ( x0 < 0 ) or ( x1 > self.data.shape[1] ) or ( y0 < 0 ) or ( y1 > self.data.shape[0] ):
                 raise ValueError( "Trim limits [{x0}:{x1}, {y0}:y1}] are outside image borders." )
 
-        xcen = int( np.floor( (x0 + x1) / 2. ) )
-        ycen = int( np.floor( (y0 + y1) / 2. ) )
         trimimprov = trimsrcprov = trimwcsprov = None
         trimim = trimsrc = trimbg = trimpsf = trimwcs = trimzp = None
 
@@ -2195,11 +2200,10 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             rows, _cols = pgdb.execute( q )
             downstreams.extend( [ ( ForcedPhot, row[0] ) for row in rows ] )
 
-            if self.is_trim:
-                q = sql.SQL( "SELECT image_id FROM image_trim_parent WHERE parent_image_id={me}"
-                            ).format( me=self.id )
-                rows, _cols = pgdb.execute( q )
-                downstreams.extend( [ ( Image, row[0] ) for row in rows ] )
+            q = sql.SQL( "SELECT image_id FROM image_trim_parent WHERE parent_image_id={me}"
+                        ).format( me=self.id )
+            rows, _cols = pgdb.execute( q )
+            downstreams.extend( [ ( Image, row[0] ) for row in rows ] )
 
         return downstreams
 
