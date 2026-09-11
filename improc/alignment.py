@@ -108,7 +108,7 @@ class ParsImageAligner(Parameters):
                           "is the same as the psf of the warped image." ),
             critical = True
         )
-        
+
         self.scamp_timeout = self.add_par(
             'scamp_timeout',
             60,

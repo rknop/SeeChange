@@ -1,15 +1,13 @@
-import shutil
 import textwrap
-import random
 
 import numpy as np
-from astropy.io import fits
 from psycopg import sql
 
 import models.object
 from models.base import PGDB
+from models.image import Image
 from pipeline.lightcurve import Lightcurve
-from util.logger import SCLogger
+from util.logger import SCLogger   # noqa: F401
 
 
 def test_lightcurve( sim_lightcurve_persistent_sources,
@@ -71,83 +69,82 @@ def test_lightcurve( sim_lightcurve_persistent_sources,
             nukes['forcedphot'].extend( ltcv.forced_phots )
             nukes['subimids'].extend( p.subtraction_id for p in ltcv.forced_phots )
 
-            #####
-            # Uncomment this to write out debugging images to the test directory.
-            # If you do, be aware that they will be cleaned up in the finally block!
-            #   So, put in a breakpoint somewhere before that.
-            from models.image import Image
-            from models.source_list import SourceList
-            import pathlib
-            comps = ['image', 'weight', 'flags']
-            atts = ['data', 'weight', 'flags']
-            for filt, ref in ltcv.refs.items():
-                origfiles = ref.image.get_fullpath( components=comps )
-                for comp, origfile in zip( atts, origfiles ):
-                    destfile = f"ref_{comp}_{filt}.fits{'.fz' if origfile[-3:]=='.fz' else ''}"
-                    shutil.copy2( origfile, destfile)
-                    nukes['loose_files'].append( pathlib.Path(destfile) )
-                destfile = f"ref_{comp}_{filt}.reg"
-                ref.sources.ds9_regfile( destfile )
-                nukes['loose_files'].append( pathlib.Path( destfile ) )
-            with PGDB( dictcursor=True ) as pgdb:
-                for photi, phot in enumerate( ltcv.forced_phots ):
-                    subim = Image.get_by_id( phot.subtraction_id, pgdb=pgdb )
-                    origfiles = subim.get_fullpath( comps )
-                    for comp, origfile in zip( comps, origfiles ):
-                        destfile = ( f"sub_{comp}_{subim.filter}_{obji}_{photi}.fits"
-                                     f"{'.fz' if origfile[-3:]=='.fz' else ''}" )
-                        shutil.copy2( origfile, destfile )
-                        nukes['loose_files'].append( pathlib.Path(destfile) )
-                    q = sql.SQL( textwrap.dedent(
-                        """\
-                        SELECT s.* FROM source_lists s
-                        INNER JOIN world_coordinates w ON w.sources_id=s._id
-                        INNER JOIN zero_points z ON z.wcs_id=w._id
-                        INNER JOIN image_subtraction_components isc ON isc.new_zp_id=z._id
-                        WHERE isc.image_id={subid}
-                        """
-                    ) ).format( subid=subim.id )
-                    rows = pgdb.execute( q )
-                    if len(rows) != 1:
-                        raise RuntimeError( "I am surprised." )
-                    newsrcs = SourceList.create( **(rows[0]) )
-                    newim = Image.get_by_id( newsrcs.image_id, pgdb=pgdb )
-                    origfiles = newim.get_fullpath( components=comps )
-                    for comp, origfile in zip( atts, origfiles ):
-                        destfile = ( f"new_{comp}_{newim.filter}_{obji}_{photi}.fits"
-                                     f"{'.fz' if origfile[-3:]=='.fz' else ''}" )
-                        shutil.copy2( origfile, destfile )
-                        nukes['loose_files'].append( pathlib.Path(destfile) )
-                    destfile = f"new_{newim.filter}_{obji}_{photi}.reg"
-                    newsrcs.ds9_regfile( destfile )
-                    nukes['loose_files'].append( pathlib.Path( destfile ) )
-            for photi, aligned in enumerate( ltcv.aligned_cache ):
-                hdr = fits.Header( aligned['wcs'].wcs.to_header( relax=True ) )
-                destfile = f"alignedref_image_{newim.filter}_{obji}_{photi}.fits"
-                fits.writeto( destfile, data=aligned['ref_image'].data, header=hdr )
-                nukes['loose_files'].append( pathlib.Path( destfile ) )
-                destfile = f"alignedref_{newim.filter}_{obji}_{photi}.reg"
-                aligned['ref_sources'].ds9_regfile( destfile )
-                nukes['loose_files'].append( pathlib.Path( destfile ) )
-            SCLogger.warning( "Lightcurve images written to test directory" )
-            ####
+            # #####
+            # # Uncomment this to write out debugging images to the test directory.
+            # # If you do, be aware that they will be cleaned up in the finally block!
+            # #   So, put in a breakpoint somewhere before that.
+            # import shutil
+            # from astropy.io import fits
+            # from models.image import Image
+            # from models.source_list import SourceList
+            # import pathlib
+            # comps = ['image', 'weight', 'flags']
+            # atts = ['data', 'weight', 'flags']
+            # for filt, ref in ltcv.refs.items():
+            #     origfiles = ref.image.get_fullpath( components=comps )
+            #     for comp, origfile in zip( atts, origfiles ):
+            #         destfile = f"ref_{comp}_{filt}.fits{'.fz' if origfile[-3:]=='.fz' else ''}"
+            #         shutil.copy2( origfile, destfile)
+            #         nukes['loose_files'].append( pathlib.Path(destfile) )
+            #     destfile = f"ref_{comp}_{filt}.reg"
+            #     ref.sources.ds9_regfile( destfile )
+            #     nukes['loose_files'].append( pathlib.Path( destfile ) )
+            # with PGDB( dictcursor=True ) as pgdb:
+            #     for photi, phot in enumerate( ltcv.forced_phots ):
+            #         subim = Image.get_by_id( phot.subtraction_id, pgdb=pgdb )
+            #         origfiles = subim.get_fullpath( comps )
+            #         for comp, origfile in zip( comps, origfiles ):
+            #             destfile = ( f"sub_{comp}_{subim.filter}_{obji}_{photi}.fits"
+            #                          f"{'.fz' if origfile[-3:]=='.fz' else ''}" )
+            #             shutil.copy2( origfile, destfile )
+            #             nukes['loose_files'].append( pathlib.Path(destfile) )
+            #         q = sql.SQL( textwrap.dedent(
+            #             """\
+            #             SELECT s.* FROM source_lists s
+            #             INNER JOIN world_coordinates w ON w.sources_id=s._id
+            #             INNER JOIN zero_points z ON z.wcs_id=w._id
+            #             INNER JOIN image_subtraction_components isc ON isc.new_zp_id=z._id
+            #             WHERE isc.image_id={subid}
+            #             """
+            #         ) ).format( subid=subim.id )
+            #         rows = pgdb.execute( q )
+            #         if len(rows) != 1:
+            #             raise RuntimeError( "I am surprised." )
+            #         newsrcs = SourceList.create( **(rows[0]) )
+            #         newim = Image.get_by_id( newsrcs.image_id, pgdb=pgdb )
+            #         origfiles = newim.get_fullpath( components=comps )
+            #         for comp, origfile in zip( atts, origfiles ):
+            #             destfile = ( f"new_{comp}_{newim.filter}_{obji}_{photi}.fits"
+            #                          f"{'.fz' if origfile[-3:]=='.fz' else ''}" )
+            #             shutil.copy2( origfile, destfile )
+            #             nukes['loose_files'].append( pathlib.Path(destfile) )
+            #         destfile = f"new_{newim.filter}_{obji}_{photi}.reg"
+            #         newsrcs.ds9_regfile( destfile )
+            #         nukes['loose_files'].append( pathlib.Path( destfile ) )
+            # for photi, aligned in enumerate( ltcv.aligned_cache ):
+            #     hdr = fits.Header( aligned['wcs'].wcs.to_header( relax=True ) )
+            #     destfile = f"alignedref_image_{newim.filter}_{obji}_{photi}.fits"
+            #     fits.writeto( destfile, data=aligned['ref_image'].data, header=hdr )
+            #     nukes['loose_files'].append( pathlib.Path( destfile ) )
+            #     destfile = f"alignedref_{newim.filter}_{obji}_{photi}.reg"
+            #     aligned['ref_sources'].ds9_regfile( destfile )
+            #     nukes['loose_files'].append( pathlib.Path( destfile ) )
+            # SCLogger.warning( "Lightcurve images written to test directory" )
+            # ####
 
             assert len( ltcv.forced_phots ) == len( imageinfo['mjdoffs'] )
             psffluxen = np.array( [ p.flux_psf for p in ltcv.forced_phots ] )
             psffluxen_err = np.array( [ p.flux_psf_err for p in ltcv.forced_phots ] )
-            aperfluxen = np.array( [ p.flux_apertures[0] * 10**(p._aper_cors[0]/-2.5) for p in ltcv.forced_phots ] )
-            aperfluxen_err = np.array( [ p.flux_apertures_err[0] for p in ltcv.forced_phots ] )
+            # aperfluxen = np.array( [ p.flux_apertures[0] * 10**(p._aper_cors[0]/-2.5) for p in ltcv.forced_phots ] )
+            # aperfluxen_err = np.array( [ p.flux_apertures_err[0] for p in ltcv.forced_phots ] )
 
-            # Some of the galaxies are really badly subtracted.  This seems to affect aperture more than psf.
-            # Also, sometimes the object is very dim, and the psf fit may fail.
-            # Let's trust the aperture flux s/n enough to decide if we should even use the point
-            # w_ok = ( aperfluxen / aperfluxen_err ) > 2.
-            w_ok = np.full_like( psffluxen, True, dtype=bool )
-            omg = np.all( ( np.fabs( psffluxen - objinfo['fluxen'] ) / psffluxen_err )[w_ok] < 3. )
-            import pdb; pdb.set_trace()
-            
+            reduced_resids = ( psffluxen - objinfo['fluxen'] ) / psffluxen_err
+            assert np.all( np.fabs( reduced_resids ) < 3. )
+            # I'm a little nervous that the chisq/dof for objects 0 and
+            # 1 are high (~2.2), but visually at least object 0 is on a
+            # galaxy that doesn't subtract all that well.
+
     finally:
-        import pdb; pdb.set_trace()
         # Delete test files if any
         for f in nukes['loose_files']:
             f.unlink( missing_ok=True )
@@ -173,14 +170,13 @@ def test_lightcurve( sim_lightcurve_persistent_sources,
                     """
                     SELECT i.* FROM images i
                     INNER JOIN source_lists s ON s.image_id=i._id
-                    INNER JOIN world_coordinates w ON w.sources_id=i._id
+                    INNER JOIN world_coordinates w ON w.sources_id=s._id
                     INNER JOIN zero_points z ON z.wcs_id=w._id
                     INNER JOIN image_subtraction_components isc ON isc.new_zp_id=z._id
                     WHERE isc.image_id=ANY(ARRAY[{subids}])
                     """
                 ) ).format( subids=sql.SQL(",").join( nukes['subimids'] ) )
                 rows = pgdb.execute( q )
-                # import pdb; pdb.set_trace()
             for row in rows:
                 img = Image.create( **(row) )
                 img.delete_from_disk_and_database()

@@ -6,7 +6,7 @@ import collections.abc
 
 import numpy as np
 
-import sqlalchemy as sa
+from psycopg import sql
 
 from astropy.io import fits
 from astropy.wcs import WCS

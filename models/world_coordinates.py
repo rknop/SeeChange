@@ -1,7 +1,6 @@
 import os
 import textwrap
 import pathlib
-import numbers
 
 import numpy as np
 
@@ -70,22 +69,6 @@ class WorldCoordinates(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness, Spat
 
         # manually set all properties (columns or not)
         self.set_attributes_from_dict(kwargs)
-
-    def __getitem__( self, subset ):
-        if not ( isinstance( subset, tuple ) and ( len(subset) == 2) and
-                 isinstance( subset[0], slice ) and isinstance( subset[1], slice ) and
-                 ( subset[0].step is None ) and ( subset[1].step is None ) and
-                 isinstance( subset[0].start, numbers.Integral ) and
-                 isinstance( subset[0].stop, numbers.Integral ) and
-                 isinstance( subset[1].start, numbers.Integral ) and
-                 isinstance( subset[1].stop, numbers.Integral )
-                ):
-            raise TypeError( "When indexing a WorldCoordinates, must index with two "
-                             "colon-separated ranges of integers." )
-
-        newwcs = WorldCoordinates()
-        newwcs.wcs = self.wcs[ subset[1].start:subset[1].stop, subset[0].start:subset[0].start ]
-        return newwcs
 
     def _fill_bogus_coordinate_fields( self, image=None, ra=-999., dec=-999.,
                                        minra=-999., maxra=-999., mindec=-999., maxdec=-999. ):
@@ -202,6 +185,12 @@ class WorldCoordinates(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness, Spat
         height = height if height is not None else imhei if imhei is not None else None
 
         super().set_corners_from_wcs( wcs=self.wcs, width=width, height=height, mask=mask, setradec=setradec )
+
+
+    def trim( self, x0, x1, y0, y1 ):
+        newwcs = WorldCoordinates()
+        newwcs.wcs = self.wcs[ y0:y1, x0:x1 ]
+        return newwcs
 
 
     def save( self, filename=None, image=None, **kwargs ):

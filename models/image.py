@@ -16,7 +16,6 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as sqlUUID
 from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.ext.hybrid import hybrid_property
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.schema import CheckConstraint, UniqueConstraint
 
 from astropy.time import Time
@@ -601,7 +600,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
 
             if not nocommit:
                 pgdb.commit()
-                
+
 
     def upsert( self, pgdb=None, session=None, load_defaults=False, nocommit=False ):
         with PGDB( pgdb if pgdb is not None else session ) as pgdb:
@@ -1595,7 +1594,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
 
             if ( trimwcs is None ) and ( wcs is not None ):
                 to_save['wcs'] = { 'image': trimim }
-                trimwcs = wcs[ y0:y1, x0:x1 ]
+                trimwcs = wcs.trim( x0, x1, y0, y1 )
                 trimwcs.sources_id = trimsrc.id
                 trimwcs.provenance_id = None if trimwcsprov is None else trimwcsprov.id
                 trimwcs.set_corners_from_wcs( trimim, width=x1-x0, height=y1-y0, setradec=True, mask=trimim.flags )
