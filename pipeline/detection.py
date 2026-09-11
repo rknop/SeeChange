@@ -251,7 +251,7 @@ class ParsDetector(Parameters):
                         'sextr_threshold': 1.5,
                         'snr_threshold': 3.0,
                         'subtraction': False,
-                        'subtractor_back_type': 'MANUAL',
+                        'sextractor_back_type': 'MANUAL',
                         'sextractor_back_value': 0.,
                         'sextractor_back_size': None,
                         'sextractor_back_filtersize': None,

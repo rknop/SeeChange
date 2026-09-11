@@ -344,7 +344,8 @@ class Background(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
                 bggrp.attrs['counts_bscale'] = counts_bscale
                 bggrp.attrs['rms_bzero'] = rms_bzero
                 bggrp.attrs['rms_bscale'] = rms_bscale
-                opts = dict(compression='gzip', chunks=(128, 128))
+                opts = dict( compression='gzip', chunks=( min(128, qcounts.shape[0]),
+                                                          min(128, qcounts.shape[1]) ) )
                 bggrp.create_dataset( 'counts', data=qcounts, **opts )
                 bggrp.create_dataset( 'rms', data=qrms, **opts )
                 del qcounts

@@ -429,7 +429,7 @@ class Parameters:
                     newkey = self._get_real_par_name( key )
                     if newkey != key:
                         if key in which:
-                            raise ValueError( "Different keys point to the same parameter: {key}, {newkye}" )
+                            raise ValueError( f"Different keys point to the same parameter: {key}, {newkey}" )
                         which[newkey] = which[key]
                         del which[key]
 
@@ -520,7 +520,7 @@ class Parameters:
         if ( not isinstance(before, list) ) or ( not isinstance(after, list) ):
             raise TypeError( "Must pass lists of dicts ot merge_config" )
 
-        everything =before.copy()
+        everything = before.copy()
         everything.append( self.to_dict() )
         everything.extend( after )
 
@@ -531,6 +531,7 @@ class Parameters:
             else:
                 result = self._recursive_merge( result, item )
 
+        self.override( result )
 
     def override(self, dictionary, ignore_addons=False):
 

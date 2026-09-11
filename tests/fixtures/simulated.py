@@ -12,7 +12,7 @@ from astropy.io import fits
 from astropy.wcs import WCS
 from astropy.coordinates import SkyCoord
 
-from models.base import SmartSession, PsycopgConnection
+from models.base import PGDB
 from models.provenance import Provenance
 from models.exposure import Exposure
 from models.image import Image
@@ -85,10 +85,9 @@ def generate_exposure_fixture( seed=None ):
 
         e.delete_from_disk_and_database()
 
-        with SmartSession() as session:
-            # The provenance will have been automatically created
-            session.execute( sa.delete( Provenance ).where( Provenance._id==e.provenance_id ) )
-            session.commit()
+        with PGDB() as pgdb:
+            pgdb.execute( sql.SQL( "DELETE FROM provenances WHERE _id={pid}" ).format( pid=e.provenance_id ) )
+            pgdb.commit()
 
     return new_exposure
 
@@ -121,14 +120,13 @@ def sim_exposure_filter_array():
     yield e
 
     if 'e' in locals():
-        with SmartSession() as session:
-            e = session.merge(e)
-            if sa.inspect( e ).persistent:
-                session.delete(e)
-                session.commit()
-
-            session.execute( sa.delete( Provenance ).where( Provenance._id==e.provenance_id ) )
-            session.commit()
+        with PGDB() as pgdb:
+            # We don't do Exposure.delete_from_disk_and_database()
+            #   because the fixture didn't actually make an exposure file,
+            #   just a fake exposure record for things to chew on.
+            pgdb.execute( sql.SQL( "DELETE FROM exposures WHERE _id={eid}" ).format( eid=e.id ) )
+            pgdb.execute( sql.SQL( "DELETE FROM provenances WHERE _id={pid}" ).format( pid=e.provenance_id ) )
+            pgdb.commit()
 
 
 # tools for making Image fixtures
@@ -365,10 +363,11 @@ def sim_reference(provenance_preprocessing, provenance_extraction, provenance_ex
     for exp in exposures:
         exp.delete_from_disk_and_database()
 
-    with SmartSession() as session:
-        session.execute( sa.delete( SourceList ).where( SourceList._id==sc.id ) )
-        session.execute( sa.delete( Provenance ).where( Provenance._id.in_([coaddprov.id, refprov.id]) ) )
-        session.commit()
+    with PGDB() as pgdb:
+        pgdb.execute( sql.SQL( "DELETE FROM source_lists WHERE _id={sid}" ).format( sid=sc.id ) )
+        pgdb.execute( sql.SQL( "DELETE FROM provenances WHERE _id=ANY(ARRAY[{pids}])"
+                              ).format( sql.SQL(",").join( [coaddprov.id, refprov.id] ) ) )
+        pgdb.commit()
 
 
 @pytest.fixture
@@ -703,10 +702,9 @@ def sim_lightcurve_image_parameters():
 
     yield imageinfo, imageargs
 
-    with PsycopgConnection() as con:
-        cursor = con.cursor()
-        cursor.execute( "DELETE FROM provenances WHERE _id=%(id)s", { 'id': improv.id } )
-        con.commit()
+    with PGDB() as pgdb:
+        pgdb.execute( "DELETE FROM provenances WHERE _id=%(id)s", { 'id': improv.id } )
+        pgdb.commit()
 
 
 @pytest.fixture
@@ -862,10 +860,9 @@ def sim_lightcurve_reference_image_unsaved( sim_lightcurve_image_parameters, sim
     # saved stuff cleaned up after itself.  But, just to be sure....
 
     ds.delete_everything()
-    with PsycopgConnection() as conn:
-        cursor = conn.cursor()
-        cursor.execute( "DELETE FROM provenance_tags WHERE tag='sim_lightcurve_reference'" )
-        conn.commit()
+    with PGDB() as pgdb:
+        pgdb.execute( "DELETE FROM provenance_tags WHERE tag='sim_lightcurve_reference'" )
+        pgdb.commit()
 
 
 # Function used by the next two fixtures
@@ -891,16 +888,17 @@ def sim_lightcurve_reference( sim_lightcurve_reference_image_unsaved ):
         yield ref, ds
     finally:
         if ref is not None:
-            with PsycopgConnection() as conn:
-                cursor = conn.cursor()
-                cursor.execute( "DELETE FROM refsets WHERE name='sim_lightcurve_reference'" )
-                cursor.execute( "DELETE FROM refs WHERE _id=%(id)s", { 'id': ref.id } )
-                conn.commit()
+            with PGDB() as pgdb:
+                pgdb.execute( "DELETE FROM refsets WHERE name='sim_lightcurve_reference'" )
+                pgdb.execute( "DELETE FROM refs WHERE _id=%(id)s", { 'id': ref.id } )
+                pgdb.commit()
 
         sim_lightcurve_reference_image_unsaved.delete_everything( do_not_clear=True )
 
 
 # Same as previous fixture, but with module scope for efficiency
+# WARNING: don't mix the module and non-module fixtures in the same
+#   file, or you will become sad!
 @pytest.fixture( scope='module' )
 def sim_lightcurve_reference_module(  sim_lightcurve_reference_image_unsaved ):
     ref = None
@@ -909,23 +907,22 @@ def sim_lightcurve_reference_module(  sim_lightcurve_reference_image_unsaved ):
         yield ref, ds
     finally:
         if ref is not None:
-            with PsycopgConnection() as conn:
-                cursor = conn.cursor()
-                cursor.execute( "DELETE FROM refsets WHERE name='sim_lightcurve_reference'" )
-                cursor.execute( "DELETE FROM refs WHERE _id=%(id)s", { 'id': ref.id } )
-                conn.commit()
+            with PGDB() as pgdb:
+                pgdb.execute( "DELETE FROM refsets WHERE name='sim_lightcurve_reference'" )
+                pgdb.execute( "DELETE FROM refs WHERE _id=%(id)s", { 'id': ref.id } )
+                pgdb.commit()
 
         sim_lightcurve_reference_image_unsaved.delete_everything( do_not_clear=True )
 
 
 # This fixture is used in pipeline/test_lightcurve.py
 @pytest.fixture( scope='module' )
-def sim_lightcurve_forcedphot_references( sim_lightcurve_reference_module, sim_lightcurve_persistent_sources ):
-    _ref, ds = sim_lightcurve_reference_image_unsaved
+def sim_lightcurve_forcedphot_references_module( sim_lightcurve_reference_module, sim_lightcurve_persistent_sources ):
+    _ref, ds = sim_lightcurve_reference_module
     refs = []
     imgs = []
     for obj in sim_lightcurve_persistent_sources:
-        xcen, ycen = ds.wcs.wcs.world_to_pixel( obj['ra'], obj['dec'] )
+        xcen, ycen = ds.wcs.wcs.world_to_pixel_values( obj['ra'], obj['dec'] )
         xcen = int( np.floor(xcen + 0.5) )
         ycen = int( np.floor(ycen + 0.5) )
         x0 = xcen - 75
@@ -935,16 +932,18 @@ def sim_lightcurve_forcedphot_references( sim_lightcurve_reference_module, sim_l
         mess = ds.image.trim( x0, x1, y0, y1, adjust_limits=True, sources=ds.sources, bg=ds.bg,
                               psf=ds.psf, wcs=ds.wcs, zp=ds.zp, save_prov=True, save_to_db=True )
         imgs.append( mess['image'] )
-        refprov = Provenance( 'referencing', parameters={ 'overlap_fraction': None,
-                                                          'coadd_overlap_fraction': None,
-                                                          'instrument': ds.image.instrument,
-                                                          'zp_prov_id': ds.zp.provenance_id,
-                                                         } )
-        ref = Reference( zp_id=mess['zp'].id, provenance_id=refprov.id )
-        ref.insert()
-        refs.append( ref )
+        with PGDB() as pgdb:
+            refprov = Provenance( process='referencing', parameters={ 'overlap_fraction': None,
+                                                                      'coadd_overlap_fraction': None,
+                                                                      'instrument': ds.image.instrument,
+                                                                      'zp_prov_id': ds.zp.provenance_id,
+                                                                     } )
+            refprov.insert_if_needed( pgdb=pgdb )
+            ref = Reference( zp_id=mess['zp'].id, provenance_id=refprov.id )
+            ref.insert( pgdb=pgdb )
+            refs.append( ref )
 
-    refset = RefSet( name='sim_lightcuve_forcedphot_references', provenance_id=refprov.id )
+    refset = RefSet( name='sim_lightcurve_forcedphot_reference', provenance_id=refprov.id )
     refset.insert()
 
     yield refs
@@ -1111,10 +1110,9 @@ def sim_lightcurve_new_ds_factory( sim_lightcurve_image_parameters,
 
     for ds in dsentodel:
         ds.delete_everything()
-    with PsycopgConnection() as conn:
-        cursor = conn.cursor()
-        cursor.execute( "DELETE FROM provenance_tags WHERE tag='sim_lightcurve'" )
-        conn.commit()
+    with PGDB() as pgdb:
+        pgdb.execute( "DELETE FROM provenance_tags WHERE tag='sim_lightcurve'" )
+        pgdb.commit()
 
 
 # Same as previous fixture, but module scope for efficiency.
@@ -1139,10 +1137,9 @@ def sim_lightcurve_new_ds_factory_module( sim_lightcurve_image_parameters,
 
     for ds in dsentodel:
         ds.delete_everything()
-    with PsycopgConnection() as conn:
-        cursor = conn.cursor()
-        cursor.execute( "DELETE FROM provenance_tags WHERE tag='sim_lightcurve'" )
-        conn.commit()
+    with PGDB() as pgdb:
+        pgdb.execute( "DELETE FROM provenance_tags WHERE tag='sim_lightcurve'" )
+        pgdb.commit()
 
 
 # This fixture still takes a minute or two to run.  Too much time is
@@ -1169,7 +1166,7 @@ def sim_lightcurve_news( sim_lightcurve_new_ds_factory, sim_lightcurve_rng,
 # Same as previous fixture, but module scope
 @pytest.fixture( scope='module' )
 def sim_lightcurve_news_module( sim_lightcurve_new_ds_factory_module, sim_lightcurve_rng_module,
-                                sim_lightcurve_image_parmaeters ):
+                                sim_lightcurve_image_parameters ):
     rng = sim_lightcurve_rng_module
 
     dses = []

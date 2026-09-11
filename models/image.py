@@ -6,6 +6,7 @@ import random
 import numbers
 
 import numpy as np
+import psycopg
 from psycopg import sql
 
 import sqlalchemy as sa
@@ -65,7 +66,7 @@ image_trim_parent = sa.Table(
     Base.metadata,
     sa.Column( 'image_id',
                sqlUUID,
-               sa.ForeignKey('images._id', ondelete="RESTRICT", name="image_trim_image_fkey" ),
+               sa.ForeignKey('images._id', ondelete="CASCADE", name="image_trim_image_fkey" ),
                index=True,
                nullable=False,
                primary_key=True ),
@@ -554,7 +555,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         # if this_object_session is not None:  # if just loaded, should usually have a session!
         #     self.load_upstream_products(this_object_session)
 
-    def insert( self, session=None ):
+    def insert( self, pgdb=None, session=None, nocommit=False ):
         """Add the Image object to the database.
 
         In any events, if there are no exceptions, self.id will be set upon
@@ -566,36 +567,45 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
 
         Parameters
         ----------
-          session: SQLAlchemy Session, default None
+          pgdb, session: PGDB, psycopg.Connection, psycogp.Cursor, or sqlalchemy Session, or None
             Usually you do not want to pass this; it's mostly for other
-            upsert etc. methods that cascade to this.
+            upsert etc. methods that cascade to this.  The two things
+            are synonyms; if both are given, pgdb takes precedence.
+
+          nocommit: bool, default False
+            If True, run the statements to insert records to the
+            relevante tables, but don't actually commit the database.
+            Do this if you want the insert to be inside a transaction
+            you've started on pgdb.  It doesn't make sense to set
+            nocommit=True unless you've passed something in pgdb.
 
         """
 
-        with SmartSession( session ) as sess:
+        with PGDB( pgdb if pgdb is not None else session ) as pgdb:
             # Insert the image.  If this raises an exception (because the image already exists),
             # then we won't futz with the image_coadd_component_table.
-            SeeChangeBase.insert( self, session=sess )
+            SeeChangeBase.insert( self, pgdb=pgdb, nocommit=True )
 
             if ( self._coadd_component_zp_ids is not None ) and ( len(self._coadd_component_zp_ids) > 0 ):
                 for ui in self._coadd_component_zp_ids:
-                    sess.execute( sa.text( "INSERT INTO image_coadd_component(zp_id,coadd_image_id) "
-                                           "VALUES (:them,:me)" ),
-                                  { "them": ui, "me": self.id } )
-                sess.commit()
+                    pgdb.execute( sql.SQL( "INSERT INTO image_coadd_component(zp_id,coadd_image_id) "
+                                           "VALUES ({them},{me})"
+                                          ).format( them=ui, me=self.id ) )
 
             if ( self._ref_id is not None ) or ( self._new_zp_id is not None ):
                 if ( self._ref_id is None ) or ( self._new_zp_id is None ):
                     raise RuntimeError( "Either neither or both of _ref_id and _new_zp_id must be None" )
-                sess.execute( sa.text( "INSERT INTO image_subtraction_components(image_id,new_zp_id,ref_id) "
-                                       "VALUES (:me,:zp,:ref)" ),
-                              { "me": self.id, "zp": self._new_zp_id, "ref": self._ref_id } )
-                sess.commit()
+                pgdb.execute( sql.SQL( "INSERT INTO image_subtraction_components(image_id,new_zp_id,ref_id) "
+                                       "VALUES ({me},{zp},{ref})"
+                                      ).format( me=self.id, zp=self._new_zp_id, ref=self._ref_id ) )
 
+            if not nocommit:
+                pgdb.commit()
+                
 
-    def upsert( self, session=None, load_defaults=False ):
-        with SmartSession( session ) as sess:
-            SeeChangeBase.upsert( self, session=sess, load_defaults=load_defaults )
+    def upsert( self, pgdb=None, session=None, load_defaults=False, nocommit=False ):
+        with PGDB( pgdb if pgdb is not None else session ) as pgdb:
+            SeeChangeBase.upsert( self, pgdb=pgdb, load_defaults=load_defaults, nocommit=True )
 
             # We're just going to merrily try to set all the coadd component ids and not care
             #   if we get already existing errors.  Assume that if we get one, we'll get 'em
@@ -606,24 +616,25 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             if ( self._coadd_component_zp_ids is not None ) and ( len(self._coadd_component_zp_ids) > 0 ):
                 try:
                     for ui in self._coadd_component_zp_ids:
-                        sess.execute( sa.text( "INSERT INTO image_coadd_component(zp_id,coadd_image_id) "
-                                               "VALUES (:them,:me)" ),
-                                      { "them": ui, "me": self.id } )
-                        sess.commit()
-                except IntegrityError as ex:
+                        pgdb.execute( sql.SQL( "INSERT INTO image_coadd_component(zp_id,coadd_image_id) "
+                                               "VALUES ({them},{me})"
+                                              ).format( them=ui, me=self.id ) )
+                except psycopg.errors.UniqueViolation as ex:
                     if 'duplicate key value violates unique constraint "image_coadd_component_pkey"' in str(ex):
-                        sess.rollback()
+                        pgdb.rollback()
                     else:
                         raise
 
             # Update the image_subtraction_components_table ; here, we can just
             #   do a straight-up postgres upsert
             if ( self._ref_id is not None ) or ( self._new_zp_id is not None ):
-                sess.execute( sa.text( "INSERT INTO image_subtraction_components(image_id,new_zp_id,ref_id) "
-                                       "VALUES (:me,:zp,:ref) "
-                                       "ON CONFLICT (image_id) DO UPDATE SET new_zp_id=:zp, ref_id=:ref" ),
-                              { "me": self.id, "zp": self._new_zp_id, "ref": self._ref_id } )
-                sess.commit()
+                pgdb.execute( sql.SQL( "INSERT INTO image_subtraction_components(image_id,new_zp_id,ref_id) "
+                                       "VALUES ({me},{zp},{ref}) "
+                                       "ON CONFLICT (image_id) DO UPDATE SET new_zp_id={zp}, ref_id={ref}"
+                                      ).format( me=self.id, zp=self._new_zp_id, ref=self._ref_id ) )
+
+            if not nocommit:
+                pgdb.commit()
 
 
     def set_corners_from_header_wcs( self, wcs=None, setradec=False, width=None, height=None ):
@@ -1306,14 +1317,14 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         if save:
             with PGDB( pgdb ) as pgdb:
                 provs = [ trimimprov ]
-                trimimprov.insert_if_needed( session=pgdb )
+                trimimprov.insert_if_needed( pgdb=pgdb )
                 if wcs_prov is not None:
                     provs.extend( [ trimsrcprov, trimwcsprov ] )
-                    trimsrcprov.insert_if_needed( session=pgdb )
-                    trimwcsprov.insert_if_needed( session=pgdb )
+                    trimsrcprov.insert_if_needed( pgdb=pgdb )
+                    trimwcsprov.insert_if_needed( pgdb=pgdb )
                 if zp_prov is not None:
                     provs.append( trimzpprov )
-                    trimzpprov.insert_if_needed( sesson=pgdb )
+                    trimzpprov.insert_if_needed( pgdb=pgdb )
                 if provtag is not None:
                     Provenance.addtag( provtag, provs, pgdb=pgdb )
         else:
@@ -1463,7 +1474,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         #   the filepath to reflect the aspirational center.
         xcen = int( np.floor( (x0 + x1) / 2. ) )
         ycen = int( np.floor( (y0 + y1) / 2. ) )
-
+        width = x1 - x0
+        height = y1 - y0
 
         if adjust_limits:
             x0 = max( x0, 0 )
@@ -1486,7 +1498,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                 ( trimimprov,
                   trimsrcprov,
                   trimwcsprov,
-                  trimzpprov ) = self.get_trim_provs( x1-x0, y1-y0, upstreams=[provenance], wcs_prov=wcsprov,
+                  trimzpprov ) = self.get_trim_provs( width, height, upstreams=[provenance], wcs_prov=wcsprov,
                                                       zp_prov=zpprov, save=save_prov, provtag=provtag, pgdb=tmppgdb )
 
             # Try to load the image unless told not to.
@@ -1549,10 +1561,10 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                                                          trimzpprov.id )
 
         # Make the image stuff we didn't load
-        to_save = []
+        to_save = {}
 
         if trimim is None:
-            to_save.append( { 'image': {} } )
+            to_save['image'] = {}
             trimim = Image.copy_image( self, no_copy_data=True )
             trimim.data = self.data[ y0:y1, x0:x1 ].copy()
             trimim.weight = self.weight[ y0:y1, x0:x1 ].copy() if self.weight is not None else None
@@ -1569,28 +1581,35 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
 
         if sources is not None:
             if trimsrc is None:
-                to_save.append( { 'sources': { 'image': trimim } } )
+                to_save['sources'] = { 'image': trimim }
                 trimsrc = sources.trim( x0, x1, y0, y1, trimmed_image=trimim )
                 trimsrc.provenance_id = None if trimsrcprov is None else trimsrcprov.id
 
             if trimbg is None:
-                to_save.append( { 'bg': { 'image': trimim, 'sources': trimsrc } } )
+                to_save['bg'] = { 'image': trimim, 'sources': trimsrc }
                 trimbg = bg.trim( x0, x1, y0, y1, trimmed_sources=trimsrc )
 
             if trimpsf is None:
-                to_save.append( { 'psf': { 'image': trimim, 'sources': trimsrc } } )
+                to_save['psf'] = { 'image': trimim, 'sources': trimsrc }
                 trimpsf = psf.trim( x0, x1, y0, y1, trimmed_sources=trimsrc )
 
             if ( trimwcs is None ) and ( wcs is not None ):
-                to_save.append( { 'wcs': { 'image': trimim } } )
+                to_save['wcs'] = { 'image': trimim }
                 trimwcs = wcs[ y0:y1, x0:x1 ]
                 trimwcs.sources_id = trimsrc.id
                 trimwcs.provenance_id = None if trimwcsprov is None else trimwcsprov.id
                 trimwcs.set_corners_from_wcs( trimim, width=x1-x0, height=y1-y0, setradec=True, mask=trimim.flags )
-                trimim.set_corners_from_wcs( trimwcs.wcs, width=x1-x0, height=y1-y0, setradec=True )
+                # We want the trimmed image ra/dec to have the ra/dec of the thing we TRIED to center on.
+                tmp = wcs.wcs.pixel_to_world_values( xcen, ycen )
+                # It's very irritating that numpy returns array(5.) instead of 5.
+                # Even worse is that numbers.isnstance( array(5.), Real ) is False.
+                trimim.ra = float( tmp[0] )
+                trimim.dec = float( tmp[1] )
+                trimim.calculate_coordinates()
+                trimim.set_corners_from_wcs( trimwcs.wcs, width=x1-x0, height=y1-y0, setradec=False )
 
             if ( trimzp is None ) and ( trimwcs is not None ) and ( zp is not None ):
-                to_save.append( { 'zp': None } )
+                to_save['zp'] = None
                 from models.zero_point import ZeroPoint
                 trimzp = ZeroPoint.create( zp=zp.zp, dzp=zp.dzp, aper_cor_radii=zp.aper_cor_radii,
                                            aper_cors=zp.aper_cors, provenance_id=zp.provenance_id,
@@ -1625,16 +1644,17 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                     retval[which].save( **kwargs )
             with PGDB( pgdb_in ) as pgdb:
                 for which in to_save.keys():
-                    retval[which].insert( pgdb=pgdb, noncommit=True )
+                    retval[which].insert( pgdb=pgdb, nocommit=True )
                     if which == 'image':
-                        q = sql.SQL( "INSERT INTO image_trim_parent(image_id,parent_image_id,parent_wcs_id,xcen,ycen) "
-                                     "VALUES ({imid},{parid},{wcsid},{xcen},{ycen})"
-                                    ).format( imid=trimim.id,
-                                              parid=self.id,
-                                              xcen=xcen,
-                                              ycen=ycen,
-                                              wcsid=wcs.id if wcs is not None else None )
-                pgdb.execute_nofetch( q )
+                        q = sql.SQL( textwrap.dedent(
+                            """\
+                            INSERT INTO image_trim_parent(image_id, parent_image_id, parent_wcs_id,
+                                                          trim_xcen, trim_ycen )
+                            VALUES ({imid},{parid},{wcsid},{xcen},{ycen})
+                            """
+                        ) ).format( imid=trimim.id, parid=self.id, xcen=xcen, ycen=ycen,
+                                   wcsid=wcs.id if wcs is not None else None )
+                        pgdb.execute_nofetch( q )
                 pgdb.commit()
 
         return retval

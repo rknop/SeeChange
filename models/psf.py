@@ -474,7 +474,15 @@ class PSF(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
 
 
     def trim( self, x0, x1, y0, y1, trimmed_sources=None ):
-        """Make a shallow copy of the PSF for a trimmed image.  WARNING: will point to the same data blocks!"""
+        """Make a shallow copy of the PSF for a trimmed image.  WARNING: will point to the same data blocks!
+
+        THIS IS NOT REALLY DONE RIGHT.  It just adds an offset, which
+        works with our get_clip.  But anything that uses the psfex
+        directly (like sextractor) is going to do the wrong thing!
+
+        It should be possible to mangle the psfex data to fix this.
+
+        """
 
         if any( i is None for i in (x0, x1, y0, y1) ):
             raise ValueError( "x0, x1, y0, y1 must all be given" )

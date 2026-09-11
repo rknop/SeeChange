@@ -923,9 +923,9 @@ class SeeChangeBase:
           nocommit: bool, default False
             If True, run the statement to insert the object, but don't
             actually commit the database.  Do this if you want the
-            insert to be inside a transaction you've started on session.
+            insert to be inside a transaction you've started on pgdb.
             It doesn't make sense to set nocommit=True unless you've
-            passed something in session.
+            passed something in pgdb.
 
         """
 
@@ -955,7 +955,7 @@ class SeeChangeBase:
                 pgdb.commit()
 
 
-    def upsert( self, session=None, load_defaults=False ):
+    def upsert( self, pgdb=None, session=None, load_defaults=False, nocommit=False ):
         """Insert an object into the database, or update it if it's already there (using _id as the primary key).
 
         Will *not* update self's fields with server default values!
@@ -975,8 +975,9 @@ class SeeChangeBase:
 
         Parameters
         ----------
-          session: PGDB, psycopg.Connect, psycopg.Cursor, sa.orm.session.Session, or None
-            Usually you don't want to pass this.
+          pgdb, session: PGDB, psycopg.Connect, psycopg.Cursor, sa.orm.session.Session, or None
+            Usually you don't want to pass this.  The two arguments are
+            synonyms; if both are given, will use pgdb.
 
           load_defaults: bool, default False
             Normally, will *not* update self's fields with server
@@ -1026,9 +1027,10 @@ class SeeChangeBase:
                     conflict=sql.SQL(",").join( sql.SQL(f"{{c}}=%({c})s").format( c=sql.Identifier(c) )
                                                 for c in conflictdict )
                    )
-        with PGDB( session ) as pgdb:
+        with PGDB( pgdb if pgdb is not None else session ) as pgdb:
             pgdb.execute_nofetch( q, subdict )
-            pgdb.commit()
+            if not nocommit:
+                pgdb.commit()
 
             if load_defaults:
                 dbobj = self.__class__.get_by_id( self.id, pgdb=pgdb )

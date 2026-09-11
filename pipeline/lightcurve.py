@@ -219,8 +219,8 @@ class Lightcurve:
         # Let this class' defaults override that
         # Let the lightcurve config override that
         # Let kwargs override that.
-        self.pars.merge_configs( before=[ {'subtraction_config': cfg.get('subtraction')} ],
-                                 after=[ cfg.get('lightcurve'), kwargs ] )
+        self.pars.merge_configs( before=[ {'subtraction_config': cfg.value('subtraction')} ],
+                                 after=[ cfg.value('lightcurve'), kwargs ] )
 
         self.subtractor = Subtractor( **(self.pars.subtraction_config) )
 
@@ -707,16 +707,16 @@ class Lightcurve:
                                 wcs=ds.wcs, zp=ds.zp, adjust_limits=True )
 
             cropprovs = trimmed['provenances']
-            x0, x1, y0, y1 = trimmed['limits']
-            # Offset xctr and yctr so they're on the trimmed image
-            xctr -= x0
-            yctr -= y0
-
             if ( ( cropprovs['image'].id != ds.prov_tree['Image.trim'].id ) or
                  ( cropprovs['sources'].id != ds.prov_tree['Image.trim.sources'].id ) or
                  ( cropprovs['wcs'].id != ds.prov_tree['Image.trim.wcs'].id ) or
                  ( cropprovs['zp'].id != ds.prov_tree['Image.trim.zp'].id ) ):
                 raise ValueError( "Image trim provenances didn't match!  This should never happen." )
+
+            x0, x1, y0, y1 = trimmed['limits']
+            # Offset xctr and yctr so they're on the trimmed image
+            xctr -= x0
+            yctr -= y0
 
             cropds = DataStore( trimmed['image'] )
             cropds.prov_tree = ds.prov_tree
@@ -805,6 +805,11 @@ class Lightcurve:
 
             if self.pars.save_to_db:
                 forcedphot.insert()
+
+        # For convenience for tests, stick the aperture corrections in
+        # the forcedphot object.  The "right" way to do this is go
+        # from subtraction_id to zp_id and get it there.
+        forcedphot._aper_cors = ds.get_zp().aper_cors
 
         return forcedphot, aligned_cache
 

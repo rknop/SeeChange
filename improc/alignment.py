@@ -89,6 +89,26 @@ class ParsImageAligner(Parameters):
             critical=True,
         )
 
+        self.swarp_trust_raw_wcs = self.add_par(
+            name = 'swarp_trust_raw_wcs',
+            default = False,
+            par_types = bool,
+            docstring = ( "If False, then when aligning images try to make a WCS optimized for going from "
+                          "one image to another.  If True, just use the existing WCSes for alignment." ),
+            critical = True
+        )
+
+
+        self.swarp_use_unwarped_psf = self.add_par(
+            name = 'swarp_use_unwarped_psf',
+            default = False,
+            par_types = bool,
+            docstring = ( "If False, then a new psf is determined from the warped image, which is what you "
+                          "really need to do.  If this is True, then pretend the psf of the unwarped image "
+                          "is the same as the psf of the warped image." ),
+            critical = True
+        )
+        
         self.scamp_timeout = self.add_par(
             'scamp_timeout',
             60,
@@ -321,7 +341,8 @@ class ImageAligner:
                 residfile.unlink( missing_ok=True )
 
     def _align_swarp( self, source_image, source_sources, source_bg, source_psf, source_wcs, source_zp,
-                      target_image, target_sources, target_wcs, warped_prov, warped_sources_prov ):
+                      target_image, target_sources, target_wcs, warped_prov, warped_sources_prov,
+                      trust_raw_wcs=False, use_unwarped_psf=False ):
         """Use scamp and swarp to align source_image to target_image.
 
         Parameters
@@ -373,6 +394,16 @@ class ImageAligner:
 
           warped_sources_prov: Provenance
             The provenance to assign to the sources extracted from the warped image.
+
+          trust_raw_wcs: bool, default False
+            If true, take the WCSes of both images at face value.  If False, try to make
+            a WCS based on matching the sources of the two images that will (ideally)
+            be better for image transformation than just using the two sky solutions.
+
+          use_unwarped_psf: bool, default False
+            ...this is probably a really bad idea.  But.  If this is True, instead of trying
+            to measure the psf on the warped image, just pretend that the ps from the unwarped
+            image (source_psf) is still the right psf for the warped image.
 
         Returns
         -------
@@ -446,8 +477,11 @@ class ImageAligner:
 
         try:
 
-            swarp_fodder_wcs = self.get_swarp_fodder_wcs( source_image, source_sources, source_wcs, source_zp,
-                                                          target_image, target_sources, target_wcs )
+            if trust_raw_wcs:
+                swarp_fodder_wcs = target_wcs.wcs
+            else:
+                swarp_fodder_wcs = self.get_swarp_fodder_wcs( source_image, source_sources, source_wcs, source_zp,
+                                                              target_image, target_sources, target_wcs )
 
             # Write out the .head file that swarp will use to figure out what to do
             hdr = swarp_fodder_wcs.to_header( relax=True )
@@ -599,7 +633,15 @@ class ImageAligner:
             #   other than calling the "run" method of one of these pipeline objects.
             fakeds = types.SimpleNamespace( wcs=target_wcs )
             extractor.pars.subconfig_update( fakeds )
-            warpedsources, warpedpsf, _, _ = extractor.extract_sources( warpedim, warpedbg )
+            if not use_unwarped_psf:
+                # Always want to measure the psf on the warped image, warping could have changed it
+                extractor.pars.measure_psf = True
+                warpedsources, warpedpsf, _, _ = extractor.extract_sources( warpedim, warpedbg )
+            else:
+                # ...unless we're foolish
+                extractor.pars.measure_psf = False
+                warpedsources, warpedpsf, _, _ = extractor.extract_sources( warpedim, warpedbg,
+                                                                            psf=source_psf )
 
             prov = Provenance(
                 code_version_id=Provenance.get_code_version( process='extraction' ).id,
@@ -818,7 +860,9 @@ class ImageAligner:
                                                                target_sources,
                                                                target_wcs,
                                                                warped_prov,
-                                                               warped_sources_prov )
+                                                               warped_sources_prov,
+                                                               trust_raw_wcs=self.pars.swarp_trust_raw_wcs,
+                                                               use_unwarped_psf=self.pars.swarp_use_unwarped_psf )
             else:
                 raise ValueError( f'alignment method {self.pars.method} is unknown' )
 

@@ -12,11 +12,13 @@ from pipeline.lightcurve import Lightcurve
 from util.logger import SCLogger
 
 
-def test_lightcurve( sim_lightcurve_persistent_sources, sim_lightcurve_news, sim_lightcurve_forcedphot_references,
+def test_lightcurve( sim_lightcurve_persistent_sources,
+                     sim_lightcurve_news_module,
+                     sim_lightcurve_forcedphot_references_module,
                      sim_lightcurve_image_parameters ):
     srcs = sim_lightcurve_persistent_sources
     imageinfo, _ = sim_lightcurve_image_parameters
-    newdsen = sim_lightcurve_news
+    newdsen = sim_lightcurve_news_module
 
     objinfos = []
     for source in srcs:
@@ -56,22 +58,23 @@ def test_lightcurve( sim_lightcurve_persistent_sources, sim_lightcurve_news, sim
                                mjd1 = imageinfo['refmjd'] + imageinfo['mjdoffs'][-1] + 0.1,
                                instrument='DemoInstrument',
                                object_name=f'test_lightcurve_object_{obji}',
-                               # NOTE : currently using the search reference, not centered lightcurve
-                               #   references, so filtering on max_dist will throw out two of the
-                               #   three candidates.  TODO, actual lightcurve refs.
-                               subtraction={ 'refset': 'sim_lightcurve_forcedphot_reference',
-                                             'alignment': { 'min_matched': 6 },
-                                             'reference': { 'max_dist': None }
-                                            },
+                               subtraction_config={ 'refset': 'sim_lightcurve_forcedphot_reference',
+                                                    'alignment': { 'min_matched': 6,
+                                                                   'swarp_trust_raw_wcs': True,
+                                                                   'swarp_use_unwarped_psf': True },
+                                                    'reference': { 'min_overlap': None,
+                                                                   'max_dist': 0.003 }
+                                                   },
                                save_to_db=True
                               )
-            import pdb; pdb.set_trace()
             ltcv.run( cache_aligned_images=True )
             nukes['forcedphot'].extend( ltcv.forced_phots )
             nukes['subimids'].extend( p.subtraction_id for p in ltcv.forced_phots )
 
             #####
-            # Uncomment this to write out debugging images to the test directory
+            # Uncomment this to write out debugging images to the test directory.
+            # If you do, be aware that they will be cleaned up in the finally block!
+            #   So, put in a breakpoint somewhere before that.
             from models.image import Image
             from models.source_list import SourceList
             import pathlib
@@ -79,7 +82,7 @@ def test_lightcurve( sim_lightcurve_persistent_sources, sim_lightcurve_news, sim
             atts = ['data', 'weight', 'flags']
             for filt, ref in ltcv.refs.items():
                 origfiles = ref.image.get_fullpath( components=comps )
-                for comp, origfile in zip( comps, origfiles ):
+                for comp, origfile in zip( atts, origfiles ):
                     destfile = f"ref_{comp}_{filt}.fits{'.fz' if origfile[-3:]=='.fz' else ''}"
                     shutil.copy2( origfile, destfile)
                     nukes['loose_files'].append( pathlib.Path(destfile) )
@@ -87,11 +90,12 @@ def test_lightcurve( sim_lightcurve_persistent_sources, sim_lightcurve_news, sim
                 ref.sources.ds9_regfile( destfile )
                 nukes['loose_files'].append( pathlib.Path( destfile ) )
             with PGDB( dictcursor=True ) as pgdb:
-                for phot in ltcv.forced_phots:
+                for photi, phot in enumerate( ltcv.forced_phots ):
                     subim = Image.get_by_id( phot.subtraction_id, pgdb=pgdb )
                     origfiles = subim.get_fullpath( comps )
                     for comp, origfile in zip( comps, origfiles ):
-                        destfile = f"sub_{comp}_{subim.filter}_{obji}.fits{'.fz' if origfile[-3:]=='.fz' else ''}"
+                        destfile = ( f"sub_{comp}_{subim.filter}_{obji}_{photi}.fits"
+                                     f"{'.fz' if origfile[-3:]=='.fz' else ''}" )
                         shutil.copy2( origfile, destfile )
                         nukes['loose_files'].append( pathlib.Path(destfile) )
                     q = sql.SQL( textwrap.dedent(
@@ -110,29 +114,40 @@ def test_lightcurve( sim_lightcurve_persistent_sources, sim_lightcurve_news, sim
                     newim = Image.get_by_id( newsrcs.image_id, pgdb=pgdb )
                     origfiles = newim.get_fullpath( components=comps )
                     for comp, origfile in zip( atts, origfiles ):
-                        destfile = f"new_{comp}_{newim.filter}_{obji}.fits{'.fz' if origfile[-3:]=='.fz' else ''}"
+                        destfile = ( f"new_{comp}_{newim.filter}_{obji}_{photi}.fits"
+                                     f"{'.fz' if origfile[-3:]=='.fz' else ''}" )
                         shutil.copy2( origfile, destfile )
                         nukes['loose_files'].append( pathlib.Path(destfile) )
-                    destfile = f"new_{comp}_{newim.filter}_{obji}.reg"
+                    destfile = f"new_{newim.filter}_{obji}_{photi}.reg"
                     newsrcs.ds9_regfile( destfile )
                     nukes['loose_files'].append( pathlib.Path( destfile ) )
-            for aligned in ltcv.aligned_cache:
+            for photi, aligned in enumerate( ltcv.aligned_cache ):
                 hdr = fits.Header( aligned['wcs'].wcs.to_header( relax=True ) )
-                for comp, att in zip( comps, atts ):
-                    destfile = f"alignedref_{comp}_{newim.filter}_{obji}.fits"
-                    fits.writeto( destfile, data=getattr( aligned['ref_image'], att ), header=hdr )
-                    nukes['loose_files'].append( pathlib.Path( destfile ) )
-                    destfile = f"alignedref_{comp}_{newim.filter}_{obji}.reg"
-                    aligned['ref_sources'].ds9_regfile( destfile )
-                    nukes['loose_files'].append( pathlib.Path( destfile ) )
+                destfile = f"alignedref_image_{newim.filter}_{obji}_{photi}.fits"
+                fits.writeto( destfile, data=aligned['ref_image'].data, header=hdr )
+                nukes['loose_files'].append( pathlib.Path( destfile ) )
+                destfile = f"alignedref_{newim.filter}_{obji}_{photi}.reg"
+                aligned['ref_sources'].ds9_regfile( destfile )
+                nukes['loose_files'].append( pathlib.Path( destfile ) )
             SCLogger.warning( "Lightcurve images written to test directory" )
-            import pdb; pdb.set_trace()
             ####
 
             assert len( ltcv.forced_phots ) == len( imageinfo['mjdoffs'] )
-            fluxen = np.array( [ p.flux_psf for p in ltcv.forced_phots ] )
+            psffluxen = np.array( [ p.flux_psf for p in ltcv.forced_phots ] )
+            psffluxen_err = np.array( [ p.flux_psf_err for p in ltcv.forced_phots ] )
+            aperfluxen = np.array( [ p.flux_apertures[0] * 10**(p._aper_cors[0]/-2.5) for p in ltcv.forced_phots ] )
+            aperfluxen_err = np.array( [ p.flux_apertures_err[0] for p in ltcv.forced_phots ] )
 
+            # Some of the galaxies are really badly subtracted.  This seems to affect aperture more than psf.
+            # Also, sometimes the object is very dim, and the psf fit may fail.
+            # Let's trust the aperture flux s/n enough to decide if we should even use the point
+            # w_ok = ( aperfluxen / aperfluxen_err ) > 2.
+            w_ok = np.full_like( psffluxen, True, dtype=bool )
+            omg = np.all( ( np.fabs( psffluxen - objinfo['fluxen'] ) / psffluxen_err )[w_ok] < 3. )
+            import pdb; pdb.set_trace()
+            
     finally:
+        import pdb; pdb.set_trace()
         # Delete test files if any
         for f in nukes['loose_files']:
             f.unlink( missing_ok=True )
@@ -152,7 +167,6 @@ def test_lightcurve( sim_lightcurve_persistent_sources, sim_lightcurve_news, sim
         # images, but the fixtures aren't currently deleting things in
         # the right order to avoid all RESTRICT foreign keys.  Besides,
         # it's nice to clean up after ourselves, yes?)
-        import pdb; pdb.set_trace()
         if len( nukes['subimids'] ) > 0:
             with PGDB( dictcursor=True ) as pgdb:
                 q = sql.SQL( textwrap.dedent(
@@ -166,6 +180,7 @@ def test_lightcurve( sim_lightcurve_persistent_sources, sim_lightcurve_news, sim
                     """
                 ) ).format( subids=sql.SQL(",").join( nukes['subimids'] ) )
                 rows = pgdb.execute( q )
+                # import pdb; pdb.set_trace()
             for row in rows:
                 img = Image.create( **(row) )
                 img.delete_from_disk_and_database()
