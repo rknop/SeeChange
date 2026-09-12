@@ -187,13 +187,14 @@ class ProvenanceTree(dict):
                 raise RuntimeError( f"Process {process} came up with inconsistent values "
                                     f"when bulding the provenance tree!  Tried to add {prov.id}, "
                                     f"but the provenance tree already had {self[process].id}." )
-            found_upstreams = ( set() if process in noupstreams
-                                else set( p.process if p.process not in processmap else processmap[p.process]
-                                          for p in prov.upstreams ) )
-            if found_upstreams != expected_upstreams:
-                raise RuntimeError( f"Process {process} came up with inconsistent upstream "
-                                    f"steps when building the provenance tree!  "
-                                    f"Found: {found_upstreams}, expected: {expected_upstreams}" )
+            if process not in noupstreams:
+                found_upstreams = ( set() if process in noupstreams
+                                    else set( p.process if p.process not in processmap else processmap[p.process]
+                                              for p in prov.upstreams ) )
+                if found_upstreams != expected_upstreams:
+                    raise RuntimeError( f"Process {process} came up with inconsistent upstream "
+                                        f"steps when building the provenance tree!  "
+                                        f"Found: {found_upstreams}, expected: {expected_upstreams}" )
         else:
             useproc = processmap[process] if process in processmap else process
             self[useproc] = prov
@@ -2238,7 +2239,7 @@ class DataStore:
                            "  AND c.new_zp_id={zpid} "
                            "  AND c.ref_id={refid} "
                            "  AND i.is_sub"
-                          ).format( prov=provenance.id, zpid=self.zp.id, ref=self.reference.id ) )
+                          ).format( prov=provenance.id, zpid=self.zp.id, refid=self.reference.id ) )
             rows = pgdb.execute( q )
             if len(rows) > 1:
                 raise RuntimeError( "Found more than one matching sub_image in the database!  This shouldn't happen!" )
@@ -2469,8 +2470,50 @@ class DataStore:
             testing purposes.
 
         """
+
+        # Figure out what is already in the database.
+        # NOTE: we're making the assumption that if measurement_set is
+        #   in the database, then all the associated meaurements are
+        #   too.  Likewise for deepscore_set.
+        already_in_db = set()
+        with PGDB() as pgdb:
+            for att in self.products_to_save:
+                obj = getattr( self, att, None )
+                if obj is None:
+                    continue
+
+                if isinstance( obj, FileOnDiskMixin ):
+                    q = ( sql.SQL( "SELECT _id FROM {table} WHERE filepath={filepath}")
+                          .format( table=sql.Identifier(obj.__tablename__), filepath=obj.filepath ) )
+                    rows, _cols = pgdb.execute( q )
+                    if len(rows) > 1:
+                        raise RuntimeError( f"Database corruption, there is more than one row in "
+                                            f"{obj.__tablename__} with filepath {obj.filepath}.  "
+                                            f"This should never happen." )
+                    if len(rows) == 1:
+                        if rows[0][0] != obj.id:
+                            raise ValueError( f"datastore.{att} has id {obj.id}, but the same filepath "
+                                              f"in the database has id {rows[0][0]}" )
+                        already_in_db.add( att )
+                else:
+                    # WORRY.  If the object wasn't read from the database, then it will make a new
+                    #   id here... but I don't that should ever happen, we always try to read from
+                    #   the database, so, maybe don't worry.
+                    q = ( sql.SQL( "SELECT _id FROM {table} WHERE _id={objid}" )
+                          .format( table=sql.Identifier(obj.__tablename__), objid=obj.id ) )
+                    rows, _cols = pgdb.execute( q )
+                    if len(rows) == 1:
+                        # This is _id, it's the primary key, I'm not going to bother checking for >1
+                        already_in_db.add( att )
+
         # save to disk whatever is FileOnDiskMixin
+        # Do NOT do this within the "with PGDB()" above, because this saving could take a while,
+        #   and we don't want to hold the database connection open during all that time.
         for att in self.products_to_save:
+            if att in already_in_db:
+                SCLogger.debug( f"DataStore: {att} is already in the database, not trying to save it." )
+                continue
+
             obj = getattr(self, att, None)
             if obj is None:
                 continue
@@ -2541,139 +2584,146 @@ class DataStore:
 
         commits = []
 
-        # Exposure
-        # THINK.  Should we actually upsert this?
-        # Almost certainly it hasn't changed, and
-        # it was probably already in the database
-        # anyway.
-        if self.exposure is not None:
-            SCLogger.debug( "save_and_commit upserting exposure" )
-            self.exposure.upsert( load_defaults=True )
-            # commits.append( 'exposure' )
-            # exposure isn't in the commit bitflag
+        with PGDB() as pgdb:
+            # Exposure
+            # Almost certainly already in the database.
+            if ( self.exposure is not None ) and ( 'exposure' not in already_in_db ):
+                SCLogger.debug( "save_and_commit inserting exposure" )
+                self.exposure.insert( load_defaults=True, pgdb=pgdb, nocommit=True )
+                # commits.append( 'exposure' )
+                # exposure isn't in the commit bitflag
 
-        # Image
-        if self.image is not None:
-            if self.exposure is not None:
-                self.image.exposure_id = self.exposure.id
-            SCLogger.debug( "save_and_commit upserting image" )
-            self.image.upsert( load_defaults=True )
-            commits.append( 'image' )
-
-        # SourceList
-        if self.sources is not None:
+            # Image
             if self.image is not None:
-                self.sources.image_id = self.image.id
-            SCLogger.debug( "save_and_commit upserting sources" )
-            self.sources.upsert( load_defaults=True )
-            commits.append( 'sources' )
+                # Image is more complicated.  Because we have a few things that get set after
+                #   insertion (fvwm_estimate, lim_mag_estimate, etc.), we have to upsert
+                #   the image sometimes.
+                if any( att not in already_in_db for att in [ 'image', 'sources', 'psf', 'bg', 'wcs', 'zp' ] ):
+                    if self.exposure is not None:
+                        self.image.exposure_id = self.exposure.id
+                    SCLogger.debug( "save_and_commit upserting image" )
+                    self.image.upsert( load_defaults=True, pgdb=pgdb, nocommit=True )
+                    commits.append( 'image' )
 
-        # psf
-        if self.psf is not None:
-            if self.sources is not None:
-                self.psf.sources_id = self.sources.id
-            SCLogger.debug( "save_and_commit upserting psf" )
-            self.psf.upsert( load_defaults=True )
-            commits.append( 'psf' )
+            # SourceList
+            if ( self.sources is not None ) and ( 'sources' not in already_in_db ):
+                if self.image is not None:
+                    self.sources.image_id = self.image.id
+                SCLogger.debug( "save_and_commit inserting sources" )
+                self.sources.insert( load_defaults=True, pgdb=pgdb, nocommit=True )
+                commits.append( 'sources' )
 
-        # bg
-        if self.bg is not None:
-            if self.sources is not None:
-                self.bg.sources_id = self.sources.id
-            SCLogger.debug( "save_and_commit upsertting bg" )
-            self.bg.upsert( load_defaults=True )
-            commits.append( 'bg' )
+            # psf
+            if ( self.psf is not None ) and ( 'psf' not in already_in_db ):
+                if self.sources is not None:
+                    self.psf.sources_id = self.sources.id
+                SCLogger.debug( "save_and_commit inserting psf" )
+                self.psf.insert( load_defaults=True, pgdb=pgdb, nocommit=True )
+                commits.append( 'psf' )
 
-        # wcs
-        if self.wcs is not None:
-            if self.sources is not None:
-                self.wcs.sources_id = self.sources.id
-            SCLogger.debug( "save_and_commit upserting wcs" )
-            self.wcs.upsert( load_defaults=True )
-            commits.append( 'wcs' )
+            # bg
+            if ( self.bg is not None ) and ( 'bg' not in already_in_db ):
+                if self.sources is not None:
+                    self.bg.sources_id = self.sources.id
+                SCLogger.debug( "save_and_commit insertting bg" )
+                self.bg.insert( load_defaults=True, pgdb=pgdb, nocommit=True )
+                commits.append( 'bg' )
 
-        # zp
-        if self.zp is not None:
-            if self.wcs is not None:
-                self.zp.wcs_id = self.wcs.id
-            if self.bg is not None:
-                self.zp.background_id = self.bg.id
-            SCLogger.debug( "save_and_commit upsertting zp" )
-            self.zp.upsert( load_defaults=True )
-            commits.append( 'zp' )
+            # wcs
+            if ( self.wcs is not None ) and ( 'wcs' not in already_in_db ):
+                if self.sources is not None:
+                    self.wcs.sources_id = self.sources.id
+                SCLogger.debug( "save_and_commit inserting wcs" )
+                self.wcs.insert( load_defaults=True, pgdb=pgdb, nocommit=True )
+                commits.append( 'wcs' )
 
-        # subtraction Image
-        if self.sub_image is not None:
-            self.sub_image.upsert( load_defaults=True )
-            SCLogger.debug( "save_and_commit upserting sub_image" )
-            commits.append( 'sub_image' )
+            # zp
+            if ( self.zp is not None ) and ( 'zp' not in already_in_db ):
+                if self.wcs is not None:
+                    self.zp.wcs_id = self.wcs.id
+                if self.bg is not None:
+                    self.zp.background_id = self.bg.id
+                SCLogger.debug( "save_and_commit insertting zp" )
+                self.zp.insert( load_defaults=True, pgdb=pgdb, nocommit=True )
+                commits.append( 'zp' )
 
-        # detections
-        if self.detections is not None:
-            if self.sub_image is not None:
-                self.detections.image_id = self.sub_image.id
-            SCLogger.debug( "save_and_commit detections" )
-            self.detections.upsert( load_defaults=True )
-            commits.append( 'detections' )
+            # subtraction Image
+            if ( self.sub_image is not None ) and ( 'sub_image' not in already_in_db ):
+                SCLogger.debug( "save_and_commit inserting sub_image" )
+                self.sub_image.insert( load_defaults=True, pgdb=pgdb, nocommit=True )
+                commits.append( 'sub_image' )
 
-        # cutouts
-        if self.cutouts is not None:
-            if self.detections is not None:
-                self.cutouts.detections_id = self.detections.id
-            SCLogger.debug( "save_and_commit upserting cutouts" )
-            self.cutouts.upsert( load_defaults=True )
-            commits.append( 'cutouts' )
+            # detections
+            if ( self.detections is not None ) and ( 'detections' not in already_in_db ):
+                if self.sub_image is not None:
+                    self.detections.image_id = self.sub_image.id
+                SCLogger.debug( "save_and_commit inserting detections" )
+                self.detections.insert( load_defaults=True, pgdb=pgdb, nocommit=True )
+                commits.append( 'detections' )
 
-        # measurements
-        if self.measurement_set is not None:
-            if self.cutouts is not None:
-                self.measurement_set.cutouts_id = self.cutouts.id
-            SCLogger.debug( "save_and_commit measurements" )
-            self.measurement_set.upsert( load_defaults=True )
-            if len( self.measurement_set.measurements ) > 0:
-                for m in self.measurement_set.measurements:
-                    m.measurementset_id = self.measurement_set.id
-                Measurements.upsert_list( self.measurement_set.measurements, load_defaults=True )
-            commits.append( 'measurement_set' )
+            # cutouts
+            if ( self.cutouts is not None ) and ( 'cutouts' not in already_in_db ):
+                if self.detections is not None:
+                    self.cutouts.detections_id = self.detections.id
+                SCLogger.debug( "save_and_commit inserting cutouts" )
+                self.cutouts.insert( load_defaults=True, pgdb=pgdb, nocommit=True )
+                commits.append( 'cutouts' )
 
-        # scores
-        if self.deepscore_set is not None:
-            if self.measurement_set is not None:
-                self.deepscore_set.measurementset_id = self.measurement_set.id
-            SCLogger.debug( "save_and_commit scores" )
-            self.deepscore_set.upsert( load_defaults=True )
-            if len( self.deepscore_set.deepscores ) > 0:
-                for d in self.deepscore_set.deepscores:
-                    d.deepscoreset_id = self.deepscore_set.id
-                DeepScore.upsert_list( self.deepscore_set.deepscores, load_defaults=True )
-            commits.append( 'deepscore_set' )
+            # measurements
+            if ( self.measurement_set is not None ) and ( 'measurement_set' not in already_in_db ):
+                if self.cutouts is not None:
+                    self.measurement_set.cutouts_id = self.cutouts.id
+                SCLogger.debug( "save_and_commit inserting measurements" )
+                self.measurement_set.insert( load_defaults=True, pgdb=pgdb, nocommit=True )
+                if len( self.measurement_set.measurements ) > 0:
+                    for m in self.measurement_set.measurements:
+                        m.measurementset_id = self.measurement_set.id
+                    Measurements.insert_list( self.measurement_set.measurements, pgdb=pgdb,
+                                              load_defaults=True, nocommit=True )
+                commits.append( 'measurement_set' )
 
-        self.products_committed = ",".join( commits )
+            # scores
+            if ( self.deepscore_set is not None ) and ( 'deepscore_set' not in already_in_db ):
+                if self.measurement_set is not None:
+                    self.deepscore_set.measurementset_id = self.measurement_set.id
+                SCLogger.debug( "save_and_commit inserting scores" )
+                self.deepscore_set.insert( load_defaults=True, pgdb=pgdb, nocommit=True )
+                if len( self.deepscore_set.deepscores ) > 0:
+                    for d in self.deepscore_set.deepscores:
+                        d.deepscoreset_id = self.deepscore_set.id
+                    DeepScore.insert_list( self.deepscore_set.deepscores, pgdb=pgdb,
+                                           load_defaults=True, nocommit=True )
+                commits.append( 'deepscore_set' )
 
-        # fakes
-        if self.fakes is not None:
-            if self.zp is not None:
-                self.fakes.zp_id = self.zp.id
-            SCLogger.debug( "save_and_commit fakes" )
-            self.fakes.upsert( load_defaults=True )
-            commits.append( "fakes" )
+            # fakes
+            if ( self.fakes is not None ) and ( 'fakes' not in already_in_db ):
+                if self.zp is not None:
+                    self.fakes.zp_id = self.zp.id
+                SCLogger.debug( "save_and_commit inserting fakes" )
+                self.fakes.insert( load_defaults=True, pgdb=pgdb, nocommit=True )
+                commits.append( "fakes" )
 
-        # fake analysis
-        if self.fakeanal is not None:
-            if self.fakes is not None:
-                self.fakeanal.fakeset_id = self.fakes.id
-            # NO!  Not setting orig_deepscore_set_id.  The deepscore set
-            #   in the DataStore is almost certainly *not* the original
-            #   deepscore set, but the one from the with-fakes
-            #   subtraction!  If somebody hasn't properly set
-            #   orig_deepscore_set_id, then we'll just get a database
-            #   error when we try to insert, which is fine.
-            #   pipeline/top_level.py does the right thing.
-            # if self.deepscore_set is not None:
-            #     self.fakeanal.orig_deepscore_set_id = ...uhoh
-            SCLogger.debug( "save_and_commit fakeanal" )
-            self.fakeanal.upsert( load_defaults=True )
-            commits.append( "fakeanal" )
+            # fake analysis
+            if ( self.fakeanal is not None ) and ( 'fakeanal' not in already_in_db ):
+                if self.fakes is not None:
+                    self.fakeanal.fakeset_id = self.fakes.id
+                # NO!  Not setting orig_deepscore_set_id.  The deepscore set
+                #   in the DataStore is almost certainly *not* the original
+                #   deepscore set, but the one from the with-fakes
+                #   subtraction!  If somebody hasn't properly set
+                #   orig_deepscore_set_id, then we'll just get a database
+                #   error when we try to insert, which is fine.
+                #   pipeline/top_level.py does the right thing.
+                # if self.deepscore_set is not None:
+                #     self.fakeanal.orig_deepscore_set_id = ...uhoh
+                SCLogger.debug( "save_and_commit inserting fakeanal" )
+                self.fakeanal.insert( load_defaults=True, pgdb=pgdb, nocommit=True )
+                commits.append( "fakeanal" )
+
+            self.products_committed = ",".join( commits )
+            if len( commits ) > 0:
+                SCLogger.info( f"DataStore commtting {len(commits)} data products to databsae." )
+                pgdb.commit()
 
 
     def delete_everything( self, do_not_clear=False ):

@@ -899,7 +899,7 @@ class SeeChangeBase:
         return cols, values
 
 
-    def insert( self, pgdb=None, session=None, nocommit=False ):
+    def insert( self, pgdb=None, session=None, nocommit=False, load_defaults=False ):
         """Insert the object into the database.
 
         Does not do any saving to disk, only saves the database record.
@@ -927,6 +927,11 @@ class SeeChangeBase:
             It doesn't make sense to set nocommit=True unless you've
             passed something in pgdb.
 
+          load_defaults: bool, default False
+            Normally, will *not* update self's fields with server
+            default values.  Set this to True for that to happen.  (This
+            will trigger an additional read from the database.)
+
         """
 
         pgdb = pgdb if pgdb is not None else session
@@ -951,6 +956,15 @@ class SeeChangeBase:
                                   vals=sql.SQL(",").join( sql.SQL(f'%({c})s') for c in subdict.keys() )
                                  )
             pgdb.execute_nofetch( q, subdict )
+
+            if load_defaults:
+                dbobj = self.__class__.get_by_id( self.id, pgdb=pgdb )
+                for col in sa.inspect( self.__class__ ).c:
+                    if ( ( col.name == 'modified' ) or
+                         ( ( col.server_default is not None ) and ( getattr( self, col.name ) is None ) )
+                        ):
+                        setattr( self, col.name, getattr( dbobj, col.name ) )
+
             if not nocommit:
                 pgdb.commit()
 
@@ -1042,7 +1056,7 @@ class SeeChangeBase:
 
 
     @classmethod
-    def upsert_list( cls, objects, session=None, load_defaults=False ):
+    def insert_list( cls, objects, pgdb=None, session=None, load_defaults=False, upsert=False ):
         """Like upsert, but for a bunch of objects in a list, and tries to be efficient about it.
 
         Do *not* use this with classes that have things like association
@@ -1059,12 +1073,10 @@ class SeeChangeBase:
 
         """
 
-        # Doing this manually for the same reasons as in upset()
-
         if not all( [ isinstance( o, cls ) for o in objects ] ):
             raise TypeError( f"{cls.__name__}.upsert_list: passed objects weren't all of this class!" )
 
-        with PGDB( session ) as pgdb:
+        with PGDB( pgdb if pgdb is not None else session ) as pgdb:
             for obj in objects:
                 _ = obj.id                 #  Make sure _id is generated
                 cols, values = obj._get_cols_and_vals_for_insert()
@@ -1072,22 +1084,28 @@ class SeeChangeBase:
                 subdict['modified'] = datetime.datetime.now( tz=datetime.UTC )
                 basicdict = subdict.copy()
                 del basicdict['modified']
-                conflictdict = subdict.copy()
-                if '_id' in conflictdict:
-                    del conflictdict['_id']
+                if upsert:
+                    conflictclause = ( sql.SQL( "ON CONFLICT(_id) DO UPDATE SET {conflict}" )
+                                       .format(
+                                           conflict=sql.SQL(",").join(
+                                               sql.SQL(f"{{c}}=%({c})s").format( c=sql.Identifier(c) )
+                                               for c in subdict.keys() if c != '_id' )
+                                       )
+                                      )
+                else:
+                    conflictclause = sql.SQL( "" )
+
 
                 q = sql.SQL( textwrap.dedent(
                     """\
                     INSERT INTO {tab}({fields})
                     VALUES ({vals})
-                    ON CONFLICT(_id) DO UPDATE SET {conflict}
+                    {conflictclause}
                     """
                 ) ).format( tab=sql.Identifier(cls.__tablename__),
                             fields=sql.SQL(",").join( sql.Identifier(c) for c in basicdict.keys() ),
                             vals=sql.SQL(",").join( sql.SQL(f'%({c})s') for c in basicdict.keys() ),
-                            conflict=sql.SQL(",").join( sql.SQL(f"{{c}}=%({c})s").format( c=sql.Identifier(c) )
-                                                        for c in conflictdict.keys() )
-                           )
+                            conflictclause=conflictclause )
                 pgdb.execute_nofetch( q, subdict )
             pgdb.commit()
 
@@ -1099,6 +1117,27 @@ class SeeChangeBase:
                              ( ( col.server_default is not None ) and ( getattr( obj, col.name ) is None ) )
                             ):
                             setattr( obj, col.name, getattr( dbobj, col.name ) )
+
+
+    @classmethod
+    def upsert_list( cls, objects, pgdb=None, session=None, load_defaults=False ):
+        """Like upsert, but for a bunch of objects in a list, and tries to be efficient about it.
+
+        Do *not* use this with classes that have things like association
+        tables that need to get updated (i.e. with Image, maybe
+        eventually some others).
+
+        All reference fields (ids of other objects) of the objects must
+        be up to date.  If the referenced objects don't exist in the
+        database already, you'll get integrity errors.
+
+        Will update object id fields, but will not update any other
+        object fields with database defaults.  Reload the rows from the
+        table if that's what you need.
+
+        """
+
+        cls.insert_list( objects, pgdb=pgdb, session=session, load_defaults=load_defaults, upsert=True )
 
 
     def _delete_from_database( self, pgdb=None ):
@@ -1142,7 +1181,7 @@ class SeeChangeBase:
                 rows = pgdb.execute( q )
                 if len(rows) != 1:
                     raise RuntimeError( "This should never happen." )
-                upstreams.append( cls.create( **(rows[0]) ) )
+                upstreams.append( cls.create( pgdb=pgdb, **(rows[0]) ) )
         return upstreams
 
     def get_downstream_ids(self, pgdb=None):
@@ -1160,7 +1199,7 @@ class SeeChangeBase:
                 rows = pgdb.execute( q )
                 if len(rows) != 1:
                     raise RuntimeError( "This should never happen." )
-                downstreams.append( cls.create( **(rows[0]) ) )
+                downstreams.append( cls.create( pgdb=pgdb, **(rows[0]) ) )
         return downstreams
 
     def delete_everything_in_provtag( self, tag, models=[], remove_folders=True,
@@ -2362,7 +2401,7 @@ class UUIDMixin:
             else:
                 kwargs = kwargs.copy()
                 kwargs.update( rows[0] )
-                obj = cls.create( **kwargs )
+                obj = cls.create( pgdb=pgdb, **kwargs )
                 obj.from_db = True
                 return obj
 
@@ -2397,10 +2436,10 @@ class UUIDMixin:
                                   ids=sql.SQL(",").join(uuids) )
             rows = pgdb.execute( q )
 
-        if return_dict:
-            return { r['_id']: cls.create(**r) for r in rows }
-        else:
-            return [ cls.create(**r) for r in rows ]
+            if return_dict:
+                return { r['_id']: cls.create(pgdb=pgdb, **r) for r in rows }
+            else:
+                return [ cls.create(pgdb=pgdb, **r) for r in rows ]
 
 
     @classmethod
@@ -2426,7 +2465,7 @@ class UUIDMixin:
                                  .format( tab=sql.Identifier(cls.__tablename__),
                                           field=sql.Identifier(field),
                                           vals=sql.SQL(",").join(values) ) )
-        return [ cls.create(**r) for r in rows ]
+        return [ cls.create(pgdb=pgdb, **r) for r in rows ]
 
 
 
@@ -2495,7 +2534,7 @@ class SpatiallyIndexed:
             q = q.format( tab=sql.Identifier(cls.__tablename__), ra=ra, dec=dec, rad=radius/3600. )
             rows = pgdb.execute( q )
 
-        return [ cls.create(**row) for row in rows ]
+        return [ cls.create(pgdb=pgdb, **row) for row in rows ]
 
 
     @hybrid_method
@@ -2897,7 +2936,7 @@ class FourCorners:
                         ra=ra, dec=dec )
 
             rows = pgdb.execute( q )
-            objs = [ cls.create(**r) for r in rows ]
+            objs = [ cls.create(pgdb=pgdb, **r) for r in rows ]
             pgdb.execute_nofetch( sql.SQL( "DROP TABLE {temptable}" ).format( temptable=sql.Identifier(temptable) ) )
             return objs
 
@@ -3046,7 +3085,7 @@ class FourCorners:
             rows = pgdb.execute( sql.SQL( "SELECT i.* FROM {tab} i INNER JOIN {temptable} t ON i._id=t._id" )
                                  .format( tab=sql.Identifier(cls.__tablename__),
                                           temptable=sql.Identifier(temptable) ) )
-            objs = [ cls.create(**r) for r in rows ]
+            objs = [ cls.create(pgdb=pgdb, **r) for r in rows ]
             pgdb.execute_nofetch( sql.SQL( "DROP TABLE {temptable}" ).format( temptable=sql.Identifier(temptable) ) )
             return objs
 

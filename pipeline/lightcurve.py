@@ -1,3 +1,6 @@
+import sys
+import argparse
+import datetime
 import numbers
 import uuid
 import textwrap
@@ -5,7 +8,7 @@ import textwrap
 import numpy as np
 from psycopg import sql
 
-import improc
+import improc.photometry
 import models.object
 from models.base import PGDB
 from models.provenance import Provenance
@@ -22,6 +25,7 @@ from util.util import listify
 from pipeline.parameters import Parameters
 from pipeline.data_store import ProvenanceTree, DataStore
 from pipeline.subtraction import Subtractor
+import util.util
 
 
 class ParsLightcurve(Parameters):
@@ -77,7 +81,7 @@ class ParsLightcurve(Parameters):
 
         self.object_position_prov_tag_process = self.add_par(
             name = 'object_position_prov_tag_process',
-            default = None,
+            default = 'positioning',
             par_types = ( str, None ),
             docstring = "The process to use when searching provenance tags for object position provenance.",
             critical = False
@@ -728,7 +732,7 @@ class Lightcurve:
             cropds.zp = trimmed['zp']
             ds = cropds
 
-        ds = self.subtractor.run( ds, ra=self.ra, dec=self.dec, trust_datastore_reference=True )
+        ds = self.subtractor.run( ds, ra=self.ra, dec=self.dec, trust_datastore_reference=True, do_not_load=False )
         sub_image = ds.get_sub_image()
 
         aligned_cache = None
@@ -747,8 +751,6 @@ class Lightcurve:
                              }
 
         # Save to database if requested
-        # WARNING.  THis is broken.  If the trimmed image pre-existed, then we're
-        #   going to get errors when we try to overwrite!
         if self.pars.save_to_db:
             ds.save_and_commit( overwrite=False )
 
@@ -813,8 +815,11 @@ class Lightcurve:
 
         return forcedphot, aligned_cache
 
+    def write_csv_file( self, filepath ):
+        raise NotImplementedError( "File writing not implemented." )
 
-    def run( self, *args, cache_aligned_images=False, **kwargs ):
+
+    def run( self, *args, cache_aligned_images=False, die_on_fail=False, **kwargs ):
         """Do forced photometry based on the object configuration.
 
         Parameters
@@ -851,7 +856,6 @@ class Lightcurve:
 
         """
 
-
         self.setup( *args, **kwargs )
         self.provtree = self.make_prov_tree( save=True )
 
@@ -885,6 +889,7 @@ class Lightcurve:
         if len(imgs) == 0:
             SCLogger.warning( "No images found to build a lightcurve for!" )
             return None
+        SCLogger.info( f"lightcurve found {len(imgs)} images" )
 
         self.imgs = imgs
         self.wcsen = wcsen
@@ -907,8 +912,125 @@ class Lightcurve:
 
         SCLogger.info( f"Lightcurve doing forced photometry on {len(imgs)} images." )
         for i in range( len(self.imgs) ):
-            self.forced_phots[i], cached_aligns = self.process_one_image(i, cache_aligned_images=cache_aligned_images)
-            if cache_aligned_images:
-                self.aligned_cache[i] = cached_aligns
+            try:
+                self.forced_phots[i], cached_aligns = self.process_one_image(i,
+                                                                             cache_aligned_images=cache_aligned_images)
+                if cache_aligned_images:
+                    self.aligned_cache[i] = cached_aligns
+            except Exception as ex:
+                if die_on_fail:
+                    raise
+                else:
+                    SCLogger.exception( "Exception on image {self.imgs[i].filepath}: {ex}; moving on." )
 
+        SCLogger.info( "Lightcurve complete" )
         return self.forced_phots
+
+
+# ======================================================================
+
+def main():
+    sys.stderr.write( f"lightcurve starting at {datetime.datetime.now(tz=datetime.UTC).isoformat()}\n" )
+
+    parser = argparse.ArgumentParser( 'lightcurve', description='DIA forced photomtery',
+                                      formatter_class=argparse.RawDescriptionHelpFormatter,
+                                      epilog=
+"""Build a lightcurve by doing forced photomtery on difference images.
+
+Rob write longer description.
+
+For all config options, if the argument isn't given, it will default to
+what's in the config, or, if it's not in the config, the defaults
+defined in the ParsLightcurve class definition.
+"""
+                                     )
+    parser.add_argument( 'outfile', default=None, nargs='?',
+                          help=( "[Optional] Write out a CSV file with the photometry.  If not given, write no file. "
+                                 "If you neither specify this nor --save-to-db, you are just wasting time." ) )
+    parser.add_argument( '--zp-prov', default=argparse.SUPPRESS,
+                         help=( "Provenance id for ZeroPoint to use to find images.  Need either this or "
+                                "--zp-prov-tag.  If both are given, this takes precedence (I think)." ) )
+    parser.add_argument( '-z', '--zp-prov-tag', default=argparse.SUPPRESS,
+                         help=( "Provenance tag to use to find ZeroPoints, which in turn specify Images to "
+                                "build the lightcurve from." ) )
+    parser.add_argument( "--zp-prov-tag-process", default=argparse.SUPPRESS )
+    parser.add_argument( "--object-position-prov", default=argparse.SUPPRESS,
+                         help=( "Provenance id for object positioning.  If this and --object-position-prov-tag "
+                                "are both None, will use raw object position" ) )
+    parser.add_argument( "-p", "--object-position-prov-tag", default=argparse.SUPPRESS,
+                         help="Provenace tag for object positoning." )
+    parser.add_argument( "--only-existing-subtractions", action='store_true', default=argparse.SUPPRESS,
+                         help=( "Only do forced photometry on existing subtractons, don't make new ones.  "
+                                "(NOT IMPLEMENTED.)" ) )
+    parser.add_argument( "-c", "--crop-image", type=int, nargs=2, default=argparse.SUPPRESS,
+                         help="Crop images to this size around object position before subtracting." )
+    parser.add_argument( "-f", "--filters", nargs='+', default=argparse.SUPPRESS,
+                         help=( "Filters to build lightcurve for.  If not specified (here or in config), "
+                                "builds lightcurves for all fitlers of images found in the database for "
+                                "this object and date range" ) )
+    parser.add_argument( "--mjd0", type=float, default=argparse.SUPPRESS,
+                         help="Start building lightcurve at this mjd" )
+    parser.add_argument( "--mjd1", type=float, default=argparse.SUPPRESS,
+                         help="Stop building lightcurve at this mjd" )
+    parser.add_argument( "-i", "--instrument", required=True,
+                         help="Name of instrument whose images we're doing photometry on" )
+    parser.add_argument( "--object-id", default=argparse.SUPPRESS,
+                         help="Database UUID of the object to build a lightcurve for." )
+    parser.add_argument( "-o", "--object-name", default=argparse.SUPPRESS,
+                         help=( "Database name of object to build a lightcurve for.  Unless, perversely, "
+                                "you've set one in config, you ened either this or --ojbect-id." ) )
+    parser.add_argument( "-s", "--save-to-db", default=False, action="store_true",
+                         help="Save trimmed images, subtractions, and forced photometry to database?" )
+    parser.add_argument( "-n", "--numprocs", type=int, default=1,
+                         help="Run this many subprocesses in parallel.  1=run fully serially.  NOT IMLEMENTED." )
+    parser.add_argument( "-v", "--verbose", default=False, action="store_true",
+                         help="Log at DEBUG level (default INFO)." )
+    parser.add_argument( "-w", "--warnings-only", default=False, action="store_true",
+                         help=( "Log at the WARNING level (default INFO).  Ignored if --verbose or --errors-only "
+                                "are set." ) )
+    parser.add_argument( "-e", "--errors-only", default=False, action="store_true",
+                         help=( "Log at teh ERROR Level (default INFO), if you are bold and really don't want to "
+                                "see the warnings.  Ignored if --verbose is given." ) )
+    args = parser.parse_args()
+
+    kwargs = vars(args).copy()
+
+    SCLogger.setLevel( "DEBUG" if kwargs['verbose']
+                       else "ERROR" if kwargs['errors_only']
+                       else "WARNING" if kwargs['warnings_only']
+                       else "INFO" )
+
+    SCLogger.info( "lightcurve run with:\n"
+                   f"{util.util.reconstruct_commandline(parser, args, 'python /seechange/pipeline/lightcurve.py')}" )
+
+    for kw in [ 'verbose', 'warnings_only', 'errors_only' ]:
+        if kw in kwargs:
+            del kwargs[kw]
+
+    if ( kwargs['outfile'] is None ) and ( not kwargs['save_to_db'] ):
+        SCLogger.error( "Must either give an outputifle, or use --save-to-db.  Otherwise, this does nothing "
+                        "but burn cpu time." )
+        sys.exit( 1 )
+    outfile = kwargs['outfile']
+    del kwargs['outfile']
+
+    if outfile is not None:
+        raise NotImplementedError( "File writing not implemented." )
+
+    lightcurve = Lightcurve( **kwargs )
+    lightcurve.run()
+
+    nfail = len( [ f for f in lightcurve.forced_phots if f is None ] )
+    if nfail > 0:
+        SCLogger.warning( f"{nfail} out of {len(lightcurve.forced_phots)} (at least!) failed.  "
+                          f"(The others returned values, but that doesn't mean they're good....)" )
+    
+    if outfile is not None:
+        SCLogger.info( f"Writing csv file {outfile}..." )
+        lightcurve.write_csv_file( outfile )
+        SCLogger.info( "...done." )
+
+
+# ======================================================================
+if __name__ == "__main__":
+    main()

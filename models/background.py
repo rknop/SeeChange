@@ -4,13 +4,15 @@ import numpy as np
 
 import h5py
 
+from psycopg import sql
+
 import sqlalchemy as sa
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.schema import CheckConstraint, UniqueConstraint
 
 from improc.tools import find_and_apply_bscale
-from models.base import Base, SeeChangeBase, SmartSession, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness
+from models.base import Base, SeeChangeBase, PGDB, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness
 from models.image import Image
 from models.source_list import SourceList
 from models.enums_and_bitflags import BackgroundFormatConverter, BackgroundMethodConverter, bg_badness_inverse
@@ -179,16 +181,16 @@ class Background(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
                 raise RuntimeError( "Error, can't figure out background image_shape.  Either explicitly pass "
                                     "image_shape, or make sure that sources_id is set, and the SourceList and "
                                     "Image are already saved to the database." )
-            with SmartSession() as session:
-                image = ( session.query( Image )
-                          .join( SourceList, Image._id==SourceList.image_id )
-                          .filter( SourceList._id==kwargs['sources_id'] )
-                         ).first()
-                if image is None:
+            with PGDB( kwargs['pgdb'] if 'pgdb' in kwargs else None ) as pgdb:
+                rows, _cols = pgdb.execute( sql.SQL( "SELECT i.width, i.height FROM images i "
+                                                     "INNER JOIN source_lists s ON s.image_id=i._id "
+                                                     "WHERE s._id={sid}" )
+                                            .format( sid=kwargs['sources_id'] ) )
+                if len(rows) == 0:
                     raise RuntimeError( "Error, can't figure out background image_shape.  Either explicitly pass "
                                         "image_shape, or make sure that sources_id is set, and the SourceList and "
                                         "Image are already saved to the database." )
-                self._image_shape = ( image.height, image.width )
+                self._image_shape = ( rows[0][1], rows[0][0] )
 
         # Manually set all properties ( columns or not )
         for key, value in kwargs.items():
@@ -289,14 +291,14 @@ class Background(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
             self.filepath = filename
         else:
             if ( sources is None ) or ( image is None ):
-                with SmartSession() as session:
+                with PGDB( dictcursor=True ) as pgdb:
                     if sources is None:
-                        sources = SourceList.get_by_id( self.sources_id, session=session )
+                        sources = SourceList.get_by_id( self.source_id, pgdb=pgdb )
                         if sources is None:
                             raise RuntimeError( "Can't invent Background filepath; "
                                                 "can't find corresponding source list." )
                     if image is None:
-                        image = Image.get_by_id( sources.image_id, session=session )
+                        image = Image.get_by_id( sources.image_id, pgdb=pgdb )
                         if image is None:
                             raise RuntimeError( "Can't invent Background filepath; "
                                                 "can't find corresponding image." )

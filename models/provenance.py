@@ -443,9 +443,9 @@ class Provenance(Base):
         with PGDB( pgdb, dictcursor=True ) as pgdb:
             q = sql.SQL( textwrap.dedent(
                 """\
-                SELECT p.* FROM provenances
+                SELECT p.* FROM provenances p
                 INNER JOIN provenance_tags t ON p._id=t.provenance_id
-                WHERE t.tag={gtag}
+                WHERE t.tag={tag}
                 """
             ) ).format( tag=tag )
             if process is not None:

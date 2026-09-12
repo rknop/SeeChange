@@ -6,7 +6,6 @@ import random
 import numbers
 
 import numpy as np
-import psycopg
 from psycopg import sql
 
 import sqlalchemy as sa
@@ -32,7 +31,6 @@ from models.base import (
     SeeChangeBase,
     PGDB,
     SmartSession,
-    PsycopgConnection,
     UUIDMixin,
     FileOnDiskMixin,
     SpatiallyIndexed,
@@ -147,29 +145,47 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         doc=( "ID of the image that was the alignment target for this coadd image, if appropriate." )
     )
 
-    def _load_coadd_component_zp_ids( self, session=None ):
-        with PsycopgConnection() as conn:
-            cursor = conn.cursor()
-            # We have to join back to image in order to get the mjd for sorting
-            cursor.execute( "SELECT z._id FROM zero_points z "
-                            "INNER JOIN image_coadd_component c ON c.zp_id=z._id "
-                            "INNER JOIN world_coordinates w ON w._id=z.wcs_id "
-                            "INNER JOIN source_lists s ON s._id=w.sources_id "
-                            "INNER JOIN images i ON s.image_id=i._id "
-                            "WHERE c.coadd_image_id=%(imid)s "
-                            "ORDER BY i.mjd",
-                            { 'imid': self.id } )
-            zpids = [ asUUID(row[0]) for row in cursor.fetchall() ]
-            if len( zpids ) > 0 and ( not self.is_coadd ):
-                raise RuntimeError( "Database corruption, there are coadd components, but image is not a coadd." )
-            self._coadd_component_zp_ids = zpids
+    def _get_coadd_component_zp_ids( self, sort=True, pgdb=None, always_load=False, missing_ok=False ):
+        if ( not always_load ) and ( not isinstance(self._coadd_component_zp_ids, config.NoValue) ):
+            return self._coadd_component_zp_ids
 
+        with PGDB( pgdb ) as pgdb:
+            if sort:
+                # We have to join back to image in order to get the mjd for sorting
+                q = sql.SQL( textwrap.dedent(
+                    """\
+                    SELECT z._id FROM zero_points z
+                    INNER JOIN image_coadd_component c ON c.zp_id=z._id
+                    INNER JOIN world_coordinates w ON w._id=z.wcs_id
+                    INNER JOIN source_lists s ON s._id=w.sources_id
+                    INNER JOIN images i ON s.image_id=i._id
+                    WHERE c.coadd_image_id={imid}
+                    ORDER BY i.mjd
+                    """
+                ) ).format( imid=self.id )
+            else:
+                q = ( sql.SQL( "SELECT zp_id FROM image_coadd_component WHERE coadd_image_id={imid}" )
+                      .format( imid=self.id ) )
+            rows = pgdb.execute( q )
+            zpids = [ asUUID(row[0]) for row in rows ]
+            if self.is_coadd:
+                if len( zpids ) == 0:
+                    if missing_ok:
+                        zpids = config.NoValue()
+                    else:
+                        raise ValueError( "Image is coadd but doesn't have any components in the database!" )
+            else:
+                if len( zpids ) > 0:
+                    raise RuntimeError( "Database corruption, there are coadd components, but image is not a coadd." )
+                zpids = None
+            return zpids
 
     @property
     def coadd_component_zp_ids( self ):
-        if self._coadd_component_zp_ids is None:
-            self._load_coadd_component_zp_ids()
+        if isinstance( self._coadd_component_zp_ids, config.NoValue ):
+            self._coadd_component_zp_ids = self._get_coadd_component_zp_ids( sort=True )
         return self._coadd_component_zp_ids
+
 
     is_sub = sa.Column(
         sa.Boolean,
@@ -179,24 +195,43 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         doc='Is this a subtraction image.'
     )
 
-    is_trim = sa.Column(
-        sa.Boolean,
-        nullable=False,
-        server_default='false',
-        index=False,
-        doc='Is this image the result of a call to Image.trim'
-    )
+    def _get_subtraction_components( self, pgdb=None, always_load=False, missing_ok=False ):
+        if ( ( not always_load ) and ( not isinstance(self._ref_id, config.NoValue) )
+             and ( not isinstance(self._new_zp_id, config.NoValue) ) ):
+            return self._ref_id, self._new_zp_id
+
+        with PGDB( pgdb ) as pgdb:
+            rows, _cols = pgdb.execute( sql.SQL( "SELECT new_zp_id, ref_id FROM image_subtraction_components "
+                                                 "WHERE image_id={me}" )
+                                        .format( me=self.id ) )
+            if len(rows) > 1:
+                raise RuntimeError( f"Database corruption, more than one image_subtraction_components row for "
+                                    f"sub image {self.id}" )
+            if len(rows) == 0:
+                if self.is_sub:
+                    if missing_ok:
+                        nv = config.NoValue()
+                        return ( nv, nv )
+                    else:
+                        raise ValueError( "Image is a subtraction, but has no subtraction components in the databse." )
+                else:
+                    return ( None, None )
+            else:
+                if self.is_sub:
+                    return ( rows[0][0], rows[0][1] )
+                else:
+                    raise ValueError( "Image is not a subtraction, but has subtraction components in the database!" )
+
+        raise RuntimeError( "You should never get here." )
+
+    def _load_subtraction_components( self, pgdb=None, always_load=False ):
+        if always_load or isinstance( self._new_zp_id, config.NoValue ) or isinstance( self._ref_id, config.NoValue ):
+            self._new_zp_id, self._ref_id = self._get_subtraction_components( pgdb=pgdb, always_load=True )
 
     @property
     def ref_id( self ):
-        if not self.is_sub:
-            return None
-        if self._ref_id is None:
-            from models.reference import image_subtraction_components
-            with SmartSession() as session:
-                self._ref_id = ( session.query( image_subtraction_components.c.ref_id )
-                                 .filter( image_subtraction_components.c.image_id==self.id )
-                                .scalar() )
+        if isinstance( self._ref_id, config.NoValue ):
+            self._load_subtraction_components()
         return self._ref_id
 
     @ref_id.setter
@@ -205,19 +240,81 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
 
     @property
     def new_zp_id( self ):
-        if not self.is_sub:
-            return None
-        if self._new_zp_id is None:
-            from models.reference import image_subtraction_components
-            with SmartSession() as session:
-                self._new_zp_id = ( session.query( image_subtraction_components.c.new_zp_id )
-                                    .filter( image_subtraction_components.c.image_id==self.id )
-                                    .scalar() )
+        if isinstance( self._new_zp_id, config.NoValue ):
+            self._load_subtraction_components()
         return self._new_zp_id
 
     @new_zp_id.setter
     def new_zp_id( self, val ):
         raise RuntimeError( "Don't" )
+
+
+    is_trim = sa.Column(
+        sa.Boolean,
+        nullable=False,
+        server_default='false',
+        index=False,
+        doc='Is this image the result of a call to Image.trim'
+    )
+
+    def _get_trim_parent( self, pgdb=None, always_load=False, missing_ok=False ):
+        if ( not always_load ) and all( not isinstance( att, config.NoValue )
+                                        for att in [ '_trim_image_parent', '_trim_wcs_parent',
+                                                     '_trim_xcen', '_trim_ycen' ] ):
+            return ( self._trim_image_parent, self._trim_wcs_parent, self._trim_xcen, self._trim_ycen )
+
+        with PGDB( pgdb ) as pgdb:
+            rows, _cols = pgdb.execute( sql.SQL( "SELECT parent_image_id, parent_wcs_id, trim_xcen, trim_ycen "
+                                                  "FROM image_trim_parent WHERE image_id={me}" )
+                                        .format( me=self.id ) )
+            if len(rows) > 1:
+                raise RuntimeError( f"Database corruption, multiple trim parents for {self.id}" )
+            if self.is_trim:
+                if len(rows) == 0:
+                    if missing_ok:
+                        nv = config.NoValue()
+                        return ( nv, nv, nv, nv )
+                    else:
+                        raise ValueError( "Image is trim, but doesn't have trim parent in the database." )
+                return tuple( rows[0] )
+            else:
+                if len(rows) == 1:
+                    raise ValueError( "Image is not trim, but has trim parents in the database!" )
+                return ( None, None, None, None )
+
+        raise RuntimeError( "You should ever get here." )
+
+
+    def _load_trim_parent( self, pgdb=None, always_load=False ):
+        if always_load or any( isinstance( att, config.NoValue )
+                               for att in [ '_trim_image_parent', '_trim_wcs_parent', '_trim_xcen', '_trim_ycen' ] ):
+            ( self._trim_image_parent, self._trim_wcs_parent,
+              self._trim_xcen, self._trim_ycen ) = self._get_trim_parent( pgdb=pgdb, always_load=True )
+
+    @property
+    def trim_image_parent( self ):
+        if isinstance( self._trim_image_parent, config.NoValue ):
+            self._load_trim_parent()
+        return self._trim_image_parent
+
+    @property
+    def trim_wcs_parent( self ):
+        if isinstance( self._trim_image_parent, config.NoValue ):
+            self._load_trim_parent()
+        return self._trim_wcs_parent
+
+    @property
+    def trim_xcen( self ):
+        if isinstance( self._trim_image_parent, config.NoValue ):
+            self._load_trim_parent()
+        return self._trim_xcen
+
+    @property
+    def trim_ycen( self ):
+        if isinstance( self._trim_image_parent, config.NoValue ):
+            self._load_trim_parent()
+        return self._trim_ycen
+
 
 
     _type = sa.Column(
@@ -504,10 +601,14 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         self._nandata = None  # a copy of the image data, only with NaNs at each flagged point. Lazy calculated.
         self._nanscore = None  # a copy of the image score, only with NaNs at each flagged point. Lazy calculated.
 
-        self._coadd_component_zp_ids = None
-        self._ref_id = None
-        self._ref_image_id = None
-        self._new_zp_id = None
+        self._coadd_component_zp_ids = config.NoValue()
+        self._ref_id = config.NoValue()
+        self._ref_image_id = config.NoValue()
+        self._new_zp_id = config.NoValue()
+        self._trim_image_parent = config.NoValue()
+        self._trim_wcs_parent = config.NoValue()
+        self._trim_xcen = config.NoValue()
+        self._trim_ycen = config.NoValue()
 
         self._instrument_object = None
         self._bitflag = 0
@@ -554,7 +655,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         # if this_object_session is not None:  # if just loaded, should usually have a session!
         #     self.load_upstream_products(this_object_session)
 
-    def insert( self, pgdb=None, session=None, nocommit=False ):
+    def insert( self, pgdb=None, session=None, nocommit=False, load_defaults=False ):
         """Add the Image object to the database.
 
         In any events, if there are no exceptions, self.id will be set upon
@@ -581,22 +682,37 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         """
 
         with PGDB( pgdb if pgdb is not None else session ) as pgdb:
-            # Insert the image.  If this raises an exception (because the image already exists),
-            # then we won't futz with the image_coadd_component_table.
-            SeeChangeBase.insert( self, pgdb=pgdb, nocommit=True )
+            SeeChangeBase.insert( self, pgdb=pgdb, nocommit=True, load_defaults=load_defaults )
 
-            if ( self._coadd_component_zp_ids is not None ) and ( len(self._coadd_component_zp_ids) > 0 ):
-                for ui in self._coadd_component_zp_ids:
-                    pgdb.execute( sql.SQL( "INSERT INTO image_coadd_component(zp_id,coadd_image_id) "
-                                           "VALUES ({them},{me})"
-                                          ).format( them=ui, me=self.id ) )
+            if self.is_coadd:
+                if isinstance( self._coadd_comonent_zp_ids, config.NoValue ):
+                    raise ValueError( "Error inserting coadd image, missing _coadd_component_zp_ids" )
+                else:
+                    for ui in self._coadd_component_zp_ids:
+                        pgdb.execute( sql.SQL( "INSERT INTO image_coadd_component(zp_id,coadd_image_id) "
+                                               "VALUES ({them},{me})"
+                                              ).format( them=ui, me=self.id ) )
 
-            if ( self._ref_id is not None ) or ( self._new_zp_id is not None ):
-                if ( self._ref_id is None ) or ( self._new_zp_id is None ):
-                    raise RuntimeError( "Either neither or both of _ref_id and _new_zp_id must be None" )
+            if self.is_sub:
+                if isinstance( self._ref_id, config.NoValue ) or isinstance( self._new_zp_id, config.NoValue ):
+                    raise RuntimeError( "Error inserting sub image, missing subtraction components" )
                 pgdb.execute( sql.SQL( "INSERT INTO image_subtraction_components(image_id,new_zp_id,ref_id) "
                                        "VALUES ({me},{zp},{ref})"
                                       ).format( me=self.id, zp=self._new_zp_id, ref=self._ref_id ) )
+
+            if self.is_trim:
+                if any( isinstance( getattr(self, att), config.NoValue )
+                        for att in [ '_trim_image_parent', '_trim_wc_parent', '_trim_xcen', '_trim_ycen' ] ):
+                    raise ValueError( "Error inserting trim image, missing expected properties." )
+                q = sql.SQL( textwrap.dedent(
+                    """\
+                    INSERT INTO image_trim_parent(image_id, parent_image_id, parent_wcs_id,
+                                                  trim_xcen, trim_ycen )
+                    VALUES ({imid},{parid},{wcsid},{xcen},{ycen})
+                    """
+                ) ).format( imid=self.id, parid=self._trim_image_parent, wcsid=self._trim_wcs_parent,
+                            xcen=self._trim_xcen, ycen=self._trim_ycen )
+                pgdb.execute_nofetch( q )
 
             if not nocommit:
                 pgdb.commit()
@@ -606,31 +722,76 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         with PGDB( pgdb if pgdb is not None else session ) as pgdb:
             SeeChangeBase.upsert( self, pgdb=pgdb, load_defaults=load_defaults, nocommit=True )
 
-            # We're just going to merrily try to set all the coadd component ids and not care
-            #   if we get already existing errors.  Assume that if we get one, we'll get 'em
-            #   all, because somebody else has already loaded all of them.
-            # (I hope that's right.  But, in reality, it's extremely unlikely that two processes
-            # will be trying to upsert the same image at the same time.)
+            # For all the associated tables, if *all* the various underscore
+            #   properties exist, validate them, or, if nothing is there,
+            #   insert them.  If they don't all exist, just assume that the
+            #   image was already loaded and those values are OK.
 
-            if ( self._coadd_component_zp_ids is not None ) and ( len(self._coadd_component_zp_ids) > 0 ):
-                try:
-                    for ui in self._coadd_component_zp_ids:
-                        pgdb.execute( sql.SQL( "INSERT INTO image_coadd_component(zp_id,coadd_image_id) "
-                                               "VALUES ({them},{me})"
-                                              ).format( them=ui, me=self.id ) )
-                except psycopg.errors.UniqueViolation as ex:
-                    if 'duplicate key value violates unique constraint "image_coadd_component_pkey"' in str(ex):
-                        pgdb.rollback()
+            if self.is_coadd:
+                if self._component_zp_ids is None:
+                    raise ValueError( "_component_zp_ids None for coadd image, that shouldn't happen" )
+                zpids = self._get_coadd_component_zp_ids( sort=True, pgdb=pgdb, always_load=True, missing_ok=True )
+                if isinstance( self._component_zp_ids, config.NoValue ):
+                    if isinstance( zpids, config.NoValue ) or ( zpids is None ):
+                        raise ValueError( "Failure upserting coadd image, no coadd components in database, "
+                                          "and no coadd components in object." )
+                    self._coadd_component_zp_ids = zpids
+                else:
+                    if isinstance( zpids, config.NoValue ):
+                        for ui in self._coadd_component_zp_ids:
+                            pgdb.execute( sql.SQL( "INSERT INTO image_coadd_component(zp_id,coadd_image_id) "
+                                                   "VALUES ({them},{me})"
+                                                  ).format( them=ui, me=self.id ) )
                     else:
-                        raise
+                        if zpids != self._coadd_component_zp_ids:
+                            raise ValueError( "Error upserting image: coadd components in database do not "
+                                              "match what's in the object." )
 
-            # Update the image_subtraction_components_table ; here, we can just
-            #   do a straight-up postgres upsert
-            if ( self._ref_id is not None ) or ( self._new_zp_id is not None ):
-                pgdb.execute( sql.SQL( "INSERT INTO image_subtraction_components(image_id,new_zp_id,ref_id) "
-                                       "VALUES ({me},{zp},{ref}) "
-                                       "ON CONFLICT (image_id) DO UPDATE SET new_zp_id={zp}, ref_id={ref}"
-                                      ).format( me=self.id, zp=self._new_zp_id, ref=self._ref_id ) )
+            if self.is_sub:
+                new_zp_id, ref_id = self._get_subtraction_components( pgdb=pgdb, always_load=True, missing_ok=True )
+                if isinstance( new_zp_id, config.NoValue ):
+                    if isinstance( self._new_zp_id, config.NoValue ) or isinstance( self._ref_id, config.NoValue ):
+                        raise ValueError( "Error upserting image, no subtraction components in database or "
+                                          "in object" )
+                    pgdb.execute( sql.SQL( "INSERT INTO image_subtraction_components(image_id,new_zp_id,ref_id) "
+                                           "VALUES ({me},{zp},{ref}) "
+                                          ).format( me=self.id, zp=self._new_zp_id, ref=self._ref_id ) )
+                else:
+                    if isinstance( self._new_zp_id, config.NoValue ):
+                        self._new_zp_id = new_zp_id
+                    if isinstance( self._ref_id, config.NoValue ):
+                        self._ref_id = ref_id
+                    if ( self._ref_id != ref_id ) or ( self._new_zp_id != new_zp_id ):
+                        raise ValueError( "Subtraction components in database don't match what's in object" )
+
+            if self.is_trim:
+                ( trim_image_parent, trim_wcs_parent,
+                  trim_xcen, trim_ycen ) = self._get_trim_parent( pgdb=pgdb, always_load=True, missing_ok=True )
+                if isinstance( trim_image_parent, config.NoValue ):
+                    if any( isinstance( getattr( self, att ), config.NoValue )
+                            for att in ( '_trim_image_parent', '_trim_wcs_parent', '_trim_xcen', '_trim_ycen' ) ):
+                        raise ValueError( "Error upserting image, no trim components in database and "
+                                          "missing trim components in object." )
+                    q = sql.SQL( textwrap.dedent(
+                        """\
+                        INSERT INTO image_trim_parent(image_id, parent_image_id, parent_wcs_id,
+                        trim_xcen, trim_ycen )
+                        VALUES ({imid},{parid},{wcsid},{xcen},{ycen})
+                        """
+                    ) ).format( imid=self.id, parid=self._trim_image_parent,
+                                wcsid=self._trim_wcs_parent, xcen=self._trim_xcen, ycen=self._trim_ycen )
+                    pgdb.execute( q )
+                else:
+                    uhoh = False
+                    for att, val in zip( [ '_trim_image_parent', '_trim_wcs_parent', '_trim_xcen', '_trim_ycen' ],
+                                         [ trim_image_parent, trim_wcs_parent, trim_xcen, trim_ycen ] ):
+                        if isinstance( getattr( self, att ), config.NoValue() ):
+                            setattr( self, att, val )
+                        elif getattr( self, att ) != val:
+                            uhoh = True
+                    if uhoh:
+                        raise ValueError( "Error upserting image, image trim components in database do not "
+                                          "match what is in object." )
 
             if not nocommit:
                 pgdb.commit()
@@ -1577,6 +1738,10 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             else:
                 trimim.provenance_id = None
                 trimim.filepath = None
+        trimim._trim_image_parent = self.id
+        trimim._trim_wcs_parent = wcs.id if wcs is not None else None
+        trimim._trim_xcen = xcen
+        trimim._trim_ycen = ycen
 
         if sources is not None:
             if trimsrc is None:
