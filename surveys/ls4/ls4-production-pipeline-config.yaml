@@ -203,6 +203,10 @@ lightcurve:
   object_position_prov_tag_process: positioning
   subtraction_config:
     method: hotpants
+    save_warped_ref: true
+    hotpants_numregions: [1, 1]
+    hotpants_ko: 0
+    hotpants_bgo: 0
     refset: premayrefltcvref
     reference:
       search_by: ra/dec

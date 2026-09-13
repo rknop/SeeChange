@@ -241,7 +241,6 @@ class Lightcurve:
         self.wcsen = None
         self.zps = None
         self.forced_phots = None
-        self.aligned_cache = None
 
 
     def setup( self, object_id=NoValue(), object_name=NoValue(), mjd0=NoValue(),
@@ -652,36 +651,8 @@ class Lightcurve:
 
         return provtree
 
-    def find_refs( self, ds, filters=None, mjd0=None, mjd1=None, pgdb=None ):
-        if self.object_position is not None:
-            ra = self.object_position.ra
-            dec = self.object_position.dec
-        else:
-            ra = self.object.ra
-            dec = self.object.dec
 
-        kwargs = self.subtractor.pars.reference.copy()
-        kwargs['instrument'] = self.pars.instrument
-        kwargs['provenances'] = self.refset.provenance_id
-        kwargs['ra'] = ra
-        kwargs['dec'] = dec
-        kwargs['mjd0'] = mjd0
-        kwargs['mjd1'] = mjd1
-
-        if any( x in kwargs for x in ( 'must_match_section', 'must_match_target' ) ):
-            raise ValueError( "Don't use must_match_section or must_match_target in subtraction_conifg['reference']" )
-
-        refs = {}
-        for filt in filters:
-            ref = ds.get_reference( filter=filt, pgdb=pgdb, **kwargs )
-            if ref is None:
-                raise RuntimeError( f"Cannot find a reference at ({ra:.4f}, {dec:.4f}) for instrument "
-                                    f"{self.pars.instrument}, filter {filt}, and parameters {kwargs}" )
-            refs[filt] = ref
-
-        return refs
-
-    def process_one_image( self, imgdex, cache_aligned_images=False ):
+    def process_one_image( self, imgdex ):
         img = self.imgs[ imgdex ]
         ds = DataStore( img )
         ds.prov_tree = self.provtree
@@ -734,21 +705,6 @@ class Lightcurve:
 
         ds = self.subtractor.run( ds, ra=self.ra, dec=self.dec, trust_datastore_reference=True, do_not_load=False )
         sub_image = ds.get_sub_image()
-
-        aligned_cache = None
-        if cache_aligned_images:
-            aligned_cache = { 'new_image': ds.aligned_new_image,
-                              'new_sources': ds.aligned_new_sources,
-                              'new_bg': ds.aligned_new_bg,
-                              'new_psf': ds.aligned_new_psf,
-                              'new_zp': ds.aligned_new_zp,
-                              'ref_image': ds.aligned_ref_image,
-                              'ref_sources': ds.aligned_ref_sources,
-                              'ref_bg': ds.aligned_ref_bg,
-                              'ref_psf': ds.aligned_ref_psf,
-                              'ref_zp': ds.aligned_ref_zp,
-                              'wcs': ds.aligned_wcs
-                             }
 
         # Save to database if requested
         if self.pars.save_to_db:
@@ -813,53 +769,13 @@ class Lightcurve:
         # from subtraction_id to zp_id and get it there.
         forcedphot._aper_cors = ds.get_zp().aper_cors
 
-        return forcedphot, aligned_cache
+        return forcedphot
 
     def write_csv_file( self, filepath ):
         raise NotImplementedError( "File writing not implemented." )
 
 
-    def run( self, *args, cache_aligned_images=False, die_on_fail=False, **kwargs ):
-        """Do forced photometry based on the object configuration.
-
-        Parameters
-        ----------
-          object_id : str or uuid
-          object_name : str
-          mjd0 : float
-          mjd1 : float
-          filters : list of str
-             All of these can override their corresponding parameters
-             that were set when the Lightcurve object was instantiated.
-             This will change what is in those parameters, so if you
-             call the run() method more than once on the same Lightcurve
-             object (which is in general a scary thing to do), don't
-             count on them having reverted to what you constructed
-             the Lightcurve object with!
-
-          cached_aligned_images : bool, default False
-             If true, then the aligned news and refs, as well as
-             downstream dataproducts, are saved in self.aligned_cache.
-             Useful for debugging.  (These are not normally saved to the
-             database.)  (Note that the aligned new is identical to the
-             new, since we always align to the new.)
-
-          pgdb: PGDB, default None
-             Database connection.  Connections will be opened and closed
-             as needed if this is None.
-
-        Returns
-        -------
-          List of ForcedPhot
-
-          That list is also in self.forced_phots
-
-        """
-
-        self.setup( *args, **kwargs )
-        self.provtree = self.make_prov_tree( save=True )
-
-        SCLogger.info( "Lightcurve finding images." )
+    def find_images( self ):
         if self.pars.filter is None:
             imgs, wcsen, zps = Image.find_images( ra=self.ra, dec=self.dec, type='Sci',
                                                   provenance_ids=self.provtree['photocal'].id,
@@ -884,24 +800,46 @@ class Lightcurve:
                 imgs.extend( thisimgs )
                 wcsen.update( thiswcsen )
                 zps.update( thiszps )
-                imgs.sort( key=lambda x: x.mjd )
-
-        if len(imgs) == 0:
-            SCLogger.warning( "No images found to build a lightcurve for!" )
-            return None
-        SCLogger.info( f"lightcurve found {len(imgs)} images" )
+            imgs.sort( key=lambda x: x.mjd )
 
         self.imgs = imgs
         self.wcsen = wcsen
         self.zps = zps
+        self.filters = filters
         self.forced_phots = [ None ] * len(imgs)
-        self.aligned_cache = [ None ] * len(imgs) if cache_aligned_images else None
 
-        SCLogger.info( f"Lightcurve finding refs for {len(filters)} filters." )
+    def find_refs( self, pgdb=None ):
         # Make an empty datastore to do use for finding references.  (Issue #550)
         ds = DataStore()
         ds.prov_tree = self.provtree
-        self.refs = self.find_refs( ds, filters=filters, mjd0=imgs[0].mjd, mjd1=imgs[1].mjd )
+
+        if self.object_position is not None:
+            ra = self.object_position.ra
+            dec = self.object_position.dec
+        else:
+            ra = self.object.ra
+            dec = self.object.dec
+
+        kwargs = self.subtractor.pars.reference.copy()
+        kwargs['instrument'] = self.pars.instrument
+        kwargs['provenances'] = self.refset.provenance_id
+        kwargs['ra'] = ra
+        kwargs['dec'] = dec
+        kwargs['mjd0'] = self.imgs[0].mjd
+        kwargs['mjd1'] = self.imgs[-1].mjd
+
+        if any( x in kwargs for x in ( 'must_match_section', 'must_match_target' ) ):
+            raise ValueError( "Don't use must_match_section or must_match_target in subtraction_conifg['reference']" )
+
+        refs = {}
+        with PGDB( pgdb ) as pgdb:
+            for filt in self.filters:
+                ref = ds.get_reference( filter=filt, pgdb=pgdb, **kwargs )
+                if ref is None:
+                    raise RuntimeError( f"Cannot find a reference at ({ra:.4f}, {dec:.4f}) for instrument "
+                                        f"{self.pars.instrument}, filter {filt}, and parameters {kwargs}" )
+                refs[filt] = ref
+
         oks = [ f for f, r in self.refs.items() if r is not None ]
         missings = [ f for f, r in self.refs.items() if r is None ]
         if len(missings) > 0:
@@ -910,13 +848,100 @@ class Lightcurve:
         else:
             SCLogger.info( f"Found refs for all filters: {oks}" )
 
-        SCLogger.info( f"Lightcurve doing forced photometry on {len(imgs)} images." )
+        self.refs = refs
+
+    def load( self, *args, **kwargs ):
+        self.setup( *args, **kwargs )
+        self.provtree = self.make_prov_tree( save=False )
+        self.find_images()
+        self.find_refs()
+
+        self.forced_phots = []
+        with PGDB() as pgdb:
+            q = sql.SQL( "SELECT f.* FROM forced_photometry f "
+                         "INNER JOIN images i ON i._id=f.subtracton_id "
+                         "WHERE object_id={obj} "
+                         "AND provenance_id={prov} "
+                         "AND object_position_id{poscaluse}"
+                         "ORDER BY i.mjd"
+                        ).format( obj=self.object.id,
+                                  provid=self.provtree['forcedphot'].id,
+                                  posclause=( sql.SQL( "={posid}".format(posid=self.object_position.id) )
+                                              if self.object_position is not None
+                                              else sql.SQL( " IS NULL" ) ) )
+            rows = pgdb.execute( q )
+
+        for row in rows:
+            self.forced_phots.append( **row )
+
+        SCLogger.info( "Loaded forced photometry for {len(self.forced_phots)} out of {len(self.mgs)}" )
+
+    def export_image_mess( self, namebase="phot_" ):
+        for phot in self.forced_phots:
+            with PGDB() as pgdb:
+                subim = Image.get_by_id( phot.subtraction_id, pgdb=pgdb )
+                q = sql.SQL( textwrap.dedent(
+                    """\
+                    SELECT i.* FROM image_subtraction_components isc
+                    INNER JOIN zero_points z ON isc.new_zp_id=z._id
+                    INNER JOIN world_coordinates w ON z.wcs_id=w._id
+                    INNER JOIN source_lists s """
+                ) ).format( ROB="YOU WERE HERE" )
+
+
+
+
+
+    def run( self, *args, die_on_fail=False, **kwargs ):
+        """Do forced photometry based on the object configuration.
+
+        Parameters
+        ----------
+          object_id : str or uuid
+          object_name : str
+          mjd0 : float
+          mjd1 : float
+          filters : list of str
+             All of these can override their corresponding parameters
+             that were set when the Lightcurve object was instantiated.
+             This will change what is in those parameters, so if you
+             call the run() method more than once on the same Lightcurve
+             object (which is in general a scary thing to do), don't
+             count on them having reverted to what you constructed
+             the Lightcurve object with!
+
+          pgdb: PGDB, default None
+             Database connection.  Connections will be opened and closed
+             as needed if this is None.
+
+        Returns
+        -------
+          List of ForcedPhot
+
+          That list is also in self.forced_phots
+
+        """
+
+
+        self.setup( *args, **kwargs )
+        self.provtree = self.make_prov_tree( save=True )
+
+        SCLogger.info( "Lightcurve finding images." )
+        self.find_images()
+
+        if len(self.imgs) == 0:
+            SCLogger.warning( "No images found to build a lightcurve for!" )
+            return None
+        SCLogger.info( f"lightcurve found {len(self.imgs)} images" )
+
+        SCLogger.info( f"Lightcurve finding refs for {len(self.filters)} filters." )
+        self.find_refs()
+
+        SCLogger.info( f"Lightcurve doing forced photometry on "
+                       f"{len([ i for i in self.imgs if i.filter in self.refs ])} images." )
         for i in range( len(self.imgs) ):
             try:
-                self.forced_phots[i], cached_aligns = self.process_one_image(i,
-                                                                             cache_aligned_images=cache_aligned_images)
-                if cache_aligned_images:
-                    self.aligned_cache[i] = cached_aligns
+                self.forced_phots[i] = self.process_one_image(i)
             except Exception as ex:
                 if die_on_fail:
                     raise

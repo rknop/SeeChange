@@ -82,14 +82,23 @@ image_trim_parent = sa.Table(
                sqlUUID,
                sa.ForeignKey('world_coordinates._id', ondelete="RESTRICT", name="image_trim_parent_wcs_fkey" ),
                nullable=True,
-               index=True ),
+               index=True )
 )
 
 
 # It is not mandatory to save warped images in subtractions.  If we do, this keeps track of it.
+#
+# Having warped_provenance_id here violates database normalizaton, since you could get the
+#   same value from looking up provenance_id in the Images table with key warped_id.  However,
+#   it's here so we can use it in a unique constraint.
 image_warp_parent = sa.Table(
     'image_warp_parent',
     Base.metadata,
+    sa.Column( 'warp_provenance_id',
+               sqlUUID,
+               sa.ForeignKey('provenances._id', ondelete="RESTRICT", name="image_warped_prov_fkey" ),
+               index=True,
+               nullable=False ),
     sa.Column( 'warped_id',
                sqlUUID,
                sa.ForeignKey('images._id', ondelete="CASCADE", name="image_warped_image_fkey"),
@@ -105,7 +114,8 @@ image_warp_parent = sa.Table(
                sqlUUID,
                sa.ForeignKey('world_coordinates._id', ondelete="RESTRICT", name="image_warped_target_wcs_fkey"),
                index=True,
-               nullable=False )
+               nullable=False ),
+    UniqueConstraint( 'unwarped_zp_id', 'target_wcs_id', 'warp_provenance_id', name="warp_unique" )
 )
 
 
@@ -2523,6 +2533,94 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             downstreams.extend( [ ( Image, row[0] ) for row in rows ] )
 
         return downstreams
+
+    def get_new_image( self, pgdb=None, return_sources=False, return_wcs=False, return_zp=False ):
+        if not self.is_sub:
+            raise ValueError( "Can't get new image for image that isn't a subtraction." )
+        with PGDB( pgdb ) as pgdb:
+            q = sql.SQL( textwrap.dedent(
+                """\
+                SELECT i._id, s._id, w._id, z._id FROM image_subtracton_components isc
+                INNER JOIN zero_points z ON isc.new_zp_id=z._id
+                INNER JOIN world_coordinates w ON z.wcs_id=w._id
+                INNER JOIN source_lists s ON w.sources_id=s._id
+                INNER JOIN images i ON s.image_id=w._id
+                WHERE isc.image_id={me}
+                """
+            ) ).format( me=self.id )
+            rows, _cols = pgdb.execute( q )
+            if len(rows) != 1:
+                raise RuntimeError( f"Failed to find new image for subtracton image {self.id}" )
+            rval = { 'image': Image.get_by_id( rows[0][0], pgdb=pgdb ) }
+            if return_sources:
+                # import here to avoid circular imports
+                from models.source_list import SourceList
+                rval['sources'] = SourceList.get_by_id( rows[0][1], pgdb=pgdb )
+            if return_wcs:
+                from models.world_coordinates import WorldCoordinates
+                rval['wcs'] = WorldCoordinates.get_by_id( rows[0][2], pgdb=pgdb )
+            if return_zp:
+                from models.zero_point import ZeroPoint
+                rval['zp'] = ZeroPoint.get_by_id( rows[0][3], pgdb=pgdb )
+
+            return rval
+
+    def get_ref_image( self, warp_prov=None, pgdb=None, return_ref=False, return_sources=False, return_wcs=False,
+                       return_zp=False, return_warped=False ):
+        if not self.is_sub:
+            raise ValueError( "Can't get ref image for image that isn't a subtraction" )
+        with PGDB( pgdb ) as pgdb:
+            q = sql.SQL( textwrap.dedent(
+                """\
+                SELECT i._id, s._id, w._id, z._id, ref._id FROM image_subtraction_components isc
+                INNER JOIN refs ref ON isc.ref_id=ref._id
+                INNER JOIN zero_points z ON ref.zp_id=z._id
+                INNER JOIN world_coordinates w ON z.wcs_id=w._id
+                INNER JOIN source_lists s ON w.sources_id=s._id
+                INNER JOIN images i ON s.image_id=i._id
+                WHERE isc.image_id={me}
+                """
+            ) ).format( me=self.id )
+            rows, _cols = pgdb.execute( q )
+            if len(rows) != 1:
+                raise RuntimeError( f"Failed to find ref image for subtraction image {self.id}" )
+            rval = { 'image': Image.get_by_id( rows[0][0], pgdb=pgdb ) }
+            if return_sources:
+                from models.source_list import SourceList
+                rval['sources'] = SourceList.get_by_id( rows[0][1], pgdb=pgdb )
+            if return_wcs:
+                from models.world_coordinates import WorldCoordinates
+                rval['wcs'] = WorldCoordinates.get_by_id( rows[0][2], pgdb=pgdb)
+            if return_zp:
+                from models.zero_point import ZeroPoint
+                rval['zp'] = ZeroPoint.get_by_id( rows[0][3], pgdb=pgdb )
+            if return_ref:
+                from models.reference import Reference
+                rval['ref'] = Reference.get_by_id( rows[0][4], pgdb=pgdb )
+            if return_warped:
+                q = sql.SQL( textwrap.dedent(
+                    """\
+                    SELECT i.* FROM image_subtraction_components isc
+                    INNER JOIN zero_points z ON isc.new_zp_id=z._id
+                    INNER JOIN image_warp_parent iwp ON iwp.target_wcs_id=z.wcs_id
+                    INNER JOIN images i ON i._id=iwp.warped_id
+                    WHERE iwp.unwarped_zp_id={zpid}
+                      AND isc.image_id={me}
+                    """
+                ) ).format( me=self.id, zpid=rows[0][3] )
+                if warp_prov is not None:
+                    warp_prov = warp_prov.id if isinstance( warp_prov, Provenance ) else warp_prov
+                    q += sql.SQL( "  AND iwp.warp_provenance_id={prov}" ).format( prov=warp_prov )
+                rows, _cols = pgdb.execute( q )
+                if len(rows) == 0:
+                    # Might just not exist; we don't require it to
+                    rval['warped' ] = None
+                elif warp_prov is not None:
+                    rval['warped'] = [ Image.create( **row ) for row in rows ]
+                else:
+                    rval['warped'] = Image.create( **(rows[0]) )
+
+            return rval
 
 
     @staticmethod

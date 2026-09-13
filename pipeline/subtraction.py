@@ -114,9 +114,9 @@ class ParsSubtractor(Parameters):
 
         self.hotpants_numregions = self.add_par(
             name = "hotpants_numregions",
-            default = (1, 1),
-            par_types = tuple,
-            docstring = "Tuple of nrx, nry, number of regions (hotpants only)",
+            default = [1, 1],
+            par_types = list,
+            docstring = "List of nrx, nry, number of regions (hotpants only)",
             critical = True
         )
 
