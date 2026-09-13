@@ -336,20 +336,35 @@ class WorldCoordinates(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness, Spat
     def get_downstream_ids(self, pgdb=None):
         """Get downstreams of this wcs.
 
-        This will include zeropoints and (maybe) images (which were trimmed).
+        This will include zeropoints and (maybe) images (which were trimmed or warped).
 
         """
         downstreams = []
 
         from models.zero_point import ZeroPoint
+        seen = set()
         with PGDB() as pgdb:
             rows, _cols = pgdb.execute( sql.SQL( "SELECT _id FROM zero_points WHERE wcs_id={wcs}" )
                                  .format( wcs=self.id ) )
-            downstreams.extend( [ ( ZeroPoint, row[0] ) for row in rows ] )
+            for row in rows:
+                if row[0] not in seen:
+                    downstreams.append( ( ZeroPoint, row[0] ) )
+                    seen.add( row[0] )
 
             rows, _cols = pgdb.execute(
                 sql.SQL( "SELECT image_id FROM image_trim_parent WHERE parent_wcs_id={wcs}" )
                 .format( wcs=self.id ) )
-            downstreams.extend( [ ( Image, row[0] ) for row in rows ] )
+            for row in rows:
+                if row[0] not in seen:
+                    downstreams.append( ( Image, row[0] ) )
+                    seen.add( row[0] )
+
+            rows, _cols = pgdb.execute(
+                sql.SQL( "SELECT warped_id FROM image_warp_parent WHERE target_wcs_id={wcs}" )
+                .format( wcs=self.id ) )
+            for row in rows:
+                if row[0] not in seen:
+                    downstreams.append( ( Image, row[0] ) )
+                    seen.add( row[0] )
 
         return downstreams

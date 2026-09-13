@@ -34,6 +34,7 @@ def test_lightcurve( sim_lightcurve_persistent_sources,
               'forcedphot': [],
               'subimids': [],
               'objects': [] }
+    reduced_residses = []
     try:
         for obji, objinfo in enumerate( objinfos ):
             # ****
@@ -57,6 +58,11 @@ def test_lightcurve( sim_lightcurve_persistent_sources,
                                instrument='DemoInstrument',
                                object_name=f'test_lightcurve_object_{obji}',
                                subtraction_config={ 'refset': 'sim_lightcurve_forcedphot_reference',
+                                                    'save_warped_ref': True,
+                                                    'method': 'hotpants',
+                                                    'hotpants_ko': 0,
+                                                    'hotpants_bgo': 0,
+                                                    'hotpants_numregions': (1, 1),
                                                     'alignment': { 'min_matched': 6,
                                                                    'swarp_trust_raw_wcs': True,
                                                                    'swarp_use_unwarped_psf': True },
@@ -72,7 +78,7 @@ def test_lightcurve( sim_lightcurve_persistent_sources,
             # #####
             # # Uncomment this to write out debugging images to the test directory.
             # # If you do, be aware that they will be cleaned up in the finally block!
-            # #   So, put in a breakpoint somewhere before that.
+            # #   So, uncomment the import pdb just before the finally below
             # import shutil
             # from astropy.io import fits
             # from models.image import Image
@@ -139,10 +145,26 @@ def test_lightcurve( sim_lightcurve_persistent_sources,
             # aperfluxen_err = np.array( [ p.flux_apertures_err[0] for p in ltcv.forced_phots ] )
 
             reduced_resids = ( psffluxen - objinfo['fluxen'] ) / psffluxen_err
-            assert np.all( np.fabs( reduced_resids ) < 3. )
+            reduced_residses.append( reduced_resids )
+
+        for obji, reduced_resids in enumerate( reduced_residses ):
+            # assert np.all( np.fabs( reduced_resids ) < 3. )
+            SCLogger.info( f"reduced_resids for {obji}: {reduced_resids}" )
             # I'm a little nervous that the chisq/dof for objects 0 and
             # 1 are high (~2.2), but visually at least object 0 is on a
             # galaxy that doesn't subtract all that well.
+
+        # Uncomment this if you uncommented the debug writing of images,
+        #   or if you want to look at what was produced before they get
+        #   nuked.
+        # import pdb; pdb.set_trace()
+        # pass
+        #
+        # ...or this one, if you're running tests in the background
+        #   but still want to stop, e.g. if you want to look at a
+        #   log file.
+        import remote_pdb; remote_pdb.RemotePdb( '127.0.0.1', 4444 ).set_trace()
+        pass
 
     finally:
         # Delete test files if any

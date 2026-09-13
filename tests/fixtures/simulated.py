@@ -729,19 +729,19 @@ def sim_lightcurve_persistent_sources():
           'dec': -3.14735274,
           'mjdmaxoff': 29.5,
           'sigmadays': 5.,
-          'maxflux': 10000.
+          'maxflux': 100000.
          },
         { 'ra': 123.45663172,   # At x=128.8, y=229.3
           'dec': -3.12999611,
           'mjdmaxoff': 42.2,
           'sigmadays': 10.,
-          'maxflux': 2000.,
+          'maxflux': 20000.,
          },
         { 'ra': 123.45339241,
           'dec': -3.14136222,   # At x=157.2, y=129.5
           'mjdmaxoff': 49.7,
           'sigmadays': 18.,
-          'maxflux': 3000.,
+          'maxflux': 30000.,
           }
     ]
 

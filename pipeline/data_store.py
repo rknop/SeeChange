@@ -2392,6 +2392,7 @@ class DataStore:
                         exists_ok=False,
                         overwrite=True,
                         no_archive=False,
+                        save_warped_ref=False,
                         update_image_header=False,
                         update_image_record=True,
                         force_save_everything=False ):
@@ -2450,6 +2451,10 @@ class DataStore:
             If True, will not push files up to the archive, will only
             save on local disk.
 
+        save_warped_ref: bool, default False
+            If True, save the aligned reference image, sources, wcs, and
+            zeropoint to the database.
+
         update_image_header: bool, default False
             See above.  If this is true, then the if there is an Image
             object in the data store, its "image" component will be
@@ -2471,13 +2476,24 @@ class DataStore:
 
         """
 
+        products_to_save = self.products_to_save.copy()
+        if save_warped_ref:
+            products_to_save.extend( [ 'aligned_ref_image', 'aligned_ref_sources',
+                                       'aligned_ref_bg', 'aligned_ref_psf' ] )
+
         # Figure out what is already in the database.
         # NOTE: we're making the assumption that if measurement_set is
         #   in the database, then all the associated meaurements are
         #   too.  Likewise for deepscore_set.
         already_in_db = set()
         with PGDB() as pgdb:
-            for att in self.products_to_save:
+            # ...while we're here, make sure the warped provenances are in the database
+            if save_warped_ref:
+                for prov in [ self.warped_provs['warped'],
+                              self.warped_provs['notwarped'],
+                              self.warped_provs['sources'] ]:
+                    prov.insert_if_needed( pgdb=pgdb )
+            for att in products_to_save:
                 obj = getattr( self, att, None )
                 if obj is None:
                     continue
@@ -2509,7 +2525,7 @@ class DataStore:
         # save to disk whatever is FileOnDiskMixin
         # Do NOT do this within the "with PGDB()" above, because this saving could take a while,
         #   and we don't want to hold the database connection open during all that time.
-        for att in self.products_to_save:
+        for att in products_to_save:
             if att in already_in_db:
                 SCLogger.debug( f"DataStore: {att} is already in the database, not trying to save it." )
                 continue
@@ -2562,8 +2578,12 @@ class DataStore:
                         # Various things need other things to invent their filepath
                         if att in [ "psf", "bg" ]:
                             obj.save( image=self.image, sources=self.sources, **basicargs )
+                        elif att in [ "aligned_ref_psf", "aligned_ref_bg" ]:
+                            obj.save( image=self.aligned_ref_image, sources=self.aligned_ref_sources, **basicargs )
                         elif att in [ "sources", "wcs" ]:
                             obj.save( image=self.image, **basicargs )
+                        elif att == "aligned_ref_sources":
+                            obj.save( image=self.aligned_ref_image, **basicargs )
                         elif att == "detections":
                             obj.save( image=self.sub_image, **basicargs )
                         elif att == "cutouts":
@@ -2652,6 +2672,34 @@ class DataStore:
                 SCLogger.debug( "save_and_commit inserting sub_image" )
                 self.sub_image.insert( load_defaults=True, pgdb=pgdb, nocommit=True )
                 commits.append( 'sub_image' )
+
+            # warped image
+            if ( save_warped_ref and ( self.aligned_ref_image is not None ) and
+                 ( 'aligned_ref_image' not in already_in_db )
+                ):
+                SCLogger.debug( "save_and_commit inserting aligned_ref_image" )
+                self.aligned_ref_image.insert( load_defaults=True, pgdb=pgdb, nocommit=True )
+
+            # warped sources
+            if ( save_warped_ref and ( self.aligned_ref_sources is not None ) and
+                 ( 'aligned_ref_sources' not in already_in_db )
+                ):
+                SCLogger.debug( "save_and_commit inserting aligned_ref_sources" )
+                self.aligned_ref_sources.insert( load_defaults=True, pgdb=pgdb, nocommit=True )
+
+            # warped psf
+            if ( save_warped_ref and ( self.aligned_ref_psf is not None ) and
+                 ( 'aligned_ref_psf' not in already_in_db )
+                ):
+                SCLogger.debug( "save_and_commit inserting aligned_ref_psf" )
+                self.aligned_ref_psf.insert( load_defaults=True, pgdb=pgdb, nocommit=True )
+
+            # warped bg
+            if ( save_warped_ref and ( self.aligned_ref_bg is not None ) and
+                 ( 'aligned_ref_bg' not in already_in_db )
+                ):
+                SCLogger.debug( "save_and_commit inserting aligned_ref_bg" )
+                self.aligned_ref_bg.insert( load_defaults=True, pgdb=pgdb, nocommit=True )
 
             # detections
             if ( self.detections is not None ) and ( 'detections' not in already_in_db ):

@@ -476,11 +476,7 @@ class PSF(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
     def trim( self, x0, x1, y0, y1, trimmed_sources=None ):
         """Make a shallow copy of the PSF for a trimmed image.  WARNING: will point to the same data blocks!
 
-        THIS IS NOT REALLY DONE RIGHT.  It just adds an offset, which
-        works with our get_clip.  But anything that uses the psfex
-        directly (like sextractor) is going to do the wrong thing!
-
-        It should be possible to mangle the psfex data to fix this.
+        Subclasses may need to override this, e.g. PSFExPSF does.
 
         """
 
@@ -908,10 +904,7 @@ class PSFExPSF(PSF):
         self.format = 'psfex'
 
     def _load_image_shape( self ):
-        if self.trimmed_width is not None:
-            self._image_shape = ( self.trimmed_height, self.trimmed_width )
-        else:
-            self._image_shape = ( self.header['IMAXIS2'], self.header['IMAXIS1'] )
+        self._image_shape = ( self.header['IMAXIS2'], self.header['IMAXIS1'] )
 
     def _load_clip_shape( self ):
         psfwid = self.data.shape[1]
@@ -925,6 +918,22 @@ class PSFExPSF(PSF):
     def _load_raw_clip_shape( self ):
         # Data is a 3d array; the first index is the index over the orders
         self._raw_clip_shape = self.data.shape[1:]
+
+    def trim( self, x0, x1, y0, y1, trimmed_sources=None ):
+        # This subclass does *not* use offset_x and offset_y,
+        #   but instead adjusts the header.
+        newpsf = PSF.trim( self, x0, x1, y0, y1, trimmed_sources=trimmed_sources )
+        # Gotta copy the header so we can mangle it
+        newpsf.header = fits.Header( newpsf.header )
+        newpsf.header['POLZERO1'] += x0
+        newpsf.header['POLZERO2'] += y0
+        newpsf.header['IMAXIS1'] = x1 - x0
+        newpsf.header['IMAXIS2'] = y1 - y0
+        newpsf.offset_x = None
+        newpsf.offset_y = None
+        newpsf.trimmed_width = None
+        newpsf.trimmed_height = None
+        return newpsf
 
 
     def get_resampled_psf( self, x, y, dtype=np.float64 ):

@@ -190,6 +190,8 @@ class ImageTypeConverter( EnumConverter ):
         15: 'Fringe',
         16: 'Warped',
         17: 'ComWarped',
+        18: 'DiffWarped',
+        19: 'ComDiffWarped'
     }
     _allowed_values = None
     _dict_filtered = None

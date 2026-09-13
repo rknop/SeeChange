@@ -86,6 +86,29 @@ image_trim_parent = sa.Table(
 )
 
 
+# It is not mandatory to save warped images in subtractions.  If we do, this keeps track of it.
+image_warp_parent = sa.Table(
+    'image_warp_parent',
+    Base.metadata,
+    sa.Column( 'warped_id',
+               sqlUUID,
+               sa.ForeignKey('images._id', ondelete="CASCADE", name="image_warped_image_fkey"),
+               index=True,
+               nullable=False,
+               primary_key=True ),
+    sa.Column( 'unwarped_zp_id',
+               sqlUUID,
+               sa.ForeignKey('zero_points._id', ondelete="RESTRICT", name="image_warped_unwarped_zp_fkey"),
+               index=True,
+               nullable=False ),
+    sa.Column( 'target_wcs_id',
+               sqlUUID,
+               sa.ForeignKey('world_coordinates._id', ondelete="RESTRICT", name="image_warped_target_wcs_fkey"),
+               index=True,
+               nullable=False )
+)
+
+
 class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, HasBitFlagBadness):
     __tablename__ = 'images'
 
@@ -187,6 +210,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         return self._coadd_component_zp_ids
 
 
+    # NOTE : is_sub and is_coadd are redundant with _type !
     is_sub = sa.Column(
         sa.Boolean,
         nullable=False,
@@ -316,6 +340,36 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         return self._trim_ycen
 
 
+    def _get_warp_parent( self, pgdb=None, always_load=False ):
+        if ( not always_load ) and all( not isinstance( att, config.NoValue )
+                                        for att in [ '_warp_parent_source_zp', '_warp_parent_target_wcs' ] ):
+            return ( self._warp_parent_source_zp, self._warp_parent_target_wcs )
+
+        with PGDB( pgdb ) as pgdb:
+            rows, _cols = pgdb.execute( sql.SQL( "SELECT unwarped_zp_id, target_wcs_id FROM image_warp_parent "
+                                                 "WHERE warped_id={me}" ).format( me=self.id ) )
+            if len(rows) == 0:
+                return ( None, None )
+            else:
+                return tuple( rows[0] )
+
+    def _load_warp_parent( self, pgdb, always_load=False ):
+        if always_load or any( isinstance( att, config.NoValue )
+                               for att in [ '_warp_parent_source_zp', '_warp_parent_target_wcs' ] ):
+            self._warp_parent_source_zp, self._warp_parent_target_wcs = self._get_warp_parent( pgdb=pgdb,
+                                                                                               always_load=True )
+
+    @property
+    def warp_parent_source_zp( self ):
+        if isinstance( self._warp_parent_source_zp, config.NoValue ):
+            self._load_warp_parent()
+        return self._warp_parent_source_zp
+
+    @property
+    def warp_parent_target_wcs( self ):
+        if isinstance( self._warp_parent_target_wcs, config.NoValue ):
+            self._load_warp_parent()
+        return self._warp_parent_target_wcs
 
     _type = sa.Column(
         sa.SMALLINT,
@@ -609,6 +663,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         self._trim_wcs_parent = config.NoValue()
         self._trim_xcen = config.NoValue()
         self._trim_ycen = config.NoValue()
+        self._warp_parent_source_zp = config.NoValue()
+        self._warp_parent_target_wcs = config.NoValue()
 
         self._instrument_object = None
         self._bitflag = 0
@@ -702,7 +758,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
 
             if self.is_trim:
                 if any( isinstance( getattr(self, att), config.NoValue )
-                        for att in [ '_trim_image_parent', '_trim_wc_parent', '_trim_xcen', '_trim_ycen' ] ):
+                        for att in [ '_trim_image_parent', '_trim_wcs_parent', '_trim_xcen', '_trim_ycen' ] ):
                     raise ValueError( "Error inserting trim image, missing expected properties." )
                 q = sql.SQL( textwrap.dedent(
                     """\
@@ -712,6 +768,18 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                     """
                 ) ).format( imid=self.id, parid=self._trim_image_parent, wcsid=self._trim_wcs_parent,
                             xcen=self._trim_xcen, ycen=self._trim_ycen )
+                pgdb.execute_nofetch( q )
+
+            if self.type in ( 'Warped', 'ComWarped', 'DiffWarped', 'ComDiffWarped' ):
+                if any( isinstance( getattr(self, att), config.NoValue ) or ( getattr(self, att) is None )
+                        for att in [ '_warp_parent_source_zp', '_warp_parent_target_wcs' ] ):
+                    raise ValueError( "Error inserting warped image, missing warp parent properties." )
+                q = sql.SQL( textwrap.dedent(
+                    """\
+                    INSERT INTO image_warp_parent(warped_id, unwarped_zp_id, target_wcs_id)
+                    VALUES( {imid}, {zpid}, {wcsid} )
+                    """
+                ) ).format( imid=self.id, zpid=self._warp_parent_source_zp, wcsid=self._warp_parent_target_wcs )
                 pgdb.execute_nofetch( q )
 
             if not nocommit:
@@ -791,6 +859,28 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                             uhoh = True
                     if uhoh:
                         raise ValueError( "Error upserting image, image trim components in database do not "
+                                          "match what is in object." )
+
+            if self.type in ( 'Warped', 'ComWarped', 'DiffWarped', 'ComDiffWarped' ):
+                warp_parent_source_zp, warp_parent_target_wcs = self._get_warp_parent( pgdb=pgdb, always_load=True )
+                if ( warp_parent_source_zp is None ) != ( warp_parent_target_wcs is None ):
+                    raise RuntimeError( "This should never happen." )
+                if warp_parent_source_zp is None:
+                    if any( isinstance( getattr(self, att), config.NoValue ) or ( getattr(self, att) is None )
+                            for att in [ '_warp_parent_source_zp', '_warp_parent_target_wcs' ] ):
+                        raise ValueError( "Error upserting image, missing warp parent info" )
+                    q = sql.SQL( textwrap.dedent(
+                        """\
+                        INSERT INTO image_warp_parent(warped_id, unwarped_zp_id, target_wcs_id)
+                        VALUES( {imid}, {zpid}, {wcsid} )
+                        """
+                    ) ).format( imid=self.id, zpid=self._warp_parent_source_zp, wcsid=self._warp_parent_target_wcs )
+                    pgdb.execute_nofetch( q )
+                else:
+                    if any( getattr( self, att ) != val
+                            for att, val in zip( [ '_warp_parent_source_zp', '_warp_parent_target_wcs' ],
+                                                 [ warp_parent_source_zp, warp_parent_target_wcs ] ) ):
+                        raise ValueError( "Error upserting image, image warp parents in database do not "
                                           "match what is in object." )
 
             if not nocommit:
@@ -1028,6 +1118,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             'coadd_alignment_target',
             'is_coadd',
             'is_sub',
+            'is_trim',
             '_bitflag',
             '_upstream_bitflag',
             '_format',
@@ -1809,22 +1900,12 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             with PGDB( pgdb_in ) as pgdb:
                 for which in to_save.keys():
                     retval[which].insert( pgdb=pgdb, nocommit=True )
-                    if which == 'image':
-                        q = sql.SQL( textwrap.dedent(
-                            """\
-                            INSERT INTO image_trim_parent(image_id, parent_image_id, parent_wcs_id,
-                                                          trim_xcen, trim_ycen )
-                            VALUES ({imid},{parid},{wcsid},{xcen},{ycen})
-                            """
-                        ) ).format( imid=trimim.id, parid=self.id, xcen=xcen, ycen=ycen,
-                                   wcsid=wcs.id if wcs is not None else None )
-                        pgdb.execute_nofetch( q )
                 pgdb.commit()
 
         return retval
 
 
-    def invent_filepath( self, name_convention=None, extra=None ):
+    def invent_filepath( self, name_convention=None, extra=None, append=None, **overrides ):
         """Create a relative file path for the object.
 
         Create a file path relative to data root for the object based on its
@@ -1854,9 +1935,30 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
               storage.image.name_convention from the config file if this
               isn't given.
 
-           extras: str, default None If not None, this will be appended
-              ot the end of the filepath (but before stuff that's added
-              for coadded or difference images, described above).
+           extras: str, default None
+              If not None, this will be appended ot the end of the filepath
+              (but before stuff that's added for coadded or difference
+              images, described above).  It can include {field} stuff
+              just like the filepath extension.
+
+           append: str, default None
+              Added to the very end of the filepath (but before .fits).
+              Added as a raw string, so please no spaces, curly braces,
+              etc.
+
+           overrides:
+              Further keywords can be passed to *override* what's in the
+              Image object.  Use this with extreme care.  Arguments can include:
+                provenance_id
+                inst_name
+                im_type
+                project
+                mjd
+                filter_short
+                section_id
+                ra
+                dec
+
 
         Returns
         -------
@@ -1865,40 +1967,52 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         """
         prov_hash = inst_name = im_type = date = time = filter = ra = dec = dec_int_pm = project = ''
         section_id = section_id_int = ra_int = ra_int_h = ra_frac = dec_int = dec_frac = 0
+        mjd = None
 
-        if self.provenance_id is not None:
+        overrideable = { 'prov_hash', 'inst_name', 'im_type', 'project', 'mjd',
+                         'filter', 'section_id', 'ra', 'dec' }
+        unknown = set( overrides.keys() ) - overrideable
+        if len(unknown) > 0:
+            raise ValueError( f"Unknown overrides: {unknown}" )
+        for prop, val in overrides.items():
+            locals()[prop] = overrides[prop]
+
+        if ( self.provenance_id is not None ) and ( 'prov_hash' not in overrides ):
             prov_hash = self.provenance_id
-        if self.instrument_object is not None:
+
+        if ( self.instrument_object is not None ) and ( 'inst_name' not in overrides ):
             inst_name = self.instrument_object.get_short_instrument_name()
-        if self.type is not None:
+        if ( self.type is not None ) and ( 'im_type' not in overrides ):
             im_type = self.type
-        if self.project is not None:
+        if ( self.project is not None ) and ( 'project' not in overrides ):
             project = self.project
 
-        if self.mjd is not None:
-            t = Time(self.mjd, format='mjd', scale='utc').datetime
+        mjd = self.mjd if 'mjd' not in overrides else mjd
+        if ( mjd is not None ):
+            t = Time(mjd, format='mjd', scale='utc').datetime
             date = t.strftime('%Y%m%d')
             time = t.strftime('%H%M%S')
 
-        if self.filter_short is not None:
+        if ( self.filter_short is not None ) and ( 'filter' not in overrides ):
             filter = self.filter_short
 
-        if self.section_id is not None:
-            section_id = str(self.section_id)
+        tmp_section_id = self.section_id if 'section_id' not in overrides else section_id
+        if tmp_section_id is not None:
+            section_id = str(tmp_section_id)
             try:
-                section_id_int = int(self.section_id)
+                section_id_int = int(tmp_section_id)
             except ValueError:
                 section_id_int = 0  # TODO: maybe replace with a placeholder like 99?
 
-        if self.ra is not None:
-            ra = self.ra
+        ra = self.ra if 'ra' not in overrides else ra
+        if ra is not None:
             ra_int, ra_frac = str(float(ra)).split('.')
             ra_int = int(ra_int)
             ra_int_h = ra_int // 15
             ra_frac = int(ra_frac)
 
-        if self.dec is not None:
-            dec = self.dec
+        dec = self.dec if 'dec' not in overrides else dec
+        if dec is not None:
             dec_int, dec_frac = str(float(dec)).split('.')
             dec_int = int(dec_int)
             dec_int_pm = f'p{dec_int:02d}' if dec_int >= 0 else f'm{-dec_int:02d}'
@@ -1972,6 +2086,9 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             filepath += utag
 
             filepath += f"_{ra:08.4f}{dec:+08.4f}"
+
+        if append is not None:
+            filepath += append
 
         return filepath
 
@@ -2240,14 +2357,15 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         Returns
         -------
         upstreams: list of [ ( class, id ) ]
-            The upstream Exposure, ZeroPoint, and Reference ids that
-            were used to create this image.  For most images, it will be
-            (at most) a single Exposure id.  For coadds, it will be a
-            bunch of ZeroPoints.  For a subtraction, will be one
-            ZeroPoint and one Reference.  Don't count on the list as
-            being sorted in any particular way.  It's not fully
-            deterministic, nor is it random, but in any event it's not
-            obvious.
+            The upstream Exposure, WorldCoordiantes, ZeroPoint, and
+            Reference ids that were used to create this image.  For most
+            images, it will be (at most) a single Exposure id.  For
+            coadds, it will be a bunch of ZeroPoints.  For a
+            subtraction, will be one ZeroPoint and one Reference.  For
+            warped images, it will be two WorldCoordiantes.  Don't count
+            on the list as being sorted in any particular way.  It's not
+            fully deterministic, nor is it random, but in any event it's
+            not obvious.
 
             If full_chain is true, this list can also include
             SourceList, WorldCoordinates, and Image ids.
@@ -2295,6 +2413,21 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                         upstreams.append( ( ZeroPoint, row[0] ) )
                         seen.add( row[0] )
 
+            elif ImageTypeConverter( self._type ).to_string() in ( 'Warped', 'ComWarped' ):
+                q = sql.SQL( "SELECT unwarped_zp_id, target_wcs_id FROM image_warp_parent "
+                             "WHERE warped_id={me}" ).format( me=self.id )
+                rows, _cols = pgdb.execute( q )
+                if len(rows) > 1:
+                    raise RuntimeError( f"Database corruption, image {self.id} has multiple warp parents!  "
+                                        f"This should never happen." )
+                elif len(rows) == 1:
+                    if rows[0][0] not in seen:
+                        upstreams.append( ( ZeroPoint, rows[0][0] ) )
+                        seen.add( rows[0][0] )
+                    if rows[0][1] not in seen:
+                        upstreams.append( ( WorldCoordinates, rows[0][1] ) )
+                        seen.add( rows[0][1] )
+
             elif self.is_trim:
                 q = sql.SQL( "SELECT parent_image_id, parent_wcs_id FROM image trim_parent "
                              "WHERE image_id={me}" ).formt( me=self.id )
@@ -2308,7 +2441,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                         seen.add( row[1] )
 
             if full_chain:
-                # Get upstreams of WorldCoordinateses.  These will be from trimmed images.
+                # Get upstreams of WorldCoordinateses.  These will be from trimmed and warped images.
                 q = sql.SQL( textwrap.dedent(
                     """\
                     SELECT s._id, i._id

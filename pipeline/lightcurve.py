@@ -752,7 +752,7 @@ class Lightcurve:
 
         # Save to database if requested
         if self.pars.save_to_db:
-            ds.save_and_commit( overwrite=False )
+            ds.save_and_commit( save_warped_ref=self.subtractor.pars.save_warped_ref, overwrite=False )
 
         # See if we can load pre-existing forced photometry from the database
         forcedphot = None
@@ -921,7 +921,7 @@ class Lightcurve:
                 if die_on_fail:
                     raise
                 else:
-                    SCLogger.exception( "Exception on image {self.imgs[i].filepath}: {ex}; moving on." )
+                    SCLogger.exception( f"Exception on image {self.imgs[i].filepath}: {ex}; moving on." )
 
         SCLogger.info( "Lightcurve complete" )
         return self.forced_phots
@@ -1024,7 +1024,7 @@ defined in the ParsLightcurve class definition.
     if nfail > 0:
         SCLogger.warning( f"{nfail} out of {len(lightcurve.forced_phots)} (at least!) failed.  "
                           f"(The others returned values, but that doesn't mean they're good....)" )
-    
+
     if outfile is not None:
         SCLogger.info( f"Writing csv file {outfile}..." )
         lightcurve.write_csv_file( outfile )

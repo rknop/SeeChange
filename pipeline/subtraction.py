@@ -87,22 +87,46 @@ class ParsSubtractor(Parameters):
             critical=True
         )
 
-        self.trim_size = self.add_par(
-            name = 'trim_size',
-            default = None,
-            par_types = ( int, None ),
-            docstring = ( "If not None, after subtracting trim the difference image to a square this many pixels "
-                          "on a side.  If this is not None, then either (x, y) or (ra, dec) must be passed to "
-                          "the run() method.  This is used in the Lightcurve pipeline." ),
-            critical=True
-        )
-
         self.trust_aligned_images = self.add_par(
             'trust_aligned_images',
             True,
             bool,
             "If a passed datastore has aligned_* properties with the right types of objects, "
             "trust that they're the right thing and don't recalculate alignments.",
+            critical=False
+        )
+
+        self.hotpants_ko = self.add_par(
+            name = 'hotpants_ko',
+            default = 1,
+            par_types = int,
+            docstring = "Spatial order of kernel variation within region (hotpants only)",
+            critical = True
+        )
+
+        self.hotpants_bgo = self.add_par(
+            name = "hotpants_bgo",
+            default = 1,
+            par_types = int,
+            docstring = "Spatial order of background variation within region (hotpants only)",
+            critical = True
+        )
+
+        self.hotpants_numregions = self.add_par(
+            name = "hotpants_numregions",
+            default = (1, 1),
+            par_types = tuple,
+            docstring = "Tuple of nrx, nry, number of regions (hotpants only)",
+            critical = True
+        )
+
+        self.save_warped_ref = self.add_par(
+            name = 'save_warped_ref',
+            default = True,
+            par_types = bool,
+            docstring = ( "If True, save the warped reference image to the database.  This isn't required, "
+                          "but might be good for diagnostic purposes.  Maybe we will make it required.  "
+                          "Dunno." ),
             critical=False
         )
 
@@ -527,10 +551,10 @@ class Subtractor:
                     '-rss', str(rss),
                     '-ssf', substamp_file,
                     '-v', "0",
-                    '-nrx', "1",
-                    '-nry', "1",
-                    '-ko', "1",    # Maybe make this configurable?  Order of kernel spatial variation
-                    '-bgo', "1"    # Order of background variation.  Since we are not doing bgsubbed news, this matters
+                    '-nrx', str( self.pars.hotpants_numregions[0]),
+                    '-nry', str( self.pars.hotpants_numregions[1]),
+                    '-ko', str( self.pars.hotpants_ko ),
+                    '-bgo', str( self.pars.hotpants_bgo )
                     ]
             com.extend( gaussparam )
             SCLogger.debug( f"Running hotpants with command: {com}" )
@@ -681,29 +705,32 @@ class Subtractor:
                         # In *lots* of places the code makes the assumption that we align the ref to the new.
                         # If we ever want to be able to align the new to the ref, we have to go all the way
                         # through the code and find every place it might affect.
+                        #
+                        # This code will also need to be edited more if we ever update this, becasue
+                        # stuff has been added to the "to_index == 'new'" block below.
                         SCLogger.error( "Aligning new to ref will violate assumptions in detection.py,"
                                         "measuring.py, fakeinjection.py, and probably elsewhere." )
                         raise RuntimeError( "Aligning new to ref not supported; align ref to new instead" )
 
-                        for needed in [ ds.image, ds.sources, ds.bg, ds.wcs, ds.zp, ds.ref_image, ds.ref_sources ]:
-                            if needed is None:
-                                raise RuntimeError( "Not all data products needed for alignment to ref "
-                                                    "are present in the DataStore" )
+                        # for needed in [ ds.image, ds.sources, ds.bg, ds.wcs, ds.zp, ds.ref_image, ds.ref_sources ]:
+                        #     if needed is None:
+                        #         raise RuntimeError( "Not all data products needed for alignment to ref "
+                        #                             "are present in the DataStore" )
 
-                        ( aligned_image, aligned_sources,
-                          aligned_bg, aligned_psf ) = aligner.run( ds.image, ds.sources, ds.bg, ds.psf, ds.wcs, ds.zp,
-                                                                   ds.ref_image, ds.ref_sources, ds.ref_wcs )
-                        ds.aligned_new_image = aligned_image
-                        ds.aligned_new_sources = aligned_sources
-                        ds.aligned_new_bg = aligned_bg
-                        ds.aligned_new_psf = aligned_psf
-                        ds.aligned_new_zp = ds.get_zp()
-                        ds.aligned_ref_image = ds.ref_image
-                        ds.aligned_ref_sources = ds.ref_sources
-                        ds.aligned_ref_bg = ds.ref_bg
-                        ds.aligned_ref_psf = ds.ref_psf
-                        ds.aligned_ref_zp = ds.ref_zp
-                        ds.aligned_wcs = ds.ref_wcs
+                        # ( aligned_image, aligned_sources,
+                        #   aligned_bg, aligned_psf ) = aligner.run( ds.image, ds.sources, ds.bg, ds.psf, ds.wcs, ds.zp,
+                        #                                            ds.ref_image, ds.ref_sources, ds.ref_wcs )
+                        # ds.aligned_new_image = aligned_image
+                        # ds.aligned_new_sources = aligned_sources
+                        # ds.aligned_new_bg = aligned_bg
+                        # ds.aligned_new_psf = aligned_psf
+                        # ds.aligned_new_zp = ds.get_zp()
+                        # ds.aligned_ref_image = ds.ref_image
+                        # ds.aligned_ref_sources = ds.ref_sources
+                        # ds.aligned_ref_bg = ds.ref_bg
+                        # ds.aligned_ref_psf = ds.ref_psf
+                        # ds.aligned_ref_zp = ds.ref_zp
+                        # ds.aligned_wcs = ds.ref_wcs
 
                     elif to_index == 'new':
                         SCLogger.debug( "Aligning ref to new" )
@@ -715,9 +742,15 @@ class Subtractor:
                                                     "are present in the DataStore" )
 
                         ( aligned_image, aligned_sources,
-                          aligned_bg, aligned_psf ) = aligner.run( ds.ref_image, ds.ref_sources, ds.ref_bg,
-                                                                   ds.ref_psf, ds.ref_wcs, ds.ref_zp,
-                                                                   ds.image, ds.sources, ds.wcs )
+                          aligned_bg, aligned_psf, warped_provs ) = aligner.run( ds.ref_image,
+                                                                                 ds.ref_sources,
+                                                                                 ds.ref_bg,
+                                                                                 ds.ref_psf,
+                                                                                 ds.ref_wcs,
+                                                                                 ds.ref_zp,
+                                                                                 ds.image,
+                                                                                 ds.sources,
+                                                                                 ds.wcs )
                         ds.aligned_new_image = ds.image
                         ds.aligned_new_sources = ds.get_sources()
                         ds.aligned_new_bg = ds.get_background()
@@ -729,6 +762,7 @@ class Subtractor:
                         ds.aligned_ref_psf = aligned_psf
                         ds.aligned_ref_zp = ds.ref_zp
                         ds.aligned_wcs = ds.wcs
+                        ds.warped_provs = warped_provs
 
                         # We are going to make the aligned ref image as *not* a coadd, because
                         #   it's not a direct coadd, it's a warp of another image.  Scary.  But,
@@ -832,6 +866,13 @@ class Subtractor:
 
                 ds.sub_image = sub_image
 
+                # Aligned filepaths are perverse.  We're going to name them after the sub image,
+                #   *not* after the image they are warped from!  They will be more unique this way.
+                #   We expect references to be warped a lot of different times, but a given
+                #   sub image will only have one warped ref that goes with it.
+                if ds.aligned_new_image.id != ds.image.id:
+                    raise RuntimeError( "The aligned new isn't the new!  This should never happen!" )
+                ds.aligned_ref_image.filepath = sub_image.invent_filepath( append="_WarpedRef" )
             if ds.update_runtimes:
                 ds.runtimes['subtraction'] = time.perf_counter() - t_start
             if ds.update_memory_usages:
