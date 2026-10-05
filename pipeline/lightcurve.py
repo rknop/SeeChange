@@ -876,20 +876,19 @@ class Lightcurve:
 
         SCLogger.info( "Loaded forced photometry for {len(self.forced_phots)} out of {len(self.mgs)}" )
 
+
     def export_image_mess( self, namebase="phot_" ):
         for phot in self.forced_phots:
             with PGDB() as pgdb:
                 subim = Image.get_by_id( phot.subtraction_id, pgdb=pgdb )
-                q = sql.SQL( textwrap.dedent(
+                _q = sql.SQL( textwrap.dedent(
                     """\
                     SELECT i.* FROM image_subtraction_components isc
                     INNER JOIN zero_points z ON isc.new_zp_id=z._id
                     INNER JOIN world_coordinates w ON z.wcs_id=w._id
                     INNER JOIN source_lists s """
                 ) ).format( ROB="YOU WERE HERE" )
-
-
-
+                raise RuntimeError(subim)
 
 
     def run( self, *args, die_on_fail=False, **kwargs ):

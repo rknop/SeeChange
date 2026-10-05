@@ -24,7 +24,7 @@ from models.refset import RefSet
 
 from util.config import Config
 from util.logger import SCLogger
-from util.util import parse_dateobs, reconstruct_commandline
+from util.util import parse_dateobs, reconstruct_commandline, asUUID
 
 
 class ParsRefMaker(Parameters):
@@ -454,7 +454,7 @@ class RefMaker:
         self.coadd_provs = None
         self.ref_prov = None
         self.refset = None
-        self.subtraction_minovfrac = config.value( 'subtraction.reference.minovfrac' )
+        self.subtraction_minovfrac = config.value( 'subtraction.reference.min_overlap' )
 
 
     # ======================================================================
@@ -624,8 +624,8 @@ class RefMaker:
     # ======================================================================
 
     def parse_arguments( self, image=None, image_zp_prov_id=None, ra=None, dec=None,
-                             minra=None, maxra=None, mindec=None, maxdec=None,
-                             target=None, section_id=None, mjd=None, filter=None ):
+                         minra=None, maxra=None, mindec=None, maxdec=None,
+                         target=None, section_id=None, mjd=None, filter=None ):
         """Parse arguments for the RefMaker.
 
         There are three modes in which RefMaker can operate:
@@ -951,7 +951,7 @@ class RefMaker:
 
     # ======================================================================
 
-    def run(self, *args, do_not_build=False, identify_even_if_not_building=False, **kwargs ):
+    def run( self, *args, do_not_build=False, identify_even_if_not_building=False, **kwargs ):
         """Look to see if there is an existing reference that matches the specs; if not, optionally build one.
 
         See parse_arguments for function call parameters.  The remaining
@@ -969,8 +969,8 @@ class RefMaker:
 
         """
 
-        self.parse_arguments( *args, **kwargs )
         self.make_refset()
+        self.parse_arguments( *args, **kwargs )
 
         # look for the reference at the given location in the sky (via ra/dec or target/section_id)
         if self.ra is not None:
@@ -1171,8 +1171,8 @@ class RefMaker:
 
         return ref
 
-# ======================================================================
 
+# ======================================================================
 
 class ArgFormatter( argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter ):
     def __init__( self, *args, **kwargs ):
@@ -1184,6 +1184,9 @@ def main():
                                       description="Build a reference",
                                       formatter_class=ArgFormatter,
                                       epilog="Rob write help" )
+    parser.add_argument( "-o", "--object", default=argparse.SUPPRESS,
+                         help=( "UUID or name of object to use for looking up ra and dec.  Do not use with "
+                                "any of --ra, --dec, --image, --minra, --maxra, --mindec, --maxdec" ) )
     parser.add_argument( "-r", "--ra", type=float, default=argparse.SUPPRESS,
                          help="RA to make a reference for; decimal degrees.  See description above." )
     parser.add_argument( "-d", "--dec", type=float, default=argparse.SUPPRESS,
@@ -1267,6 +1270,24 @@ def main():
         kwargs[ 'coadd_overlap_fraction' ] = None
     del kwargs[ 'corner_distance_none' ]
 
+    # See if we were given an object, get the ra and dec from that
+    if 'object' in kwargs:
+        try:
+            objid = asUUID( kwargs['object'] )
+            q = sql.SQL( "SELECT ra, dec FROM objects WHERE _id={oid}" ).format( oid=objid )
+        except Exception:
+            q = sql.SQL( "SELECT ra, dec FROM objects WHERE name={name}" ).format( name=kwargs['object'] )
+        with PGDB( dictcursor=True ) as pgdb:
+            rows = pgdb.execute( q )
+            if len(rows) == 0:
+                raise ValueError( f"Object {kwargs['object']} not found." )
+            elif len(rows) > 1:
+                raise ValueError( f"Ojbect {kwargs['object']} is multiply defined; this should never happen." )
+            kwargs['ra'] = rows[0]['ra']
+            kwargs['dec'] = rows[0]['dec']
+            del kwargs['object']
+
+    # Build the things we'll pass to .run() in runkwargs, leave the constructor args in kwargs
     runkwargs = {}
     for k in [ 'ra', 'dec', 'image', 'image_zp_prov_id', 'minra', 'maxra', 'mindec', 'maxdec', 'filter' ]:
         if k in kwargs:

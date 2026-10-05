@@ -199,7 +199,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             else:
                 q = ( sql.SQL( "SELECT zp_id FROM image_coadd_component WHERE coadd_image_id={imid}" )
                       .format( imid=self.id ) )
-            rows = pgdb.execute( q )
+            rows, _cols = pgdb.execute( q )
             zpids = [ asUUID(row[0]) for row in rows ]
             if self.is_coadd:
                 if len( zpids ) == 0:
@@ -806,10 +806,10 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             #   image was already loaded and those values are OK.
 
             if self.is_coadd:
-                if self._component_zp_ids is None:
-                    raise ValueError( "_component_zp_ids None for coadd image, that shouldn't happen" )
+                if self._coadd_component_zp_ids is None:
+                    raise ValueError( "_coadd_component_zp_ids None for coadd image, that shouldn't happen" )
                 zpids = self._get_coadd_component_zp_ids( sort=True, pgdb=pgdb, always_load=True, missing_ok=True )
-                if isinstance( self._component_zp_ids, config.NoValue ):
+                if isinstance( self._coadd_component_zp_ids, config.NoValue ):
                     if isinstance( zpids, config.NoValue ) or ( zpids is None ):
                         raise ValueError( "Failure upserting coadd image, no coadd components in database, "
                                           "and no coadd components in object." )
