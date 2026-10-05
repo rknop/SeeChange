@@ -835,11 +835,11 @@ class ImageAligner:
         with PGDB() as pgdb:
             q = sql.SQL( textwrap.dedent(
                 """\
-                SELECT i.* image_warp_parent iwp
+                SELECT i.* FROM image_warp_parent iwp
                 INNER JOIN images i ON i._id=iwp.warped_id
                 WHERE iwp.unwarped_zp_id={zpid}
                   AND iwp.target_wcs_id={wcsid}
-                  AND iwp.warp_provenance_id={provid}
+                  AND i.provenance_id={provid}
                 """
             ) ).format( zpid=source_zp.id, wcsid=target_wcs.id,
                         provid=notwarped_prov.id if target_image.id==source_image.id else warped_prov.id )

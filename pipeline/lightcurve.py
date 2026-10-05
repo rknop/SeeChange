@@ -791,10 +791,11 @@ class Lightcurve:
             filters = self.pars.filter
             for filt in filters:
                 thisimgs, thiswcsen, thiszps = Image.find_images( ra=self.ra, dec=self.dec, type='Sci',
-                                                                  provenance_ids=self.provtree['photocal'],
+                                                                  provenance_ids=self.provtree['photocal'].id,
                                                                   provenance_ids_are_zp=True,
                                                                   instrument=self.pars.instrument,
                                                                   min_mjd=self.pars.mjd0, max_mjd=self.pars.mjd1,
+                                                                  filter=filt,
                                                                   order_by='earliest',
                                                                   return_wcs=True, return_zeropoints=True )
                 imgs.extend( thisimgs )
@@ -1002,7 +1003,7 @@ defined in the ParsLightcurve class definition.
                          help="Database UUID of the object to build a lightcurve for." )
     parser.add_argument( "-o", "--object-name", default=argparse.SUPPRESS,
                          help=( "Database name of object to build a lightcurve for.  Unless, perversely, "
-                                "you've set one in config, you ened either this or --ojbect-id." ) )
+                                "you've set one in config, you need either this or --ojbect-id." ) )
     parser.add_argument( "-s", "--save-to-db", default=False, action="store_true",
                          help="Save trimmed images, subtractions, and forced photometry to database?" )
     parser.add_argument( "-n", "--numprocs", type=int, default=1,
@@ -1013,7 +1014,7 @@ defined in the ParsLightcurve class definition.
                          help=( "Log at the WARNING level (default INFO).  Ignored if --verbose or --errors-only "
                                 "are set." ) )
     parser.add_argument( "-e", "--errors-only", default=False, action="store_true",
-                         help=( "Log at teh ERROR Level (default INFO), if you are bold and really don't want to "
+                         help=( "Log at the ERROR Level (default INFO), if you are bold and really don't want to "
                                 "see the warnings.  Ignored if --verbose is given." ) )
     args = parser.parse_args()
 

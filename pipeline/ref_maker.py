@@ -123,6 +123,32 @@ class ParsRefMaker(Parameters):
             critical=True
         )
 
+        self.time_window_days = self.add_par(
+            name = 'time_window_days',
+            default = None,
+            par_types = (None, float),
+            help = ( 'Ignored if both (start_time, end_time) or both (fiducial_start_delta_days, '
+                     'fiducial_end_delta_days) are given.  If not, then this defines the other end '
+                     'of the window.  You must give at least one of (start_time, end_time, '
+                     'fiducial_start_delta_days, fiducial_end_delta_days, or noncritical_start_time) '
+                     'if this is not None' ),
+            critical=True
+        )
+
+        self.noncritical_start_time = self.add_par(
+            name = 'noncritical_start_time',
+            default = None,
+            par_types = (None, str, float, datetime.datetime, datetime.date),
+            docstring = ( 'Ignored if start_time or end_time is non-None.  Use this as a way of '
+                          'creating a time-dyanmic reference provenance.  If you use start_time or end_time, '
+                          'those get baked into the provenance.  This does not.  You probably want to use '
+                          'time_window_days if you use this, because that probably is an important part of '
+                          'a time-dynamic reference provenance.  You probably also want to make sure to '
+                          'set delta_days_validity_start and/or delta_days_validity_end, but *not* '
+                          'validity_start or validity_end' ),
+            critical = False
+        )
+
         self.delta_days_validity_start = self.add_par(
             'delta_days_validity_start',
             None,
