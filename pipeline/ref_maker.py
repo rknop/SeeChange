@@ -127,12 +127,12 @@ class ParsRefMaker(Parameters):
             name = 'time_window_days',
             default = None,
             par_types = (None, float),
-            help = ( 'Ignored if both (start_time, end_time) or both (fiducial_start_delta_days, '
-                     'fiducial_end_delta_days) are given.  If not, then this defines the other end '
-                     'of the window.  You must give at least one of (start_time, end_time, '
-                     'fiducial_start_delta_days, fiducial_end_delta_days, or noncritical_start_time) '
-                     'if this is not None' ),
-            critical=True
+            docstring = ( 'Ignored if both (start_time, end_time) or both (fiducial_start_delta_days, '
+                          'fiducial_end_delta_days) are given.  If not, then this defines the other end '
+                          'of the window.  You must give at least one of (start_time, end_time, '
+                          'fiducial_start_delta_days, fiducial_end_delta_days, or noncritical_start_time) '
+                          'if this is not None' ),
+            critical=False # THIS SHOULD BE TRUE BUT FOR REASONS I TEMPORARILY MADE IT FALSE
         )
 
         self.noncritical_start_time = self.add_par(
