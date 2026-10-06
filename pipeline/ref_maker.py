@@ -110,7 +110,7 @@ class ParsRefMaker(Parameters):
             (None, float),
             ( 'If given a fiducial time (e.g. an image), then define a time period that is this many days '
               'away from that fiducial time in which to search for images to combine into a reference.  Can '
-              'be negative.  None=no limit.' ),
+              'be negative.  None=no limit.  Ignored if start_time is not None.' ),
             critical=True
         )
 
@@ -119,7 +119,7 @@ class ParsRefMaker(Parameters):
             None,
             (None, float),
             ( 'Like fiducial_start_delta_days, but defines the end of the time period in which to search for '
-              'images to combine into a reference.  None=no limit.' ),
+              'images to combine into a reference.  None=no limit.  Ignored if end_time is not None.' ),
             critical=True
         )
 
@@ -132,20 +132,32 @@ class ParsRefMaker(Parameters):
                           'of the window.  You must give at least one of (start_time, end_time, '
                           'fiducial_start_delta_days, fiducial_end_delta_days, or noncritical_start_time) '
                           'if this is not None' ),
-            critical=False # THIS SHOULD BE TRUE BUT FOR REASONS I TEMPORARILY MADE IT FALSE
+            critical=True
         )
 
         self.noncritical_start_time = self.add_par(
             name = 'noncritical_start_time',
             default = None,
-            par_types = (None, str, float, datetime.datetime, datetime.date),
+            par_types = ( None, str, float, datetime.datetime, datetime.date ),
             docstring = ( 'Ignored if start_time or end_time is non-None.  Use this as a way of '
                           'creating a time-dyanmic reference provenance.  If you use start_time or end_time, '
-                          'those get baked into the provenance.  This does not.  You probably want to use '
-                          'time_window_days if you use this, because that probably is an important part of '
-                          'a time-dynamic reference provenance.  You probably also want to make sure to '
-                          'set delta_days_validity_start and/or delta_days_validity_end, but *not* '
+                          'those get baked into the provenance.  This does not, so you can build references '
+                          'that cover different times and still have them all be in the same provenance.  '
+                          'You probably want to use time_window_days if you use this, because that probably '
+                          'is an important part of a time-dynamic reference provenance.  You probably also want '
+                          'to set delta_days_validity_start and/or delta_days_validity_end, but *not* '
                           'validity_start or validity_end' ),
+            critical = False
+        )
+
+        self.noncritical_end_time = self.add_par(
+            name = 'noncritical_end_time',
+            default = None,
+            par_types = ( None, str, float, datetime.datetime, datetime.date ),
+            docstring = ( 'Just like noncritical_start_time, only it specifies the end of the window. '
+                          'Although it\'s allowed, from a sanity-in-provenance point of view you should '
+                          '*not* use this together with noncritical_start_time; just use one, and always '
+                          'set a time_window.' )
             critical = False
         )
 
@@ -250,6 +262,23 @@ class ParsRefMaker(Parameters):
             critical=True
         )
 
+        self.selection_criteria = self.add_par(
+            name = 'selection_criteria',
+            default = 'no_duplicates',
+            par_types = ( str, list ),
+            docstring = ( "When searching for existing references, if multiple refs are found, how should "
+                          "we deal with it?  If this is a list, the criteria are applied in order, if an "
+                          "earlier criterion on the list still yielded more than one reference.  Possibilities "
+                          "include the following: no_duplicates = raise an exception if more than one reference "
+                          "matches; latest = reference with the latest validity_end (or validity_start if "
+                          "validity_end isn't defined for these refs); earliest = reference with the earliest "
+                          "validity_start (or validity_end if validity_start isn't defined for these refs); "
+                          "best_seeing = reference with the smallest seeing; best_lim_mag = reference with the "
+                          "highest limiting magnitude; whatever = choose something not entirely deterministic "
+                          "but also not really random." ),
+            critical = True
+        )
+        
         self.__image_query_pars__ = ['airmass', 'background', 'seeing', 'lim_mag', 'exp_time']
 
         for name in self.__image_query_pars__:
@@ -266,6 +295,14 @@ class ParsRefMaker(Parameters):
                                               'If None, will not limit the minimal lim_mag. ')
         self.__docstrings__['max_lim_mag'] = ('Only use images with lim_mag smaller (brighter) than this. '
                                               'If None, will not limit the maximal lim_mag. ')
+        self.__docstrings__['min_lim_mag_by_filter'] = ('A dictionary that specifies to only use images with '
+                                                        'im_mag larger (fainter) than this for specified filters.  '
+                                                        'If the image is of a filter that\'s not in this '
+                                                        'dictionary, will use min_lim_mag instead.' )
+        self.__docstrings__['max_lim_mag_by_filter'] = ('A dictionary that specifies to only use images with '
+                                                        'im_mag smaller (brighter) than this for specified filters.  '
+                                                        'If the image is of a filter that\'s not in this '
+                                                        'dictionary, will use min_lim_mag instead.' )
 
         self.min_number = self.add_par(
             'min_number',
@@ -480,7 +517,7 @@ class RefMaker:
         self.coadd_provs = None
         self.ref_prov = None
         self.refset = None
-        self.subtraction_minovfrac = config.value( 'subtraction.reference.min_overlap' )
+        self._config_subtraction_minovfrac = config.value( 'subtraction.reference.min_overlap' )
 
 
     # ======================================================================
@@ -649,10 +686,12 @@ class RefMaker:
 
     # ======================================================================
 
-    def parse_arguments( self, image=None, image_zp_prov_id=None, ra=None, dec=None,
-                         minra=None, maxra=None, mindec=None, maxdec=None,
-                         target=None, section_id=None, mjd=None, filter=None ):
-        """Parse arguments for the RefMaker.
+    def parse_arguments( self, image=None, image_zp_prov_id=None, filter=None,
+                         ra=None, dec=None, minra=None, maxra=None, mindec=None, maxdec=None,
+                         target=None, section_id=None,
+                         noncritical_start_time=None, noncritical_end_time=None,
+                         mjd=None, ):
+        """Parse runtime (NOT instantiation time) arguments for the RefMaker.
 
         There are three modes in which RefMaker can operate:
 
@@ -708,13 +747,15 @@ class RefMaker:
 
         """
 
+        # First, see if we're operating in image mode, and if so,
+        #   figure out ra/dec from the image
         if image is not None:
             if any ( i is not None for i in [ ra, dec, minra, maxra, mindec, maxdec ] ):
                 raise ValueError( "If you pass image to RefMaker.run, you can't pass any coordinates." )
 
             if isinstance( image, Image ):
                 imgid = image.id
-                mjd = image.mjd
+                mjd = image.mjd if mjd is None else mjd
                 imgra = image.ra
                 imgdec = image.dec
                 imgminra = image.minra
@@ -773,6 +814,7 @@ class RefMaker:
                         imgra = ( imgminra + imgmaxra )  / 2.
                     imgdec = ( imgmindec + imgmaxdec ) / 2.
 
+        # Deal with area vs. point, detetected by corner_distance being non-None
         if self.pars.corner_distance is None:
             if any( i is not None for i in [ minra, maxra, mindec, maxdec ] ):
                 raise ValueError( "For RefMaker corner_distance None, can't specify minra/maxra/mindec/maxdec" )
@@ -784,6 +826,7 @@ class RefMaker:
             else:
                 if ( ra is None ) or ( dec is None ):
                     raise ValueError( "For RefMaker corner_distance None, must provide either image or both ra & dec" )
+            self.subtraction_minovfrac = None
         else:
             if ( ra is not None ) or ( dec is not None ):
                 raise ValueError( "For RefMaker corner_distance not None, can't specify ra/dec" )
@@ -799,7 +842,56 @@ class RefMaker:
                 if any ( i is None for i in [ minra, maxra, mindec, maxdec ] ):
                     raise ValueError( "For RefMaker corner_distance not None, must specify image or "
                                       "all of minra/maxra/mindec/maxdec" )
+            self.subtraction_minovfrac = self._config_subtraction_minovfrac
+                
+        # Figure out time ranges for searching for images to use in refs
+        self.start_time = None if self.pars.start_time is None else parse_dateobs( self.pars.start_time )
+        self.end_time = None if self.pars.end_time is None else parse_dateobs( self.pars.end_time )
+        if self.pars.fiducial_start_delta_days is not None:
+            if self.start_time is not None:
+                raise ValueError( "Can't give both start_time and fiducial_start_delta_days" )
+            if self.end_time is not None:
+                SCLogger.warning( "Giving fiducial_start_delta_days and end_time together; this is weird.  "
+                                  "Make sure you really know what you're doing!" )
+            if mjd is None:
+                raise ValueError( f"Can't use fiducial_start_delta_days, don't have a fiducial time!" )
+            self.start_time = mjd - self.pars.fiducial_start_delta_days
+        if self.pars.fiducial_end_delta_days is not None:
+            if self.end_time is not None:
+                raise ValueError( "Can't give both end_time and fiducial_end_delta_days" )
+            if self.start_time is not None:
+                SCLogger.warning( "Giving fiducial_end_delta_days and start_time together; this is weird.  "
+                                  "Make sure you really know what you're doing!" )
+            if mjd is None:
+                raise ValueError( f"Can't use fiducial_end_delta_days, don't have a fiducial time!" )
+            self.end_time = mjd + self.pars.fiducial_end_delta_days
 
+        noncritical_start_time = ( noncrticial_start_time if noncritical_start_time is not None
+                                   else self.pars.non_critical_start_time )
+        noncritical_end_time = ( noncritical_end_time if noncritical_end_time is not None
+                                 else self.pars.noncritical_end_time )
+        if noncritical_start_time is not None:
+            if self.start_time is not None:
+                raise ValueError( "Can't specify both a (start time or fiducial_start_delta_days) and "
+                                  "a noncritical_start_time." )
+            self.start_time = parse_dateobs( noncritical_start_time )
+        if noncritical_end_time is not None:
+            if self.end_time is not None:
+                raise ValueError( "Can't specify both a (end time or fiducial_end_delta_days) and "
+                                  "a noncritical_end_time" )
+            self.end_time = parse_dateobs( noncritical_end_time )
+
+        if self.pars.time_window_days is not None:
+            if ( self.start_time is not None ) and ( self.end_time is not None ):
+                raise ValueError( f"Error, can't give a time_window_days when you have both a start and end time" )
+            if ( self.start_time is None ) and ( self.end_time is None ):
+                raise ValueError( f"Error, can't give a time_window_days when you have neither a start nor end time" )
+            if self.start_time is None:
+                self.start_time = self.end_time - self.pars.time_window_days
+            else:
+                self.end_time = self.start_time + self.pars.time_window_days
+        
+        # Fill in the other self variables we will need
         self.mjd = mjd
         self.minra = minra
         self.maxra = maxra
@@ -871,9 +963,9 @@ class RefMaker:
                                     [ ctrra + dra, ctrdec + ddec ] ] )
             match_count = [ 0 ] * 9
             # PYTHON VIOLATES PRINCIPLE OF LEAST SURPRISE
-            # This next line doesn't make a list of 9 empty lists.
-            # No, it makes a list of 9 references to the SAME empty list.
-            # match_pos_images = [ [] ] * 9
+            # The line
+            #   match_pos_images = [ [] ] * 9
+            # doesn't make a list of 9 empty lists. No, it makes a list of 9 references to the SAME empty list.
             match_pos_images = [ [] for i in range(len(match_count)) ]
             kwargs = { 'minra': self.minra, 'maxra': self.maxra, 'mindec': self.mindec, 'maxdec': self.maxdec,
                        'overlapfrac': self.pars.coadd_overlap_fraction }
@@ -883,9 +975,8 @@ class RefMaker:
         kwargs['instrument' ] = self.pars.instrument
         kwargs['project'] = self.pars.projects
         kwargs['filter'] = self.filter
-        kwargs['min_mjd'] = ( None if self.pars.start_time is None
-                              else parse_dateobs( self.pars.start_time, output='mjd' ) )
-        kwargs['max_mjd'] = None if self.pars.end_time is None else parse_dateobs( self.pars.end_time, output='mjd' )
+        kwargs['min_mjd'] = None if self.start_time is None else self.start_time
+        kwargs['max_mjd'] = None if self.end_time is None else self.end_time
 
         for kw in self.pars.__filter_based_image_query_pars__:
             for min_max in [ 'min', 'max' ]:
@@ -999,24 +1090,20 @@ class RefMaker:
         self.parse_arguments( *args, **kwargs )
 
         # look for the reference at the given location in the sky (via ra/dec or target/section_id)
-        if self.ra is not None:
-            SCLogger.warning( "NOT IMPLEMENTED: finding existing references when you give ra/dec" )
-            refs = []
-        else:
-            refs, _ = Reference.get_references(
-                minra=self.minra,
-                maxra=self.maxra,
-                mindec=self.mindec,
-                maxdec=self.maxdec,
-                ra=self.ra,
-                dec=self.dec,
-                target=self.target,
-                section_id=self.section_id,
-                filter=self.filter,
-                provenance_ids=self.ref_prov.id,
-                for_image_mjd=self.mjd,
-                overlapfrac=self.subtraction_minovfrac
-            )
+        refs, _ = Reference.get_references(
+            minra=self.minra,
+            maxra=self.maxra,
+            mindec=self.mindec,
+            maxdec=self.maxdec,
+            ra=self.ra,
+            dec=self.dec,
+            target=self.target,
+            section_id=self.section_id,
+            filter=self.filter,
+            provenance_ids=self.ref_prov.id,
+            mjds=None if self.mjd is None else [ self.mjd ],
+            overlapfrac=self.subtraction_minovfrac
+        )
 
         # if found a reference, can skip the next part of the code!
         if len(refs) == 1:
