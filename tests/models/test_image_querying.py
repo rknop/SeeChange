@@ -385,7 +385,7 @@ def test_find_images(ptf_reference_image_datastores, ptf_ref,
         all_wcs_prov_ids = list( set( v['wcsprovid'] for v in allimgs.values() if v['wcsprovid'] is not None ) )
         all_zp_prov_ids = list( set( v['zpprovid'] for v in allimgs.values() if v['zpprovid'] is not None ) )
         total_w_calibs = len( allimgs )
-        sciimages = { k: v for k, v in allimgs.items() if v['imgtyp'] in (1, 2, 3, 4) }
+        sciimages = { k: v for k, v in allimgs.items() if v['imgtyp'] in (1, 2, 3, 4, 20, 21) }
         total = len( sciimages )
         subsciimages = { k: v for k, v in allimgs.items() if v['improvid'] in provids }
         subtotal = len( subsciimages )
@@ -414,14 +414,14 @@ def test_find_images(ptf_reference_image_datastores, ptf_ref,
     assert len(found1) < total
 
     # get the coadd and subtraction images
-    found2 = Image.find_images( type=[2, 3, 4], provenance_ids=all_prov_ids )
-    assert all(im._type in [2, 3, 4] for im in found2)
-    assert all(im.type in ['ComSci', 'Diff', 'ComDiff'] for im in found2)
+    found2 = Image.find_images( type=[2, 3, 4, 20, 21], provenance_ids=all_prov_ids )
+    assert all(im._type in [2, 3, 4, 20, 21] for im in found2)
+    assert all(im.type in ['ComSci', 'Diff', 'ComDiff', 'ExternComSci', 'ExternComDiff'] for im in found2)
     assert len(found2) < total
     assert len(found1) + len(found2) == total
 
     # use the names of the types instead of integers, or a mixture of ints and strings
-    found3 = Image.find_images(type=['ComSci', 'Diff', 4], provenance_ids=all_prov_ids )
+    found3 = Image.find_images(type=['ComSci', 'Diff', 4, 20, 'ExternComDiff'], provenance_ids=all_prov_ids )
     assert [ f._id for f in found2 ] == [ f._id for f in found3 ]
 
     # filter by MJD and observation date
@@ -754,7 +754,7 @@ def test_find_images(ptf_reference_image_datastores, ptf_ref,
     found2 = Image.find_images(target=target, section_id=section_id, min_exp_time=exp_time, provenance_ids=all_prov_ids)
     assert len(found2) == 1
     assert found2[0].instrument == 'DECam'
-    assert found2[0].type == 'ComSci'
+    assert found2[0].type == 'ExternComSci'
     assert found2[0].exp_time == 150.0
 
     # cross filter on MJD and instrument in a way that has no found

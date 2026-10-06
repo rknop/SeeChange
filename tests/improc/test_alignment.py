@@ -9,6 +9,7 @@ import numpy as np
 import astropy.wcs
 
 from models.base import SmartSession
+from models.provenance import Provenance
 from models.image import Image
 from models.background import Background
 from models.source_list import SourceList
@@ -70,12 +71,15 @@ def test_warp_decam( decam_datastore_through_zp, decam_reference ):
         ds.get_reference()
         aligner = ImageAligner()
         ( warped, warpedsrc,
-          warpedbg, warpedpsf ) = aligner.run( ds.ref_image, ds.ref_sources, ds.ref_bg, ds.ref_psf,
-                                               ds.ref_wcs, ds.ref_zp, ds.image, ds.sources, ds.wcs )
+          warpedbg, warpedpsf,
+          warpedprovs ) = aligner.run( ds.ref_image, ds.ref_sources, ds.ref_bg, ds.ref_psf,
+                                       ds.ref_wcs, ds.ref_zp, ds.image, ds.sources, ds.wcs )
         assert isinstance( warped, Image )
         assert isinstance( warpedsrc, SourceList )
         assert isinstance( warpedbg, Background )
         assert isinstance( warpedpsf, PSF )
+        assert isinstance( warpedprovs, dict )
+        assert all( isinstance( v, Provenance ) for v in warpedprovs.values() )
         assert warped.data.shape == ds.image.data.shape
 
         warped.filepath = f'warp_test_{"".join(random.choices("abcdefghijklmnopqrstuvwxyz",k=10))}'

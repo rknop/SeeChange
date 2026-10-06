@@ -809,10 +809,10 @@ class Coadder:
         parentwcs.sources_id = None
         parentwcs.md5sum = None
         for ds in data_store_list:
-            wrpim, wrpsrc, wrpbg, wrppsf = aligner.run( ds.image, ds.sources, ds.bg, ds.psf, ds.wcs, ds.zp,
-                                                        data_store_list[index].image,
-                                                        data_store_list[index].sources,
-                                                        data_store_list[index].wcs )
+            wrpim, wrpsrc, wrpbg, wrppsf, wrpprv = aligner.run( ds.image, ds.sources, ds.bg, ds.psf, ds.wcs, ds.zp,
+                                                                data_store_list[index].image,
+                                                                data_store_list[index].sources,
+                                                                data_store_list[index].wcs )
             alds = DataStore( wrpim )
             alds.sources = wrpsrc
             alds.sources.image_id= alds.image.id
@@ -829,6 +829,8 @@ class Coadder:
             #  because it could change the aperture corrections!  Issue #353.
             alds.zp = ds.zp.copy()
             alds.sources_id = alds.sources.id
+
+            alds.warped_provenances = wrpprv
 
             self.aligned_datastores.append( alds )
 

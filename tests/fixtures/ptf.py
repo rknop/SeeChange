@@ -409,8 +409,11 @@ def ptf_aligned_image_datastores(request, ptf_reference_image_datastores, ptf_ca
         ds = ptf_reference_image_datastores[0]
         improv = Provenance.get( ds.image.provenance_id )
         srcprov = Provenance.get( ds.sources.provenance_id )
-        ( warped_prov, warped_sources_prov,
-          warped_wcs_prov, warped_zp_prov ) = aligner.get_provenances( [improv, srcprov], srcprov )
+        provdict = aligner.get_provenances( [improv, srcprov], srcprov )
+        warped_prov = provdict[ 'warped' ]
+        warped_sources_prov = provdict[ 'sources' ]
+        warped_wcs_prov = provdict[ 'wcs' ]
+        warped_zp_prov = provdict[ 'zp' ]
 
         with open(os.path.join(cache_dir, 'manifest.txt')) as f:
             filenames = f.read().splitlines()
@@ -503,7 +506,8 @@ def ptf_ref(
     utag = base64.b32encode(utag.digest()).decode().lower()
     utag = f'u-{utag[:6]}'
 
-    cache_base_name = f'187/PTF_20090405_073932_11_R_ComSci_{refmaker.coadd_provs["starting_point"].id[:6]}_{utag}'
+    cache_base_name = ( f'187/PTF_20090405_073932_11_R_ComSci_{refmaker.coadd_provs["starting_point"].id[:6]}_{utag}'
+                        f'_187.9831+04.4838' )
 
     extensions = [
         '',

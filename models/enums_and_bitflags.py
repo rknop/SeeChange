@@ -191,7 +191,16 @@ class ImageTypeConverter( EnumConverter ):
         16: 'Warped',
         17: 'ComWarped',
         18: 'DiffWarped',
-        19: 'ComDiffWarped'
+        19: 'ComDiffWarped',
+        20: 'ExternComSci',    # "Extern" means externally, so components shouldn't be expected in our database
+        21: 'ExternComDiff',   # Probably only ExternComSci, ExternComBias, ExternComDark, and ExternCom*Flat
+        22: 'ExternComBias',   #   should ever be used.
+        23: 'ExternComDark',
+        24: 'ExternComDomeFlat',
+        25: 'ExternComSkyFlat',
+        26: 'ExternComTwiFlat',
+        27: 'ExternComWarped',
+        28: 'ExternComDiffWarped'
     }
     _allowed_values = None
     _dict_filtered = None

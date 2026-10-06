@@ -175,8 +175,8 @@ class ImageCleanup:
 
         image.save(no_archive=not archive)
 
-        return cls.create(image, archive=archive)  # don't use this, but let it sit there
-                                                   #     until going out of scope of the test
+        return ImageCleanup(image, archive=archive)  # don't use this, but let it sit there
+                                                     #     until going out of scope of the test
 
     def __init__(self, image, archive=True):
         self.image = image

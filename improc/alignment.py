@@ -814,11 +814,18 @@ class ImageAligner:
 
         Returns
         -------
-          Image, Sources, Background, PSF
-            Versions of all of these, warped from source to target
+          Image, Sources, Background, PSF, dict
+             Warped versions of the input stuff.  Sources, Backround,
+             and PSF may have been re-determined by running the
+             appropriate processes on the warped image (CHECK THIS).
 
-            There are some implicit assumptions that these will never
-            get saved to the database.
+             The dictionary is a dictionary of Provenance objects for
+             the warped data product; it has keys:
+                 warped
+                 notwarped
+                 sources
+                 wcs
+                 zp
 
         """
         SCLogger.debug( f"ImageAligner.run: aligning image {source_image.id} ({source_image.filepath}) "

@@ -600,7 +600,8 @@ def decam_elais_e1_two_refs_datastore( download_url, decam_cache_dir, data_dir, 
             image.filter = image.filter_short
             image.provenance_id = prov.id
             image.filepath = f'007/{filebase}.{chip:02d}'
-            image.is_coadd = True
+            # is_coadd is false because this should NOT be set for an ExternCom* image
+            image.is_coadd = False
             image.components = [ 'image', 'weight', 'flags' ]
             image.md5sum_components = [ None, None, None ]
             for comp, path in zip( image.components, image.get_fullpath() ):

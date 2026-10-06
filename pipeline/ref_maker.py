@@ -157,7 +157,7 @@ class ParsRefMaker(Parameters):
             docstring = ( 'Just like noncritical_start_time, only it specifies the end of the window. '
                           'Although it\'s allowed, from a sanity-in-provenance point of view you should '
                           '*not* use this together with noncritical_start_time; just use one, and always '
-                          'set a time_window.' )
+                          'set a time_window.' ),
             critical = False
         )
 
@@ -278,7 +278,7 @@ class ParsRefMaker(Parameters):
                           "but also not really random." ),
             critical = True
         )
-        
+
         self.__image_query_pars__ = ['airmass', 'background', 'seeing', 'lim_mag', 'exp_time']
 
         for name in self.__image_query_pars__:
@@ -843,7 +843,7 @@ class RefMaker:
                     raise ValueError( "For RefMaker corner_distance not None, must specify image or "
                                       "all of minra/maxra/mindec/maxdec" )
             self.subtraction_minovfrac = self._config_subtraction_minovfrac
-                
+
         # Figure out time ranges for searching for images to use in refs
         self.start_time = None if self.pars.start_time is None else parse_dateobs( self.pars.start_time )
         self.end_time = None if self.pars.end_time is None else parse_dateobs( self.pars.end_time )
@@ -854,7 +854,7 @@ class RefMaker:
                 SCLogger.warning( "Giving fiducial_start_delta_days and end_time together; this is weird.  "
                                   "Make sure you really know what you're doing!" )
             if mjd is None:
-                raise ValueError( f"Can't use fiducial_start_delta_days, don't have a fiducial time!" )
+                raise ValueError( "Can't use fiducial_start_delta_days, don't have a fiducial time!" )
             self.start_time = mjd - self.pars.fiducial_start_delta_days
         if self.pars.fiducial_end_delta_days is not None:
             if self.end_time is not None:
@@ -863,10 +863,10 @@ class RefMaker:
                 SCLogger.warning( "Giving fiducial_end_delta_days and start_time together; this is weird.  "
                                   "Make sure you really know what you're doing!" )
             if mjd is None:
-                raise ValueError( f"Can't use fiducial_end_delta_days, don't have a fiducial time!" )
+                raise ValueError( "Can't use fiducial_end_delta_days, don't have a fiducial time!" )
             self.end_time = mjd + self.pars.fiducial_end_delta_days
 
-        noncritical_start_time = ( noncrticial_start_time if noncritical_start_time is not None
+        noncritical_start_time = ( noncritical_start_time if noncritical_start_time is not None
                                    else self.pars.non_critical_start_time )
         noncritical_end_time = ( noncritical_end_time if noncritical_end_time is not None
                                  else self.pars.noncritical_end_time )
@@ -883,14 +883,14 @@ class RefMaker:
 
         if self.pars.time_window_days is not None:
             if ( self.start_time is not None ) and ( self.end_time is not None ):
-                raise ValueError( f"Error, can't give a time_window_days when you have both a start and end time" )
+                raise ValueError( "Error, can't give a time_window_days when you have both a start and end time" )
             if ( self.start_time is None ) and ( self.end_time is None ):
-                raise ValueError( f"Error, can't give a time_window_days when you have neither a start nor end time" )
+                raise ValueError( "Error, can't give a time_window_days when you have neither a start nor end time" )
             if self.start_time is None:
                 self.start_time = self.end_time - self.pars.time_window_days
             else:
                 self.end_time = self.start_time + self.pars.time_window_days
-        
+
         # Fill in the other self variables we will need
         self.mjd = mjd
         self.minra = minra

@@ -1056,8 +1056,8 @@ class SeeChangeBase:
 
 
     @classmethod
-    def insert_list( cls, objects, pgdb=None, session=None, load_defaults=False, upsert=False ):
-        """Like upsert, but for a bunch of objects in a list, and tries to be efficient about it.
+    def insert_list( cls, objects, pgdb=None, session=None, load_defaults=False, upsert=False, nocommit=False ):
+        """Like upsert, but for a bunch of objects in a list, and tries to be sorta efficient about it.
 
         Do *not* use this with classes that have things like association
         tables that need to get updated (i.e. with Image, maybe
@@ -1071,10 +1071,19 @@ class SeeChangeBase:
         object fields with database defaults.  Reload the rows from the
         table if that's what you need.
 
+        "sorta efficient": it does it all in one transaction, but it
+        issues a separate "INSERT" for each object in the list.  Use
+        this for small numbers of things to insert (no more than of
+        order 10¹, say).  For larger numbers, you really want to be
+        using a PostgreSQL COPY.
+
         """
 
         if not all( [ isinstance( o, cls ) for o in objects ] ):
             raise TypeError( f"{cls.__name__}.upsert_list: passed objects weren't all of this class!" )
+
+        if nocommit and ( pgdb is None ) and ( session is None ):
+            raise ValueError( "If you set nocommit=True, you must pass a pgdb" )
 
         with PGDB( pgdb if pgdb is not None else session ) as pgdb:
             for obj in objects:
@@ -1107,7 +1116,8 @@ class SeeChangeBase:
                             vals=sql.SQL(",").join( sql.SQL(f'%({c})s') for c in basicdict.keys() ),
                             conflictclause=conflictclause )
                 pgdb.execute_nofetch( q, subdict )
-            pgdb.commit()
+            if not nocommit:
+                pgdb.commit()
 
             if load_defaults:
                 for obj in objects:
@@ -1170,18 +1180,18 @@ class SeeChangeBase:
         """Get a list of tuples of (type, id) for all direct upstreams of this object (non-recursive)."""
         raise NotImplementedError( f'get_upstream_ids not implemented for this {self.__class__.__name__}' )
 
-    def get_upstreams(self, session=None):
+    def get_upstreams(self, nofile=False, session=None):
         """Get all data products that were directly used to create this object (non-recursive)."""
         upstreams = []
         with PGDB( session, dictcursor=True ) as pgdb:
-            upstream_info = self.get_upstream_ids( pgdb)
+            upstream_info = self.get_upstream_ids( pgdb=pgdb )
             for cls, upid in upstream_info:
                 q = sql.SQL( "SELECT * FROM {tab} WHERE _id={objid}" ).format( tab=sql.Identifier(cls.__tablename__),
                                                                                objid=upid )
                 rows = pgdb.execute( q )
                 if len(rows) != 1:
                     raise RuntimeError( "This should never happen." )
-                upstreams.append( cls.create( pgdb=pgdb, **(rows[0]) ) )
+                upstreams.append( cls.create( pgdb=pgdb, nofile=nofile, **(rows[0]) ) )
         return upstreams
 
     def get_downstream_ids(self, pgdb=None):

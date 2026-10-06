@@ -2488,7 +2488,7 @@ class DataStore:
         already_in_db = set()
         with PGDB() as pgdb:
             # ...while we're here, make sure the warped provenances are in the database
-            if save_warped_ref:
+            if save_warped_ref and hasattr( self, 'aligned_ref_image' ) and ( self.aligned_ref_image is not None ):
                 for prov in [ self.warped_provs['warped'],
                               self.warped_provs['notwarped'],
                               self.warped_provs['sources'] ]:

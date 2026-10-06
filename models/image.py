@@ -168,7 +168,9 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         nullable=False,
         server_default='false',
         index=True,
-        doc='Is this image made by stacking multiple images.'
+        doc=( 'Is this image made by stacking multiple images?  Should only be set if the images stacked '
+              'are in the database.  The image should have a _type of ComSomething.  Images with a _type of '
+              'ExternComSomething should not have is_coadd set.' )
     )
 
     coadd_alignment_target = sa.Column(
@@ -751,7 +753,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             SeeChangeBase.insert( self, pgdb=pgdb, nocommit=True, load_defaults=load_defaults )
 
             if self.is_coadd:
-                if isinstance( self._coadd_comonent_zp_ids, config.NoValue ):
+                if isinstance( self._coadd_component_zp_ids, config.NoValue ):
                     raise ValueError( "Error inserting coadd image, missing _coadd_component_zp_ids" )
                 else:
                     for ui in self._coadd_component_zp_ids:
@@ -2361,7 +2363,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             WARNING : this is not tested, and (I think) not even used in
             the code base right now.  TODO: write tests.
 
-          seen: set
+          _seen: set
               Used internally for recursion if full_chain is True.
 
         Returns
@@ -2383,7 +2385,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         """
 
         # Avoid circular imports
-        from models.source_lists import SourceList
+        from models.source_list import SourceList
         from models.world_coordinates import WorldCoordinates
         from models.zero_point import ZeroPoint
         from models.reference import Reference
@@ -2423,7 +2425,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                         upstreams.append( ( ZeroPoint, row[0] ) )
                         seen.add( row[0] )
 
-            elif ImageTypeConverter( self._type ).to_string() in ( 'Warped', 'ComWarped' ):
+            elif ImageTypeConverter().to_string( self._type ) in ( 'Warped', 'ComWarped' ):
                 q = sql.SQL( "SELECT unwarped_zp_id, target_wcs_id FROM image_warp_parent "
                              "WHERE warped_id={me}" ).format( me=self.id )
                 rows, _cols = pgdb.execute( q )
@@ -2452,46 +2454,50 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
 
             if full_chain:
                 # Get upstreams of WorldCoordinateses.  These will be from trimmed and warped images.
-                q = sql.SQL( textwrap.dedent(
-                    """\
-                    SELECT s._id, i._id
-                    FROM world_coordinates w
-                    INNER JOIN source_lists s ON s._id=w.sources_id
-                    INNER JOIN images i ON i._id=s.image_id
-                    WHERE w._id=ANY(ARRAY[{wcsids}])
-                    """
-                ) ).format( wcsids=sql.SQL(",").join( [ u[1] for u in upstreams if u[0] == WorldCoordinates] ) )
-                rows, _cols = pgdb.execute( q )
-                for row in rows:
-                    if row[0] not in seen:
-                        seen.add( row[0] )
-                        upstreams.append( ( SourceList, row[0] ) )
-                    if row[1] not in seen:
-                        seen.add( row[1] )
-                        upstreams.append( ( Image, row[1] ) )
+                wcsupstrs = [ u[1] for u in upstreams if u[0] == WorldCoordinates ]
+                if len( wcsupstrs ) > 0:
+                    q = sql.SQL( textwrap.dedent(
+                        """\
+                        SELECT s._id, i._id
+                        FROM world_coordinates w
+                        INNER JOIN source_lists s ON s._id=w.sources_id
+                        INNER JOIN images i ON i._id=s.image_id
+                        WHERE w._id=ANY(ARRAY[{wcsids}])
+                        """
+                    ) ).format( wcsids=sql.SQL(",").join(wcsupstrs) )
+                    rows, _cols = pgdb.execute( q )
+                    for row in rows:
+                        if row[0] not in seen:
+                            seen.add( row[0] )
+                            upstreams.append( ( SourceList, row[0] ) )
+                        if row[1] not in seen:
+                            seen.add( row[1] )
+                            upstreams.append( ( Image, row[1] ) )
 
                 # Get all upstreams back to Image of ZeroPoints.  This will come from subs and coads.
-                q = sql.SQL( textwrap.dedent(
-                    """\
-                    SELECT w._id, s._id, i._id
-                    FROM zero_points z
-                    INNER JOIN word_coordinates w ON w._id=z.wcs_id
-                    INNER JOIN source_lists s ON s._id=w.sources_id
-                    INNER JOIN images i ON s.image_id=i._id
-                    WHERE z._id=ANY(ARRAY[{zpids}])
-                    """
-                ) ).format( zpid=sql.SQL(",").join( [ u[1] for u in upstreams if u[0] == ZeroPoint ] ) )
-                rows, _cols = pgdb.execute( q )
-                for row in rows:
-                    if row[0] not in seen:
-                        upstreams.append( ( WorldCoordinates, row[0] ) )
-                        seen.add( row[0] )
-                    if row[1] not in seen:
-                        upstreams.append( ( SourceList, row[1] ) )
-                        seen.add( row[1] )
-                    if row[2] not in seen:
-                        seen.add( row[2] )
-                        upstreams.append( ( Image, row[2] ) )
+                zpupstrs = [ u[1] for u in upstreams if u[0] == ZeroPoint ]
+                if len( zpupstrs ) > 0:
+                    q = sql.SQL( textwrap.dedent(
+                        """\
+                        SELECT w._id, s._id, i._id
+                        FROM zero_points z
+                        INNER JOIN world_coordinates w ON w._id=z.wcs_id
+                        INNER JOIN source_lists s ON s._id=w.sources_id
+                        INNER JOIN images i ON s.image_id=i._id
+                        WHERE z._id=ANY(ARRAY[{zpids}])
+                        """
+                    ) ).format( zpids=sql.SQL(",").join(zpupstrs) )
+                    rows, _cols = pgdb.execute( q )
+                    for row in rows:
+                        if row[0] not in seen:
+                            upstreams.append( ( WorldCoordinates, row[0] ) )
+                            seen.add( row[0] )
+                        if row[1] not in seen:
+                            upstreams.append( ( SourceList, row[1] ) )
+                            seen.add( row[1] )
+                        if row[2] not in seen:
+                            seen.add( row[2] )
+                            upstreams.append( ( Image, row[2] ) )
 
                 # Recursively get all upstreams of Images we've collected
                 for upstream in upstreams:
@@ -2637,7 +2643,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             provenance_ids_are_zp=False,
             provenance_ids_are_wcs=False,
             use_good=True,
-            type=[1,2,3,4],
+            type=[1,2,3,4,20,21],
             target=None,
             section_id=None,
             project=None,
@@ -2741,7 +2747,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             List of image types to search for; see
             enums_and_bitflags.py::ImageTypeConverter for the values.
             Use "Sci" or 1 to get regular (non-coadd, non-subtraction)
-            images.  This defaults to [1,2,3,4], which gets science,
+            images.  This defaults to [1,2,3,4,20,21], which gets science,
             coadded science, difference, and coadded difference images;
             it omits calibration images (bias, flats, etc.) and warped
             images.  Set this to None to get everything.
