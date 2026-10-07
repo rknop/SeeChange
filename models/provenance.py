@@ -134,6 +134,29 @@ class CodeVersion(Base, UUIDMixin):
 
 
     @classmethod
+    def get_by_version( cls, process, major, minor, patch=None, pgdb=None ):
+        with PGDB( pgdb ) as pgdb:
+            q = sql.SQL( textwrap.dedent(
+                """\
+                SELECT * FROM code_versions
+                WHERE process={process}
+                  AND version_major={major}
+                  AND version_minor={minor}
+                """ ) ).format( process=process, major=major, minor=minor )
+            if ( patch is not None ):
+                q += sql.SQL( "  AND version_patch={patch}" ).format( patch=patch )
+            else:
+                q += sql.SQL( "  ORDER BY patch DESC LIMIT 1" )
+            rows = pgdb.execute( q )
+            if len(rows) == 0:
+                return None
+            elif len(rows) > 1:
+                raise RuntimeError( "This should never happen." )
+            else:
+                return CodeVersion( **(rows[0]) )
+
+
+    @classmethod
     def is_cv_newer( cls, cv1, cv2 ):
         """Returns True if cv1 is newer than cv2"""
         # check if it is strictly older
@@ -387,7 +410,32 @@ class Provenance(Base):
 
     @classmethod
     def get( cls, provid, pgdb=None, session=None ):
-        """Get a provenance given an id, or None if it doesn't exist."""
+        """Get a provenance given an id, or None if it doesn't exist.
+
+        Parameters
+        ----------
+           provid : str or Provenance
+             If this is a Provenance, then it is just immediately
+             returned.  Otherwise, this must be the id of the
+             provenance, which is loaded from the database.
+
+           pgdb : PGDB
+             Database connection.  If not given, a new one will be
+             opened and closed.
+
+           session : don't use this, here for backwards compatibility
+
+        Return
+        ------
+           Provenance or None
+
+           If the provenance was not found in the database, returns None.
+
+        """
+
+        if isinstance( provid, Provenance ):
+            return provid
+        
         pgdb = pgdb if pgdb is not None else session
         with PGDB( pgdb, dictcursor=True ) as pgdb:
             rows = pgdb.execute( sql.SQL( "SELECT * FROM provenances WHERE _id={provid}" )

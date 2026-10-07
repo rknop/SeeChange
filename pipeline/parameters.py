@@ -767,7 +767,6 @@ class Parameters:
 
 
     def get_critical_pars(self):
-
         """Get a dictionary of the critical parameters.
 
         Returns
@@ -784,6 +783,12 @@ class Parameters:
         Only get the parameters that were defined
         using the add_par method.
 
+        This is depending on python dictionaries being ordered (which
+        they are).  self.__defaultpars__ will always be in the same
+        order as long as the sequence of add_par calls is deterministic.
+        We're also counting on the json string dump preserving order.
+        All of this is to the end of generating a repeatable provenance.
+
         Parameters
         ----------
         critical: bool
@@ -796,6 +801,7 @@ class Parameters:
         -------
         output: dict
             A dictionary with the parameters.
+
         """
         output = {}
         for k in self.__defaultpars__.keys():

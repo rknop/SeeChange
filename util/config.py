@@ -10,6 +10,8 @@ from util.logger import SCLogger
 class NoValue:
     pass
 
+NotDefined = NoValue()
+
 
 class Config:
     """Interface for yaml config file.

@@ -94,26 +94,35 @@ class ProvenanceTree(dict):
         self._noupstreams = noupstreams
         self._processmap = processmap
 
-    @property
-    def sorted_processes( self ):
-        """Get a list of processes, in order such that if a is upstream of b, a is earlier than b in the list."""
+    @classmethod
+    def _is_upstream( cls, upstream_steps, process_down, process_up ):
+        if len( upstream_steps[ process_down ] ) == 0:
+            return False
+        if process_up in upstream_steps[ process_down ]:
+            return True
+        else:
+            for test_up in upstream_steps[ process_down ]:
+                if cls._is_upstream( upstream_steps, test_up, process_up ):
+                    return True
+            return False
+        
+    @classmethod
+    def sort_processes( cls, upstream_steps ):
+        """Get a list of processes, in order such that if a is upstream of b, a is earlier than b in the list.
 
-        # TODO: caching so we don't sort every time we access this property?
-        # We'd have to also have a "dirty" flag to mark if the dict or the upstream_steps were changed.
+        Processes will always be as late in the list as possible,
+        i.e. just before the first process that has this process as a
+        (recursive) upstream.
 
-        # There's probably a more elegant way to do this than the manual insertion sort I've written here.
-        def _isupstream( process_down, process_up ):
-            if len( self.upstream_steps[ process_down ] ) == 0:
-                return False
-            if process_up in self.upstream_steps[ process_down ]:
-                return True
-            else:
-                for test_up in self.upstream_steps[ process_down ]:
-                    if _isupstream( test_up, process_up ):
-                        return True
-                return False
+        You *can* pass an upstream_steps dict where processes show in up
+        some of the lists that are the values of the dict that aren't
+        also keys of upstream_steps.  That doesn't make for a valid
+        provenance tree set of upstream steps, but this method is just
+        concerned with sorting.
 
-        allprocs = list( self.upstream_steps.keys() )
+        """
+
+        allprocs = list( upstream_steps.keys() )
         sortedprocs = [ allprocs[0] ]
         for proc in allprocs[1:]:
             did = False
@@ -126,6 +135,16 @@ class ProvenanceTree(dict):
                 sortedprocs.append( proc )
 
         return sortedprocs
+
+        
+    @property
+    def sorted_processes( self ):
+        """Get a list of processes, in order such that if a is upstream of b, a is earlier than b in the list."""
+
+        # TODO: caching so we don't sort every time we access this property?
+        # We'd have to also have a "dirty" flag to mark if the dict or the upstream_steps were changed.
+        return self.sort_processes( self.upstream_steps )
+
 
     @property
     def sorted_provenances( self ):
