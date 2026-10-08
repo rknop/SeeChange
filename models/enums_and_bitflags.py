@@ -194,7 +194,7 @@ class ImageTypeConverter( EnumConverter ):
         19: 'ComDiffWarped',
         20: 'ExternComSci',    # "Extern" means externally, so components shouldn't be expected in our database
         21: 'ExternComDiff',   # Probably only ExternComSci, ExternComBias, ExternComDark, and ExternCom*Flat
-        22: 'ExternComBias',   #   should ever be used.
+        22: 'ExternComBias',   #   should ever be used; I *guess* we might import an external difference image.
         23: 'ExternComDark',
         24: 'ExternComDomeFlat',
         25: 'ExternComSkyFlat',

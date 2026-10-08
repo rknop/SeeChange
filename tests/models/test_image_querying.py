@@ -442,13 +442,13 @@ def test_find_images(ptf_reference_image_datastores, ptf_ref,
 
     # filter by observation date
     t = Time(57000.0, format='mjd').datetime
-    found4 = Image.find_images( min_dateobs=t, provenance_ids=all_prov_ids )
+    found4 = Image.find_images( min_mjd=t, provenance_ids=all_prov_ids )
     assert all(im.observation_time >= t for im in found4)
     assert all(im.instrument == 'DECam' for im in found4)
     assert set( f._id for f in found4 ) == set( f._id for f in found1 )
     assert len(found4) < total
 
-    found5 = Image.find_images( max_dateobs=t, provenance_ids=all_prov_ids )
+    found5 = Image.find_images( max_mjd=t, provenance_ids=all_prov_ids )
     assert all(im.observation_time <= t for im in found5)
     assert all(im.instrument == 'PTF' for im in found5)
     assert set( f._id for f in found5 ) == set( f._id for f in found2 )
@@ -457,24 +457,24 @@ def test_find_images(ptf_reference_image_datastores, ptf_ref,
 
     # Check returning wcsen and zps
     # 3 of the 4 images in found4 have WCSes and ZPs
-    found6, wcs6 = Image.find_images( min_dateobs=t, provenance_ids=all_wcs_prov_ids, provenance_ids_are_wcs=True,
+    found6, wcs6 = Image.find_images( min_mjd=t, provenance_ids=all_wcs_prov_ids, provenance_ids_are_wcs=True,
                                       return_wcs=True )
     assert set( f.id for f in found6 ).issubset( set( f.id for f in found4 ) )
     assert len( found6 ) == 3
     assert all( wcs6[f.id].id == allimgs[f.id]['wcsid'] for f in found6 )
 
-    found7, wcs7 = Image.find_images( min_dateobs=t, provenance_ids=all_zp_prov_ids, provenance_ids_are_zp=True,
+    found7, wcs7 = Image.find_images( min_mjd=t, provenance_ids=all_zp_prov_ids, provenance_ids_are_zp=True,
                                       return_wcs=True )
     # There don't happen to be any images with wcs but no zp
     assert set( f.id for f in found7 ) == set( f.id for f in found6 )
     assert all( wcs7[f.id].id == allimgs[f.id]['wcsid'] for f in found7 )
 
-    found8, zp8 = Image.find_images( min_dateobs=t, provenance_ids=all_zp_prov_ids, provenance_ids_are_zp=True,
+    found8, zp8 = Image.find_images( min_mjd=t, provenance_ids=all_zp_prov_ids, provenance_ids_are_zp=True,
                                      return_zeropoints=True )
     assert set( f.id for f in found8 ) == set( f.id for f in found6 )
     assert all( zp8[f.id].id == allimgs[f.id]['zpid'] for f in found8 )
 
-    found9, wcs9, zp9 = Image.find_images( min_dateobs=t, provenance_ids=all_zp_prov_ids, provenance_ids_are_zp=True,
+    found9, wcs9, zp9 = Image.find_images( min_mjd=t, provenance_ids=all_zp_prov_ids, provenance_ids_are_zp=True,
                                            return_wcs=True, return_zeropoints=True )
     assert set( f.id for f in found9 ) == set( f.id for f in found6 )
     assert all( wcs9[f.id].id == allimgs[f.id]['wcsid'] for f in found9 )

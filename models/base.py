@@ -1180,10 +1180,10 @@ class SeeChangeBase:
         """Get a list of tuples of (type, id) for all direct upstreams of this object (non-recursive)."""
         raise NotImplementedError( f'get_upstream_ids not implemented for this {self.__class__.__name__}' )
 
-    def get_upstreams(self, nofile=False, session=None):
+    def get_upstreams(self, nofile=False, pgdb=None, session=None):
         """Get all data products that were directly used to create this object (non-recursive)."""
         upstreams = []
-        with PGDB( session, dictcursor=True ) as pgdb:
+        with PGDB( pgdb if pgdb is not None else session, dictcursor=True ) as pgdb:
             upstream_info = self.get_upstream_ids( pgdb=pgdb )
             for cls, upid in upstream_info:
                 q = sql.SQL( "SELECT * FROM {tab} WHERE _id={objid}" ).format( tab=sql.Identifier(cls.__tablename__),
@@ -1198,10 +1198,10 @@ class SeeChangeBase:
         """Get a list of tuples of (type, id) for all direct downstreams of this object (non-recursive)."""
         raise NotImplementedError( f'get_downstream_ids not implemented for this {self.__class__.__name__}' )
 
-    def get_downstreams(self, session=None):
+    def get_downstreams(self, pgdb=None, session=None):
         """Get all data products that were created directly from this object (non-recursive)."""
         downstreams = []
-        with PGDB( session, dictcursor=True ) as pgdb:
+        with PGDB( pgdb if pgdb is not None else session, dictcursor=True ) as pgdb:
             downstream_info = self.get_downstream_ids( pgdb )
             for cls, dwnid in downstream_info:
                 q = sql.SQL( "SELECT * FROM {tab} WHERE _id={objid}" ).format( tab=sql.Identifier(cls.__tablename__),

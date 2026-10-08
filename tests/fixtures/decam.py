@@ -282,7 +282,7 @@ def decam_exposure_factory(download_url, data_dir, decam_cache_dir):
         exphdrinfo = decam.extract_header_info( hdr, [ 'mjd', 'exp_time', 'filter', 'project', 'target',
                                                        'ra','dec' ] )
 
-        exposure = Exposure( filepath=filename, instrument='DECam', **exphdrinfo )
+        exposure = Exposure( filepath=filename, instrument='DECam', format='fits', **exphdrinfo )
         exposure.save()  # save to archive and get an MD5 sum
         exposure.insert()
 

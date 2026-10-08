@@ -645,8 +645,6 @@ def test_image_preproc_bitflag( sim_image1, provenance_base ):
 
 
 def test_image_from_exposure( provenance_base, sim_exposure1 ):
-    sim_exposure1.update_instrument()
-
     # demo instrument only has one section
     with pytest.raises(ValueError, match='section_id must be 0 for this instrument.'):
         _ = Image.from_exposure(sim_exposure1, section_id=1)
@@ -717,7 +715,6 @@ def test_image_from_exposure( provenance_base, sim_exposure1 ):
 
 
 def test_image_from_exposure_filter_array(sim_exposure_filter_array):
-    sim_exposure_filter_array.update_instrument()
     im = Image.from_exposure(sim_exposure_filter_array, section_id=0)
     filt = sim_exposure_filter_array.filter_array[0]
     assert im.filter == filt
@@ -980,9 +977,6 @@ def test_image_subtraction(sim_exposure1, sim_exposure2, provenance_base, proven
     ref = None
     im = None
     try:
-        sim_exposure1.update_instrument()
-        sim_exposure2.update_instrument()
-
         # make sure exposures are in chronological order...
         if sim_exposure1.mjd > sim_exposure2.mjd:
             sim_exposure1, sim_exposure2 = sim_exposure2, sim_exposure1

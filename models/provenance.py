@@ -15,7 +15,7 @@ from sqlalchemy.schema import UniqueConstraint
 from util.util import NumpyAndUUIDJsonEncoder, asUUID, listify
 from util.logger import SCLogger
 
-from models.base import Base, UUIDMixin, SeeChangeBase, SmartSession, PGDB
+from models.base import Base, UUIDMixin, SeeChangeBase, PGDB
 
 
 
@@ -73,7 +73,7 @@ class CodeVersion(Base, UUIDMixin):
         'extraction': (0,9,0),
         'astrocal' : (0,6,0),
         'photocal' : (0,3,0),
-        'subtraction': (0,4,0),
+        'subtraction': (0,5,0),
         'detection': (0,4,0),
         'cutting': (0,2,0),
         'measuring': (0,2,0),
@@ -97,7 +97,7 @@ class CodeVersion(Base, UUIDMixin):
         #   then probably the subtraction, and maybe the coadd,
         #   version should change too, as changes in these processes
         #   will affect both subtraction and coadd.
-        'alignment' : (0,4,0),
+        'alignment' : (0,5,0),
         'inpainting' : (0,2,0),
 
         # These are processes for downloading stuff
@@ -474,10 +474,11 @@ class Provenance(Base):
         # for hash get the static versions from codeversion rather than UUID which changes each run of tests
         cv_string = None
         if self.code_version_id is not None:
-            with SmartSession() as sess:
-                cv = sess.query( CodeVersion ).filter( CodeVersion._id == self.code_version_id ).first()
+            with PGDB() as pgdb:
+                rows, _cols = pgdb.execute( sql.SQL( "SELECT version_major, version_minor FROM code_versions "
+                                                     "WHERE _id={cvid}").format( cvid=self.code_version_id ) )
                 # Don't use patch because patch shouldn't change data thus require a provenance change
-                cv_string = f"{cv.version_major}.{cv.version_minor}"
+                cv_string = f"{rows[0][0]}.{rows[0][1]}"
 
         superdict = dict(
             process=self.process,

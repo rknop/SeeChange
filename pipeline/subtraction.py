@@ -685,11 +685,6 @@ class Subtractor:
 
                 # See if we have to align the images
                 if ( self.pars.trust_aligned_images and
-                     isinstance( ds.aligned_new_image, Image ) and
-                     isinstance( ds.aligned_new_sources, SourceList ) and
-                     isinstance( ds.aligned_new_psf, PSF ) and
-                     isinstance( ds.aligned_new_bg, Background ) and
-                     isinstance( ds.aligned_new_zp, ZeroPoint ) and
                      isinstance( ds.aligned_ref_image, Image ) and
                      isinstance( ds.aligned_ref_sources, SourceList ) and
                      isinstance( ds.aligned_ref_psf, PSF ) and
@@ -702,35 +697,9 @@ class Subtractor:
                     to_index = self.pars.alignment_index
                     aligner = ImageAligner(**self.parameters_to_initialize_alignment)
                     if to_index == 'ref':
-                        # In *lots* of places the code makes the assumption that we align the ref to the new.
-                        # If we ever want to be able to align the new to the ref, we have to go all the way
-                        # through the code and find every place it might affect.
-                        #
-                        # This code will also need to be edited more if we ever update this, becasue
-                        # stuff has been added to the "to_index == 'new'" block below.
-                        SCLogger.error( "Aligning new to ref will violate assumptions in detection.py,"
-                                        "measuring.py, fakeinjection.py, and probably elsewhere." )
+                        SCLogger.error( "Aligning new to ref doesn't work, here and in many other places "
+                                        "there is a built-in assumption that we're aligning ref to new." )
                         raise RuntimeError( "Aligning new to ref not supported; align ref to new instead" )
-
-                        # for needed in [ ds.image, ds.sources, ds.bg, ds.wcs, ds.zp, ds.ref_image, ds.ref_sources ]:
-                        #     if needed is None:
-                        #         raise RuntimeError( "Not all data products needed for alignment to ref "
-                        #                             "are present in the DataStore" )
-
-                        # ( aligned_image, aligned_sources,
-                        #   aligned_bg, aligned_psf ) = aligner.run( ds.image, ds.sources, ds.bg, ds.psf, ds.wcs, ds.zp,
-                        #                                            ds.ref_image, ds.ref_sources, ds.ref_wcs )
-                        # ds.aligned_new_image = aligned_image
-                        # ds.aligned_new_sources = aligned_sources
-                        # ds.aligned_new_bg = aligned_bg
-                        # ds.aligned_new_psf = aligned_psf
-                        # ds.aligned_new_zp = ds.get_zp()
-                        # ds.aligned_ref_image = ds.ref_image
-                        # ds.aligned_ref_sources = ds.ref_sources
-                        # ds.aligned_ref_bg = ds.ref_bg
-                        # ds.aligned_ref_psf = ds.ref_psf
-                        # ds.aligned_ref_zp = ds.ref_zp
-                        # ds.aligned_wcs = ds.ref_wcs
 
                     elif to_index == 'new':
                         SCLogger.debug( "Aligning ref to new" )
@@ -751,11 +720,6 @@ class Subtractor:
                                                                                  ds.image,
                                                                                  ds.sources,
                                                                                  ds.wcs )
-                        ds.aligned_new_image = ds.image
-                        ds.aligned_new_sources = ds.get_sources()
-                        ds.aligned_new_bg = ds.get_background()
-                        ds.aligned_new_psf = ds.get_psf()
-                        ds.aligned_new_zp = ds.get_zp()
                         ds.aligned_ref_image = aligned_image
                         ds.aligned_ref_sources = aligned_sources
                         ds.aligned_ref_bg = aligned_bg
@@ -771,7 +735,7 @@ class Subtractor:
                         ds.aligned_ref_image.is_coadd = False
 
                     else:
-                        raise ValueError( f"alignment_index must be ref or new, not {to_index}" )
+                        raise ValueError( f"alignment_index must new, not {to_index}" )
 
                     del aligner
                     ImageAligner.cleanup_temp_images()
@@ -780,12 +744,11 @@ class Subtractor:
 
                 if self.pars.method == 'naive':
                     SCLogger.debug( "Subtracting with naive" )
-                    outdict = self._subtract_naive( ds.aligned_new_image, ds.aligned_ref_image )
+                    outdict = self._subtract_naive( ds.image, ds.aligned_ref_image )
 
                 elif self.pars.method == 'hotpants':
                     SCLogger.debug( "Subtracting with hotpants" )
-                    outdict = self._subtract_hotpants( ds.aligned_new_image, ds.aligned_new_bg,
-                                                       ds.aligned_new_sources, ds.aligned_wcs, ds.aligned_new_psf,
+                    outdict = self._subtract_hotpants( ds.image, ds.bg, ds.sources, ds.wcs, ds.psf,
                                                        ds.aligned_ref_image, ds.aligned_ref_bg,
                                                        ds.aligned_ref_sources, ds.aligned_wcs, ds.aligned_ref_psf )
 
@@ -793,8 +756,7 @@ class Subtractor:
 
                 elif self.pars.method == 'zogy':
                     SCLogger.debug( "Subtracting with zogy" )
-                    outdict = self._subtract_zogy( ds.aligned_new_image, ds.aligned_new_bg,
-                                                   ds.aligned_new_psf, ds.aligned_new_zp,
+                    outdict = self._subtract_zogy( ds.image, ds.bg, ds.psf, ds.zp,
                                                    ds.aligned_ref_image, ds.aligned_ref_bg,
                                                    ds.aligned_ref_psf, ds.aligned_ref_zp )
 
@@ -803,7 +765,7 @@ class Subtractor:
                     #   about whether that's the right thing to do, and it
                     #   gets renormalized to its σ in detection.py anyway.
 
-                    normfac = 10 ** ( 0.4 * ( ds.aligned_new_zp.zp - outdict['zero_point'] ) )
+                    normfac = 10 ** ( 0.4 * ( ds.zp.zp - outdict['zero_point'] ) )
                     outdict['outim'] *= normfac
                     outdict['outwt'] /= normfac*normfac
                     outdict['alpha'] *= normfac
@@ -870,8 +832,6 @@ class Subtractor:
                 #   *not* after the image they are warped from!  They will be more unique this way.
                 #   We expect references to be warped a lot of different times, but a given
                 #   sub image will only have one warped ref that goes with it.
-                if ds.aligned_new_image.id != ds.image.id:
-                    raise RuntimeError( "The aligned new isn't the new!  This should never happen!" )
                 ds.aligned_ref_image.filepath = sub_image.invent_filepath( append="_WarpedRef" )
             if ds.update_runtimes:
                 ds.runtimes['subtraction'] = time.perf_counter() - t_start

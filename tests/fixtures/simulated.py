@@ -204,7 +204,6 @@ def generate_image_fixture(commit=True, filter=None, seed=None ):
         #  would get an error about unknown exposure id
         #  when trying to commit the image.
         exp = commit_exposure(exp)
-        exp.update_instrument()
 
         im = Image.from_exposure(exp, section_id=0)
         im.provenance_id = provenance_preprocessing.id
@@ -267,7 +266,6 @@ def sim_reference(provenance_preprocessing, provenance_extraction, provenance_ex
         exp.dec = dec
         exposures.append( exp )
 
-        exp.update_instrument()
         im = Image.from_exposure(exp, section_id=0)
         im.data = im.raw_data - np.median(im.raw_data)
         im.flags = rng.integers(0, 100, size=im.raw_data.shape, dtype=np.int16)

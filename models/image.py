@@ -30,7 +30,6 @@ from models.base import (
     Base,
     SeeChangeBase,
     PGDB,
-    SmartSession,
     UUIDMixin,
     FileOnDiskMixin,
     SpatiallyIndexed,
@@ -1394,7 +1393,10 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         new_image: Image or None
             If you pass this, then it must be the Image that goes along
             with ZeroPoint.  Normally, this function will search the
-            database to find the right Image.
+            database to find the right Image.  When searching the database,
+            it will thrown out difference images and warped images -- those
+            will share the same zero_points row as the parent image.  If you
+            are trying to work on such an image, then you must pass new_image.
 
         width, height: int, default None
             You probably never want to set these, because they will
@@ -1422,21 +1424,29 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         if ( new_image is not None ) and ( not isinstance( new_image, Image ) ):
             raise TypeError( f"If you pass new_image, it must be an Image, not a {type(new_image)}" )
 
-        with SmartSession() as sess:
-            ref._load_ref_data_products( session=sess )
-            ref_image = Image.get_by_id( ref.image.id, session=sess )
+        with PGDB( dictcursor=True ) as pgdb:
+            ref._load_ref_data_products( pgdb=pgdb )
+            ref_image = Image.get_by_id( ref.image.id, pgdb=pgdb )
             if new_image is None:
-                from models.source_list import SourceList
-                from models.world_coordinates import WorldCoordinates
-                from models.zero_point import ZeroPoint
-                new_image = ( sess.query( Image )
-                              .join( SourceList, SourceList.image_id==Image._id )
-                              .join( WorldCoordinates, WorldCoordinates.sources_id==SourceList._id )
-                              .join( ZeroPoint, ZeroPoint.wcs_id==WorldCoordinates._id )
-                              .filter( ZeroPoint._id == new_image_zp.id ) ).first()
-                if new_image is None:
+                rows = pgdb.execute( sql.SQL( textwrap.dedent(
+                    """\
+                    SELECT i.* FROM images i
+                    INNER JOIN source_lists s ON s.image_id=i._id
+                    INNER JOIN world_coordinates w ON w.sources_id=s._id
+                    INNER JOIN zero_points z ON z.wcs_id=w._id
+                    WHERE z._id={zpid}
+                      AND i._type NOT IN ({types})
+                    """
+                ) ).format( zpid=new_image_zp.id,
+                            types=sql.SQL(",").join( [ ImageTypeConverter.to_int(t) for t in ( 'Diff', 'Warped' ) ] )
+                           ) )
+                if len(rows) == 0:
                     raise RuntimeError( f"Database corruption: Image corresponding to ZeroPoint "
                                         f"{new_image_zp} not found!" )
+                elif len(rows) > 1:
+                    raise RuntimeError( f"Found more than one image corresponding to ZeroPoint "
+                                        f"{new_image_zp}; this should never happen." )
+                new_image = Image.create( **(rows[0]) )
 
         output = Image( nofile=True )
 
@@ -2062,7 +2072,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
 
         # For coadded and subtracted images, add some more things to the filename.
         # Reason: you can have more than one coadd or subtraction image in the
-        #   same provenance that has the same iamge used as the base for its name,
+        #   same provenance that has the same image used as the base for its name,
         #   but they *can* be different images.
         # Two things can be different:
         #   (1) the set of images combined may be different
@@ -2651,8 +2661,6 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             filter=None,
             min_mjd=None,
             max_mjd=None,
-            min_dateobs=None,
-            max_dateobs=None,
             min_exp_time=None,
             max_exp_time=None,
             min_seeing=None,
@@ -2772,17 +2780,13 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             Find images taken using this filter.
             Provide a list to match multiple filters.
 
-        min_mjd: float (optional)
-            Find images taken after this MJD.
+        min_mjd: float, str, astropy.time.Time, datetime.datetime, or datetime.date (optional)
+            Find images taken after this time.  If a float, it is an
+            MJD.  If a str, it must be ISO8601 formatted and should
+            either have an explicit time zone (ideal) or be UTC.
 
-        max_mjd: float (optional)
-            Find images taken before this MJD.
-
-        min_dateobs: str (optional)
-            Find images taken after this date (use ISOT format or a datetime object).
-
-        max_dateobs: str (optional)
-            Find images taken before this date (use ISOT format or a datetime object).
+        max_mjd: float, str, astropy.time.Time, datetime.datetime, or datetime.date (optional)
+            Find images taken after this time.
 
         min_exp_time: float (optional)
             Find images with exposure time longer than this (in seconds).
@@ -3068,8 +3072,8 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                     ) ).format( ra=ra, dec=dec )
 
             # A few fields need preprocessing before feeding into the code below
-            min_dateobs = None if min_dateobs is None else parse_dateobs(min_dateobs, output='mjd')
-            max_dateobs = None if max_dateobs is None else parse_dateobs(max_dateobs, output='mjd')
+            min_mjd = None if min_mjd is None else parse_dateobs(min_mjd, output='mjd')
+            max_mjd = None if max_mjd is None else parse_dateobs(max_mjd, output='mjd')
             types = None if type is None else [ ImageTypeConverter.to_int(t) for t in listify(type) ]
 
             # Note that we do NOT filter on provenance here, because we already filtered on
@@ -3081,9 +3085,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                        { 'field': 'instrument',          'val': instrument,     'type': 'list' },
                        { 'field': '_type',               'val': types,          'type': 'list' },
                        { 'field': 'mjd',                 'val': min_mjd,        'type': 'ge' },
-                       { 'field': 'mjd',                 'val': min_dateobs,    'type': 'ge' },
                        { 'field': 'mjd',                 'val': max_mjd,        'type': 'le' },
-                       { 'field': 'mjd',                 'val': max_dateobs,    'type': 'le' },
                        { 'field': 'exp_time',            'val': min_exp_time,   'type': 'ge' },
                        { 'field': 'exp_time',            'val': max_exp_time,   'type': 'le' },
                        { 'field': 'fwhm_estimate',       'val': min_seeing,     'type': 'ge' },
@@ -3240,7 +3242,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
 
 
     @staticmethod
-    def get_coadd_from_components(zps, prov_id=None, session=None):
+    def get_coadd_from_components(zps, prov_id=None, pgdb=None, session=None):
         """Finds the combined image with a given provenance that was made from exactly a list of images.
 
         (The zeropoints point back to wcs which point to sources which point to images.)
@@ -3262,41 +3264,43 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             prov_id = prov_id.id
         zpids = [ i.id if isinstance(i,ZeroPoint) else str(i) for i in zps ]
 
-        with SmartSession(session) as session:
-            dbcon = session.bind.raw_connection()
-            cursor = dbcon.cursor()
-
-            cursor.execute( "DROP TABLE IF EXISTS temp_image_from_upstreams" )
+        with PGDB( pgdb if pgdb is not None else session, dictcursor=True ) as pgdb:
+            pgdb.execute( "DROP TABLE IF EXISTS temp_image_from_upstreams" )
 
             # First get a list of candidate coadd images that are ones whose upstreams
             #   include anything in images, plus a count of how many of
             #   images are in the upstreams.
-            q = ( "SELECT i._id AS imgid, COUNT(c.zp_id) AS nmatchupstr "
-                  "INTO TEMP TABLE temp_image_from_upstreams "
-                  "FROM images i "
-                  "INNER JOIN image_coadd_component c ON c.coadd_image_id=i._id "
-                  "WHERE c.zp_id=ANY(%(zpids)s) " )
-            subdict = { 'zpids': zpids }
+            q = sql.SQL( textwrap.dedent(
+                """\
+                SELECT i._id AS imgid, COUNT(c.zp_id) AS nmatchupstr
+                INTO TEMP TABLE temp_image_from_upstreams
+                FROM images i
+                INNER JOIN image_coadd_component c ON c.coadd_image_id=i._id
+                WHERE c.zp_id=ANY([{zipds}])
+                """
+            ) ).format( zipds=sql.SQL(",").join( zpids ) )
 
             if prov_id is not None:  # pick only those coadds with the right provenance id
-                q += "AND i.provenance_id=%(provid)s "
-                subdict[ 'provid' ] = prov_id
+                q += sql.SQL( "  AND i.provenance_id={provid}\n" ).format( provid=prov_id )
 
             q += "GROUP BY i._id "
-            cursor.execute( q, subdict )
+            pgdb.execute( q )
 
             # Now go through those images and count *all* of the upstreams.
             # (The previous table only counted upstreams that were in zps.)
             # The one (if any) that has len(images) in both the count of
             # matched upstreams and all upstreams is the one we're looking for.
-            q = ( "SELECT imgid FROM ("
-                  "  SELECT t.imgid, t.nmatchupstr, COUNT(c.zp_id) AS nupstr "
-                  "  FROM temp_image_from_upstreams t "
-                  "  INNER JOIN image_coadd_component c ON c.coadd_image_id=t.imgid "
-                  "  GROUP BY t.imgid, t.nmatchupstr ) subq "
-                  "WHERE nmatchupstr=%(num)s AND nupstr=%(num)s " )
-            cursor.execute( q, { 'num': len(zpids) } )
-            rows = cursor.fetchall()
+            q = sql.SQL( textwrap.dedent(
+                """\
+                SELECT imgid FROM (
+                  SELECT t.imgid, t.nmatchupstr, COUNT(c.zp_id) AS nupstr
+                  FROM temp_image_from_upstreams t
+                  INNER JOIN image_coadd_component c ON c.coadd_image_id=t.imgid
+                  GROUP BY t.imgid, t.nmatchupstr ) subq
+                WHERE nmatchupstr={num} AND nupstr={num}
+                """
+            ) ).format( num=len(zpids) )
+            rows = pgdb.execte( q )
 
             if len(rows) > 1:
                 raise ValueError( f"More than one combined image found with provenance ID {prov_id} "

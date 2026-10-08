@@ -194,8 +194,10 @@ def test_alignment_in_image( ptf_reference_image_datastores):
         new_image.insert()
 
         # check that the filename is correct
-        # e.g.: /path/to/data/PTF_<YYYYMMDD>_<HHMMSS>_<sec_ID>_<filt>_ComSci_<prov hash>_u-<coadd hash>.image.fits
-        match = re.match(r'/.*/.*_\d{8}_\d{6}_.*_.*_ComSci_.{6}_u-.{6}\.image\.fits', new_image.get_fullpath()[0])
+        # e.g.: /path/to/PTF_<YYYYMMDD>_<HHMMSS>_<sec_ID>_<filt>_ComSci_<prov hash>_u-<coadd hash>_<posinfo>.image.fits
+        match = re.match(r'/.*/.*_\d{8}_\d{6}_.*_.*_ComSci_.{6}_u-.{6}'
+                         r'_[0-9]{3}\.[0-9]{4}[+\-][0-9]{2}\.[0-9]{4}\.image\.fits',
+                         new_image.get_fullpath()[0])
         assert match is not None
 
         upstream_zps = new_image.get_upstreams()
