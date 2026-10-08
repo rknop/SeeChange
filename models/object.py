@@ -171,6 +171,7 @@ class Object(Base, UUIDMixin, SpatiallyIndexed):
                     FROM deepscore_sets ds
                     INNER JOIN deepscores d ON d.deepscoreset_id=ds._id
                     INNER JOIN measurement_sets ms ON ds.measurementset_id=ms._id
+                    INNER JOIN measurements m ON m.measurementset_id=ms._id AND m.index_in_sources=d.index_in_sources
                     """
                 ) )
                 whereclause = sql.SQL( textwrap.dedent(
@@ -181,7 +182,8 @@ class Object(Base, UUIDMixin, SpatiallyIndexed):
                 ) ).format( dsprov=deepscore_prov_id, msprov=measurement_prov_id )
             else:
                 extra = sql.SQL( "" )
-                fromclause = sql.SQL( "FROM measurement_sets ms\n" )
+                fromclause = sql.SQL( "FROM measurement_sets ms\n"
+                                      "INNER JOIN measurements m ON m.measurementset_id=ms._id\n" )
                 whereclause = sql.SQL( "WHERE ms.provenance_id={msprov}\n" ).format( msprov=measurement_prov_id )
 
             q = sql.SQL( textwrap.dedent(
@@ -191,7 +193,6 @@ class Object(Base, UUIDMixin, SpatiallyIndexed):
                        to_jsonb(i) AS image,
                        to_jsonb(z) AS zeropoint{extra}
                 {fromclause}
-                INNER JOIN measurements m ON m.measurementset_id=ms._id
                 INNER JOIN cutouts c ON ms.cutouts_id=c._id
                 INNER JOIN source_lists s ON c.sources_id=s._id
                 INNER JOIN images i ON s.image_id=i._id

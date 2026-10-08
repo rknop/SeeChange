@@ -3262,7 +3262,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
 
         if ( prov_id is not None ) and ( isinstance( prov_id, Provenance ) ):
             prov_id = prov_id.id
-        zpids = [ i.id if isinstance(i,ZeroPoint) else str(i) for i in zps ]
+        zpids = [ i.id if isinstance(i, ZeroPoint) else asUUID(i) for i in zps ]
 
         with PGDB( pgdb if pgdb is not None else session, dictcursor=True ) as pgdb:
             pgdb.execute( "DROP TABLE IF EXISTS temp_image_from_upstreams" )
@@ -3276,14 +3276,14 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                 INTO TEMP TABLE temp_image_from_upstreams
                 FROM images i
                 INNER JOIN image_coadd_component c ON c.coadd_image_id=i._id
-                WHERE c.zp_id=ANY([{zipds}])
+                WHERE c.zp_id=ANY(ARRAY[{zipds}])
                 """
             ) ).format( zipds=sql.SQL(",").join( zpids ) )
 
             if prov_id is not None:  # pick only those coadds with the right provenance id
                 q += sql.SQL( "  AND i.provenance_id={provid}\n" ).format( provid=prov_id )
 
-            q += "GROUP BY i._id "
+            q += sql.SQL( "GROUP BY i._id " )
             pgdb.execute( q )
 
             # Now go through those images and count *all* of the upstreams.
@@ -3300,7 +3300,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                 WHERE nmatchupstr={num} AND nupstr={num}
                 """
             ) ).format( num=len(zpids) )
-            rows = pgdb.execte( q )
+            rows = pgdb.execute( q )
 
             if len(rows) > 1:
                 raise ValueError( f"More than one combined image found with provenance ID {prov_id} "
@@ -3308,7 +3308,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             elif len(rows) == 0:
                 return None
             else:
-                return Image.get_by_id( rows[0][0], session=session )
+                return Image.get_by_id( rows[0]['imgid'], session=session )
 
 
     @property

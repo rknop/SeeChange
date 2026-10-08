@@ -747,6 +747,8 @@ class SeeChangeBase:
         so that they can create objects of different classes based on what's passed.
 
         """
+        if '_id' in kwargs and isinstance( kwargs['_id'], str ):
+            kwargs['_id'] = asUUID( kwargs['_id'] )
         return cls( **kwargs )
 
     def __init__(self, **kwargs):

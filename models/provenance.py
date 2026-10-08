@@ -76,7 +76,7 @@ class CodeVersion(Base, UUIDMixin):
         'subtraction': (0,5,0),
         'detection': (0,4,0),
         'cutting': (0,2,0),
-        'measuring': (0,2,0),
+        'measuring': (0,3,0),
         'scoring': (0,2,0),
         'alerting': (0,1,0),
         'fakeinjection' : (0,2,0),
