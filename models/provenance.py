@@ -386,14 +386,31 @@ class Provenance(Base):
 
 
     @classmethod
-    def get( cls, provid, pgdb=None, session=None ):
-        """Get a provenance given an id, or None if it doesn't exist."""
-        pgdb = pgdb if pgdb is not None else session
-        with PGDB( pgdb, dictcursor=True ) as pgdb:
+    def get( cls, provid, must_exist=False, pgdb=None, session=None ):
+        """Get a provenance given an id, or None if it doesn't exist.
+
+        If pvid is a Provenance, it is just returned.  (This may be used
+        as a convenience function to allow somebody to pass either a
+        Provenance or its id; just call this to make sure you have the
+        Provenance object.)
+
+        """
+        if provid is None:
+            if must_exist:
+                raise ValueError( "Dude.  You passed None as provid, and then set must_exist.  What did you expect?" )
+            return None
+
+        if isinstance( provid, Provenance ):
+            return provid
+
+        with PGDB( pgdb if pgdb is not None else session, dictcursor=True ) as pgdb:
             rows = pgdb.execute( sql.SQL( "SELECT * FROM provenances WHERE _id={provid}" )
                                  .format( provid=provid ) )
             if len(rows) == 0:
-                return None
+                if must_exist:
+                    return RuntimeError( "Failed to find provenance with id {provid}" )
+                else:
+                    return None
             elif len(rows) > 1:
                 raise RuntimeError( "This should never happen." )
             else:

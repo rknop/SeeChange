@@ -39,8 +39,12 @@ class ParsLightcurve(Parameters):
             docstring = ( "Provenance of the zeropoint to use when searching for images to build into the "
                           "lightcurve.  Pass either this or zp_prov_tag; if you pass both, zp_prov_tag is "
                           "ignored." ),
-            # Not critical, because the zp provenance will be in the dia forced photometry provenance upstreams
-            critical = False
+            # Strictly speaking, this doesn't need to be critical, because the zeropoint provenance
+            #   will be in this process' provenance's upstreams.  But!  We need it here, because we don't
+            #   only want Provenance.parameters to be enough to uniquely specify the provenance (together
+            #   with process, code_version, and upsterams), but also we want to be able to use
+            #   Provenance.parmaeters to instantiate a pipeline worker object.
+            critical = True
         )
 
         self.zp_prov_tag = self.add_par(
@@ -66,8 +70,7 @@ class ParsLightcurve(Parameters):
             par_types = ( str, None ),
             docstring = ( "Provenance if the object position to use for finding the object's position.  If neither "
                           "this nor object_position_prov_tag is given, will use the raw position from the object." ),
-            # Not critical because the positon provenance will be an upstream of the dia forced phot provenance
-            critical = False
+            critical = True
         )
 
         self.object_position_prov_tag = self.add_par(
@@ -242,9 +245,20 @@ class Lightcurve:
         self.zps = None
         self.dia_forced_phots = None
 
+        self._has_been_setup = False
+
 
     def setup( self, object_id=NoValue(), object_name=NoValue(), mjd0=NoValue(),
                mjd1=NoValue(), filters=NoValue(), pgdb=None ):
+        if self._has_been_setup:
+            # Doing this because we set some parameters below.  If we wanted to make
+            #   this reusable, we'd have to be able to restore them.
+            #   (Honestly, that may be true of lots of other objects as well -- they may
+            #   set parameters when they're run, not only when they're instantiated, which
+            #   means there's a hysteresis.  Should check.)
+            raise RuntimeError( "Lightcurve is a single-use object." )
+        self._has_been_setup = True
+
         pgdb_in = pgdb
 
         self.pars.object_id = object_id if not isinstance( object_id, NoValue ) else self.pars.object_id
@@ -278,6 +292,7 @@ class Lightcurve:
                 elif self.pars.zp_prov_tag is not None:
                     self.zp_prov = Provenance.get_for_tag( self.pars.zp_prov_tag, self.pars.zp_prov_tag_process,
                                                            pgdb=pgdb )
+                    self.pars.zp_prov = self.zp_prov.id
 
             if self.zp_prov is None:
                 raise RuntimeError( f"Could not find a zeropoint provenance to use to find images. "
@@ -306,6 +321,7 @@ class Lightcurve:
                         raise ValueError( f"Could not find object position provenance for "
                                           f"tag {self.pars.object_position_prov_tag} and "
                                           f"process { self.pars.object_position_prov_tag_process}" )
+                    self.pars.object_position_prov = self.object_position_prov.id
 
             if self.subtractor.pars.refset is None:
                 raise ValueError( "Subtractor has no refset defined!" )

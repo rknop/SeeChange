@@ -783,6 +783,7 @@ class Subtractor:
                 sub_image.data = outdict['outim']
                 sub_image.weight = outdict['outwt']
                 sub_image.flags = outdict['outfl']
+                sub_image.warped_ref_source_id = ds.aligned_ref_sources.id
                 if 'outimhdr' in outdict:
                     sub_image.header = outdict['outimhdr']
                 if 'score' in outdict:

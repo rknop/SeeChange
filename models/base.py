@@ -740,15 +740,19 @@ class SeeChangeBase:
     type_annotation_map = { UUID: sqlUUID }
 
     @classmethod
-    def create( cls, **kwargs ):
+    def create( cls, create_uuidify=True, **kwargs ):
         """Create an object.  Usually use this instead of the object constructor directly.
 
         For most objects, it just calls the object constructor.  Some classes may subclass this
         so that they can create objects of different classes based on what's passed.
 
         """
-        if '_id' in kwargs and isinstance( kwargs['_id'], str ):
-            kwargs['_id'] = asUUID( kwargs['_id'] )
+        if create_uuidify:
+            mess = sa.inspect( cls )
+            knowncols = { c.name: c for c in mess.columns }
+            for k in kwargs:
+                if ( k in knowncols ) and ( isinstance( knowncols[k].type, sqlUUID ) ):
+                    kwargs[k] = None if kwargs[k] is None else asUUID( kwargs[k] )
         return cls( **kwargs )
 
     def __init__(self, **kwargs):

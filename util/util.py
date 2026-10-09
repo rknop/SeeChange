@@ -92,7 +92,11 @@ def listify( val, require_string=False ):
         return val
 
     if isinstance( val, collections.abc.Iterable ):
-        if isinstance( val, str ) or isinstance( val, bytes ):
+        if isinstance( val, str ):
+            return [ val ]
+        elif isinstance( val, bytes ):
+            if require_string:
+                raise TypeError( "listify wants a string, you gave it bytes.  (use decode?)" )
             return [ val ]
         else:
             if require_string and ( not all( [ isinstance( i, str ) for i in val ] ) ):
