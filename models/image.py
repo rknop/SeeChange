@@ -787,10 +787,11 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
                     raise ValueError( "Error inserting warped image, missing warp parent properties." )
                 q = sql.SQL( textwrap.dedent(
                     """\
-                    INSERT INTO image_warp_parent(warped_id, unwarped_zp_id, target_wcs_id)
-                    VALUES( {imid}, {zpid}, {wcsid} )
+                    INSERT INTO image_warp_parent(warped_id, unwarped_zp_id, target_wcs_id, warp_provenance_id)
+                    VALUES( {imid}, {zpid}, {wcsid}, {prov} )
                     """
-                ) ).format( imid=self.id, zpid=self._warp_parent_source_zp, wcsid=self._warp_parent_target_wcs )
+                ) ).format( imid=self.id, zpid=self._warp_parent_source_zp, wcsid=self._warp_parent_target_wcs,
+                            prov=self.provenance_id )
                 pgdb.execute_nofetch( q )
 
             if not nocommit:

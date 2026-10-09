@@ -26,7 +26,7 @@ def upgrade() -> None:
     # ### end Alembic commands ###
 
     # Doing this manually because it would take me a lot longer to make
-    # sure I got the order of operations rigth trying to do this with
+    # sure I got the order of operations right trying to do this with
     # SQLAlchemy and alembic.  (Yet ONE MORE way I regret ever having heard
     # about SQLAlchemy in the first place.)
     

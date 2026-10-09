@@ -12,7 +12,7 @@ from util.logger import SCLogger   # noqa: F401
 
 def test_lightcurve( sim_lightcurve_persistent_sources,
                      sim_lightcurve_news_module,
-                     sim_lightcurve_dia_forcedphot_references_module,
+                     sim_lightcurve_diaforcedphot_references_module,
                      sim_lightcurve_image_parameters ):
     srcs = sim_lightcurve_persistent_sources
     imageinfo, _ = sim_lightcurve_image_parameters
@@ -57,7 +57,7 @@ def test_lightcurve( sim_lightcurve_persistent_sources,
                                mjd1 = imageinfo['refmjd'] + imageinfo['mjdoffs'][-1] + 0.1,
                                instrument='DemoInstrument',
                                object_name=f'test_lightcurve_object_{obji}',
-                               subtraction_config={ 'refset': 'sim_lightcurve_dia_forcedphot_reference',
+                               subtraction_config={ 'refset': 'sim_lightcurve_diaforcedphot_reference',
                                                     'save_warped_ref': True,
                                                     'method': 'hotpants',
                                                     'hotpants_ko': 0,
