@@ -12,7 +12,7 @@ from util.logger import SCLogger   # noqa: F401
 
 def test_lightcurve( sim_lightcurve_persistent_sources,
                      sim_lightcurve_news_module,
-                     sim_lightcurve_forcedphot_references_module,
+                     sim_lightcurve_diaforcedphot_references_module,
                      sim_lightcurve_image_parameters ):
     srcs = sim_lightcurve_persistent_sources
     imageinfo, _ = sim_lightcurve_image_parameters
@@ -31,7 +31,7 @@ def test_lightcurve( sim_lightcurve_persistent_sources,
     # are deleted.  However, I don't think we can count on them doing it
     # in the right order.  So, try to clean up everything we make here.
     nukes = { 'loose_files': [],
-              'forcedphot': [],
+              'diaforcedphot': [],
               'subimids': [],
               'objects': [] }
     reduced_residses = []
@@ -57,7 +57,7 @@ def test_lightcurve( sim_lightcurve_persistent_sources,
                                mjd1 = imageinfo['refmjd'] + imageinfo['mjdoffs'][-1] + 0.1,
                                instrument='DemoInstrument',
                                object_name=f'test_lightcurve_object_{obji}',
-                               subtraction_config={ 'refset': 'sim_lightcurve_forcedphot_reference',
+                               subtraction_config={ 'refset': 'sim_lightcurve_diaforcedphot_reference',
                                                     'save_warped_ref': True,
                                                     'method': 'hotpants',
                                                     'hotpants_ko': 0,
@@ -72,8 +72,8 @@ def test_lightcurve( sim_lightcurve_persistent_sources,
                                save_to_db=True
                               )
             ltcv.run()
-            nukes['forcedphot'].extend( ltcv.forced_phots )
-            nukes['subimids'].extend( p.subtraction_id for p in ltcv.forced_phots )
+            nukes['diaforcedphot'].extend( ltcv.dia_forced_phots )
+            nukes['subimids'].extend( p.subtraction_id for p in ltcv.dia_forced_phots )
 
             # #####
             # # Uncomment this to write out debugging images to the test directory.
@@ -96,7 +96,7 @@ def test_lightcurve( sim_lightcurve_persistent_sources,
             #     ref.sources.ds9_regfile( destfile )
             #     nukes['loose_files'].append( pathlib.Path( destfile ) )
             # with PGDB( dictcursor=True ) as pgdb:
-            #     for photi, phot in enumerate( ltcv.forced_phots ):
+            #     for photi, phot in enumerate( ltcv.dia_forced_phots ):
             #         subim = Image.get_by_id( phot.subtraction_id, pgdb=pgdb )
             #         origfiles = subim.get_fullpath( comps )
             #         for comp, origfile in zip( comps, origfiles ):
@@ -138,11 +138,12 @@ def test_lightcurve( sim_lightcurve_persistent_sources,
             # SCLogger.warning( "Lightcurve images written to test directory" )
             # ####
 
-            assert len( ltcv.forced_phots ) == len( imageinfo['mjdoffs'] )
-            psffluxen = np.array( [ p.flux_psf for p in ltcv.forced_phots ] )
-            psffluxen_err = np.array( [ p.flux_psf_err for p in ltcv.forced_phots ] )
-            # aperfluxen = np.array( [ p.flux_apertures[0] * 10**(p._aper_cors[0]/-2.5) for p in ltcv.forced_phots ] )
-            # aperfluxen_err = np.array( [ p.flux_apertures_err[0] for p in ltcv.forced_phots ] )
+            assert len( ltcv.dia_forced_phots ) == len( imageinfo['mjdoffs'] )
+            psffluxen = np.array( [ p.flux_psf for p in ltcv.dia_forced_phots ] )
+            psffluxen_err = np.array( [ p.flux_psf_err for p in ltcv.dia_forced_phots ] )
+            # aperfluxen = np.array( [ p.flux_apertures[0] *
+            #                          10**(p._aper_cors[0]/-2.5) for p in ltcv.dia_forced_phots ] )
+            # aperfluxen_err = np.array( [ p.flux_apertures_err[0] for p in ltcv.dia_forced_phots ] )
 
             reduced_resids = ( psffluxen - objinfo['fluxen'] ) / psffluxen_err
             reduced_residses.append( reduced_resids )
@@ -171,8 +172,8 @@ def test_lightcurve( sim_lightcurve_persistent_sources,
         for f in nukes['loose_files']:
             f.unlink( missing_ok=True )
 
-        # Delete forced phot first, because it's furthest downstream
-        for p in nukes['forcedphot']:
+        # Delete dia forced phot first, because it's furthest downstream
+        for p in nukes['diaforcedphot']:
             p.delete_from_disk_and_database()
 
         # Should be safe to delete objects now:

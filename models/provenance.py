@@ -90,7 +90,7 @@ class CodeVersion(Base, UUIDMixin):
         'Image.trim.sources': (0,1,0),
         'Image.trim.wcs': (0,1,0),
         'Image.trim.zp': (0,1,0),
-        'forcedphot': (0,1,0),
+        'diaforcedphot': (0,2,0),
 
         # The next couple are processes whose direct data products
         #   are not saved to the database.  If their versions change,
