@@ -1,3 +1,4 @@
+import numpy as np
 import sqlalchemy as sa
 from sqlalchemy.schema import UniqueConstraint
 from sqlalchemy.dialects.postgresql import ARRAY
@@ -45,6 +46,28 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
         nullable = False,
         index = True,
         doc = ( "ID of the subtraction this forced phot was performed on." )
+    )
+
+    # Note: the NaN default here is just because I had an existing database to which
+    #   these columns were going to be added, so I didn't want the not null to kill
+    #   it.  Yeah, I will need to manually go back and fix those columns later (if
+    #   I decide I care).
+    x = sa.Column(
+        sa.REAL,
+        nullable = False,
+        index = False,
+        default = np.nan,
+        server_default = sa.sql.elements.TextClause( "'NaN'" ),
+        doc = ( "x position (0-indexed, n.0=center of pixel) on image given by subtraction_id" )
+    )
+
+    y = sa.Column(
+        sa.REAL,
+        nullable = False,
+        index = False,
+        default = np.nan,
+        server_default = sa.sql.elements.TextClause( "'NaN'" ),
+        doc = ( "y position (0-indexed, n.0=center of pixel) on image given by subtraction_id" )
     )
 
     flux_psf = sa.Column(

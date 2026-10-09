@@ -671,6 +671,11 @@ class Lightcurve:
         # Trim if we have to
         if self.pars.crop_image is not None:
             xctr, yctr = ds.wcs.wcs.world_to_pixel_values( self.ra, self.dec )
+            # RAGE.  I hate that these get returned as np.array(<value>), i.e. a 0-dimension array,
+            #   rather than a scalar, because that confuses all kinds of code later.  So,
+            #   convert them to floats.
+            xctr = float( xctr )
+            yctr = float( yctr )
             ixctr = int( np.floor( xctr + 0.5 ) )
             iyctr = int( np.floor( yctr + 0.5 ) )
             x0 = ixctr - ( self.pars.crop_image[0] // 2 )
@@ -755,6 +760,8 @@ class Lightcurve:
                 object_position_id=None if self.object_position is None else self.object_position_id,
                 provenance_id=ds.prov_tree['diaforcedphot'].id,
                 subtraction_id=sub_image.id,
+                x=xctr,
+                y=yctr,
                 flux_psf=measurements.flux_psf,
                 flux_psf_err=measurements.flux_psf_err,
                 flux_apertures=measurements.flux_apertures,
