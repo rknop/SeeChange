@@ -460,29 +460,29 @@ def test_full_run_hotpants( decam_exposure, decam_reference, decam_default_calib
 
         # # Uncomment this bit to produce the "expected" regression results above;
         # #   will need to fix indentation and (maybe) add newlines
-        import io
-        strio = io.StringIO()
-        strio.write(
-            f"""
-            expected = {{
-                'x':      np.array( [ {', '.join(f"{m.x:7.2f}" for m in ds.measurements)} ] ),
-                'y':      np.array( [ {', '.join(f"{m.y:7.2f}" for m in ds.measurements)} ] ),
-                'gfit_x':           [ {', '.join(f"{m.gfit_x:7.2f}" for m in ds.measurements)} ],
-                'gfit_y':           [ {', '.join(f"{m.gfit_y:7.2f}" for m in ds.measurements)} ],
-                'major_width': [ {', '.join(f"{m.major_width:5.2f}" for m in ds.measurements)} ],
-                'minor_width': [ {', '.join(f"{m.minor_width:5.2f}" for m in ds.measurements)} ],
-                'neg_frac':      [ {', '.join(f"{m.negfrac:4.2f}" for m in ds.measurements)} ],
-                'neg_flux_frac': [ {', '.join(f"{m.negfluxfrac:4.2f}" for m in ds.measurements)} ],
-                'psf_flux':      [ {', '.join(f"{m.flux_psf:6.0f}." for m in ds.measurements)} ],
-                'psf_flux_err':  [ {', '.join(f"{m.flux_psf_err:6.0f}." for m in ds.measurements)} ],
-                'aper_flux':     [ {', '.join(f"{m.flux_apertures[0]:6.0f}." for m in ds.measurements)} ],
-                'aper_flux_err': [ {', '.join(f"{m.flux_apertures_err[0]:6.0f}." for m in ds.measurements)} ],
-                'rb': [ {', '.join(f"{d.score:5.3f}" for d in ds.deepscores)} ]
-            }}
-            """
-        )
-        SCLogger.info( f"Here it is:\n{strio.getvalue()}" )
-        import pdb; pdb.set_trace()
+        # import io
+        # strio = io.StringIO()
+        # strio.write(
+        #     f"""
+        #     expected = {{
+        #         'x':      np.array( [ {', '.join(f"{m.x:7.2f}" for m in ds.measurements)} ] ),
+        #         'y':      np.array( [ {', '.join(f"{m.y:7.2f}" for m in ds.measurements)} ] ),
+        #         'gfit_x':           [ {', '.join(f"{m.gfit_x:7.2f}" for m in ds.measurements)} ],
+        #         'gfit_y':           [ {', '.join(f"{m.gfit_y:7.2f}" for m in ds.measurements)} ],
+        #         'major_width': [ {', '.join(f"{m.major_width:5.2f}" for m in ds.measurements)} ],
+        #         'minor_width': [ {', '.join(f"{m.minor_width:5.2f}" for m in ds.measurements)} ],
+        #         'neg_frac':      [ {', '.join(f"{m.negfrac:4.2f}" for m in ds.measurements)} ],
+        #         'neg_flux_frac': [ {', '.join(f"{m.negfluxfrac:4.2f}" for m in ds.measurements)} ],
+        #         'psf_flux':      [ {', '.join(f"{m.flux_psf:6.0f}." for m in ds.measurements)} ],
+        #         'psf_flux_err':  [ {', '.join(f"{m.flux_psf_err:6.0f}." for m in ds.measurements)} ],
+        #         'aper_flux':     [ {', '.join(f"{m.flux_apertures[0]:6.0f}." for m in ds.measurements)} ],
+        #         'aper_flux_err': [ {', '.join(f"{m.flux_apertures_err[0]:6.0f}." for m in ds.measurements)} ],
+        #         'rb': [ {', '.join(f"{d.score:5.3f}" for d in ds.deepscores)} ]
+        #     }}
+        #     """
+        # )
+        # SCLogger.info( f"Here it is:\n{strio.getvalue()}" )
+        # import pdb; pdb.set_trace()
 
         check_full_run_results( ds, decam_exposure, decam_reference.image.section_id, decam_reference, expected )
 
