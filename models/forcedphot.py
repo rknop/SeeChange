@@ -10,38 +10,38 @@ from models.image import Image
 from models.enums_and_bitflags import measurements_badness_inverse
 
 
-class ForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
-    __tablename__ = 'forced_photometry'
+class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
+    __tablename__ = 'dia_forced_photometry'
 
     @declared_attr
     def __table_args__( cls ):    # noqa: N805
         return (
-            UniqueConstraint( 'object_id', 'subtraction_id', 'provenance_id', name='forcedphot_unique' ),
+            UniqueConstraint( 'object_id', 'subtraction_id', 'provenance_id', name='dia_forcedphot_unique' ),
         )
 
     object_id = sa.Column(
-        sa.ForeignKey( 'objects._id', ondelete='RESTRICT', name='forcedphot_object_id_fkey' ),
+        sa.ForeignKey( 'objects._id', ondelete='RESTRICT', name='dia_forcedphot_object_id_fkey' ),
         nullable = False,
         index = True,
         doc = "ID of the object this is forced photometry for"
     )
 
     object_position_id = sa.Column(
-        sa.ForeignKey( 'object_positions._id', ondelete='RESTRICT', name='forcedphot_object_position_id_fkey' ),
+        sa.ForeignKey( 'object_positions._id', ondelete='RESTRICT', name='dia_forcedphot_object_position_id_fkey' ),
         nullable = True,
         index = True,
         doc = "ID (if any) of the object position used for this forced photometry."
     )
 
     provenance_id = sa.Column(
-        sa.ForeignKey( 'provenances._id', ondelete='CASCADE', name='forcedphot_provenance_id_fkey' ),
+        sa.ForeignKey( 'provenances._id', ondelete='CASCADE', name='dia_forcedphot_provenance_id_fkey' ),
         nullable = False,
         index = True,
         doc = ( "ID of the Provenance of this forced photometry point" )
     )
 
     subtraction_id = sa.Column(
-        sa.ForeignKey( 'images._id', ondelete='RESTRICT', name='forcedphot_subtraction_id_fkey' ),
+        sa.ForeignKey( 'images._id', ondelete='RESTRICT', name='dia_forcedphot_subtraction_id_fkey' ),
         nullable = False,
         index = True,
         doc = ( "ID of the subtraction this forced phot was performed on." )

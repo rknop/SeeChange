@@ -915,7 +915,7 @@ def sim_lightcurve_reference_module(  sim_lightcurve_reference_image_unsaved ):
 
 # This fixture is used in pipeline/test_lightcurve.py
 @pytest.fixture( scope='module' )
-def sim_lightcurve_forcedphot_references_module( sim_lightcurve_reference_module, sim_lightcurve_persistent_sources ):
+def sim_lightcurve_diaforcedphot_references_module( sim_lightcurve_reference_module, sim_lightcurve_persistent_sources ):
     _ref, ds = sim_lightcurve_reference_module
     refs = []
     imgs = []
@@ -941,7 +941,7 @@ def sim_lightcurve_forcedphot_references_module( sim_lightcurve_reference_module
             ref.insert( pgdb=pgdb )
             refs.append( ref )
 
-    refset = RefSet( name='sim_lightcurve_forcedphot_reference', provenance_id=refprov.id )
+    refset = RefSet( name='sim_lightcurve_diaforcedphot_reference', provenance_id=refprov.id )
     refset.insert()
 
     yield refs

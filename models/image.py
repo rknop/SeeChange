@@ -94,7 +94,7 @@ image_warp_parent = sa.Table(
     'image_warp_parent',
     Base.metadata,
     sa.Column( 'warp_provenance_id',
-               sqlUUID,
+               sa.String,
                sa.ForeignKey('provenances._id', ondelete="RESTRICT", name="image_warped_prov_fkey" ),
                index=True,
                nullable=False ),
@@ -2524,13 +2524,13 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         This will include:
            * source lists
            * images (images trimmed from this image)
-           * forced photometry
+           * dia forced photometry
 
         """
 
         # avoids circular import
         from models.source_list import SourceList
-        from models.forcedphot import ForcedPhot
+        from models.diaforcedphot import DiaForcedPhot
 
         downstreams = []
 
@@ -2539,9 +2539,9 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             rows, _cols = pgdb.execute( q )
             downstreams.extend( [ ( SourceList, row[0] ) for row in rows ] )
 
-            q = sql.SQL( "SELECT _id FROM forced_photometry WHERE subtraction_id={me}" ).format( me=self.id )
+            q = sql.SQL( "SELECT _id FROM dia_forced_photometry WHERE subtraction_id={me}" ).format( me=self.id )
             rows, _cols = pgdb.execute( q )
-            downstreams.extend( [ ( ForcedPhot, row[0] ) for row in rows ] )
+            downstreams.extend( [ ( DiaForcedPhot, row[0] ) for row in rows ] )
 
             q = sql.SQL( "SELECT image_id FROM image_trim_parent WHERE parent_image_id={me}"
                         ).format( me=self.id )
