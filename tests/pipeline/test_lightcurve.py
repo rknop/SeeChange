@@ -72,6 +72,7 @@ def test_lightcurve( sim_lightcurve_persistent_sources,
                                save_to_db=True
                               )
             ltcv.run()
+            import pdb; pdb.set_trace()
             nukes['diaforcedphot'].extend( ltcv.dia_forced_phots )
             nukes['subimids'].extend( p.subtraction_id for p in ltcv.dia_forced_phots )
 
