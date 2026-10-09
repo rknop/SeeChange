@@ -62,7 +62,7 @@ def test_lightcurve( sim_lightcurve_persistent_sources,
                                                     'method': 'hotpants',
                                                     'hotpants_ko': 0,
                                                     'hotpants_bgo': 0,
-                                                    'hotpants_numregions': (1, 1),
+                                                    'hotpants_numregions': [1, 1],
                                                     'alignment': { 'min_matched': 6,
                                                                    'swarp_trust_raw_wcs': True,
                                                                    'swarp_use_unwarped_psf': True },
@@ -71,7 +71,7 @@ def test_lightcurve( sim_lightcurve_persistent_sources,
                                                    },
                                save_to_db=True
                               )
-            ltcv.run( cache_aligned_images=True )
+            ltcv.run()
             nukes['forcedphot'].extend( ltcv.forced_phots )
             nukes['subimids'].extend( p.subtraction_id for p in ltcv.forced_phots )
 
@@ -163,8 +163,8 @@ def test_lightcurve( sim_lightcurve_persistent_sources,
         # ...or this one, if you're running tests in the background
         #   but still want to stop, e.g. if you want to look at a
         #   log file.
-        import remote_pdb; remote_pdb.RemotePdb( '127.0.0.1', 4444 ).set_trace()
-        pass
+        # import remote_pdb; remote_pdb.RemotePdb( '127.0.0.1', 4444 ).set_trace()
+        # pass
 
     finally:
         # Delete test files if any
