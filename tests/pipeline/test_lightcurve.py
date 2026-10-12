@@ -1,13 +1,19 @@
+import pytest
+
 import numpy as np
+import pandas
+import nested_pandas
 
 from models.diaforcedphot import DiaForcedPhot
 from util.logger import SCLogger   # noqa: F401
 
 
 def test_lightcurve( sim_lightcurve_lightcurves ):
-    ltcvs, objinfos, _ = sim_lightcurve_lightcurves
+    ltcvs, objinfos, _, _ = sim_lightcurve_lightcurves
 
-    reduced_residses = []
+    psf_reduced_residses = []
+    psf_flagses = []
+    aper_reduced_residses = []
     for ltcv, objinfo in zip( ltcvs, objinfos ):
         # #####
         # # Uncomment this to write out debugging images to the test directory.
@@ -75,26 +81,119 @@ def test_lightcurve( sim_lightcurve_lightcurves ):
         assert len( ltcv ) == len( objinfo['mjds'] )
         psffluxen = np.array( [ p.flux_psf for p in ltcv ] )
         psffluxen_err = np.array( [ p.flux_psf_err for p in ltcv ] )
-        # aperfluxen = np.array( [ p.flux_apertures[0] *
-        #                          10**(p._aper_cors[0]/-2.5) for p in ltcv ] )
-        # aperfluxen_err = np.array( [ p.flux_apertures_err[0] for p in ltcv ] )
+        aperfluxen = np.array( [ p.flux_apertures[0] *
+                                 10**(p._aper_cors[0]/-2.5) for p in ltcv ] )
+        aperfluxen_err = np.array( [ p.flux_apertures_err[0] for p in ltcv ] )
 
-        reduced_resids = ( psffluxen - objinfo['fluxen'] ) / psffluxen_err
-        reduced_residses.append( reduced_resids )
+        psf_resids = ( psffluxen - objinfo['fluxen'] ) / psffluxen_err
+        psf_reduced_residses.append( psf_resids )
+        psf_flagses.append( np.array( [ p.psfflags for p in ltcv ] ) )
+        aper_resids = ( aperfluxen - objinfo['fluxen'] ) / aperfluxen_err
+        aper_reduced_residses.append( aper_resids )
 
-    for obji, reduced_resids in enumerate( reduced_residses ):
+
+    # OMG THESE ARE TERRIBLE RIGHT NOW
+
+    for obji, ( psf_reduced_resids, aper_reduced_resids ) in enumerate( zip( psf_reduced_residses,
+                                                                             aper_reduced_residses ) ):
         # assert np.all( np.fabs( reduced_resids ) < 3. )
-        SCLogger.info( f"reduced_resids for {obji}: {reduced_resids}" )
+        SCLogger.info( f"PSF reduced_resids for {obji}: {psf_reduced_resids}" )
+        SCLogger.info( f"Aper reduced resides for {obji}: {aper_reduced_resids}" )
         # I'm a little nervous that the chisq/dof for objects 0 and
         # 1 are high (~2.2), but visually at least object 0 is on a
         # galaxy that doesn't subtract all that well.
 
 
+# These next couple of tests are here rather than in
+#    models/test_diaforcedphot.py because they're test of lightcurve
+#    functionality, and because of the efficiency of not running the
+#    sim_lightcurve_lightcurves module-scope fixture yet another time.
 
 def test_find_objects_with_diaforcedphot( sim_lightcurve_lightcurves ):
-    ltvcs, objinfos, photprovid = sim_lightcurve_lightcurves
+    ltcvs, _objinfos, objs, photprovid = sim_lightcurve_lightcurves
 
     # Try to get everything
-    _rval = DiaForcedPhot.find_objects_with_diaforcedphot( photprovid )
-    import pdb; pdb.set_trace()
-    pass
+    rval = DiaForcedPhot.find_objects_with_diaforcedphot( photprovid )
+    assert len( rval['id'] ) == 3
+    objdexen = []
+    for i in range( len(objs) ):
+        dex = [ j for j in range( len(rval['name']) ) if rval['name'][j] == objs[i].name ]
+        assert len(dex) == 1
+        objdexen.append( dex[0] )
+    # The fixture had no object positions, so was just using the positions from the object
+    assert all ( r == pytest.approx( objs[objdexen[i]].ra, abs=0.01/3600. / np.cos( rval['dec'][i] ) )
+                 for i, r in enumerate( rval['ra'] ) )
+    assert all ( d == pytest.approx( objs[objdexen[i]].dec, abs=0.01/3600. )
+                 for i, d in enumerate( rval['dec'] ) )
+    assert all( n == 6 for n in rval['numphot'] )
+
+
+def test_get_lightcurve_for_object( sim_lightcurve_lightcurves ):
+    expected_ltcvs, objinfos, objs, photprovid = sim_lightcurve_lightcurves
+
+    basic_keys = { 'mjd', 'filter', 'zp', 'flux_psf', 'flux_psf_err' }
+    raw_keys = { 'flux_psf_raw', 'flux_psf_raw_err' }
+    scalar_ap_keys = { 'flux_aper_0', 'flux_aper_0_err', 'flux_aper_n', 'flux_aper_n_err' }
+    list_ap_keys = { 'aper_cors', 'aper_pix' }
+    raw_ap_keys = { 'flux_apertures_raw', 'flux_apertures_raw_err' }
+
+    # ....it's a four-loop
+    for obj, objinfo, expected_ltcv in zip( objs, objinfos, expected_ltcvs ):
+        for searchby in ( obj, obj.id, obj.name ):
+            for incraw in ( False, True ):
+                for incap in ( False, True ):
+                    scalarcols = basic_keys
+                    allcols = basic_keys
+                    dfcols = basic_keys
+                    dftype = pandas.DataFrame
+                    extras = {}
+                    if incraw:
+                        scalarcols = scalarcols.union( raw_keys )
+                        dfcols = scalarcols
+                        allcols = scalarcols
+                        extras['include_raw'] = True
+                    if incap:
+                        scalarcols = scalarcols.union( scalar_ap_keys )
+                        allcols = scalarcols.union( list_ap_keys )
+                        dftype = nested_pandas.NestedFrame
+                        dfcols = dfcols.union( { 'apphot' } ).union( scalar_ap_keys )
+                        dfapcols = list_ap_keys.union( raw_ap_keys if incraw else set() )
+                        extras['include_apertures'] = True
+
+                    # Default is list of dicts
+                    ltcv = DiaForcedPhot.get_lightcurve_for_object( searchby, photprovid, **extras )
+                    assert isinstance( ltcv, list )
+                    assert isinstance( ltcv[0], dict )
+                    assert set( ltcv[0].keys() ) == allcols
+                    assert all( lc['filter'] == 'r' for lc in ltcv )
+                    mjds = np.array( [ lc['mjd'] for lc in ltcv ] )
+                    assert np.all( np.isclose( mjds, objinfo['mjds'], rtol=1e-14 ) )
+                    # fluxen = np.array( [ lc['flux_psf'] for lc in ltcv ] )
+                    # dfluxen = np.array( [ lc['flux_psf_err'] for lc in ltcv ] )
+                    # # ...these next two are more a test of pipeline/lightcurve.py than of
+                    # #   get_lightcurve_for_object, but oh well... should pass here too!
+                    # assert np.all( np.abs( ( fluxen - objinfo['fluxen'] ) / dfluxen ) < 3. )
+                    # assert ( ( (fluxen - objinfo['fluxen'] ) / dfluxen ) **2 ).sum() < 1.5 * ( len(fluxen) - 1 )
+
+                    ltcv2 = DiaForcedPhot.get_lightcurve_for_object( searchby, photprovid, return_format='dictoflists',
+                                                                     **extras )
+                    assert isinstance( ltcv2, dict )
+                    assert set( ltcv2.keys() ) == allcols
+                    for i, point in enumerate( ltcv ):
+                        for attr in allcols:
+                            assert point[attr] == ltcv2[attr][i]
+
+
+                    ltcv3 = DiaForcedPhot.get_lightcurve_for_object( searchby, photprovid, return_format='dataframe',
+                                                                     **extras )
+                    assert isinstance( ltcv3, dftype )
+                    assert set( ltcv3.columns ) == dfcols
+                    for key in scalarcols:
+                        if key == 'filter':
+                            assert np.all( ltcv3[key] == np.array(ltcv2[key]) )
+                        else:
+                            assert np.all( np.isclose( ltcv3[key], np.array(ltcv2[key]), rtol=1e-6 ) )
+                    if incap:
+                        assert set( ltcv3.apphot.columns ) == dfapcols
+                        assert all( np.all( np.isclose( ltcv3.apphot[i][key], ltcv2[key][i], rtol=1e-6 ) )
+                                    for i in range(len(ltcv3)) )

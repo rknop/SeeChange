@@ -9,6 +9,7 @@ from astropy.table import QTable
 
 from improc.tools import make_cutouts
 from models.measurements import Measurements
+from models.enums_and_bitflags import psf_phot_flags_inverse, string_to_bitflag
 from util.logger import SCLogger
 
 
@@ -238,6 +239,7 @@ def photometry( image, noise, mask, positions, apers, measurements=None,
                           center_x_pixel=int(np.round(pos[0])),
                           center_y_pixel=int(np.round(pos[1])),
                          )
+        m.apertures_flags = [0] * len(apers)
 
         # PSFPhotometry is going to spit at us if we feed it a fully masked
         #   object.  Try to detect that ahead of time and skip the photometry
@@ -252,7 +254,7 @@ def photometry( image, noise, mask, positions, apers, measurements=None,
             m.y = pos[1]
             m.flux_psf = np.nan
             m.flux_psf_err = np.nan
-            m.psf_fit_flags = 9         # 1 = "≥1 pixel masked", 8 = "fit did not converge"
+            m.psf_fit_flags = string_to_bitflag( 'fully_masked', psf_phot_flags_inverse )
         else:
             photresult = photor( image, mask=mask, error=noise, init_params=init_params )
             m.x = photresult['x_fit'][0]
@@ -292,6 +294,9 @@ def photometry( image, noise, mask, positions, apers, measurements=None,
             else:
                 measurements[j].flux_apertures[i] = apphot['aperture_sum'][j]
             measurements[j].flux_apertures_err[i] = apphot['aperture_sum_err'][j]
+            # gah... these aren't here yet.  We're going to have to wait until
+            #   there's a photutils new enough to have AperturePhotometry.  3.0.0 isn't it.
+            # measurements[j].apertures_flags[i] = apphot['flags'][j]
     SCLogger.debug( "...done with aperture photometry" )
 
     if return_cutouts:

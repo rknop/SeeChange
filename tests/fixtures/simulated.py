@@ -1256,11 +1256,25 @@ def sim_lightcurve_lightcurves( sim_lightcurve_persistent_sources,
                                 sim_lightcurve_news_module,
                                 sim_lightcurve_diaforcedphot_references_module,
                                 sim_lightcurve_image_parameters ):
+    """Three lightcurves from the images produced by sim_lightcurve_news_module.
+
+    Yields
+    ------
+      lightcurves, objinfos, ltcvprovid
+
+         lightcurves is a list of lists of DiaForcedPhot objects
+         objinfo is a list of dicts with keys 'ra', 'dec', 'mjds', 'fluxen'
+         obj is a list of Object objects
+         ltcvprovid is a str, the provenance_id for the DiaForcedPhot objects
+
+    """
+
     srcs = sim_lightcurve_persistent_sources
     imageinfo, _ = sim_lightcurve_image_parameters
     newdsen = sim_lightcurve_news_module
 
     objinfos = []
+    objs = []
     for source in srcs:
         objinfos.append( { 'ra': source['ra'],
                            'dec': source['dec'],
@@ -1285,6 +1299,7 @@ def sim_lightcurve_lightcurves( sim_lightcurve_persistent_sources,
                                         ra=objinfo['ra'], dec=objinfo['dec'] )
             obj.insert()
             nukes['objects'].append( obj )
+            objs.append( obj )
 
             # Lightcurve builder
             ltcv = Lightcurve( zp_prov = newdsen[0].zp.provenance_id,
@@ -1313,7 +1328,7 @@ def sim_lightcurve_lightcurves( sim_lightcurve_persistent_sources,
             nukes['diaforcedphot'].extend( ltcv.dia_forced_phots )
             nukes['subimids'].extend( p.subtraction_id for p in ltcv.dia_forced_phots )
 
-        yield lightcurves, objinfos, ltcvprovid
+        yield lightcurves, objinfos, objs, ltcvprovid
 
     finally:
         # Delete test files if any

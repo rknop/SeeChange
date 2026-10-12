@@ -1,4 +1,6 @@
 import numbers
+import pandas
+import nested_pandas
 import textwrap
 
 import numpy as np
@@ -97,6 +99,15 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
         doc = ( "Uncertainty on psf_flux." ),
     )
 
+    psfflags = sa.Column(
+        sa.Integer,
+        nullable = False,
+        index = False,
+        default = 0,
+        server_default = '0',
+        doc = ( "photutils flags from psf photometry." )
+    )
+
     flux_apertures = sa.Column(
         ARRAY( sa.REAL, zero_indexes=True ),
         nullable = False,
@@ -111,6 +122,13 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
         index = False,
         doc = ( "Uncertainties on flux_apertures." )
     )
+
+    aperflags = sa.Column(
+        ARRAY( sa.Integer, zero_indexes=True ),
+        nullable = False,
+        index = False,
+        doc = ( "photutils flags from aperture photometry" )
+        )
 
     def __init__( self, *args, **kwargs ):
         SeeChangeBase.__init__( self )
@@ -248,7 +266,7 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
         return clips
 
     @classmethod
-    def get_lightcurve_for_object( cls, obj, prov, filters=None, include_apertures=False,
+    def get_lightcurve_for_object( cls, obj, prov, filters=None, include_apertures=False, include_raw=False,
                                    include_subim_ids=False, include_pos=False, diaforcedphotobjs=False,
                                    return_format="listofdicts", pgdb=None ):
         """Return all dia forced photometry for a given object in a given provenance.
@@ -266,24 +284,33 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
             default, all dia forced phot for this object will be returned.
 
           include_apertures : bool, default False
-            Normally, just returns psf photometry.  IF true, also return aperture photometry.
-            This will be a list, for multiple apertures.  WARNING : I don't think aperture
-            corrections are done, so the meaning of this is fraught.
+            Normally, just returns psf photometry.  If True, also return
+            aperture photometry; see Returns below.  Ignored if
+            diaforcedphotojbs is True.
+
+          include_raw : bool, default False
+            Normally, just returns photometry in units of nJy (so all
+            zeropoints will have been applied).  If this is True, then
+            there are additional columns with the raw photometry in
+            counts.  Ignored if diaforcedphotobjs is True.
 
           include_subim_ids : bool, default False
             If True, there will be an additional colum subim_id with the
             id of the subtraction image each forced photometry point was
-            performed on.
+            performed on.  Ignored if diaforcedphotobjs is True.
 
           include_pos : bool, default False
             If True, there will be two additional columns x,y giving the
-            position used for the object for this point.
+            position used for the object for this point.  Ignored if
+            diaforcedphotojbs is True.
 
           diaforcedhotobjs : bool, default False
             Changes what's returned; see Results below.
 
           return_format : str, default listofdicts
-            Either listofdicts or dict of lists.
+            Either listofdicts, dictoflists, or dataframe.  You really
+            don't want to use dataframe if diaforcedphotojbs is True,
+            but I won't stop you.
 
           pgdb : PGDB, psycopg.Connection, or psycopg.Curosr, default None
             Database connection.  If not given, a new connection will be
@@ -291,42 +318,86 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
 
         Returns
         -------
-          Either a dict of lists, or a list of dicts.  *If*
-          diaforcedphotobjs was False, you could feed this into
-          pandas.DataFrame, for instance.
+          Either a dict of lists, a list of dicts, a pandas.DataFrame,
+          or a nested_pandas.NestedFrame
 
-          If a dict of lists, the columns are the keys and each list has
-          the same number rows (the number of lightcurve points).
+          If diaforcedphots is True
 
-          If a list of dicts, the length of the list is the number of
-          lightcurve points, and each element of the list is a
-          dictionary of column: value.
+            You either get back a list (if retrurn_format is
+            "listofdicts") where each element has keys:
+              mjd -- value is a double
+              filter -- value is a string
+              diaforcedphot -- value is a DiaForcedPhotObj
 
-          By default, the keys are the column names:
+            or you get back a dict of lists, where the keys are as above
+            and each element is a list of the same length with the values.
+
+          If diaforcedphots is False:
+
+            If a return_format is "dictoflists", you get a dict of lists
+            where the keys are the column names, and the values are
+            lists all with the same length (the number of lightcurve
+            points).
+
+            If return_format is "dictoflists", the length of the list is the number of
+            lightcurve points, and each element of the list is a
+            dictionary of column: value.
+
+            If return_format is "dataframe", then if include_apertures
+            is False, it will be a pandas dataframe.  If
+            include_apertures is True, it will be a nested_pandas
+            dataframe, and the 'flux_apertures_raw',
+            'flux_apertures_raw_err', and 'aper_cors' columns are in the
+            nested 'apphot' subframe of each row.  (So, if you put the
+            return into df, you'd access it via
+            df['apphot]['flux_apertures_raw'].)
+
+        In any case, these are the colum names:
             mjd
             filter
-            flux_psf
-            flux_psf_err
-            [ flux_apertures - ** ]
-            [ flux_apertures_err - ** ]
+            flux_psf           -- in nJy
+            flux_psf_err       -- in nJy
+            [ flux_psf_raw     -- counts on image, only present if include_raw is True ]
+            [ flux_psf_raw_err -- counts on image, only present if include_raw is True ]
+            [ flux_aper_0      -- in nJy ** ]
+            [ flux_aper_0_err  -- in nJy ** ]
+            [ flux_aper_n      -- in nJy ** ]
+            [ flux_aper_n_err  -- in nJy ** ]
+            [ flux_apertures_raw      -- list, counts on image ** ]
+            [ flux_apertures_raw_err  -- list, counts on image ** ]
+            [ aper_pix                -- list, aperture radii in pixels ** ]
+            [ aper_cors               -- list, aperture corrections (magnitudes) ** ]
             [ subimid -- uuid, id of the subtraction image, only present if include_subim_id is True ]
             [ x -- position on subtraction image, only if include_pos is True ]
             [ y -- position on subtraction image, only if include_pos is True ]
 
-          If diaforcedphots is True, then the colums are:
-            mjd
-            filter
-            diaforcedphot - a DiaForcedPhot object (or list thereof)
+            ** aperture photometry is only included if include_apertures
+               is True.  Aperture photometry is in the apertures that
+               are defined by the ZeroPoint object, and are returned in
+               aper_pix; corresponding aperture corrections are in
+               aper_cors.  The flux_apertures_raw and
+               flux_apertures_raw_err have photometry in counts on the
+               image, with NO APERTURE CORRECTIONS APPLIED; aperture
+               corrections can be found in aper_cors.  These two columns
+               will only be included if both include_apertures and
+               include_raw is true.  flux_aper_0 and flux_aper_n have
+               photometry in nJy in apertures of radii aper_pix[0] and
+               aper_pix[-1]; these DO have aperture corrections (from
+               aper_cors[0] and aper_cors[-1]) applied.
 
         """
 
+        if return_format not in ( "dictoflists", "listofdicts", "dataframe" ):
+            raise ValueError( f"Unknown return_format {return_format}; must be one of dictoflists, "
+                              f"listofdicts, or dataframe." )
+
         filters = listify( filters )
-        if len(filters) == 1:
-            filtwhere = sql.SQL( "  AND i.filter={filt}" ).format( filt=filters[0] )
-        elif len(filters) > 1:
-            filtwhere = sql.SQL( "  AND i.filter=ANY(ARRAY[{filts}])" ).format( filts=sql.SQL(",").join(filters) )
-        else:
+        if ( filters is None ) or ( len(filters) <= 0 ):
             filtwhere = sql.SQL( "" )
+        elif len(filters) == 1:
+            filtwhere = sql.SQL( "  AND i.filter={filt}" ).format( filt=filters[0] )
+        else:
+            filtwhere = sql.SQL( "  AND i.filter=ANY(ARRAY[{filts}])" ).format( filts=sql.SQL(",").join(filters) )
 
         with PGDB( pgdb ) as pgdb:
             prov = Provenance.get( prov, must_exist=True, pgdb=pgdb )
@@ -342,27 +413,48 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
                 obj = objobj
 
             if diaforcedphotobjs:
+                zpjoin = sql.SQL( "" )
                 photcols = sql.SQL( "p.*" )
             else:
-                photcols = sql.SQL( "p.flux_psf, p.flux_psf_err{apcols}{subimcols}{poscols}"
-                                    ).format( apcols=sql.SQL( ", flux_apertures, flux_apertures_err"
-                                                              if include_apertures else "" ),
-                                              subimidcol=sql.SQL( ", i._id AS subimid" if include_subim_ids else "" ),
-                                              poscols=sql.SQL( ", x, y" if include_pos else "" ) )
+                zpjoin = sql.SQL( "INNER JOIN zero_points z ON z._id=isc.new_zp_id" )
+                photcols = sql.SQL( "z.zp{subimcol}{poscols},\n"
+                                    "  p.flux_psf * 10^((31.4-z.zp)/2.5) AS flux_psf,\n"
+                                    "  p.flux_psf_err * 10^((31.4-z.zp)/2.5) AS flux_psf_err"
+                                   ).format( subimcol=sql.SQL( ", i._id AS subimid" if include_subim_ids else "" ),
+                                             poscols=sql.SQL( ", x, y" if include_pos else "" ) )
+                if include_raw:
+                    photcols += sql.SQL( ",\n  p.flux_psf AS flux_psf_raw, p.flux_psf_err AS flux_psf_raw_err" )
+                if include_apertures:
+                    photcols += sql.SQL( ",\n" ) + sql.SQL( textwrap.indent( textwrap.dedent(
+                        """\
+                        z.aper_cors, z.aper_cor_radii AS aper_pix,
+                        p.flux_apertures[1] * 10^((31.4-z.zp-z.aper_cors[1])/2.5) AS flux_aper_0,
+                        p.flux_apertures_err[1] * 10^((3.14-z.zp-z.aper_cors[1])/2.5) AS flux_aper_0_err,
+                        p.flux_apertures[array_upper(p.flux_apertures, 0)] *
+                          10^((31.4-z.zp-z.aper_cors[array_upper(z.aper_cors, 0)])/2.5) AS flux_aper_n,
+                        p.flux_apertures_err[array_upper(p.flux_apertures_err, 0)] *
+                          10^((31.4-z.zp-z.aper_cors[array_upper(z.aper_cors, 0)])/2.5) AS flux_aper_n_err
+                        """
+                    ), "  " ) )
+                    if include_raw:
+                        photcols += sql.SQL( ",\n  p.flux_apertures AS flux_apertures_raw"
+                                             ",\n  p.flux_apertures_err AS flux_apertures_raw_err" )
 
             q = sql.SQL( textwrap.dedent(
                 """\
                 SELECT i.mjd, i.filter, {photcols}
                 FROM dia_forced_photometry p
                 INNER JOIN images i ON p.subtraction_id=i._id
+                INNER JOIN image_subtraction_components isc ON isc.image_id=i._id
+                {zpjoin}
                 WHERE p.object_id={objid} AND p.provenance_id={provid}
                 {filtwhere}
                 ORDER BY i.mjd
-                """ ) ).format( objid=obj.id, provid=prov.id, photcols=photcols, filtwhere=filtwhere )
+                """ ) ).format( objid=obj.id, provid=prov.id, photcols=photcols, zpjoin=zpjoin, filtwhere=filtwhere )
 
             rows, cols = pgdb.execute( q )
+            coldex = { c: i for i, c in enumerate(cols) }
 
-        coldex = { c: i for i, c in enumerate(cols) }
         if diaforcedphotobjs:
             # I set create_uuidify=False below because I know given how I did it above
             #   that I already have UUIDs (or None).  May as well save all that
@@ -381,14 +473,48 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
                         }
                 for row in rows:
                     mess = { c: row[coldex[c]] for c in cols if c not in ( 'mjd', 'filter' ) }
-                    rval[-1]['diaforcedphot'].append( DiaForcedPhot.create( create_uuidify=False, **mess ) )
+                    rval['diaforcedphot'].append( DiaForcedPhot.create( create_uuidify=False, **mess ) )
+
+                if return_format == "dataframe":
+                    # ...this can't be a good idea
+                    rval = pandas.DataFrame( rval )
 
         else:
-            if return_format == 'listofdicts':
-                # I bet there's some python tangle just like the one in else to accomplish this next row
-                rval = [ { c: row[coldex[c]] for c in cols } for row in rows ]
-            else:
+            if return_format == 'dictoflists':
+                # Python magic
                 rval = dict( zip( cols, map(list, zip(*rows)) ) )
+
+            elif return_format == 'listofdicts':
+                rval = [ { c: r[coldex[c]] for c in cols } for r in rows ]
+
+            elif return_format == 'dataframe':
+                if include_apertures:
+                    rval = nested_pandas.NestedFrame( rows, columns=cols )
+                    # This magic was suggested by Kostya
+                    tonest = [ 'aper_cors', 'aper_pix' ]
+                    if include_raw:
+                        tonest.extend( [ 'flux_apertures_raw', 'flux_apertures_raw_err' ] )
+                    rval = rval.nest_lists( tonest, 'apphot' )
+                else:
+                    rval = pandas.DataFrame( rows, columns=cols )
+
+                # # Convert to nJy and apply aperture corrections
+                # # I always have to re-work this out because I can never remember the sign
+                # #   m = -2.5*log10(f1) + zp1 = -2.5*log10(f2) + zp2
+                # #   log10(f1) - log10(f2) = ( zp2 - zp1 ) / (-2.5)
+                # #   f1 / f2 = 10^( (zp1 - zp2) / 2.5 )
+                # #   f1 = f2 * 10^( (zp1 - zp2) / 2.5 )
+                # rval['flux_psf'] = rval['flux_psf_raw'] * ( 10 ** ( (31.4 - rval['zp']) / 2.5 ) )
+                # rval['flux_psf_err'] = rval['flux_psf_raw_err'] * ( 10 ** ( (31.4 - rval['zp']) / 2.5 ) )
+                # if include_apertures:
+                #     rval['flux_aper_0'] *= 10 ** ( (31.4 - rval['zp'] - rval['aper_cor_0']) / 2.5 )
+                #     rval['flux_aper_0_err'] *= 10 ** ( (31.4 - rval['zp'] - rval['aper_cor_0']) / 2.5 )
+                #     rval['flux_aper_n'] *= 10 ** ( (31.4 - rval['zp'] - rval['aper_cor_n']) / 2.5 )
+                #     rval['flux_aper_n_err'] *= 10 ** ( (31.4 - rval['zp'] - rval['aper_cor_n']) / 2.5 )
+                #     rval.drop( columns=['aper_cor_0', 'aper_cor_n'], inplace=True )
+
+            else:
+                raise RuntimeError( "This should never happen." )
 
         return rval
 

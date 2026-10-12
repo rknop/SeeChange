@@ -780,8 +780,10 @@ class Lightcurve:
                 y=yctr,
                 flux_psf=measurements.flux_psf,
                 flux_psf_err=measurements.flux_psf_err,
+                psfflags = measurements.psf_fit_flags,
                 flux_apertures=measurements.flux_apertures,
-                flux_apertures_err=measurements.flux_apertures_err
+                flux_apertures_err=measurements.flux_apertures_err,
+                aperflags=measurements.apertures_flags
             )
 
             if self.pars.save_to_db:
