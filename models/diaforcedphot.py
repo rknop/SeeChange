@@ -212,7 +212,7 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
                 WHERE isc.image_id={subid}
                 """
             ) ).format( subid=self.subtraction_id )
-            rows = pgdb.excute( q )
+            rows = pgdb.execute( q )
             if len(rows) == 0:
                 raise RuntimeError( f"Failed to find images for dia_forced_phot {self.id}; "
                                     f"this shouldn't happen." )
@@ -228,7 +228,7 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
                 newdata = newbg.subtract_me( newim.data )
             else:
                 newdata = newim.data
-            newzp = rows[0]['zp']
+            newzp = rows[0]['newzp']
             newseeing = rows[0]['fwhm_pixels']
             if rows[0]['warprefid'] is None:
                 SCLogger.warning( f"Failed to find warped ref for subtraction {self.subtracttion_id}" )
@@ -254,10 +254,10 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
         ix = int( np.round( self.x ) )
         iy = int( np.round( self.y ) )
         clips = np.empty( (3, clip_size, clip_size), dtype=np.float32 )
-        clips[0] = make_cutouts( newdata, ix, iy, size=clip_size, fillvalue=np.nan, dtype=np.float32 )[0]
-        clips[2] = make_cutouts( subdata, ix, iy, size=clip_size, fillvalue=np.nan, dtype=np.float32 )[0]
+        clips[0] = make_cutouts( newdata, [ix], [iy], size=clip_size, fillvalue=np.nan, dtype=np.float32 )[0]
+        clips[2] = make_cutouts( subdata, [ix], [iy], size=clip_size, fillvalue=np.nan, dtype=np.float32 )[0]
         if warprefdata is not None:
-            clips[1] = make_cutouts( warprefdata, ix, iy, size=clip_size, fillvalue=np.nan, dtype=np.float32 )[0]
+            clips[1] = make_cutouts( warprefdata, [ix], [iy], size=clip_size, fillvalue=np.nan, dtype=np.float32 )[0]
             if scale_ref:
                 clips[1] *= 10 ** ( ( newzp - warprefzp) / 2.5 )
         else:

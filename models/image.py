@@ -284,25 +284,25 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         raise RuntimeError( "Don't" )
 
     @property
-    def warped_ref_source_id( self ):
-        if isinstance( self._warped_ref_source_id, config.NoValue() ):
+    def warped_ref_sources_id( self ):
+        if isinstance( self._warped_ref_sources_id, config.NoValue() ):
             if self.is_sub:
                 with PGDB() as pgdb:
-                    rows = pgdb.execute( sql.SQL( "SELECT warped_ref_source_id FROM image_subtraction_components "
+                    rows = pgdb.execute( sql.SQL( "SELECT warped_ref_sources_id FROM image_subtraction_components "
                                                   "WHERE image_id={imid}" )
                                          .format( imid=self.id ) )
                     if len(rows) == 0:
-                        self._warped_ref_source_id = None
+                        self._warped_ref_sources_id = None
                     else:
-                        self._warped_ref_source_id = rows[0][0]
+                        self._warped_ref_sources_id = rows[0][0]
             else:
-                self._warped_ref_source_id = None
-        return self._warped_ref_source_id
+                self._warped_ref_sources_id = None
+        return self._warped_ref_sources_id
 
-    @warped_ref_source_id.setter
-    def warped_ref_source_id( self, val ):
+    @warped_ref_sources_id.setter
+    def warped_ref_sources_id( self, val ):
         # validate?
-        self._warped_ref_source_id = val
+        self._warped_ref_sources_id = val
 
     is_trim = sa.Column(
         sa.Boolean,
@@ -690,7 +690,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         self._ref_id = config.NoValue()
         self._ref_image_id = config.NoValue()
         self._new_zp_id = config.NoValue()
-        self._warped_ref_source_id = config.NoValue()
+        self._warped_ref_sources_id = config.NoValue()
         self._trim_image_parent = config.NoValue()
         self._trim_wcs_parent = config.NoValue()
         self._trim_xcen = config.NoValue()
@@ -784,11 +784,11 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             if self.is_sub:
                 if isinstance( self._ref_id, config.NoValue ) or isinstance( self._new_zp_id, config.NoValue ):
                     raise RuntimeError( "Error inserting sub image, missing subtraction components" )
-                wrpsrc = ( None if isinstance( self._warped_ref_source_id, config.NoValue )
-                           else self._warped_ref_source_id )
+                wrpsrc = ( None if isinstance( self._warped_ref_sources_id, config.NoValue )
+                           else self._warped_ref_sources_id )
                 pgdb.execute( sql.SQL( textwrap.dedent(
                     """\
-                    INSERT INTO image_subtraction_components(image_id,new_zp_id,ref_id,warped_ref_source_id)
+                    INSERT INTO image_subtraction_components(image_id,new_zp_id,ref_id,warped_ref_sources_id)
                     VALUES ({me},{zp},{ref},{wrpsrc})
                     """ ) ).format( me=self.id, zp=self._new_zp_id, ref=self._ref_id, wrpsrc=wrpsrc ) )
 

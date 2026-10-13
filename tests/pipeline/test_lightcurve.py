@@ -140,7 +140,7 @@ def test_get_lightcurve_for_object( sim_lightcurve_lightcurves ):
     list_ap_keys = { 'aper_cors', 'aper_pix' }
     raw_ap_keys = { 'flux_apertures_raw', 'flux_apertures_raw_err' }
 
-    # ....it's a four-loop.  No, a five-loop!
+    # ....it's a four-loop.  No, a five-loop!  72 trials!
     for obj, objinfo, expected_ltcv in zip( objs, objinfos, expected_ltcvs ):
         for searchby in ( obj, obj.id, obj.name ):
             for incraw in ( False, True ):
@@ -224,7 +224,7 @@ def test_get_lightcurve_for_object( sim_lightcurve_lightcurves ):
                         if incpos and incraw and incap:
                             phots = DiaForcedPhot.get_lightcurve_for_object( searchby, photprovid,
                                                                              return_format='dictoflists',
-                                                                             diaforcedphotobjs=True, **extras )
+                                                                             diaforcedphotobjs=True )
                             assert set( phots.keys() ) == { 'mjd', 'filter', 'diaforcedphot' }
                             assert all( isinstance( val, list ) for val in phots.values() )
                             assert all( isinstance( val, DiaForcedPhot ) for val in phots['diaforcedphot'] )
@@ -244,3 +244,17 @@ def test_get_lightcurve_for_object( sim_lightcurve_lightcurves ):
                                 assert np.all( np.isclose( np.array(point['flux_apertures_raw_err']),
                                                            phot.flux_apertures_err,
                                                            rtol=1e-6, equal_nan=True ) )
+
+
+def test_get_clips( sim_lightcurve_lightcurves ):
+    _expected_ltcvs, _objinfos, objs, photprovid = sim_lightcurve_lightcurves
+
+    for obj in objs:
+        ltcvs = DiaForcedPhot.get_lightcurve_for_object( obj, return_format='dictoflists',
+                                                         prov=photprovid, diaforcedphotobjs=True )
+        for phot in ltcvs['diaforcedphot']:
+            clips = phot.get_clips( clip_size=25 )
+            assert isinstance( clips, np.ndarray )
+            assert clips.shape == ( 3, 25, 25 )
+
+    # TODO MORE

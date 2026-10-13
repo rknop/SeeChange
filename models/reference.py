@@ -48,7 +48,7 @@ image_subtraction_components = sa.Table(
               sa.ForeignKey('refs._id', ondelete='RESTRICT', name='image_subtraction_ref_fkey' ),
               nullable=False,
               index=True),
-    sa.Column('warped_ref_source_id',
+    sa.Column('warped_ref_sources_id',
               sqlUUID,
               sa.ForeignKey('source_lists._id', ondelete='RESTRICT', name='image_subtraction_warped_sources_fkey' ),
               nullable=True,
