@@ -31,10 +31,12 @@ import flask_session
 
 from util.config import Config
 from util.util import asUUID
+from models.provenance import Provenance
 from models.enums_and_bitflags import ImageTypeConverter
 from models.base import PsycopgConnection, PGDB
 from models.deepscore import DeepScoreSet
 from models.fakeset import FakeSet, FakeAnalysis
+from models.diaforcedphot import DiaForcedPhot
 
 sys.path.insert( 0, pathlib.Path(__name__).resolve().parent )
 from baseview import BaseView
@@ -1112,6 +1114,23 @@ class FakeAnalysisData( BaseView ):
             return retval
 
 
+# ======================================================================
+
+class DiaForcedPhotForObj( BaseView ):
+    def do_the_things( self, objid, provtag ):
+        with PGDB() as pgdb:
+            prov = Provenance.get_for_tag( provtag, process='diaforcedphot', pgdb=pgdb )
+            if prov is None:
+                return f"Can't find provenance for tag {provtag} process diaforcedphot", 422
+
+            ltcv, obj = DiaForcedPhot.get_lightcurve_for_object( objid, prov, include_apertures=True,
+                                                                 include_raw=True, include_subim_ids=True,
+                                                                 include_pos=True, return_format="dictoflists",
+                                                                 include_phot_ids=True, return_obj=True, pgdb=pgdb )
+            ltcv['objid'] = str(obj.id)
+            ltcv['objname'] = obj.name
+            ltcv['provtag'] = provtag
+            return ltcv
 
 
 # =====================================================================
@@ -1206,6 +1225,7 @@ urls = {
       "<int:limit>/<int:offset>" ): PngCutoutsForSubImage,
     "/fakeanalysisdata/<expid>/<provtag>": FakeAnalysisData,
     "/fakeanalysisdata/<expid>/<provtag>/<sectionid>": FakeAnalysisData,
+    "/diaforcedphotforobj/<objid>/<provtag>": DiaForcedPhotForObj,
 }
 
 usedurls = {}

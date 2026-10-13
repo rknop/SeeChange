@@ -11,7 +11,7 @@ from psycopg import sql
 import improc.photometry
 import models.object
 from models.base import PGDB
-from models.provenance import Provenance
+from models.provenance import Provenance, ProvenanceTag
 from models.object import ObjectPosition
 from models.image import Image
 from models.source_list import SourceList
@@ -249,7 +249,7 @@ class Lightcurve:
 
 
     def setup( self, object_id=NoValue(), object_name=NoValue(), mjd0=NoValue(),
-               mjd1=NoValue(), filters=NoValue(), pgdb=None ):
+               mjd1=NoValue(), filters=NoValue(), pgdb=None, **kwargs ):
         if self._has_been_setup:
             # Doing this because we set some parameters below.  If we wanted to make
             #   this reusable, we'd have to be able to restore them.
@@ -358,6 +358,8 @@ class Lightcurve:
                 self.ra = self.object.ra
                 self.dec = self.object.dec
 
+            return self.make_prov_tree( pgdb=pgdb, **kwargs )
+
 
     def _generate_provenances( self, provtree, pgdb=None ):
         subups = [ provtree['referencing'] ]
@@ -435,7 +437,7 @@ class Lightcurve:
         return diaforcedprov, subprov, trimprovs
 
 
-    def make_prov_tree( self, just_read=False, save=True, save_tag=True, provtag=None, pgdb=None,
+    def make_prov_tree( self, just_read=False, save_prov=True, save_tag=True, provtag=None, pgdb=None,
                         ok_if_preexisting_prov_tag_without_forcedphot=False ):
         """Make a provenance tree for the Lightcurve.
 
@@ -457,13 +459,13 @@ class Lightcurve:
               WARNING: if you do this, then don't generate new dia
               forced photometry, just read what's there!
 
-           save : bool, default True
+           save_prov : bool, default True
               Save any generated provenances to the database?  Must be
               False if just_read is True.
 
            provtag : str, default None
               The provenance tag to use to find existing subtraction and
-              diaforcedphot provenances.  If save and save_tags are both
+              diaforcedphot provenances.  If save_prov and save_tag are both
               true, than any newly generated provenacnes will be tagged
               with this provenacne tag.  If just_read is False, then if
               preexisting provenances in the database with this tag are
@@ -471,9 +473,12 @@ class Lightcurve:
               configured parameters, an exception will be raised.
 
            save_tag : bool, default True
-              Ignored if save is False.  If True, then all provenances
+              Ignored if save_prov is False.  If True, then all provenances
               saved to the database are also tagged with the provenance
               tag given in provtag.
+
+           ok_if_preexisting_prov_tag_without_forcedphot: bool, default False
+              NOT IMPELMENTED
 
            pgdb : base.PGDB, default None
               A database connection.  If not given, one will be created
@@ -485,14 +490,14 @@ class Lightcurve:
 
         """
 
-        if just_read and save:
-            raise ValueError( "Can't use just_read and save together." )
+        if just_read and save_prov:
+            raise ValueError( "Can't use just_read and save_prov together." )
 
         if just_read and ( provtag is None ):
             raise ValueError( "just_read requires provtag" )
 
-        if save_tag and ( not save ):
-            SCLogger.warning( "save_tag is True but save is False, ignoring save_tag." )
+        if save_tag and ( not save_prov ):
+            SCLogger.warning( "save_tag is True but save_prov is False, ignoring save_tag." )
 
         # Build a full provenance tree for DataStore to chew on
         # DataStore.make_prov_tree is designed for use with top_level, and is
@@ -597,7 +602,7 @@ class Lightcurve:
                     # Get the trim provenances if any
                     found_trimprovs = []
                     for proc in [ 'Image.trim', 'Image.trim.sources', 'Image.trim.wcs', 'Image.trim.zp' ]:
-                        found_trimprovs.append( Provenance.get_for_tag( provtag, proc, pgd=pgdb ) )
+                        found_trimprovs.append( Provenance.get_for_tag( provtag, proc, pgdb=pgdb ) )
                     if any( i is not None for i in found_trimprovs ):
                         if not all( i is not None for i in found_trimprovs ):
                             raise RuntimeError( f"Database corruption: found some, but not all, image trim provs "
@@ -653,7 +658,7 @@ class Lightcurve:
 
 
                 # Save them if necessary.  Do this in the right order so upstreams exist.
-                if save:
+                if save_prov:
                     provs = []
                     if self.pars.crop_image is not None:
                         provs.extend( provtree[p] for p in [ 'Image.trim', 'Image.trim.sources',
@@ -663,7 +668,7 @@ class Lightcurve:
                         prov.insert_if_needed( pgdb=pgdb, nocommit=True )
                     pgdb.commit()
                     if provtag is not None:
-                        Provenance.addtag( provtag, provs, pgdb=pgdb )
+                        ProvenanceTag.addtag( provtag, provs, pgdb=pgdb )
 
         return provtree
 
@@ -877,8 +882,7 @@ class Lightcurve:
         self.refs = refs
 
     def load( self, *args, **kwargs ):
-        self.setup( *args, **kwargs )
-        self.provtree = self.make_prov_tree( save=False )
+        self.provtree = self.setup( *args, save=False, **kwargs )
         self.find_images()
         self.find_refs()
 
@@ -948,8 +952,7 @@ class Lightcurve:
         """
 
 
-        self.setup( *args, **kwargs )
-        self.provtree = self.make_prov_tree( save=True )
+        self.provtree = self.setup( *args, **kwargs )
 
         SCLogger.info( "Lightcurve finding images." )
         self.find_images()

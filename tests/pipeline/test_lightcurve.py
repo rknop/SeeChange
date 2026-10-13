@@ -246,7 +246,10 @@ def test_get_lightcurve_for_object( sim_lightcurve_lightcurves ):
                                                            rtol=1e-6, equal_nan=True ) )
 
 
-def test_get_clips( sim_lightcurve_lightcurves ):
+# NOTE : the user and admin_user fixtures aren't really needed for this next test,
+#   but they're there so that I can have the sim_lightcurve_lightcurves all loaded
+#   up and go in and look at the test webap by running this test with --trace.
+def test_get_clips( sim_lightcurve_lightcurves, user, admin_user ):
     _expected_ltcvs, _objinfos, objs, photprovid = sim_lightcurve_lightcurves
 
     for obj in objs:

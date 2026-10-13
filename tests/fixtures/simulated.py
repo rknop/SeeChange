@@ -1322,7 +1322,7 @@ def sim_lightcurve_lightcurves( sim_lightcurve_persistent_sources,
                                                    },
                                save_to_db=True
                               )
-            ltcv.run()
+            ltcv.run( provtag='sim_lightcurve', save_tag=True, save_prov=True )
             lightcurves.append( ltcv.dia_forced_phots )
             ltcvprovid = ltcvprovid if ltcvprovid is not None else ltcv.dia_forced_phots[-1].provenance_id
             nukes['diaforcedphot'].extend( ltcv.dia_forced_phots )

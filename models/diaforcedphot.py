@@ -267,8 +267,9 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
 
     @classmethod
     def get_lightcurve_for_object( cls, obj, prov, filters=None, include_apertures=False, include_raw=False,
-                                   include_subim_ids=False, include_pos=False, diaforcedphotobjs=False,
-                                   return_format="listofdicts", pgdb=None ):
+                                   include_subim_ids=False, include_pos=False, include_phot_ids=False,
+                                   diaforcedphotobjs=False, return_format="listofdicts", return_obj=False,
+                                   pgdb=None ):
         """Return all dia forced photometry for a given object in a given provenance.
 
         Parmaeters
@@ -304,7 +305,12 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
             position used for the object for this point.  Ignored if
             diaforcedphotojbs is True.
 
-          diaforcedhotobjs : bool, default False
+          include_phot_ids : bool, default False
+            If True, there will be an additional column diaforcedphotid
+            giving the UUIDs of the DiaForcedPhot objects that go with
+            the lightcurve points.
+
+          diaforcedphotobjs : bool, default False
             Changes what's returned; see Results below.
 
           return_format : str, default listofdicts
@@ -357,18 +363,22 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
                 filter
                 flux_psf           -- in nJy
                 flux_psf_err       -- in nJy
-                psffflags          -- 32-bit bitfield; see enums_and_bitflags.py::psf_phot_flags_dict
+                psfflags           -- 32-bit bitfield; see enums_and_bitflags.py::psf_phot_flags_dict
                 [ flux_psf_raw     -- counts on image, only present if include_raw is True ]
                 [ flux_psf_raw_err -- counts on image, only present if include_raw is True ]
                 [ flux_aper_0      -- in nJy ** ]
                 [ flux_aper_0_err  -- in nJy ** ]
                 [ flux_aper_n      -- in nJy ** ]
                 [ flux_aper_n_err  -- in nJy ** ]
+                [ aperflags_0      -- 32-bit bitfield; only present if include_apertures is True ]
+                [ aperflags_n      -- 32-bit bitfield; only present if include_apertures is True ]
                 [ flux_apertures_raw      -- list, counts on image ** ]
                 [ flux_apertures_raw_err  -- list, counts on image ** ]
+                [ aperflags_raw           -- ** ]
                 [ aper_pix                -- list, aperture radii in pixels ** ]
                 [ aper_cors               -- list, aperture corrections (magnitudes) ** ]
                 [ subimid -- uuid, id of the subtraction image, only present if include_subim_id is True ]
+                [ diaforcedphotid -- uuid, id of the diaforcedphot table row, only present if yadda yadda ]
                 [ x -- position on subtraction image, only if include_pos is True ]
                 [ y -- position on subtraction image, only if include_pos is True ]
 
@@ -424,16 +434,19 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
                 photmetacols = sql.SQL( "*" )
             else:
                 zpjoin = sql.SQL( "INNER JOIN zero_points z ON z._id=isc.new_zp_id" )
-                photcols = sql.SQL( "i.mjd, i.filter, z.zp{subimcol}{poscols}, p.psfflags,\n"
+                photcols = sql.SQL( "i.mjd, i.filter, z.zp{subimcol}{photidcol}{poscols}, p.psfflags,\n"
                                     "    p.flux_psf * 10^((31.4-z.zp)/2.5) AS flux_psf,\n"
                                     "    p.flux_psf_err * 10^((31.4-z.zp)/2.5) AS flux_psf_err"
                                    ).format( subimcol=sql.SQL( ", i._id AS subimid" if include_subim_ids else "" ),
+                                             photidcol=sql.SQL( ", p._id as diaforcedphotid"
+                                                                if include_phot_ids else "" ),
                                              poscols=sql.SQL( ", x, y" if include_pos else "" ) )
                 photmetacols = sql.SQL(
-                    "mjd, filter, zp{subimcol}{poscols}, psfflags,\n"
+                    "mjd, filter, zp{subimcol}{photidcol}{poscols}, psfflags,\n"
                     "  CASE WHEN flux_psf IS NULL THEN 'NaN' ELSE flux_psf END AS flux_psf,\n"
                     "  CASE WHEN flux_psf_err IS NULL THEN 'NaN' ELSE flux_psf_err END AS flux_psf_err"
                 ).format( subimcol=sql.SQL( ", subimid" if include_subim_ids else "" ),
+                          photidcol=sql.SQL( ", diaforcedphotid" if include_phot_ids else "" ),
                           poscols=sql.SQL( ", x, y" if include_pos else "" ) )
                 if include_raw:
                     photcols += sql.SQL( ",\n    p.flux_psf AS flux_psf_raw, p.flux_psf_err AS flux_psf_raw_err" )
@@ -444,10 +457,11 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
                         z.aper_cors, z.aper_cor_radii AS aper_pix,
                         p.flux_apertures[1] * 10^((31.4-z.zp-z.aper_cors[1])/2.5) AS flux_aper_0,
                         p.flux_apertures_err[1] * 10^((3.14-z.zp-z.aper_cors[1])/2.5) AS flux_aper_0_err,
-                        p.flux_apertures[array_upper(p.flux_apertures, 0)] *
-                          10^((31.4-z.zp-z.aper_cors[array_upper(z.aper_cors, 0)])/2.5) AS flux_aper_n,
-                        p.flux_apertures_err[array_upper(p.flux_apertures_err, 0)] *
-                          10^((31.4-z.zp-z.aper_cors[array_upper(z.aper_cors, 0)])/2.5) AS flux_aper_n_err\
+                        p.flux_apertures[array_upper(p.flux_apertures, 1)] *
+                          10^((31.4-z.zp-z.aper_cors[array_upper(z.aper_cors, 1)])/2.5) AS flux_aper_n,
+                        p.flux_apertures_err[array_upper(p.flux_apertures_err, 1)] *
+                          10^((31.4-z.zp-z.aper_cors[array_upper(z.aper_cors, 1)])/2.5) AS flux_aper_n_err,
+                        p.aperflags[1] AS aperflags_0, p.aperflags[array_upper(p.aperflags, 1)] AS aperflags_n\
                         """
                     ), "    " ) )
                     photmetacols += sql.SQL( ",\n") + sql.SQL( textwrap.indent( textwrap.dedent(
@@ -456,7 +470,8 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
                         CASE WHEN flux_aper_0 IS NULL THEN 'NaN' ELSE flux_aper_0 END AS flux_aper_0,
                         CASE WHEN flux_aper_0_err IS NULL THEN 'NaN' ELSE flux_aper_0 END AS flux_aper_0_err,
                         CASE WHEN flux_aper_n IS NULL THEN 'NaN' ELSE flux_aper_0 END AS flux_aper_n,
-                        CASE WHEN flux_aper_n_err IS NULL THEN 'NaN' ELSE flux_aper_0 END AS flux_aper_n_err\
+                        CASE WHEN flux_aper_n_err IS NULL THEN 'NaN' ELSE flux_aper_0 END AS flux_aper_n_err,
+                        aperflags_0, aperflags_n\
                         """
                     ), "  " ) )
                     if include_raw:
@@ -544,7 +559,10 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
             else:
                 raise RuntimeError( "This should never happen." )
 
-        return rval
+        if return_obj:
+            return rval, obj
+        else:
+            return rval
 
 
     @classmethod

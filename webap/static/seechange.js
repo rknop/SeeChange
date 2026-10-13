@@ -5,6 +5,7 @@ import "./provenancetags.js";
 import "./exposuresearch.js";
 import "./exposurelist.js";
 import "./exposure.js";
+import "./diaforcedphot.js"
 import "./conductor.js";
 
 // Everything is going in the seechange namespace
@@ -104,7 +105,10 @@ seechange.Context = class
             this.exposuresearch.render();
             this.frontpagetabs.addTab( "exposuresearch", "Exposure Search", this.exposuresearch.div );
 
-
+            this.diaforcedphot = new seechange.DiaForcedPhotSearch( this );
+            this.diaforcedphot.render();
+            this.frontpagetabs.addTab( "diaforcedphot", "DIA Forced Photometry", this.diaforcedphot.div );
+            
             this.provenancetags = new seechange.ProvenanceTags( this );
             this.provenancetags.render();
             this.frontpagetabs.addTab( "provtags", "Provenance Tags", this.provenancetags.div );
