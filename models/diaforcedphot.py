@@ -352,38 +352,44 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
             return into df, you'd access it via
             df['apphot]['flux_apertures_raw'].)
 
-        In any case, these are the colum names:
-            mjd
-            filter
-            flux_psf           -- in nJy
-            flux_psf_err       -- in nJy
-            [ flux_psf_raw     -- counts on image, only present if include_raw is True ]
-            [ flux_psf_raw_err -- counts on image, only present if include_raw is True ]
-            [ flux_aper_0      -- in nJy ** ]
-            [ flux_aper_0_err  -- in nJy ** ]
-            [ flux_aper_n      -- in nJy ** ]
-            [ flux_aper_n_err  -- in nJy ** ]
-            [ flux_apertures_raw      -- list, counts on image ** ]
-            [ flux_apertures_raw_err  -- list, counts on image ** ]
-            [ aper_pix                -- list, aperture radii in pixels ** ]
-            [ aper_cors               -- list, aperture corrections (magnitudes) ** ]
-            [ subimid -- uuid, id of the subtraction image, only present if include_subim_id is True ]
-            [ x -- position on subtraction image, only if include_pos is True ]
-            [ y -- position on subtraction image, only if include_pos is True ]
+            The columns are:
+                mjd
+                filter
+                flux_psf           -- in nJy
+                flux_psf_err       -- in nJy
+                psffflags          -- 32-bit bitfield; see enums_and_bitflags.py::psf_phot_flags_dict
+                [ flux_psf_raw     -- counts on image, only present if include_raw is True ]
+                [ flux_psf_raw_err -- counts on image, only present if include_raw is True ]
+                [ flux_aper_0      -- in nJy ** ]
+                [ flux_aper_0_err  -- in nJy ** ]
+                [ flux_aper_n      -- in nJy ** ]
+                [ flux_aper_n_err  -- in nJy ** ]
+                [ flux_apertures_raw      -- list, counts on image ** ]
+                [ flux_apertures_raw_err  -- list, counts on image ** ]
+                [ aper_pix                -- list, aperture radii in pixels ** ]
+                [ aper_cors               -- list, aperture corrections (magnitudes) ** ]
+                [ subimid -- uuid, id of the subtraction image, only present if include_subim_id is True ]
+                [ x -- position on subtraction image, only if include_pos is True ]
+                [ y -- position on subtraction image, only if include_pos is True ]
 
-            ** aperture photometry is only included if include_apertures
-               is True.  Aperture photometry is in the apertures that
-               are defined by the ZeroPoint object, and are returned in
-               aper_pix; corresponding aperture corrections are in
-               aper_cors.  The flux_apertures_raw and
-               flux_apertures_raw_err have photometry in counts on the
-               image, with NO APERTURE CORRECTIONS APPLIED; aperture
-               corrections can be found in aper_cors.  These two columns
-               will only be included if both include_apertures and
-               include_raw is true.  flux_aper_0 and flux_aper_n have
-               photometry in nJy in apertures of radii aper_pix[0] and
-               aper_pix[-1]; these DO have aperture corrections (from
-               aper_cors[0] and aper_cors[-1]) applied.
+                ** aperture photometry is only included if include_apertures
+                   is True.  Aperture photometry is in the apertures that
+                   are defined by the ZeroPoint object, and are returned in
+                   aper_pix; corresponding aperture corrections are in
+                   aper_cors.  The flux_apertures_raw and
+                   flux_apertures_raw_err have photometry in counts on the
+                   image, with NO APERTURE CORRECTIONS APPLIED; aperture
+                   corrections can be found in aper_cors.  These two columns
+                   will only be included if both include_apertures and
+                   include_raw is true.  flux_aper_0 and flux_aper_n have
+                   photometry in nJy in apertures of radii aper_pix[0] and
+                   aper_pix[-1]; these DO have aperture corrections (from
+                   aper_cors[0] and aper_cors[-1]) applied.
+
+            It's possible that some fields will be None, and if float_aper_0
+            or float_aper_n would come out None (because of aperture
+            photometry failure for some reason or another), they will be
+            NaN.
 
         """
 
@@ -414,16 +420,24 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
 
             if diaforcedphotobjs:
                 zpjoin = sql.SQL( "" )
-                photcols = sql.SQL( "p.*" )
+                photcols = sql.SQL( "i.mjd, i.filter, p.*" )
+                photmetacols = sql.SQL( "*" )
             else:
                 zpjoin = sql.SQL( "INNER JOIN zero_points z ON z._id=isc.new_zp_id" )
-                photcols = sql.SQL( "z.zp{subimcol}{poscols},\n"
-                                    "  p.flux_psf * 10^((31.4-z.zp)/2.5) AS flux_psf,\n"
-                                    "  p.flux_psf_err * 10^((31.4-z.zp)/2.5) AS flux_psf_err"
+                photcols = sql.SQL( "i.mjd, i.filter, z.zp{subimcol}{poscols}, p.psfflags,\n"
+                                    "    p.flux_psf * 10^((31.4-z.zp)/2.5) AS flux_psf,\n"
+                                    "    p.flux_psf_err * 10^((31.4-z.zp)/2.5) AS flux_psf_err"
                                    ).format( subimcol=sql.SQL( ", i._id AS subimid" if include_subim_ids else "" ),
                                              poscols=sql.SQL( ", x, y" if include_pos else "" ) )
+                photmetacols = sql.SQL(
+                    "mjd, filter, zp{subimcol}{poscols}, psfflags,\n"
+                    "  CASE WHEN flux_psf IS NULL THEN 'NaN' ELSE flux_psf END AS flux_psf,\n"
+                    "  CASE WHEN flux_psf_err IS NULL THEN 'NaN' ELSE flux_psf_err END AS flux_psf_err"
+                ).format( subimcol=sql.SQL( ", subimid" if include_subim_ids else "" ),
+                          poscols=sql.SQL( ", x, y" if include_pos else "" ) )
                 if include_raw:
-                    photcols += sql.SQL( ",\n  p.flux_psf AS flux_psf_raw, p.flux_psf_err AS flux_psf_raw_err" )
+                    photcols += sql.SQL( ",\n    p.flux_psf AS flux_psf_raw, p.flux_psf_err AS flux_psf_raw_err" )
+                    photmetacols += sql.SQL( ",\n  flux_psf_raw, flux_psf_raw_err" )
                 if include_apertures:
                     photcols += sql.SQL( ",\n" ) + sql.SQL( textwrap.indent( textwrap.dedent(
                         """\
@@ -433,24 +447,38 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
                         p.flux_apertures[array_upper(p.flux_apertures, 0)] *
                           10^((31.4-z.zp-z.aper_cors[array_upper(z.aper_cors, 0)])/2.5) AS flux_aper_n,
                         p.flux_apertures_err[array_upper(p.flux_apertures_err, 0)] *
-                          10^((31.4-z.zp-z.aper_cors[array_upper(z.aper_cors, 0)])/2.5) AS flux_aper_n_err
+                          10^((31.4-z.zp-z.aper_cors[array_upper(z.aper_cors, 0)])/2.5) AS flux_aper_n_err\
+                        """
+                    ), "    " ) )
+                    photmetacols += sql.SQL( ",\n") + sql.SQL( textwrap.indent( textwrap.dedent(
+                        """\
+                        aper_cors, aper_pix,
+                        CASE WHEN flux_aper_0 IS NULL THEN 'NaN' ELSE flux_aper_0 END AS flux_aper_0,
+                        CASE WHEN flux_aper_0_err IS NULL THEN 'NaN' ELSE flux_aper_0 END AS flux_aper_0_err,
+                        CASE WHEN flux_aper_n IS NULL THEN 'NaN' ELSE flux_aper_0 END AS flux_aper_n,
+                        CASE WHEN flux_aper_n_err IS NULL THEN 'NaN' ELSE flux_aper_0 END AS flux_aper_n_err\
                         """
                     ), "  " ) )
                     if include_raw:
                         photcols += sql.SQL( ",\n  p.flux_apertures AS flux_apertures_raw"
                                              ",\n  p.flux_apertures_err AS flux_apertures_raw_err" )
+                        photmetacols += sql.SQL( ",\n  flux_apertures_raw, flux_apertures_raw_err" )
 
             q = sql.SQL( textwrap.dedent(
                 """\
-                SELECT i.mjd, i.filter, {photcols}
-                FROM dia_forced_photometry p
-                INNER JOIN images i ON p.subtraction_id=i._id
-                INNER JOIN image_subtraction_components isc ON isc.image_id=i._id
-                {zpjoin}
-                WHERE p.object_id={objid} AND p.provenance_id={provid}
-                {filtwhere}
-                ORDER BY i.mjd
-                """ ) ).format( objid=obj.id, provid=prov.id, photcols=photcols, zpjoin=zpjoin, filtwhere=filtwhere )
+                SELECT {photmetacols}
+                FROM (
+                  SELECT {photcols}
+                  FROM dia_forced_photometry p
+                  INNER JOIN images i ON p.subtraction_id=i._id
+                  INNER JOIN image_subtraction_components isc ON isc.image_id=i._id
+                  {zpjoin}
+                  WHERE p.object_id={objid} AND p.provenance_id={provid}
+                  {filtwhere}
+                ) subq
+                ORDER BY mjd
+                """ ) ).format( objid=obj.id, provid=prov.id, photcols=photcols,
+                                photmetacols=photmetacols, zpjoin=zpjoin, filtwhere=filtwhere )
 
             rows, cols = pgdb.execute( q )
             coldex = { c: i for i, c in enumerate(cols) }
@@ -462,7 +490,7 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
             if return_format == 'listofdicts':
                 rval = []
                 for row in rows:
-                    rows.append( { 'mjd': row[coldex['mjd']],
+                    rval.append( { 'mjd': row[coldex['mjd']],
                                    'filter': row[coldex['filter']] } )
                     mess = { c: row[coldex[c]] for c in cols if c not in ( 'mjd', 'filter' ) }
                     rval[-1]['diaforcedphot'] = DiaForcedPhot.create( create_uuidify=False, **mess )
