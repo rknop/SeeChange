@@ -139,8 +139,6 @@ seechange.Context = class
             rkWebUtil.elemaker( "option", this.provtag_wid, { "text": provtag, "attributes": { "value": provtag } } );
         }
     };
-
-
 }
 
 

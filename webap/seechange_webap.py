@@ -34,6 +34,7 @@ from util.util import asUUID
 from models.provenance import Provenance
 from models.enums_and_bitflags import ImageTypeConverter
 from models.base import PsycopgConnection, PGDB
+from models.image import Image
 from models.deepscore import DeepScoreSet
 from models.fakeset import FakeSet, FakeAnalysis
 from models.diaforcedphot import DiaForcedPhot
@@ -191,6 +192,10 @@ class Projects( BaseView ):
                      'projects': [ row[0] for row in cursor.fetchall() ]
                     }
 
+
+# ======================================================================
+
+# class Images
 
 # ======================================================================
 
@@ -420,79 +425,6 @@ class Exposures( BaseView ):
 
 # ======================================================================
 
-class ImageData( BaseView ):
-    def do_the_things( self, expid, provtag, sectionid, sub=0 ):
-        q = sql.SQL( textwrap.dedent(
-            """\
-            SELECT {t}.filepath
-            FROM images i
-            INNER JOIN provenance_tags t ON i.provenance_id=t.provenance_id AND t.tag={provtag}
-            """
-        ) ).format( provtag=provtag, t=sql.Identifier('sub' if sub else 'i') )
-        if sub:
-            q += sql.SQL( textwrap.dedent(
-                """\
-                INNER JOIN (
-                   SELECT s._id, s.image_id
-                   FROM source_lists s
-                   INNER JOIN provenance_tags t ON s.provenance_id=t.provenance_id AND t.tag={provtag}
-                ) s ON s.image_id=i._id
-                INNER JOIN (
-                   SELECT w._id, w.sources_id
-                   FROM world_coordinates w
-                   INNER JOIN provenance_tags t ON w.provenance_id=t.provenance_id AND t.tag={provtag}
-                ) w ON w.sources_id=s._id
-                INNER JOIN (
-                   SELECT z._id, z.wcs_id
-                   FROM zero_points z
-                   INNER JOIN provenance_tags t ON z.provenance_id=t.provenance_id AND t.tag={provtag}
-                ) z ON z.wcs_id=w._id
-                INNER JOIN (
-                   SELECT i._id, i.filepath, isc.new_zp_id AS newzpid
-                   FROM images i
-                   INNER JOIN image_subtraction_components isc ON i._id=isc.image_id
-                   INNER JOIN provenance_tags t ON i.provenance_id=t.provenance_id AND t.tag={provtag}
-                ) sub ON sub.newzpid=z._id
-                """
-            ) ).format( expid=expid, secid=sectionid, provtag=provtag )
-        q += sql.SQL( textwrap.dedent(
-            """\
-            WHERE i.exposure_id={expid} AND i.section_id={secid}
-            """
-        ) ).format( expid=expid, secid=sectionid )
-
-        with PGDB( dictcursor=True ) as pgdb:
-            rows = pgdb.execute( q )
-            filepath = rows[0]['filepath'] if len(rows) > 0 else None
-
-        if filepath is None:
-            return f"No {'subtraction' if sub else 'image'} for exposure {expid} section {sectionid}", 422
-
-        else:
-            cfg = Config.get()
-            # We're assuming file naming convention, whereas we should probably call a function.
-            #   But, I think the only function we have right now is get_fullpath, which will
-            #   make it relative to data_dir... augh, thought required.
-            for fz, hdun in zip( [ '', '.fz' ], [ 0, 1 ] ):
-                fullpath = pathlib.Path( cfg.value( 'archive.local_read_dir' ) ) / f'{filepath}.image.fits{fz}'
-                if fullpath.is_file():
-                    with fits.open( fullpath ) as hdu:
-                        # The convention for rkWebUtil ImView is little-endian 32-bit floats
-                        data = hdu[hdun].data.astype( "<f4" )
-                    barf = bytearray( 4 * data.shape[0] * data.shape[1] + 4 )
-                    barf[0] = data.shape[0] % 256
-                    barf[1] = data.shape[0] // 256
-                    barf[2] = data.shape[1] % 256
-                    barf[3] = data.shape[1] // 256
-                    barf[4:] = data.data
-                    app.logger.debug( f"Returning {len(barf)-4} bytes for a {data.shape[0]}×{data.shape[1]} image" )
-                    return bytes(barf)
-
-            return f"Failed to find image {filepath}.image.fits[.fz]", 422
-
-
-# ======================================================================
-
 class ExposureImages( BaseView ):
     def do_the_things( self, expid, provtag ):
         with PGDB( dictcursor=True ) as pgdb:
@@ -664,6 +596,155 @@ class ExposureReports( BaseView ):
                     retval['reports'][row['section_id']] = row
 
             return retval
+
+
+# ======================================================================
+
+class ImageInfo( BaseView ):
+    def do_the_things( self, imgid ):
+        with PGDB( dictcursor=True ) as pgdb:
+            img = Image.get_by_id( imgid, pgdb=pgdb )
+            if img is None:
+                img = Image.get_by_field_value( "filepath", imgid, pgdb=pgdb )
+            if img is None:
+                return f"Could not find image {imgid}", 422
+
+            imgdict = img.to_dict()
+
+            if img.is_sub:
+                q = sql.SQL( textwrap.dedent(
+                    """\
+                    SELECT i._id AS new_id, wi._id AS warped_ref_id, z.zp AS new_zp, rz.zp AS ref_zp
+                    FROM image_subtraction_components isc
+                    INNER JOIN zero_points z ON z._id=isc.new_zp_id
+                    INNER JOIN world_coordinates w ON w._id=z.wcs_id
+                    INNER JOIN source_lists s ON s._id=w.sources_id
+                    INNER JOIN images i ON i._id=s.image_id
+                    INNER JOIN refs r ON r._id=isc.ref_id
+                    INNER JOIN zero_points rz ON rz._id=r.zp_id
+                    LEFT JOIN source_lists ws ON isc.warped_ref_sources_id=ws._id
+                    LEFT JOIN images wi ON ws.image_id=wi._id
+                    WHERE isc.image_id={imid}
+                    """
+                ) ).format( imid=img.id )
+                rows = pgdb.execute( q )
+                if len(rows) == 0:
+                    return f"Failed to get subtraction parents for subtraction image {imgid}", 422
+                elif len(rows) > 1:
+                    return "Database corruption in seechange_webap.py::ImageInfo; this should never happen.", 422
+                imgdict['new_id'] = rows[0]['new_id']
+                imgdict['warped_ref_id'] = rows[0]['warped_ref_id']
+                imgdict['new_zp'] = rows[0]['new_zp']
+                imgdict['ref_zp'] = rows[0]['ref_zp']
+
+            elif img.is_coadd:
+                q = sql.SQL( textwrap.dedent(
+                    """\
+                    SELECT i._id AS imgid, w._id AS wcsid, z.zp
+                    FROM image_coadd_comonent icc
+                    INNER JOIN zero_points z ON icc.zp_id=zp._id
+                    INNER JOIN world_coordinates w ON z.wcs_id=w._id
+                    INNER JOIN source_lists s ON w.sources_id=s._id
+                    INNER JOIN images i ON s.image_id=i._id
+                    WHERE icc.coadd_image_id={imid}
+                    """
+                ) ).format( imid=img.id )
+                rows = pgdb.query( q )
+                imgdict[ 'coadd_component_zp' ] = [ r['zp'] for r in rows ]
+                imgdict[ 'coadd_component_wcs_id' ] = [ r['imgid'] for r in rows ]
+                imgdict[ 'coadd_component_image_id' ] = [ r['wcsid'] for r in rows ]
+
+            elif img.is_trim:
+                # ... should this be elif?  I think all of is_sub, is_coadd, is_trim are mutually exclusive
+                q = sql.SQL( "SELECT * FROM image_trim_parent WHERE image_id={imgid}" ).format( imgid=img.id )
+                rows = pgdb.query( q )
+                if len(rows) == 0:
+                    return f"Failed to get trim parents for trimmed image {imgid}", 422
+                elif len(rows) > 1:
+                    return "Database corruption in seechange_webap.py::ImageInfo; this should never happen.", 422
+                imgdict.update( rows[0] )
+
+            return imgdict
+
+
+# ======================================================================
+
+class ImageData( BaseView ):
+    def do_the_things( self, exporimid, provtag=None, sectionid=None, sub=0 ):
+        if sectionid is None:
+            q = sql.SQL( "SELECT filepath FROM images WHERE _id={imgid}" ).format( imgid=exporimid )
+
+        else:
+            q = sql.SQL( textwrap.dedent(
+                """\
+                SELECT {t}.filepath
+                FROM images i
+                INNER JOIN provenance_tags t ON i.provenance_id=t.provenance_id AND t.tag={provtag}
+                """
+            ) ).format( provtag=provtag, t=sql.Identifier('sub' if sub else 'i') )
+            if sub and ( sectionid is not None ):
+                q += sql.SQL( textwrap.dedent(
+                    """\
+                    INNER JOIN (
+                       SELECT s._id, s.image_id
+                       FROM source_lists s
+                       INNER JOIN provenance_tags t ON s.provenance_id=t.provenance_id AND t.tag={provtag}
+                    ) s ON s.image_id=i._id
+                    INNER JOIN (
+                       SELECT w._id, w.sources_id
+                       FROM world_coordinates w
+                       INNER JOIN provenance_tags t ON w.provenance_id=t.provenance_id AND t.tag={provtag}
+                    ) w ON w.sources_id=s._id
+                    INNER JOIN (
+                       SELECT z._id, z.wcs_id
+                       FROM zero_points z
+                       INNER JOIN provenance_tags t ON z.provenance_id=t.provenance_id AND t.tag={provtag}
+                    ) z ON z.wcs_id=w._id
+                    INNER JOIN (
+                       SELECT i._id, i.filepath, isc.new_zp_id AS newzpid
+                       FROM images i
+                       INNER JOIN image_subtraction_components isc ON i._id=isc.image_id
+                       INNER JOIN provenance_tags t ON i.provenance_id=t.provenance_id AND t.tag={provtag}
+                    ) sub ON sub.newzpid=z._id
+                    """
+                ) ).format( expid=exporimid, secid=sectionid, provtag=provtag )
+            q += sql.SQL( textwrap.dedent(
+                """\
+                WHERE i.exposure_id={expid} AND i.section_id={secid}
+                """
+            ) ).format( expid=exporimid, secid=sectionid )
+
+        with PGDB( dictcursor=True ) as pgdb:
+            rows = pgdb.execute( q )
+            filepath = rows[0]['filepath'] if len(rows) > 0 else None
+
+        if filepath is None:
+            if sectionid is None:
+                return f"Failed to find image with id {exporimid}", 422
+            else:
+                return f"No {'subtraction' if sub else 'image'} for exposure {exporimid} section {sectionid}", 422
+
+        else:
+            cfg = Config.get()
+            # We're assuming file naming convention, whereas we should probably call a function.
+            #   But, I think the only function we have right now is get_fullpath, which will
+            #   make it relative to data_dir... augh, thought required.
+            for fz, hdun in zip( [ '', '.fz' ], [ 0, 1 ] ):
+                fullpath = pathlib.Path( cfg.value( 'archive.local_read_dir' ) ) / f'{filepath}.image.fits{fz}'
+                if fullpath.is_file():
+                    with fits.open( fullpath ) as hdu:
+                        # The convention for rkWebUtil ImView is little-endian 32-bit floats
+                        data = hdu[hdun].data.astype( "<f4" )
+                    barf = bytearray( 4 * data.shape[0] * data.shape[1] + 4 )
+                    barf[0] = data.shape[0] % 256
+                    barf[1] = data.shape[0] // 256
+                    barf[2] = data.shape[1] % 256
+                    barf[3] = data.shape[1] // 256
+                    barf[4:] = data.data
+                    app.logger.debug( f"Returning {len(barf)-4} bytes for a {data.shape[0]}×{data.shape[1]} image" )
+                    return bytes(barf)
+
+            return f"Failed to find image {filepath}.image.fits[.fz]", 422
 
 
 # ======================================================================
@@ -1217,8 +1298,10 @@ urls = {
     "/exposures/<provenancetag>/<path:argstr>": Exposures,
     "/exposure_images/<expid>/<provtag>": ExposureImages,
     "/exposure_reports/<expid>/<provtag>": ExposureReports,
-    "/image_data/<expid>/<provtag>/<sectionid>": ImageData,
-    "/image_data/<expid>/<provtag>/<sectionid>/<int:sub>": ImageData,
+    "/image_info/<imgid>": ImageInfo,
+    "/image_data/<exporimid>": ImageData,
+    "/image_data/<exporimid>/<provtag>/<sectionid>": ImageData,
+    "/image_data/<exporimid>/<provtag>/<sectionid>/<int:sub>": ImageData,
     "/png_cutouts_for_sub_image/<exporsubid>/<provtag>/<int:issubid>/<int:nomeas>": PngCutoutsForSubImage,
     "/png_cutouts_for_sub_image/<exporsubid>/<provtag>/<int:issubid>/<int:nomeas>/<int:limit>": PngCutoutsForSubImage,
     ( "/png_cutouts_for_sub_image/<exporsubid>/<provtag>/<int:issubid>/<int:nomeas>/"

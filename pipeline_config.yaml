@@ -391,6 +391,12 @@ subtraction:
     skip_bad: true
     multiple_ok: true
     choice_criteria: [ 'overlap' ]
+  inpainting: {}
+  hotpants_ko: 1
+  hotpants_bgo: 1
+  hotpants_numregions: [1, 1]
+  save_warped_ref: true
+
 
 # ======================================================================#
 # Detection

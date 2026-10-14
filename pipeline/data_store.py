@@ -2484,7 +2484,7 @@ class DataStore:
                         exists_ok=False,
                         overwrite=True,
                         no_archive=False,
-                        save_warped_ref=False,
+                        save_warped_ref=True,
                         update_image_header=False,
                         update_image_record=True,
                         force_save_everything=False ):
@@ -2543,9 +2543,20 @@ class DataStore:
             If True, will not push files up to the archive, will only
             save on local disk.
 
-        save_warped_ref: bool, default False
+        save_warped_ref: bool, default True
             If True, save the aligned reference image, sources, wcs, and
-            zeropoint to the database.
+            zeropoint to the database; otherwise, don't.  Historically,
+            we didn't save these, on the principle that we already had
+            the cutouts, and could regenerate these deterministically if
+            we needed to.  However, later, for convenience of looking at
+            things for diagnostics, we started wishing we'd saved them.
+            If for some reason you want the old behavbior, you can set
+            this to False, but be aware that throughout the code (in
+            tests and in top-level pipeline codes) there are calls to
+            save_and_commit() that just use the default value of this
+            parameter.  (Making this a globally configurable thing, or
+            updating top-level pipelines to have a config parameter for
+            this, is probably a TODO....)
 
         update_image_header: bool, default False
             See above.  If this is true, then the if there is an Image
