@@ -149,7 +149,8 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
         return []
 
 
-    def get_clips( self, clip_size=None, bgsub=True, scale_ref=True, pgdb=None ):
+    def get_clips( self, clip_size=None, bgsub=True, scale_ref=True, pgdb=None,
+                   return_filepaths=False ):
         """Get 3d numpy array that are new, warped ref, sub cutouts for this forced phot point.
 
         Parameters
@@ -171,6 +172,10 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
              Database connection.  If not given, will open and close a
              new one.
 
+          return_filepaths : bool, default False
+             This is really just used by the webap so it can clean up after itself
+             (as it doesn't have a big local filestore, and writes to /tmp).
+
         Returns
         -------
           np.array with shape (3, clip_size, clip_size) and dtype np.float32
@@ -187,6 +192,7 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
 
         """
 
+        paths = []
         with PGDB( pgdb, dictcursor=True ) as pgdb:
             # LEFT JOIN for the warped ref because right now
             #   it might not exist.
@@ -222,12 +228,16 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
             subim = Image.get_by_id( rows[0]['subid'], pgdb=pgdb )
             # No need to background subtract a subtraction!
             subdata = subim.data
+            paths.append( subim.get_fullpath( as_list=True )[0] )
             newim = Image.get_by_id( rows[0]['newid'], pgdb=pgdb )
             if bgsub:
                 newbg = Background.get_by_id( rows[0]['newbgid'], pgdb=pgdb )
                 newdata = newbg.subtract_me( newim.data )
+                if newbg.filepath is not None:
+                    paths.append( newbg.get_fullpath( as_list=True )[0] )
             else:
                 newdata = newim.data
+            paths.append( newim.get_fullpath( as_list=True )[0] )
             newzp = rows[0]['newzp']
             newseeing = rows[0]['fwhm_pixels']
             if rows[0]['warprefid'] is None:
@@ -239,8 +249,11 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
                 if bgsub:
                     warprefbg = Background.get_by_id( rows[0]['refbgid'], pgdb=pgdb )
                     warprefdata = warprefbg.subtract_me( warpref.data )
+                    if warprefbg.filepath is not None:
+                        paths.append( warprefbg.get_fullpath( as_list=True )[0] )
                 else:
                     warprefdata = warpref.data
+                paths.append( warpref.get_fullpath( as_list=True )[0] )
                 warprefzp = rows[0]['refzp']
 
         # Figure out the clip size
@@ -263,7 +276,10 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
         else:
             clips[1] = np.nan
 
-        return clips
+        if return_filepaths:
+            return clips, paths
+        else:
+            return clips
 
     @classmethod
     def get_lightcurve_for_object( cls, obj, prov, filters=None, include_apertures=False, include_raw=False,
@@ -296,7 +312,7 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
             counts.  Ignored if diaforcedphotobjs is True.
 
           include_subim_ids : bool, default False
-            If True, there will be an additional colum subim_id with the
+            If True, there will be an additional colum subimid with the
             id of the subtraction image each forced photometry point was
             performed on.  Ignored if diaforcedphotobjs is True.
 
@@ -540,21 +556,6 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
                     rval = rval.nest_lists( tonest, 'apphot' )
                 else:
                     rval = pandas.DataFrame( rows, columns=cols )
-
-                # # Convert to nJy and apply aperture corrections
-                # # I always have to re-work this out because I can never remember the sign
-                # #   m = -2.5*log10(f1) + zp1 = -2.5*log10(f2) + zp2
-                # #   log10(f1) - log10(f2) = ( zp2 - zp1 ) / (-2.5)
-                # #   f1 / f2 = 10^( (zp1 - zp2) / 2.5 )
-                # #   f1 = f2 * 10^( (zp1 - zp2) / 2.5 )
-                # rval['flux_psf'] = rval['flux_psf_raw'] * ( 10 ** ( (31.4 - rval['zp']) / 2.5 ) )
-                # rval['flux_psf_err'] = rval['flux_psf_raw_err'] * ( 10 ** ( (31.4 - rval['zp']) / 2.5 ) )
-                # if include_apertures:
-                #     rval['flux_aper_0'] *= 10 ** ( (31.4 - rval['zp'] - rval['aper_cor_0']) / 2.5 )
-                #     rval['flux_aper_0_err'] *= 10 ** ( (31.4 - rval['zp'] - rval['aper_cor_0']) / 2.5 )
-                #     rval['flux_aper_n'] *= 10 ** ( (31.4 - rval['zp'] - rval['aper_cor_n']) / 2.5 )
-                #     rval['flux_aper_n_err'] *= 10 ** ( (31.4 - rval['zp'] - rval['aper_cor_n']) / 2.5 )
-                #     rval.drop( columns=['aper_cor_0', 'aper_cor_n'], inplace=True )
 
             else:
                 raise RuntimeError( "This should never happen." )

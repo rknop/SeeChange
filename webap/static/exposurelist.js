@@ -26,7 +26,8 @@ seechange.ExposureList = class
         let self = this;
 
         rkWebUtil.wipeDiv( this.parentdiv );
-        let div = rkWebUtil.elemaker( "div", this.parentdiv, { 'id': 'epxosurelistdiv' } );
+        let div = rkWebUtil.elemaker( "div", this.parentdiv, { 'id': 'epxosurelistdiv',
+                                                               "classes": [ "scrolly" ] } );
         let h2 = rkWebUtil.elemaker( "h2", div, { "text": "Exposures" } );
         if ( ( this.fromtime == null ) && ( this.totime == null ) ) {
             h2.appendChild( document.createTextNode( " from all time" ) );

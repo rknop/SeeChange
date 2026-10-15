@@ -27,7 +27,19 @@
 
 body { color: var(--main-color);
        background: var(--background-color);
+       display: flex;
+       flex-direction: column;
+       height: 100vh;
+       width: 100vw;
+       padding: 1ex;
+       margin: 0;
+       box-sizing: border-box;
      }
+
+div.maindiv { display: flex;
+              flex-direction: column;
+              flex-grow: 1;
+            }
 
 .good { color: var(--good-color) }
 .bad { color: var(--bad-color) }
@@ -47,6 +59,9 @@ body { color: var(--main-color);
 .bgfade { background: var(--lots-faded-color) }
 .link { background: none; border: none; padding: 0;
         color: var(--link-color); text-decoration: var(--link-decoration); cursor: pointer; }
+
+.font75 { font-size: 75% }
+.font50 { font-size: 50% }
 
 .padhalfex { padding: 0.5ex }
 .padex { padding: 1ex }
@@ -100,12 +115,17 @@ a { color: var(--link-color); text-decoration: var(--link-decoration); cursor: p
           border: 2px inset var(--full-color-border);
           margin-left: 0.5ex;
           margin-right: 0.5ex; }
-div.tabdiv {}
-div.buttonboxdiv {}
+div.tabdiv { flex-grow: 1;
+             display: flex;
+             flex-direction: column;
+           }
+div.buttonboxdiv { flex-grow: 0 }
 div.tabcontentdiv { border: 2px solid var(--mostlyfull-color-border);
                     padding: 0.5ex;
+                    flex-grow: 1;
+                    display: flex;
+                    flex-direction: column;
                   }
-
 
 table { border: 2px solid var(--full-color-border); border-spacing: 2px }
 table th { border-bottom: 2px solid var(--full-color-border); font-weight: bold }
@@ -155,6 +175,12 @@ div.vbox100p  { display: flex;
                 flex-direction: column;
                 height: 100%;
               }
+div.nogrow { flex-grow: 0; }
+div.grow0 { flex-grow: 0; }
+div.grow1 { flex-grow: 1; }
+div.noshrink { flex-shrink: 0; }
+div.shrink0 { flex-shrink: 0; }
+div.shrink1 { flex-shrink: 1; }
 
 .justifyleft { justify-content: flex-start }
 .justifycenter { justify-content: center }
@@ -168,12 +194,30 @@ div.vbox100p  { display: flex;
 .flexfitcontent { flex-basis: fit-content }
 
 
+div.header { display: flex;
+             flex-direction: row;
+             justify-content: space-between;
+             padding: 0;
+             padding-left: 1ex;
+             padding-right: 1ex;
+             border: 0;
+             margin: 0;
+             margin-bottom: 1ex;
+             flex-grow: 0;
+             flex-shrink: 1;
+           }
+div.header h1 { margin: 0;
+                padding: 0 }
+
 div.subdiv { border: 2px solid var(--mostlyfull-color-border);
              padding: 0.5ex;
              margin: 1ex; }
 
 div.authdiv { color: var(--some-faded-color);
-              font-size: 75% }
+              font-size: 75%;
+              flex-grow: 0;
+              margin: 0;
+              padding: 0; }
 
 div.footer { color: var(--some-faded-color);
              font-size: 75%;
@@ -196,7 +240,7 @@ div.conductorworkers { border: 4px inset var(--main-color);
 div.svgplottopdiv { position: relative;
                     display: flex;
                     flex-direction: column;
-                    flex-grow: 0;
+                    flex-grow: 1;
                     flex-shrink: 0;
                     min-width: 0;
                     min-height: 0;
@@ -205,7 +249,7 @@ div.svgplotdiv { min-width: 0;
                  min-height: 0;
                  display: flex;
                  flex-direction: row;
-                 flex-grow: 0;
+                 flex-grow: 1;
                  flex-shrink: 0; }
 
 svg.svgplotsvg { display: block;
@@ -238,6 +282,14 @@ div.svgplothbox { display: flex;
                   margin-top: 0.5ex;
                   margin-bottom: 0.5ex;
                 }
+div.svgplothboxleft { display: flex;
+                      flex-direction: row;
+                      justify-content: flex-start;
+                      min-width: 0;
+                      min-height: 0;
+                      margin-top: 0.5ex;
+                      margin-bottom: 0.5ex;
+                    }
 div.svgplotvbox { display: flex;
                   flex-direction: column;
                   min-width: 0;

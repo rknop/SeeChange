@@ -9,11 +9,11 @@ path:
   data_root: /tmp
   data_temp: /tmp
 
-# storage:
-#   images:
-#     format: fits
-#     single_file: false
-#     name_convention: "{ra_int:03d}/{inst_name}_{date}_{time}_{section_id}_{filter}_{im_type}_{prov_hash:.6s}"
+storage:
+  images:
+    format: fits
+    single_file: false
+    name_convention: "{ra_int:03d}/{inst_name}_{date}_{time}_{section_id}_{filter}_{im_type}_{prov_hash:.6s}"
 
 db:
   engine: postgresql+psycopg

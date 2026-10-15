@@ -29,7 +29,9 @@ seechange.ImageList = class
         let h2 = this;
 
         rkWebUtil.wipeDiv( this.parentdiv );
-        h2 = rkWebUtil.elemaker( "h2", this.parentdiv, { "text": "Images" } );
+        this.maindiv = rkWebUtil.elemaker( "div", this.parentdiv, { "classes": [ "scrolly" ] } );
+        
+        h2 = rkWebUtil.elemaker( "h2", this.maindiv, { "text": "Images" } );
         if ( ( this.fromtime !== null ) && ( this.totime != null ) ) {
             rkWebUtil.text( h2, " from MJD " + this.fromtime.toFixed(2) + " to " + this.totime.toFixed(2) );
         }
@@ -67,9 +69,9 @@ seechange.ImageList = class
             td = rkWebUtil.elemaker( "td", row, { "text": seechange.nullorfixed( images["zero_point_estimate"][i],
                                                                                  2 ) } );
             td = rkWebUtil.elemaker( "td", row, { "text": rkWebUtil.floatToString( images["bkg_mean_estimate"][i],
-                                                                                   2, true ) } );
+                                                                                   2, { 'nullok': true } ) } );
             td = rkWebUtil.elemaker( "td", row, { "text": rkWebUtil.floatToString( images["bkg_rms_estimate"][i],
-                                                                                   2, true ) } );
+                                                                                   2, { 'nullok': true } ) } );
             return row;
         };
 
@@ -94,7 +96,7 @@ seechange.ImageList = class
                                                  'colorlength': 3 } );
         tab.table.id = 'image_list_table';
         this.shown_image_list_sortabletable = tab;
-        this.parentdiv.appendChild( tab.table );
+        this.maindiv.appendChild( tab.table );
     }
 
     // THOUGHT REQUIRED.

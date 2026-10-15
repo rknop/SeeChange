@@ -715,7 +715,7 @@ class ImageInfo( BaseView ):
                     WHERE icc.coadd_image_id={imid}
                     """
                 ) ).format( imid=img.id )
-                rows = pgdb.query( q )
+                rows = pgdb.execute( q )
                 imgdict[ 'coadd_component_zp' ] = [ r['zp'] for r in rows ]
                 imgdict[ 'coadd_component_wcs_id' ] = [ r['imgid'] for r in rows ]
                 imgdict[ 'coadd_component_image_id' ] = [ r['wcsid'] for r in rows ]
@@ -723,7 +723,7 @@ class ImageInfo( BaseView ):
             elif img.is_trim:
                 # ... should this be elif?  I think all of is_sub, is_coadd, is_trim are mutually exclusive
                 q = sql.SQL( "SELECT * FROM image_trim_parent WHERE image_id={imgid}" ).format( imgid=img.id )
-                rows = pgdb.query( q )
+                rows = pgdb.execute( q )
                 if len(rows) == 0:
                     return f"Failed to get trim parents for trimmed image {imgid}", 422
                 elif len(rows) > 1:
@@ -1280,6 +1280,34 @@ class DiaForcedPhotForObj( BaseView ):
             return ltcv
 
 
+# ======================================================================
+
+class DiaForcedPhotClips( BaseView ):
+    def do_the_things( self, photid, clipsize=25 ):
+        clipsize = numpy.round( clipsize )
+        if clipsize % 2 == 0:
+            clipsize += 1
+        with PGDB() as pgdb:
+            phot = DiaForcedPhot.get_by_id( photid, pgdb=pgdb )
+            clips, paths = phot.get_clips( clip_size=clipsize, return_filepaths=True )
+
+        barf = bytearray( 4 * clipsize * clipsize + 2 )
+        barf[0] = clipsize % 256
+        barf[1] = clipsize // 256
+        barf[2:] = clips.data
+
+        # OMG RACE CONDITION
+        # If another process is trying to access exactly the same clips at the exactly the same time,
+        #   we might be about to delete them out from under this other process.
+        #   I need a sane way of dealing with the fact that I know the webap can read directly
+        #   from the archive.  I did that in ImageData above, but I don't want to encode that
+        #   hack into models/diaforcedphot.py
+        for path in paths:
+            pathlib.Path( path ).unlink( missing_ok=True )
+
+        return bytes(barf)
+
+
 # =====================================================================
 # =====================================================================
 # =====================================================================
@@ -1377,6 +1405,8 @@ urls = {
     "/fakeanalysisdata/<expid>/<provtag>": FakeAnalysisData,
     "/fakeanalysisdata/<expid>/<provtag>/<sectionid>": FakeAnalysisData,
     "/diaforcedphotforobj/<objid>/<provtag>": DiaForcedPhotForObj,
+    "/diaforcedphotclips/<photid>": DiaForcedPhotClips,
+    "/diaforcedphotclips/<photid>/<clipsize>": DiaForcedPhotClips
 }
 
 usedurls = {}

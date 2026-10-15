@@ -45,9 +45,8 @@ seechange.Context = class
 {
     constructor()
     {
-        this.parentdiv = document.getElementById( "pagebody" );
         this.authdiv = document.getElementById( "authdiv" );
-        this.maindiv = rkWebUtil.elemaker( "div", this.parentdiv, { 'id': 'parentdiv' } );
+        this.maindiv = document.getElementById( "pagebody" );
         this.frontpagediv = null;
 
         // TODO : make this configurable?  Or at least remember how to
@@ -76,7 +75,7 @@ seechange.Context = class
         if ( this.frontpagediv == null ) {
 
             rkWebUtil.wipeDiv( this.authdiv );
-            p = rkWebUtil.elemaker( "p", this.authdiv,
+            p = rkWebUtil.elemaker( "span", this.authdiv,
                                     { "text": "Logged in as " + this.auth.username
                                       + " (" + this.auth.userdisplayname + ") — ",
                                       "classes": [ "italic" ] } );
@@ -86,7 +85,8 @@ seechange.Context = class
                                          "click": () => { self.auth.logout( () => { window.location.reload(); } ) }
                                        } );
 
-            this.frontpagediv = rkWebUtil.elemaker( "div", this.maindiv, { 'id': 'frontpagediv' } );
+            this.frontpagediv = rkWebUtil.elemaker( "div", this.maindiv, { 'id': 'frontpagediv',
+                                                                           'classes': [ 'maindiv' ] } );
 
             p = rkWebUtil.elemaker( "p", this.frontpagediv, { "text": "Use provenance tag: " } );
             this.provtag_wid = rkWebUtil.elemaker( "select", p, { 'id': 'provtag_wid' } );

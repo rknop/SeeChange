@@ -13,7 +13,8 @@ seechange.Image = class extends( rkWebUtil.listener )
                                'provtag': null,
                                'box_width': 10,
                                'oversample': 5,
-                               'start_image': null
+                               'start_image': null,
+                               'show_detections': true
                              };
         Object.assign( this, default_params );
         Object.assign( this, params );
@@ -341,7 +342,7 @@ seechange.Image = class extends( rkWebUtil.listener )
             this.imviews[which] = imview;
             let but = rkWebUtil.button( imview.zoom_buttonbox, "Copy Zoom", () => { self.copy_zoom(which); } );
             but.classList.add( "marginleftex" );
-            if ( this.provtag !== null ) {
+            if ( ( this.provtag !== null ) && this.show_detections ) {
                 this.load_cutouts( (data) => { self.show_detections_on_image(which, data); }, which );
             }
         } else {
