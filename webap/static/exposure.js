@@ -66,11 +66,12 @@ seechange.Exposure = class
         this.sectionforfakes_dropdown = null;
 
         this.imgrows = {};
-        this.cutouts_promises = {};
         this.fakeanalysis_data = {};
+        this.image_objects = {};
+        this.image_promises = {};
         this.image_view_div = null;
-        this.image_views = {};
-        this.image_view_promises = {};
+        this.cutouts_promises = {};
+        this.cutoutsdiv = null;
         this.reports = null;
         this.reports_subdiv = null;
 
@@ -174,7 +175,7 @@ seechange.Exposure = class
 
         table = rkWebUtil.elemaker( "table", this.div, { "classes": [ "exposurelist" ] } );
         tr = rkWebUtil.elemaker( "tr", table );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "name" } );
+        th = rkWebUtil.elemaker( "th", tr, { "text": "image name" } );
         th = rkWebUtil.elemaker( "th", tr, { "text": "section" } );
         th = rkWebUtil.elemaker( "th", tr, { "text": "α" } );
         th = rkWebUtil.elemaker( "th", tr, { "text": "δ" } );
@@ -306,29 +307,35 @@ seechange.Exposure = class
         this.fakesdiv = rkWebUtil.elemaker( "div", div );
 
         // Selection dropdowns in the detections div
-        this.create_cutouts_widgets( this.detectionsdiv );
+        p = rkWebUtil.elemaker( "p", this.detectionsdiv );
+        this.cutoutsimage_dropdown = rkWebUtil.elemaker( "select", p,
+                                                         { "change": () => self.select_cutouts() } );
+        rkWebUtil.elemaker( "option", this.cutoutsimage_dropdown, { "text": "<Choose Image For Cutouts>",
+                                                                    "attributes": {
+                                                                        "value": "_select_image",
+                                                                        "selected": 1 } } );
+        // Currently don't have code to support showing all images at once...
+        // rkWebUtil.elemaker( "option", this.cutoutsimage_dropdown, { "text": "All Successful Images",
+        //                                                             "attributes": { "value": "_all_images" } } );
+        for ( let imgrow of this.data.images ) {
+            rkWebUtil.elemaker( "option", this.cutoutsimage_dropdown, { "text": imgrow.section_id,
+                                                                        "attributes": {
+                                                                            "value": imgrow.subid } }  );
+        }
+        this.cutoutssansmeasurements_checkbox =
+            rkWebUtil.elemaker( "input", p, { "change": () => { self.select_cutouts() },
+                                              "attributes":
+                                              { "type": "checkbox",
+                                                "id": "cutouts_sans_measurements",
+                                                "name": "cutouts_sans_measurements_checkbox" } } );
+        rkWebUtil.elemaker( "label", p, { "text": ( "Show detections that failed the preliminary cuts " +
+                                                    "(i.e. aren't sources)" ),
+                                                    // + " (Ignored for \"All Successful Images\")" ),
+                                          "attributes": { "for": "cutouts_sans_measurements_checkbox" } } );
         this.cutoutsdiv = rkWebUtil.elemaker( "div", this.detectionsdiv );
         
         // // TODO : buttons for next, prev, etc.
 
-        // this.tabs.addTab( "Images", "Images", this.imagesdiv, true );
-
-        // this.image_details_div = rkWebUtil.elemaker( "div", null, { 'id': 'exposureimagedetaildiv' } );
-        // this.tabs.addTab( "Image Details", "Image Details", this.image_details_div, false,
-        //                   () => { self.select_image_details() } );
-        // this.create_image_details_widgets();
-
-        // this.fakes_div = rkWebUtil.elemaker( "div", null, { 'id': 'exposureimagefakesdiv' } );
-        // this.tabs.addTab( "Fakes", "Fakes", this.fakes_div, false,
-        //                   () => { self.select_image_fakes() } );
-        // this.create_fakes_widgets();
-
-        // this.reports_div = rkWebUtil.elemaker( "div", null, { 'id': 'exposurereportsdiv' } );
-        // this.tabs.addTab( "Reports", "Reports", this.reports_div, false, ()=>{ self.show_reports() } );
-
-        // this.cutoutsdiv = rkWebUtil.elemaker( "div", null, { 'id': 'exposurecutoutsdiv' } );
-        // this.tabs.addTab( "Cutouts", "Sources", this.cutoutsdiv, false, ()=>{ self.select_cutouts() } );
-        // this.create_cutouts_widgets();
     };
 
     // ****************************************
@@ -548,6 +555,16 @@ seechange.Exposure = class
 
     // ****************************************
 
+    get_image_promise( sec )
+    {
+        if ( ! this.image_promises.hasOwnProperty( sec ) ) {
+            let url = 'image_info/' + ( ( this.imgrows[sec].subid !== null ) ?
+                                        this.imgrows[sec].subid : this.imgrows[sec]._id );
+            this.image_promises[sec] = this.context.connector.httpPromise( url );
+        }
+        return this.image_promises[sec];
+    }
+    
     select_image_details()
     {
         let self = this;
@@ -559,36 +576,41 @@ seechange.Exposure = class
         if ( sec == "_select_section" )
             return;
 
-        if ( this.image_views.hasOwnProperty( sec ) ) {
-            this.image_view_div.appendChild( this.image_views[sec] );
+        if ( this.image_objects.hasOwnProperty( sec ) ) {
+            this.image_objects[ sec ].show_imagediv();
             return;
         }
 
+        this.parenttabs.selectTab( "imagedetail" );
         rkWebUtil.elemaker( "p", this.image_view_div, { "text": "Loading image info...",
                                                         "classes": [ "warning", "bold", "italic" ] } );
-        this.parenttabs.selectTab( "imagedetail" );
-        
-        if ( ! this.image_view_promises.hasOwnProperty( sec ) ) {
-            let url = 'image_info/' + ( ( this.imgrows[sec].subid !== null ) ?
-                                        this.imgrows[sec].subid :
-                                        this.imgrows[sec]._id );
-            this.image_view_promises[sec] = this.context.connector.httpPromise( url );
-        }
+        let promise = this.get_image_promise( sec );
         // OK, I really don't understand javascript callbacks.  Could I
-        //   just stick self.show_image_details here instead of the
+        //   just stick self.make_image_details here instead of the
         //   arrow function?  I don't think so, but I'm not sure why, I
         //   only know that when I contemplate it I start to feel
         //   anxiety.
-        this.image_view_promises[sec].then( (info) => { self.show_image_details(info); } );
+        promise.then( (info) => { self.make_image_details(info);
+                                  self.image_objects[sec].show_imagediv();
+                                } );
     }
 
-    show_image_details( info ) {
-        rkWebUtil.wipeDiv( this.image_view_div );
-        if ( ! this.image_views.hasOwnProperty( info.section_id ) ) {
-            this.image_views[info.section_id] = new seechange.Image( this.context, info,
-                                                                     { 'provtag': this.data.provenancetag } );
+    make_image_details( info )
+    {
+        let self = this;
+        let sec = info.section_id;
+        
+        if ( ! this.image_objects.hasOwnProperty( sec ) ) {
+            this.image_objects[ sec ] = new seechange.Image( this.context, info,
+                                                             { 'provtag': this.data.provenancetag } );
+            this.image_objects[ sec ].listen( 'image',
+                                              (signal, stuff) => {
+                                                  self.parenttabs.selectTab( "imagedetail" );
+                                                  rkWebUtil.wipeDiv( self.image_view_div );
+                                                  self.image_view_div.appendChild( stuff.imagediv );
+                                              },
+                                              'exposure_image_listener' );
         }
-        this.image_view_div.appendChild( this.image_views[info.section_id].div );
     }
 
 
@@ -987,36 +1009,6 @@ seechange.Exposure = class
         magvmag.redraw();
     }
 
-    // ****************************************
-
-    create_cutouts_widgets( div ) {
-        let self = this;
-
-        let p = rkWebUtil.elemaker( "p", div );
-        this.cutoutsimage_dropdown = rkWebUtil.elemaker( "select", p,
-                                                         { "change": () => self.select_cutouts() } );
-        rkWebUtil.elemaker( "option", this.cutoutsimage_dropdown, { "text": "<Choose Image For Cutouts>",
-                                                                    "attributes": {
-                                                                        "value": "_select_image",
-                                                                        "selected": 1 } } );
-        rkWebUtil.elemaker( "option", this.cutoutsimage_dropdown, { "text": "All Successful Images",
-                                                                    "attributes": { "value": "_all_images" } } );
-        for ( let imgrow of this.data.images ) {
-            rkWebUtil.elemaker( "option", this.cutoutsimage_dropdown, { "text": imgrow.section_id,
-                                                                        "attributes": {
-                                                                            "value": imgrow.subid } }  );
-        }
-        this.cutoutssansmeasurements_checkbox =
-            rkWebUtil.elemaker( "input", p, { "change": () => { self.select_cutouts() },
-                                              "attributes":
-                                              { "type": "checkbox",
-                                                "id": "cutouts_sans_measurements",
-                                                "name": "cutouts_sans_measurements_checkbox" } } );
-        rkWebUtil.elemaker( "label", p, { "text": ( "Show detections that failed the preliminary cuts " +
-                                                    "(i.e. aren't sources) " +
-                                                    "(Ignored for \"All Successful Images\")" ),
-                                          "attributes": { "for": "cutouts_sans_measurements_checkbox" } } );
-    };
 
     // ****************************************
 
@@ -1047,180 +1039,34 @@ seechange.Exposure = class
 
         rkWebUtil.wipeDiv( this.cutoutsdiv );
 
-        let which_cutouts = this.cutoutsimage_dropdown.value.toString();
-        if ( which_cutouts == "_select_image" )
+        let sec = this.cutoutsimage_dropdown.value.toString();
+        let sans = this.cutoutssansmeasurements_checkbox.checked;
+        if ( sec == "_select_image" )
             return;
 
-        rkWebUtil.elemaker( "p", this.cutouts_content_div, { "text": "Loading cutouts...",
-                                                             "classes": [ "bold", "italic", "warning" ] } );
-
-        this.load_cutouts( which_cutouts,
-                           (which, data) => { self.show_cutouts_for_image( self.cutouts_content_div, which, data ) },
-                           this.cutoutssansmeasurements_checkbox.checked );
-    };
-
-
-    // **********************************************************************
-
-    load_cutouts( subid, callback, sansmeas=false )
-    {
-        let self = this;
-        let which_cutouts;
-
-        let url = "png_cutouts_for_sub_image/";
-        if ( subid == "_all_images" ) {
-            which_cutouts = "_all_images/0/0";
-            url += this.id + "/" + this.data.provenancetag + "/0/0";
-        }
-        else {
-            which_cutouts = subid + "/1/" + ( sansmeas ? "1" : "0" );
-            url += subid + "/" + this.data.provenancetag + "/1/" + ( sansmeas ? "1" : "0" );
+        let detections_callback = (signal, stuff) => { self.parenttabs.selectTab( "sources" );
+                                                       rkWebUtil.wipeDiv( self.cutoutsdiv );
+                                                       self.cutoutsdiv.appendChild( stuff.detectionsdiv );
+                                                     };
+            
+        if ( this.image_objects.hasOwnProperty( sec ) ) {
+            this.image_objects[ sec ].listen( 'detections', detections_callback,
+                                              'exposure_detections_listener', true );
+            this.image_objects[ sec ].show_detectionsdiv( sans );
+            return
         }
 
-        if ( ! this.cutouts_promises.hasOwnProperty( which_cutouts ) ) {
-            this.cutouts_promises[ which_cutouts ] = this.context.connector.httpPromise( url );
-        }
-        this.cutouts_promises[ which_cutouts ].then( (data) => { callback( which_cutouts, data ); } );
+        this.parenttabs.selectTab( "sources" );
+        rkWebUtil.elemaker( "p", this.cutoutsdiv, { "text": "Loading cutouts...",
+                                                    "classes": [ "warning", "bold", "italic" ] });
+
+        let promise = this.get_image_promise(sec );
+        promise.then( (info) => { self.make_image_detail(info);
+                                  this.image_objects[sec].listen( 'detections', detections_callback,
+                                                                  'exposure_detections_listener' );
+                                  self.image_objects[sec].show_detectionsdiv( sans ); } );
     }
 
-    // ****************************************
-    // TODO : implement limit and offset
-    //   (will require modifing select_cutouts too)
-
-    show_cutouts_for_image( div, which_cutouts, data )
-    {
-        var table, tr, th, td, img, span, ttspan;
-        var oversample = 5;
-
-        rkWebUtil.wipeDiv( div );
-
-        table = rkWebUtil.elemaker( "table", div, { 'id': 'exposurecutoutstable' } );
-        tr = rkWebUtil.elemaker( "tr", table );
-        th = rkWebUtil.elemaker( "th", tr );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "new" } );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "ref" } );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "sub" } );
-
-        // Sorting is now done server-side... TODO, think about this
-        // // TODO : sort by r/b, make sort configurable
-        // let dexen = [...Array(data.cutouts.sub_id.length).keys()];
-        // dexen.sort( (a, b) => {
-        //     if ( ( data.cutouts['flux'][a] == null ) && ( data.cutouts['flux'][b] == null ) ) return 0;
-        //     else if ( data.cutouts['flux'][a] == null ) return 1;
-        //     else if ( data.cutouts['flux'][b] == null ) return -1;
-        //     else if ( data.cutouts['flux'][a] > data.cutouts['flux'][b] ) return -1;
-        //     else if ( data.cutouts['flux'][a] < data.cutouts['flux'][b] ) return 1;
-        //     else return 0;
-        // } );
-
-        // for ( let i of dexen ) {
-        for ( let i in data.cutouts.sub_id ) {
-            tr = rkWebUtil.elemaker( "tr", table );
-            td = rkWebUtil.elemaker( "td", tr );
-            if ( data.cutouts.objname[i] != null ) {
-                let text = "Object: " + data.cutouts.objname[i];
-                if ( data.cutouts.is_test[i] ) text += " [TEST]";
-                td.appendChild( document.createTextNode( text ) );
-            }
-            td = rkWebUtil.elemaker( "td", tr );
-            img = rkWebUtil.elemaker( "img", td,
-                                      { "attributes":
-                                        { "src": "data:image/png;base64," + data.cutouts['new_png'][i],
-                                          "width": oversample * data.cutouts['w'][i],
-                                          "height": oversample * data.cutouts['h'][i],
-                                          "alt": "new" } } );
-            td = rkWebUtil.elemaker( "td", tr );
-            img = rkWebUtil.elemaker( "img", td,
-                                      { "attributes":
-                                        { "src": "data:image/png;base64," + data.cutouts['ref_png'][i],
-                                          "width": oversample * data.cutouts['w'][i],
-                                          "height": oversample * data.cutouts['h'][i],
-                                          "alt": "ref" } } );
-            td = rkWebUtil.elemaker( "td", tr );
-            img = rkWebUtil.elemaker( "img", td,
-                                      { "attributes":
-                                        { "src": "data:image/png;base64," + data.cutouts['sub_png'][i],
-                                          "width": oversample * data.cutouts['w'][i],
-                                          "height": oversample * data.cutouts['h'][i],
-                                          "alt": "sub" } } );
-
-            // *** The info td, which is long
-            td = rkWebUtil.elemaker( "td", tr );
-            // row; chip
-            rkWebUtil.elemaker( "b", td, { "text": "chip: " } );
-            td.appendChild( document.createTextNode( data.cutouts.section_id[i] ) );
-            rkWebUtil.elemaker( "br", td );
-            // row: source index, with good/bad
-            rkWebUtil.elemaker( "b", td, { "text": "source index: " } )
-            td.appendChild( document.createTextNode( data.cutouts.source_index[i] + "  " ) );
-            span = rkWebUtil.elemaker( "b", td, { "text": ( data.cutouts.is_bad[i] ?
-                                                            "fails cuts" : "passes cuts" ) } );
-            span.classList.add( "tooltipcolorlesssource" );
-            ttspan = rkWebUtil.elemaker( "span", span, { "classes": [ "tooltiptext" ] } );
-            ttspan.innerHTML = ( "<p>major_width: " + seechange.nullorfixed( data.cutouts.major_width[i], 2 ) + "<br>" +
-                                 "minor_width: " + seechange.nullorfixed( data.cutouts.minor_width[i], 2 ) + "<br>" +
-                                 "nbadpix: " + data.cutouts.nbadpix[i] + "<br>" +
-                                 "negfrac: " + data.cutouts.negfrac[i] + "<br>" +
-                                 "negfluxfrac: " + data.cutouts.negfluxfrac[i] + "<br>" +
-                                 "Gauss fit pos: " + seechange.nullorfixed( data.cutouts['gfit_x'][i], 2 )
-                                 + " , " + seechange.nullorfixed( data.cutouts['gfit_y'][i], 2 ) +
-                                 "</p>" )
-            span.classList.add( data.cutouts.is_bad[i] ? "bad" : "good" );
-            rkWebUtil.elemaker( "br", td );
-            // row: ra/dec
-            rkWebUtil.elemaker( "b", td, { "text": "(α, δ): " } );
-            td.appendChild( document.createTextNode( "(" +
-                                                     seechange.nullorfixed( data.cutouts['measra'][i], 5 )
-                                                     + " , " +
-                                                     seechange.nullorfixed( data.cutouts['measdec'][i], 5 )
-                                                     + ")" ) );
-            rkWebUtil.elemaker( "br", td );
-            // row: x, y from cutouts; this is where it was originally detected.
-            rkWebUtil.elemaker( "b", td, { "text": "det. (x, y): " } );
-            td.appendChild( document.createTextNode( "(" +
-                                                     seechange.nullorfixed( data.cutouts['cutout_x'][i], 2 )
-                                                     + " , " +
-                                                     seechange.nullorfixed( data.cutouts['cutout_y'][i], 2 )
-                                                     + ")" ) );
-            rkWebUtil.elemaker( "br", td );
-            // row: x, y from measurement table.
-            rkWebUtil.elemaker( "b", td, { "text": "meas. (x, y): " } );
-            td.appendChild( document.createTextNode( "(" +
-                                                     seechange.nullorfixed( data.cutouts['x'][i], 2 )
-                                                     + " , " +
-                                                     seechange.nullorfixed( data.cutouts['y'][i], 2 )
-                                                     + ")" ) );
-            rkWebUtil.elemaker( "br", td );
-            // row: flux
-            rkWebUtil.elemaker( "b", td, { "text": "Flux: " } );
-            td.appendChild( document.createTextNode( seechange.nullorfixed( data.cutouts["flux"][i], 0 )
-                                                     + " ± " +
-                                                     seechange.nullorfixed( data.cutouts["dflux"][i], 0 )
-                                                     + "  " +
-                                                     + ( ( ( data.cutouts['aperrad'][i] == null ) ||
-                                                           ( data.cutouts['aperrad'][i] <= 0 ) ) ?
-                                                         '(psf)' :
-                                                         ( "(aper r=" +
-                                                           seechange.nullorfixed( data.cutouts['aperrad'][i], 2 )
-                                                           + " px)" ) ) ) );
-            rkWebUtil.elemaker( "br", td );
-            // row: mag
-            rkWebUtil.elemaker( "b", td, { "text": "Mag: " } );
-            td.appendChild( document.createTextNode( seechange.nullorfixed( data.cutouts['mag'][i], 2 )
-                                                     + " ± " +
-                                                     seechange.nullorfixed( data.cutouts['dmag'][i], 2 ) ) );
-            rkWebUtil.elemaker( "br", td );
-            // row; R/B
-            span = rkWebUtil.elemaker( "span", td );
-            if ( ( data.cutouts['rb'][i] == null ) || ( data.cutouts['rb'][i] < data.cutouts['rbcut'][i] ) )
-                span.classList.add( 'bad' );
-            else
-                span.classList.add( 'good' );
-            rkWebUtil.elemaker( "b", span, { "text": "R/B: " } );
-            span.appendChild( document.createTextNode( seechange.nullorfixed( data.cutouts['rb'][i], 3 ) ) );
-
-        }
-    };
 }
 
 
