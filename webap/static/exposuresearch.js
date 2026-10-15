@@ -1,5 +1,7 @@
 import { rkWebUtil } from "./rkwebutil.js";
 import { seechange } from "./seechange_ns.js"
+import "./exposurelist.js"
+import "./imagelist.js"
 
 // **********************************************************************
 
@@ -183,10 +185,17 @@ seechange.ExposureSearch = class
 
     actually_show_images( data )
     {
-        window.alert( "actually_show_images not implemented" );
+        this.imagelist = new seechange.ImageList( this.context, this, this.tabbed,
+                                                  this.emptiabledivs["imagelist"].div,
+                                                  this.emptiabledivs["imagedetail"].div,
+                                                  this.emptiabledivs["sources"].div,
+                                                  data.images, data.startdate, data.enddate,
+                                                  data.provenance_tag, data.projects );
+        this.imagelist.render_page();
     }
-
 }
+
+
 
 // **********************************************************************
 // Make this into a module

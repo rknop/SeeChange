@@ -2407,6 +2407,9 @@ class UUIDMixin:
 
         """
 
+        # We will raise an exception here if the parameter uuid isn't a valid representation of a uuid
+        uuid = asUUID( uuid )
+
         with PGDB( (pgdb if pgdb is not None else session), dictcursor=True ) as pgdb:
             q = sql.SQL( "SELECT * FROM {table} WHERE _id=%(id)s" ).format( table=sql.Identifier(cls.__tablename__) )
             rows = pgdb.execute( q, { 'id': uuid } )

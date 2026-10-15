@@ -109,15 +109,20 @@ seechange.Image = class extends( rkWebUtil.listener )
 
     make_image_div( remake=false )
     {
-        if ( ( this._imagediv !== null ) && ( ! remake ) ) return;
+        let self = this;
         
-        this._imagediv = rkWebUtil.elemaker( "div", null, { "classes": [ "hbox" ] } );
+        if ( ( this._imagediv !== null ) && ( ! remake ) ) return;
 
-        rkWebUtil.elemaker( "h2", this._imagediv, "Image: " + this.filename + "( " + this.info._id + " )" );
+        this._imagediv = rkWebUtil.elemaker( "div", null );
 
-        this.imview_div = rkWebUtil.elemaker( "div", this._imagediv, { "classes": [ "vbox", "marginrightem" ] } );
-        this.info_div = rkWebUtil.elemaker( "div", this._imagediv, { "classes": [ "marginrightem" ] } );
-        this.thumbnails_div = rkWebUtil.elemaker( "div", this._imagediv );
+        rkWebUtil.elemaker( "h2", this._imagediv,
+                            { "text": "Image: " + this.filename + "( " + this.info._id + " )" } );
+        
+        let hbox = rkWebUtil.elemaker( "div", this._imagediv, { "classes": [ "hbox" ] } );
+
+        this.imview_div = rkWebUtil.elemaker( "div", hbox, { "classes": [ "vbox", "marginrightem" ] } );
+        this.info_div = rkWebUtil.elemaker( "div", hbox, { "classes": [ "marginrightem" ] } );
+        this.thumbnails_div = rkWebUtil.elemaker( "div", hbox );
         
         this.shown_imview = null;
         this.shown_info = null;
@@ -126,7 +131,6 @@ seechange.Image = class extends( rkWebUtil.listener )
             this.imviews = { 'new': null, 'ref': null, 'sub': null };
             this.imview_promises = { 'new': null, 'ref': null, 'sub': null };
             this.select_imview( 'sub' );
-            this.imview_div = rkWebUtil.elemaker( "div", this.imview_div );
             this.thumbnails_promise = null;
             this.squares_rendered = { 'new': false, 'ref': false, 'sub': false };
             this.zoomx0 = null;
@@ -135,16 +139,19 @@ seechange.Image = class extends( rkWebUtil.listener )
 
             let p = rkWebUtil.elemaker( "p", this.imview_div );
             this.newrefsub = rkWebUtil.elemaker( "select", p,
-                                                 { "attributes": {
-                                                     "change": (e) => {
-                                                         self.load_info(which);
-                                                         self.select_imview(self.newrefsub.value);
-                                                     }
+                                                 { "change": (e) => {
+                                                     let which = self.newrefsub.value;
+                                                     self.load_info_view( which );
+                                                     self.select_imview( which );
                                                  } } );
             let n = rkWebUtil.elemaker( "option", this.newrefsub, { "text": "New", attributes: { "value": "new" } } );
             let r = rkWebUtil.elemaker( "option", this.newrefsub, { "text": "Ref", attributes: { "value": "ref" } } );
             let s = rkWebUtil.elemaker( "option", this.newrefsub, { "text": "Sub", attributes: { "value": "sub" } } );
             let start_image = this.start_image;
+
+            // Make a new div underneath the dropdown we just made so the dropdown won't be wiped out
+            this.imview_div = rkWebUtil.elemaker( "div", this.imview_div );
+
             if ( start_image === null ) {
                 if ( this.issub ) start_image = 'sub';
                 else start_image = 'image';
@@ -187,12 +194,12 @@ seechange.Image = class extends( rkWebUtil.listener )
         }
         else {
             if ( this.infopromises[which] === null ) {
-                url = "image_info/";
+                let url = "image_info/";
                 if ( which == 'new' ) {
                     url += this.info['new_id'];
                 }
                 else if ( which == 'ref' ) {
-                    url += this.info['wapred_ref_id'];
+                    url += this.info['warped_ref_id'];
                 }
                 else {
                     window.alert( "Invalid thing to load_info_view: " + which );
@@ -200,6 +207,9 @@ seechange.Image = class extends( rkWebUtil.listener )
                 }
                 this.infopromises[which] = this.context.connector.httpPromise( url );
             }
+            rkWebUtil.wipeDiv( this.info_div );
+            rkWebUtil.elemaker( "p", this.info_div, { "text": "Loading image info...",
+                                                      "classes": [ "warning", "bold", "italic" ] } );
             this.infopromises[which].then( (info) => { self.show_info_view( info, which ); } );
         }
     }
@@ -225,6 +235,7 @@ seechange.Image = class extends( rkWebUtil.listener )
                            'dec': seechange.nullorfixed( info['dec'], 5 ),
                            'filter': info['filter'],
                            'exptime': seechange.nullorfixed( info['exp_time'], 1 ),
+                           'type': seechange.imagetypes[ info['_type'] ],
                            'instrument': info['instrument'],
                            'airmass': seechange.nullorfixed( info['airmass'], 2 ),
                            'seeing (pix)': seechange.nullorfixed( info['fwhm_estimate'], 2 ),
@@ -277,7 +288,7 @@ seechange.Image = class extends( rkWebUtil.listener )
 
         rkWebUtil.wipeDiv( this.imview_div );
         if ( imview !== null ) {
-            this.imview_div.appendChild( imview );
+            this.imview_div.appendChild( imview.div );
             this.shown_imview = which;
             return;
         }
@@ -291,7 +302,7 @@ seechange.Image = class extends( rkWebUtil.listener )
             }
             else {
                 if ( this.imview_promise == null ) {
-                    this.imview_promise = this.context.connector.httpPromise( "image_data/" + imgtoreuest,
+                    this.imview_promise = this.context.connector.httpPromise( "image_data/" + imgtorequest,
                                                                               null, false );
                 }
                 this.imview_promise.then( (data) => { self.create_imview( data, imgtorequest, which ); } );
@@ -343,12 +354,12 @@ seechange.Image = class extends( rkWebUtil.listener )
         this.zoomx0 = this.imviews[which].x0;
         this.zoomy0 = this.imviews[which].y0;
         this.zoomscale = this.imviews[which].scale;
-        for ( let im in [ 'new', 'ref', 'sub' ] ) {
+        for ( let im of [ 'new', 'ref', 'sub' ] ) {
             if ( im != which ) {
                 if ( this.imviews[im] != null ) {
                     this.imviews[im].x0 = this.zoomx0;
                     this.imviews[im].y0 = this.zoomy0;
-                    this.imviews[im].scale = this.zoomsca;e
+                    this.imviews[im].scale = this.zoomscale;
                     this.imviews[im].render_image();
                 }
             }

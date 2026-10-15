@@ -30,7 +30,7 @@ import flask.logging
 import flask_session
 
 from util.config import Config
-from util.util import asUUID
+from util.util import asUUID, listify
 from models.provenance import Provenance
 from models.enums_and_bitflags import ImageTypeConverter
 from models.base import PsycopgConnection, PGDB
@@ -194,8 +194,65 @@ class Projects( BaseView ):
 
 
 # ======================================================================
+# This one should be updated for more finding
 
-# class Images
+class Images( BaseView ):
+    def do_the_things( self, provenancetag, argstr=None ):
+        data = self.argstr_to_args( argstr, { 'startdate': None,
+                                              'enddate': None,
+                                              'projects': None,
+                                              } )
+        t0 = None if data['startdate'] is None else astropy.time.Time( data['startdate'], format='isot' ).mjd
+        t1 = None if data['enddate'] is None else astropy.time.Time( data['enddate'], format='isot' ).mjd
+        try:
+            projects = listify( data['projects'], require_string=True )
+        except Exception:
+            return f"Failed to parse projects \"{data['projects']}\"", 422
+
+        with PGDB() as pgdb:
+            q = sql.SQL( textwrap.dedent(
+                """\
+                SELECT i._id, i.filepath, i.provenance_id, i.mjd, i.ra, i.dec, i.exp_time, i._type, i.filter,
+                       i.airmass, i.instrument, i.section_id, i.project, i.target, i.is_sub::int,
+                       i.zero_point_estimate, i.fwhm_estimate, i.lim_mag_estimate,
+                       i.bkg_mean_estimate, i.bkg_rms_estimate
+                FROM images i
+                INNER JOIN provenance_tags t ON t.provenance_id=i.provenance_id
+                                            AND t.tag={provtag}
+                """
+            ) ).format( provtag=provenancetag )
+            where = "WHERE"
+            if t0 is not None:
+                q += sql.SQL( "{where} i.mjd>={t}\n" ).format( t=t0, where=sql.SQL( where ) )
+                where = "  AND"
+            if t1 is not None:
+                q += sql.SQL( "{where} i.mjd<={t}\n" ).format( t=t1, where=sql.SQL( where ) )
+                where = "  AND"
+            if data['projects'] is not None:
+                q += sql.SQL( "{where} i.projects=ANY(ARRAY[{projects}])\n"
+                             ).format( projects=sql.SQL(",").join( projects ) )
+            q += sql.SQL( "ORDER BY i.mjd, i.section_id, i._type\n")
+            rows, cols = pgdb.execute( q )
+
+        rval = { 'status': 'ok',
+                 'startdate': t0,
+                 'enddate': t1,
+                 'provenance_tag': provenancetag,
+                 'projects': projects,
+                 'images': { c: [ r[i] for r in rows ] for i, c in enumerate(cols) }
+                 }
+        slashre = re.compile( '^.*/([^/]+)$' )
+        dex = cols.index( 'filepath' )
+        rval['images']['filename'] = []
+        for row in rows:
+            mat = slashre.search( row[dex] )
+            if mat is None:
+                rval['images']['filename'].append( "????" )
+            else:
+                rval['images']['filename'].append( mat.group(1) )
+
+        return rval
+
 
 # ======================================================================
 
@@ -603,9 +660,18 @@ class ExposureReports( BaseView ):
 class ImageInfo( BaseView ):
     def do_the_things( self, imgid ):
         with PGDB( dictcursor=True ) as pgdb:
-            img = Image.get_by_id( imgid, pgdb=pgdb )
+            try:
+                img = Image.get_by_id( imgid, pgdb=pgdb )
+            except Exception:
+                img = None
             if img is None:
                 img = Image.get_by_field_value( "filepath", imgid, pgdb=pgdb )
+                if len( img ) > 1:
+                    return f"Multiple images with filepath {imgid}; this should never happen.", 422
+                elif len(img) == 0:
+                    img = None
+                else:
+                    img = img[0]
             if img is None:
                 return f"Could not find image {imgid}", 422
 
@@ -1298,6 +1364,8 @@ urls = {
     "/exposures/<provenancetag>/<path:argstr>": Exposures,
     "/exposure_images/<expid>/<provtag>": ExposureImages,
     "/exposure_reports/<expid>/<provtag>": ExposureReports,
+    "/images/<provenancetag>": Images,
+    "/images/<provenancetag>/<path:argstr>": Images,
     "/image_info/<imgid>": ImageInfo,
     "/image_data/<exporimid>": ImageData,
     "/image_data/<exporimid>/<provtag>/<sectionid>": ImageData,

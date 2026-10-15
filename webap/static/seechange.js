@@ -103,7 +103,7 @@ seechange.Context = class
 
             this.exposuresearch = new seechange.ExposureSearch( this );
             this.exposuresearch.render();
-            this.frontpagetabs.addTab( "exposuresearch", "Exposure Search", this.exposuresearch.div );
+            this.frontpagetabs.addTab( "exposuresearch", "Exposure/Image Search", this.exposuresearch.div );
 
             this.diaforcedphot = new seechange.DiaForcedPhotSearch( this );
             this.diaforcedphot.render();

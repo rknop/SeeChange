@@ -1579,7 +1579,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
 
         if wcs_prov is not None:
             if not isinstance( wcs_prov, Provenance ):
-                wcs_prov_obj = Provenance.get_by_id( wcs_prov, pgdb=pgdb )
+                wcs_prov_obj = Provenance.get( wcs_prov, pgdb=pgdb )
                 if wcs_prov_obj is None:
                     raise ValueError( f"Failed to find wcs prov {wcs_prov}" )
                 wcs_prov = wcs_prov_obj
@@ -1605,7 +1605,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             #   means nothing in the trimming is part of the trimmed zeropoint provenance
             #   upstreams.
             if not isinstance( zp_prov, Provenance ):
-                zp_prov_obj = Provenance.get_by_id( zp_prov, pgdb=pgdb )
+                zp_prov_obj = Provenance.get( zp_prov, pgdb=pgdb )
                 if zp_prov_obj is None:
                     raise ValueError( f"Failed to get zp prov {zp_prov}" )
                 zp_prov = zp_prov_obj

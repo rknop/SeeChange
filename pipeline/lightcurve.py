@@ -348,7 +348,7 @@ class Lightcurve:
                     raise RuntimeError( "This should never happen, I don't think, but I'm not really sure." )
                 elif len(rows) == 0:
                     raise ValueError( f"Could not find object position for object {self.object.id} "
-                                      f"and object position provenacne {self.object_position_prov.id}" )
+                                      f"and object position provenance {self.object_position_prov.id}" )
                 else:
                     self.object_position = ObjectPosition( **(rows[0]) )
 
@@ -466,8 +466,8 @@ class Lightcurve:
            provtag : str, default None
               The provenance tag to use to find existing subtraction and
               diaforcedphot provenances.  If save_prov and save_tag are both
-              true, than any newly generated provenacnes will be tagged
-              with this provenacne tag.  If just_read is False, then if
+              true, than any newly generated provenances will be tagged
+              with this provenance tag.  If just_read is False, then if
               preexisting provenances in the database with this tag are
               inconsistent with the ones generated using the object's
               configured parameters, an exception will be raised.
@@ -553,8 +553,7 @@ class Lightcurve:
 
                 # OK... didn't find an existing diaforcedphot provenance so try to read as much as we can
                 # First, there's *gotta* be a reference provenances, or we won't be able to do anything
-                # (Use Provenance.get_by_id here rather than self.refset.provenance property, so that
-                # we can use pgdb.)
+                # (Use Provenance.get here rather than self.refset.provenance property, so that we can use pgdb.)
                 refprov = Provenance.get( self.refset.provenance_id, pgdb=pgdb )
                 if refprov is None:
                     raise RuntimeError( f"Failed to find provenance {self.refset.provenance_id} for "
@@ -613,7 +612,7 @@ class Lightcurve:
                     # Get the subtraction provenance if any
                     found_subprov = Provenance.get_for_tag( provtag, 'subtraction', pgdb=pgdb )
                     if found_subprov is not None:
-                        # Add the subtraction provenacne and its upstreams.  Most (all?) of the upstreams
+                        # Add the subtraction provenance and its upstreams.  Most (all?) of the upstreams
                         #   will have already been added above, but _append_provs (supposedly) handles that.
                         provtree.append_provenance( found_subprov, pgdb=pgdb )
 
