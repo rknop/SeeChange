@@ -6,7 +6,11 @@ webap:
   # verbose: false
 
 path:
-  data_root: /tmp
+  # data_root: /tmp
+  # I AM A LITTLE AFRID OF THIS.  We should probably make sure the webap
+  #   always mounts the archive directory readonly.
+  # BUT ALSO THIS DOESN'T WORK.  OMG.  Thought required.  Gah.
+  data_root: /archive-storage/base/test
   data_temp: /tmp
 
 storage:
