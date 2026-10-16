@@ -41,9 +41,11 @@ db:
   
   
 archive:
+  path_base: test/
+  token: insecure
   archive_url: null
-  local_read_dir: /archive-storage-ro/base/test
-  local_write_dir: /archive-storage/base/test
+  local_read_dir: /archive-storage-ro/base
+  local_write_dir: /archive-storage/base
 
 email:
   email_from: 'Seechange <nobody@nowhere.org>'

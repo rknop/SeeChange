@@ -69,9 +69,13 @@ seechange.ImageList = class
             td = rkWebUtil.elemaker( "td", row, { "text": seechange.nullorfixed( images["zero_point_estimate"][i],
                                                                                  2 ) } );
             td = rkWebUtil.elemaker( "td", row, { "text": rkWebUtil.floatToString( images["bkg_mean_estimate"][i],
-                                                                                   2, { 'nullok': true } ) } );
+                                                                                   { 'digits': 2,
+                                                                                     'nullok': true }
+                                                                                 ) } );
             td = rkWebUtil.elemaker( "td", row, { "text": rkWebUtil.floatToString( images["bkg_rms_estimate"][i],
-                                                                                   2, { 'nullok': true } ) } );
+                                                                                   { 'digits': 2,
+                                                                                     'nullok': true }
+                                                                                 ) } );
             return row;
         };
 

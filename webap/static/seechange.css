@@ -63,6 +63,8 @@ div.maindiv { display: flex;
 .font75 { font-size: 75% }
 .font50 { font-size: 50% }
 
+.nopadding { padding: 0 }
+.noborder { border: 0 }
 .padhalfex { padding: 0.5ex }
 .padex { padding: 1ex }
 .hmargin { margin-left: 0.5ex; margin-right: 0.5ex }
@@ -222,6 +224,8 @@ div.authdiv { color: var(--some-faded-color);
 div.footer { color: var(--some-faded-color);
              font-size: 75%;
              font-style: italic }
+
+canvas.clipcanvas { margin: 0; padding: 0; border: 0; z-index: 1; image-rendering: pixelated }
 
 div.conductorconfig { border: 4px inset var(--main-color);
                       font-size: 75%;

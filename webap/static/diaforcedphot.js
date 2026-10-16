@@ -64,13 +64,18 @@ seechange.DiaForcedPhotSearch = class
 }
 
 // **********************************************************************
-    
+
 seechange.DiaForcedPhot = class
 {
     constructor( context, data, params )
     {
         this.context = context;
         this.data = data;
+        // For convenience
+        this.datadex = {};
+        for ( let i = 0 ; i < data.diaforcedphotid.length ; ++i ) {
+            this.datadex[ data.diaforcedphotid[i] ] = i;
+        }
 
         let defaultparams = {
             "clipsize": 25,
@@ -81,14 +86,19 @@ seechange.DiaForcedPhot = class
         Object.assign( this, defaultparams );
         Object.assign( this, params );
 
-        
         this.div = rkWebUtil.elemaker( "div", null, { "classes": [ "vbox", "grow1" ] } );
+        this.clipcache = {};
+        this.clippromise = {};
+        this.clips_clipsize = null;
+        this.clips_photid = null;
+        this.imviewcache = {};
+        this.imagepromise = {};
     }
 
     render()
     {
         let self = this;
-        
+
         rkWebUtil.elemaker( "h2", this.div, { "text": "DIA Forced Photometry for " + this.data.objname
                                               + " ( " + this.data.objid + " )" } );
 
@@ -97,12 +107,14 @@ seechange.DiaForcedPhot = class
                                                                        "flexfitcontent", "scrolly",
                                                                        "vbox", "grow1" ] } );
         this.cutoutsdiv = rkWebUtil.elemaker( "div", hbox, { "classes": [ "mostlyborder", "mmargin", "padex",
-                                                                          "flexfitcontent", "minwid40p",
+                                                                          "flexfitcontent",
                                                                           "vbox", "grow0", "scrolly" ] } );
+        this.imagediv = rkWebUtil.elemaker( "div", hbox, { "classes": [ "mostlyborder", "margin", "padex",
+                                                                        "flexfitcontent", "grow0", "scrolly" ] } );
 
         // ****************************************
         // ltcvdiv
-        
+
         this.svgplot = new SVGPlot.Plot( { "name": "ltcv-" + this.data.objid,
                                            "divid": "ltcv-svgplot-" + this.data.objid,
                                            "showerrbar": true,
@@ -159,6 +171,8 @@ seechange.DiaForcedPhot = class
                 let aper_x = [];
                 let aper_y = [];
                 let aper_dy = [];
+                let psf_pointdata = [];
+                let aper_pointdata = [];
                 for ( let i in this.data.mjd ) {
                     if ( ! this.data.psfflags[i] ) {
                         psf_x.push( this.data.mjd[i] );
@@ -166,6 +180,7 @@ seechange.DiaForcedPhot = class
                         psf_dy.push( this.data.flux_psf_err[i] );
                         this.psfphotids[filt].push( this.data.diaforcedphotid[i] );
                         this.psfphotdexen[filt].push( i );
+                        psf_pointdata.push( { 'id': this.data.diaforcedphotid[i], 'dex': i } );
                     }
                     if ( ! this.data.aperflags_0[i] ) {
                         aper_x.push( this.data.mjd[i] );
@@ -173,10 +188,13 @@ seechange.DiaForcedPhot = class
                         aper_dy.push( this.data.flux_aper_0_err[i] );
                         this.aperphotids[filt].push( this.data.diaforcedphotid[i] );
                         this.aperphotdexen[filt].push( i );
+                        aper_pointdata.push( { 'id': this.data.diaforcedphotid[i], 'dex': i } );
                     }
                 }
-                this.psfsets[filt] = new SVGPlot.Dataset( { 'x': psf_x, 'y': psf_y, 'dy': psf_dy, linewid: 0 } );
-                this.apersets[filt] = new SVGPlot.Dataset( { 'x': aper_x, 'y': aper_y, 'dy': aper_dy, linewid: 0 } );
+                this.psfsets[filt] = new SVGPlot.Dataset( { 'x': psf_x, 'y': psf_y, 'dy': psf_dy,
+                                                            'pointdata': psf_pointdata, linewid: 0 } );
+                this.apersets[filt] = new SVGPlot.Dataset( { 'x': aper_x, 'y': aper_y, 'dy': aper_dy,
+                                                             'pointdata': aper_pointdata, linewid: 0 } );
                 this.svgplot.addDataset( this.psfsets[filt] );
             }
         }
@@ -188,31 +206,31 @@ seechange.DiaForcedPhot = class
 
         this.clipboxes = {};
         this.clipcanvases = {};
-        this.clipctx = {};
+        let dispsize = Math.round( this.clipsize * this.oversamp );
         let tab = rkWebUtil.elemaker( "table", this.cutoutsdiv );
         for ( let which of [ "new", "ref", "sub" ] ) {
             let tr = rkWebUtil.elemaker( "tr", tab, { "classes": [ "vcenter" ] } );
             rkWebUtil.elemaker( "th", tr, { "text": which } );
             let td = rkWebUtil.elemaker( "td", tr );
-            this.clipboxes[which] = rkWebUtil.elemaker( "div", td,
-                                                        { "classes": [ "mostlyborder", "padex",
-                                                                       "nogrow", "noshrink" ] } );
-            this.clipboxes[which].style.width = ( this.clipsize * this.oversamp ).toString() + "px";
-            this.clipboxes[which].style.height = ( this.clipsize * this.oversamp ).toString() + "px";
+            this.clipboxes[which] = rkWebUtil.elemaker( "div", td, { "classes": [ "mostlyborder", "padex" ] } );
+            this.clipboxes[which].style.poition = "relative";
+            this.clipboxes[which].style.width = dispsize.toString() + "px";
+            this.clipboxes[which].style.height = dispsize.toString() + "px";
             this.clipcanvases[which] = rkWebUtil.elemaker( "canvas", this.clipboxes[which],
-                                                           { "attributes": { "width": this.clipsize * this.oversamp,
-                                                                             "height": this.clipsize * this.oversamp
+                                                           { "attributes": { "width": dispsize,
+                                                                             "height": dispsize
                                                                            },
-                                                             "classes": [ "imview_canvas" ] } );
-            this.clipcanvases[which].style.width = ( this.clipsize * this.oversamp ).toString() + "px";
-            this.clipcanvases[which].style.height = ( this.clipsize * this.oversamp ).toString() + "px";
-            this.clipctx[which] = this.clipcanvases[which].getContext( "2d" );
+                                                             "classes": [ "clipcanvas" ],
+                                                             "click": (e) => { self.click_on_thumbnail(which) }
+                                                           } );
+            this.clipcanvases[which].style.width = dispsize.toString() + "px";
+            this.clipcanvases[which].style.height = dispsize.toString() + "px";
         }
 
         tab = rkWebUtil.elemaker( "table", this.cutoutsdiv, { "classes": [ "borderless", "margintopem",
                                                                            "font75" ] } );
         this.cliptabcells = {};
-        for ( let prop of [ "mjd", "filter", "flux_psf", "flux_aper_0", "psfflags", "x", "y" ] ) {
+        for ( let prop of [ "mjd", "filter", "flux_psf", "flux_aper_0", "flux_aper_n", "psfflags", "x", "y" ] ) {
             let tr = rkWebUtil.elemaker( "tr", tab );
             rkWebUtil.elemaker( "th", tr, { "classes": [ "right" ], "text": prop + ": " } );
             this.cliptabcells[prop] = rkWebUtil.elemaker( "td", tr );
@@ -251,95 +269,220 @@ seechange.DiaForcedPhot = class
     click_on_svgplot( info )
     {
         let self = this;
-        let i =( ( this.phottype == 'psf' )
-                 ? this.psfphotdexen[ this.filters[ info.setdex ] ][ info.pointdex ]
-                 : this.aperphotdexen[ this.filters[ info.setdex ] ][ info.pointdex ] );
-        let photid = this.data.diaforcedphotid[i];
-        let promise = this.context.connector.httpPromise( "diaforcedphotclips/" + photid, null, false );
-        promise.then( (data) => self.show_thumbnails(data) );
+        let photid = info.pointdata.id;
+        let i = info.pointdata.dex;
 
-        let tmp = { "fixedprecision":2, "nullok": true };
-        
-        this.cliptabcells["mjd"].innerHTML = this.data.mjd[i].toFixed( 5 );
-        this.cliptabcells["filter"].innerHTML = this.data.filter[i];
-        this.cliptabcells["flux_psf"].innerHTML = ( rkWebUtil.floatToString( this.data.flux_psf[i], 4, tmp )
-                                                    + " ± " +
-                                                    rkWebUtil.floatToString( this.data.flux_psf_err[i], 4, tmp )
-                                                  );
-        this.cliptabcells["flux_aper_0"].innerHTML = ( rkWebUtil.floatToString( this.data.flux_aper_0[i], 4, tmp )
-                                                       + " ± " +
-                                                       rkWebUtil.floatToString( this.data.flux_aper_0_err[i], 4, tmp )
-                                                     );
-        // flux_aper_n will be identical to flux_aper_0 by construction
-        // this.cliptabcells["flux_aper_n"].innerHTML = ( rkWebUtil.floatToString( this.data.flux_aper_n[i], 4, tmp )
-        //                                                + " ± " +
-        //                                                rkWebUtil.floatToString( this.data.flux_aper_n_err[i], 4, tmp )
-        //                                              );
-        this.cliptabcells["psfflags"].innerHTML = "0x" + this.data.psfflags[i].toString(16);
-        this.cliptabcells["x"].innerHTML = this.data.x[i].toFixed( 2 );
-        this.cliptabcells["y"].innerHTML =this.data.y[i].toFixed( 2 );
-    }
-    
-    float_to_byte( f, min, max )
-    {
-        if ( isNan(f) ) return 0;
-        else if ( f <= min ) return 0;
-        else if ( f >= max ) return 255;
-        else return Math.round( ( f - min ) * 255 / ( max - min ) )
-    }
-
-    
-    show_thumbnails( data )
-    {
-        let dv = new DataView( data );
-        this.clipsize = dv.getUint16( 0, true );
-        let clipsdq = this.clipsize * this.clipsize;
-        this.newdata = new Float32Array( clipsq );
-        this.refdata = new Float32Array( clipsq );
-        this.subdata = new Float32Array( clipsq );
-        // Is there not a faster way to do this?
-        for ( let i = 0 ; i < clipsq ; ++i ) {
-            this.newdata[i] = dv.getFloat32( 2 + 4 + i, true );
-            this.refdata[i] = dv.getFloat32( 2 + 4 * clipsq + 4 * i, true );
-            this.subdata[i] = dv.getFloat32( 2 + 8 * clipsq + 4 * i, true );
-        }
-        let tmp = ImView.zscale_limits( this.newdata, this.zscale_new_contrast );
-        this.newmin = tmp[0];
-        this.newmax = tmp[1];
-        tmp = ImView.zscale_limits( this.subdata, this.zscale_sub_contrast );
-        this.submin = tmp[0];
-        this.submax = tmp[1];
-
-        let newdisp = this.clipctx['new'].createImageData( this.ciposize, this.clipsize );
-        let refdisp = this.clipctx['ref'].createImageData( this.ciposize, this.clipsize );
-        let subdisp = this.clipctx['sub'].createImageData( this.ciposize, this.clipsize );
-        let off = 0;
-        let bval = 0;
-        for ( let y = 0 ; y < this.clipsize ; ++y ) {
-            for ( let x = 0; x < this.clipsize ; ++x ) {
-                let dex = y * this.clipsize + x;
-                bval = this.float_to_byte( this.newdata[dex], this.newmin, this.newmax );
-                newdisp[ off ] = bval;
-                newdisp[ off + 1 ] = bval;
-                newdisp[ off + 2 ] = bval;
-                newdisp[ off + 3 ] = 255;  // alpha
-                bval = this.float_to_byte( this.refdata[dex], this.newmin, this.newax );
-                refdisp[ off ] = bval;
-                refdisp[ off + 1 ] = bval;
-                refdisp[ off + 2 ] = bval;
-                refdisp[ off + 3 ] = 255;
-                bval = this.float_to_byte( this.subdata[dex], this.submin, this.submax );
-                subdisp[ off ] = bval;
-                subdisp[ off + 1 ] = bval;
-                subdisp[ off + 2 ] = bval;
-                subdisp[ off + 3 ] = 255;
-                off += 4;
+        let clipsdone = false;
+        if ( this.clipcache.hasOwnProperty( this.clipsize ) ) {
+            if ( this.clipcache[ this.clipsize ].hasOwnProperty( photid ) ) {
+                this.show_thumbnails( this.clipcache[ this.clipsize ][ photid ] );
+                clipsdone = true;
             }
         }
-        this.clipctx['new'].putImageData( newdisp, 0, 0 );
-        this.clipctx['ref'].putImageData( refdisp, 0, 0 );
-        this.clipctx['sub'].putImageData( subdisp, 0, 0 );
+        if ( ! clipsdone ) {
+            let promise = null;
+            if ( this.clippromise.hasOwnProperty( this.clipsize ) ) {
+                if ( this.clippromise[ this.clipsize ].hasOwnProperty( photid ) ) {
+                    promise = this.clippromise[ this.clipsize ][ photid ];
+                }
+            }
+            if ( promise === null ) {
+                promise = this.context.connector.httpPromise( "diaforcedphotclips/" + photid + "/" + this.clipsize,
+                                                              null, false );
+                if ( ! this.clippromise.hasOwnProperty( this.clipsize ) ) {
+                    this.clippromise[ this.clipsize ] = {};
+                }
+                this.clippromise[ this.clipsize ][ photid ] = promise;
+            }
+            promise.then( (data) => self.receive_thumbnails(data, photid, self.clipsize) );
+        }
+
+        let tmp = { "digits": 4, "fixedprecision":2, "expprecision": 3, "nullok": true };
+
+        this.cliptabcells["mjd"].innerHTML = this.data.mjd[i].toFixed( 5 );
+        this.cliptabcells["filter"].innerHTML = this.data.filter[i];
+        this.cliptabcells["flux_psf"].innerHTML = ( rkWebUtil.floatToString( this.data.flux_psf[i], tmp )
+                                                    + " ± " +
+                                                    rkWebUtil.floatToString( this.data.flux_psf_err[i], tmp )
+                                                  );
+        this.cliptabcells["flux_aper_0"].innerHTML = ( rkWebUtil.floatToString( this.data.flux_aper_0[i], tmp )
+                                                       + " ± " +
+                                                       rkWebUtil.floatToString( this.data.flux_aper_0_err[i], tmp )
+                                                     );
+        this.cliptabcells["flux_aper_n"].innerHTML = ( rkWebUtil.floatToString( this.data.flux_aper_n[i], tmp )
+                                                       + " ± " +
+                                                       rkWebUtil.floatToString( this.data.flux_aper_n_err[i], tmp )
+                                                     );
+        this.cliptabcells["psfflags"].innerHTML = "0x" + this.data.psfflags[i].toString(16);
+        this.cliptabcells["x"].innerHTML = this.data.x[i].toFixed( 2 );
+        this.cliptabcells["y"].innerHTML = this.data.y[i].toFixed( 2 );
     }
-        
-    
+
+    receive_thumbnails( data, photid, clipsize )
+    {
+        if ( ! ImView.is_little_endian() ) {
+            window.alert( "This webap doesn't work on a platform that's not little-endian." );
+            return;
+        }
+        let dv = new DataView( data );
+        if ( clipsize != dv.getUint16( 0, true ) ) {
+            window.alert( "Expected clipsize " + clipsize + " doesn't match what we got back: " +
+                          dv.getUint16( 0, true ) );
+            return;
+        }
+        let clipsq = clipsize * clipsize;
+        let newdata = new Float32Array( dv.buffer, 4, clipsq );
+        let refdata = new Float32Array( dv.buffer, 4 + 4 * clipsq, clipsq );
+        let subdata = new Float32Array( dv.buffer, 4 + 8 * clipsq, clipsq );
+        let tmp = ImView.zsc_limits( newdata, this.zscale_new_contrast );
+        let newmin = tmp[0];
+        let newmax = tmp[1];
+        tmp = ImView.zsc_limits( subdata, this.zscale_sub_contrast );
+        let submin = tmp[0];
+        let submax = tmp[1];
+
+        if ( ! this.clipcache.hasOwnProperty( clipsize ) ) {
+            this.clipcache[ clipsize ] = {};
+        }
+
+        this.clipcache[ clipsize ][ photid ] = {
+            'photid': photid,
+            'clipsize': clipsize,
+            'new': newdata,
+            'ref': refdata,
+            'sub': subdata,
+            'newmin': newmin,
+            'newmax': newmax,
+            'submin': submin,
+            'submax': submax
+        };
+
+        this.show_thumbnails( this.clipcache[ clipsize ][ photid ] );
+    }
+
+    show_thumbnails( clips )
+    {
+        this.clips_photid = clips['photid'];
+        this.clips_clipsize = clips['clipsize'];
+        let newdata = clips['new'];
+        let refdata = clips['ref'];
+        let subdata = clips['sub'];
+        let clipsize = clips['clipsize'];
+
+        // THOUGHT REQUIRED.  If clipsize has changed since the canvases were
+        //   made, this will be broken.
+        let dispsize = Math.round( clipsize * this.oversamp );
+        let newctx = this.clipcanvases['new'].getContext( "2d", { 'alpha': false } );
+        let refctx = this.clipcanvases['ref'].getContext( "2d", { 'alpha': false } );
+        let subctx = this.clipcanvases['sub'].getContext( "2d", { 'alpha': false } );
+        // I *think* this initialized all the data to 0 (based on Uint8ClampedArray docs)
+        let newdisp = newctx.createImageData( dispsize, dispsize );
+        let refdisp = refctx.createImageData( dispsize, dispsize );
+        let subdisp = subctx.createImageData( dispsize, dispsize );
+        // Remember that astronomical images think the lower-left is (0, 0),
+        //    whereas browsers think the upper-left is (0, 0)
+        for ( let y = 0 ; y < clipsize ; ++y ) {
+            let starty = Math.round( (clipsize - y - 1) * this.oversamp );
+            let nexty = Math.round( (clipsize - y) * this.oversamp );
+            if ( nexty <= starty ) continue;
+            if ( nexty > dispsize ) nexty = dispsize;
+            for ( let x = 0 ; x < clipsize ; ++x ) {
+                let startx = Math.round( x * this.oversamp );
+                let nextx = Math.round( (x+1) * this.oversamp );
+                if ( nextx <= startx ) continue;
+                if ( nextx > dispsize ) nextx = dispsize;
+
+                let dex = y * clipsize + x;
+                let newbval = ImView.float_to_byte( newdata[dex], clips.newmin, clips.newmax );
+                let refbval = ImView.float_to_byte( refdata[dex], clips.newmin, clips.newmax );
+                let subbval = ImView.float_to_byte( subdata[dex], clips.submin, clips.submax );
+
+                for ( let dispy = starty ; dispy < nexty ; ++dispy ) {
+                    for ( let dispx = startx ; dispx < nextx ; ++dispx ) {
+                        let off = 4 * ( ( dispy * dispsize ) + dispx );
+                        newdisp.data[ off     ] = newbval;
+                        newdisp.data[ off + 1 ] = newbval;
+                        newdisp.data[ off + 2 ] = newbval;
+                        newdisp.data[ off + 3 ] = 255;  // alpha
+                        refdisp.data[ off     ] = refbval;
+                        refdisp.data[ off + 1 ] = refbval;
+                        refdisp.data[ off + 2 ] = refbval;
+                        refdisp.data[ off + 3 ] = 255;
+                        subdisp.data[ off     ] = subbval;
+                        subdisp.data[ off + 1 ] = subbval;
+                        subdisp.data[ off + 2 ] = subbval;
+                        subdisp.data[ off + 3 ] = 255;
+                    }
+                }
+            }
+        }
+        newctx.putImageData( newdisp, 0, 0 );
+        refctx.putImageData( refdisp, 0, 0 );
+        subctx.putImageData( subdisp, 0, 0 );
+    }
+
+    click_on_thumbnail( which )
+    {
+        if ( ( this.clips_clipsize === null ) || ( this.clips_photid === null ) ) return;
+
+        let self = this;
+
+        rkWebUtil.wipeDiv( this.imagediv );
+        let p = rkWebUtil.elemaker( "p", this.imagediv, { "classes": [ "warning", "bold", "italic" ],
+                                                          "text": "Loading image data..." } );
+
+        let dex = this.datadex[ this.clips_photid ];
+        let imgid = null;
+        if ( which == "new" ) {
+            imgid = this.data.newid[ dex ];
+        } else if ( which == "ref" ) {
+            imgid = this.data.refid[ dex ];
+        } else {
+            imgid = this.data.subid[ dex ];
+        }
+        if ( imgid === null ) {
+            rkWebUtil.wipeDiv( "p" );
+            rkWebUtil.elemaker( "text", p, { "classes": [ "error", "bold", "italic" ],
+                                             "text": "Requested image data doesn't exist." } );
+            return;
+        }
+
+        if ( this.imviewcache.hasOwnProperty( imgid ) ) {
+            rkWebUtil.wipeDiv( this.imagediv );
+            this.imagediv.appendChild( this.imviewcache[ imgid ].div );
+        }
+        else {
+            let promise = null;
+            if ( this.imagepromise.hasOwnProperty( imgid ) ) promise = this.imagepromise[ imgid ];
+            if ( promise === null ) {
+                promise = this.context.connector.httpPromise( "image_data/" + imgid, null, false );
+                this.imagepromise[ imgid ] = promise;
+            }
+            promise.then( (data) => { self.create_imview( imgid, data ) } );
+        }
+    }
+
+    create_imview( imgid, data ) {
+        let self = this;
+
+        rkWebUtil.wipeDiv( this.imagediv );
+
+        let dv = new DataView( data );
+        let height = dv.getUint16( 0, true );
+        let width = dv.getUint16( 2, true );
+        if ( ! ImView.is_little_endian() ) {
+            window.alert( "This webap doesn't work on a platform that's not little-endian." );
+            return;
+        }
+        let imagedata = new Float32Array( dv.buffer, 4, ( ( dv.byteLength - 4 ) / 4 ) );
+        let imview = new ImView( { "data": imagedata,
+                                   "width": width,
+                                   "height": height,
+                                   "parent": this.imagediv,
+                                   "dispwidth": 600,    // ... make this configurable?
+                                   "dispheight": 600
+                                 } );
+        this.imviewcache[ imgid ] = imview;
+    }
+
 }

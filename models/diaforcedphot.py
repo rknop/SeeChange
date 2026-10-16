@@ -149,8 +149,7 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
         return []
 
 
-    def get_clips( self, clip_size=None, bgsub=True, scale_ref=True, pgdb=None,
-                   return_filepaths=False ):
+    def get_clips( self, clip_size=None, bgsub=True, scale_ref=True, pgdb=None ):
         """Get 3d numpy array that are new, warped ref, sub cutouts for this forced phot point.
 
         Parameters
@@ -172,10 +171,6 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
              Database connection.  If not given, will open and close a
              new one.
 
-          return_filepaths : bool, default False
-             This is really just used by the webap so it can clean up after itself
-             (as it doesn't have a big local filestore, and writes to /tmp).
-
         Returns
         -------
           np.array with shape (3, clip_size, clip_size) and dtype np.float32
@@ -192,7 +187,6 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
 
         """
 
-        paths = []
         with PGDB( pgdb, dictcursor=True ) as pgdb:
             # LEFT JOIN for the warped ref because right now
             #   it might not exist.
@@ -228,16 +222,12 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
             subim = Image.get_by_id( rows[0]['subid'], pgdb=pgdb )
             # No need to background subtract a subtraction!
             subdata = subim.data
-            paths.append( subim.get_fullpath( as_list=True )[0] )
             newim = Image.get_by_id( rows[0]['newid'], pgdb=pgdb )
             if bgsub:
                 newbg = Background.get_by_id( rows[0]['newbgid'], pgdb=pgdb )
                 newdata = newbg.subtract_me( newim.data )
-                if newbg.filepath is not None:
-                    paths.append( newbg.get_fullpath( as_list=True )[0] )
             else:
                 newdata = newim.data
-            paths.append( newim.get_fullpath( as_list=True )[0] )
             newzp = rows[0]['newzp']
             newseeing = rows[0]['fwhm_pixels']
             if rows[0]['warprefid'] is None:
@@ -249,11 +239,8 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
                 if bgsub:
                     warprefbg = Background.get_by_id( rows[0]['refbgid'], pgdb=pgdb )
                     warprefdata = warprefbg.subtract_me( warpref.data )
-                    if warprefbg.filepath is not None:
-                        paths.append( warprefbg.get_fullpath( as_list=True )[0] )
                 else:
                     warprefdata = warpref.data
-                paths.append( warpref.get_fullpath( as_list=True )[0] )
                 warprefzp = rows[0]['refzp']
 
         # Figure out the clip size
@@ -276,14 +263,11 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
         else:
             clips[1] = np.nan
 
-        if return_filepaths:
-            return clips, paths
-        else:
-            return clips
+        return clips
 
     @classmethod
     def get_lightcurve_for_object( cls, obj, prov, filters=None, include_apertures=False, include_raw=False,
-                                   include_subim_ids=False, include_pos=False, include_phot_ids=False,
+                                   include_im_ids=False, include_pos=False, include_phot_ids=False,
                                    diaforcedphotobjs=False, return_format="listofdicts", return_obj=False,
                                    pgdb=None ):
         """Return all dia forced photometry for a given object in a given provenance.
@@ -311,10 +295,12 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
             there are additional columns with the raw photometry in
             counts.  Ignored if diaforcedphotobjs is True.
 
-          include_subim_ids : bool, default False
-            If True, there will be an additional colum subimid with the
-            id of the subtraction image each forced photometry point was
-            performed on.  Ignored if diaforcedphotobjs is True.
+          include_im_ids : bool, default False
+            If True, there will be three additional columns newid,
+            refid, subid that have the ids of the image, warped
+            reference, and difference image, where that last one is the
+            the forced photometry point was performed on.  Ignored if
+            diaforcedphotobjs is True.
 
           include_pos : bool, default False
             If True, there will be two additional columns x,y giving the
@@ -393,7 +379,11 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
                 [ aperflags_raw           -- ** ]
                 [ aper_pix                -- list, aperture radii in pixels ** ]
                 [ aper_cors               -- list, aperture corrections (magnitudes) ** ]
-                [ subimid -- uuid, id of the subtraction image, only present if include_subim_id is True ]
+                [ newid -- uuid, id of the new image, only present if include_im_ids is True ]
+                [ newzpid -- uuid, id of the zp of the new image, only present if include_im_ids is True ]
+                [ refid -- uuid, id of the warped ref image, only present if include_im_ids is True ]
+                [ refzpid -- uuid, id of the zp of the ref image, only present if include_im_ids is True ]
+                [ subid -- uuid, id of the subtraction image, only present if include_im_ids is True ]
                 [ diaforcedphotid -- uuid, id of the diaforcedphot table row, only present if yadda yadda ]
                 [ x -- position on subtraction image, only if include_pos is True ]
                 [ y -- position on subtraction image, only if include_pos is True ]
@@ -446,23 +436,23 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
 
             if diaforcedphotobjs:
                 zpjoin = sql.SQL( "" )
+                idjoin = sql.SQL( "" )
                 photcols = sql.SQL( "i.mjd, i.filter, p.*" )
                 photmetacols = sql.SQL( "*" )
             else:
                 zpjoin = sql.SQL( "INNER JOIN zero_points z ON z._id=isc.new_zp_id" )
-                photcols = sql.SQL( "i.mjd, i.filter, z.zp{subimcol}{photidcol}{poscols}, p.psfflags,\n"
+                idjoin = sql.SQL( "" )
+                photcols = sql.SQL( "i.mjd, i.filter, z.zp{photidcol}{poscols}, p.psfflags,\n"
                                     "    p.flux_psf * 10^((31.4-z.zp)/2.5) AS flux_psf,\n"
                                     "    p.flux_psf_err * 10^((31.4-z.zp)/2.5) AS flux_psf_err"
-                                   ).format( subimcol=sql.SQL( ", i._id AS subimid" if include_subim_ids else "" ),
-                                             photidcol=sql.SQL( ", p._id as diaforcedphotid"
+                                   ).format( photidcol=sql.SQL( ", p._id as diaforcedphotid"
                                                                 if include_phot_ids else "" ),
                                              poscols=sql.SQL( ", x, y" if include_pos else "" ) )
                 photmetacols = sql.SQL(
-                    "mjd, filter, zp{subimcol}{photidcol}{poscols}, psfflags,\n"
+                    "mjd, filter, zp{photidcol}{poscols}, psfflags,\n"
                     "  CASE WHEN flux_psf IS NULL THEN 'NaN' ELSE flux_psf END AS flux_psf,\n"
                     "  CASE WHEN flux_psf_err IS NULL THEN 'NaN' ELSE flux_psf_err END AS flux_psf_err"
-                ).format( subimcol=sql.SQL( ", subimid" if include_subim_ids else "" ),
-                          photidcol=sql.SQL( ", diaforcedphotid" if include_phot_ids else "" ),
+                ).format( photidcol=sql.SQL( ", diaforcedphotid" if include_phot_ids else "" ),
                           poscols=sql.SQL( ", x, y" if include_pos else "" ) )
                 if include_raw:
                     photcols += sql.SQL( ",\n    p.flux_psf AS flux_psf_raw, p.flux_psf_err AS flux_psf_raw_err" )
@@ -472,7 +462,7 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
                         """\
                         z.aper_cors, z.aper_cor_radii AS aper_pix,
                         p.flux_apertures[1] * 10^((31.4-z.zp-z.aper_cors[1])/2.5) AS flux_aper_0,
-                        p.flux_apertures_err[1] * 10^((3.14-z.zp-z.aper_cors[1])/2.5) AS flux_aper_0_err,
+                        p.flux_apertures_err[1] * 10^((31.4-z.zp-z.aper_cors[1])/2.5) AS flux_aper_0_err,
                         p.flux_apertures[array_upper(p.flux_apertures, 1)] *
                           10^((31.4-z.zp-z.aper_cors[array_upper(z.aper_cors, 1)])/2.5) AS flux_aper_n,
                         p.flux_apertures_err[array_upper(p.flux_apertures_err, 1)] *
@@ -484,16 +474,35 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
                         """\
                         aper_cors, aper_pix,
                         CASE WHEN flux_aper_0 IS NULL THEN 'NaN' ELSE flux_aper_0 END AS flux_aper_0,
-                        CASE WHEN flux_aper_0_err IS NULL THEN 'NaN' ELSE flux_aper_0 END AS flux_aper_0_err,
-                        CASE WHEN flux_aper_n IS NULL THEN 'NaN' ELSE flux_aper_0 END AS flux_aper_n,
-                        CASE WHEN flux_aper_n_err IS NULL THEN 'NaN' ELSE flux_aper_0 END AS flux_aper_n_err,
+                        CASE WHEN flux_aper_0_err IS NULL THEN 'NaN' ELSE flux_aper_0_err END AS flux_aper_0_err,
+                        CASE WHEN flux_aper_n IS NULL THEN 'NaN' ELSE flux_aper_n END AS flux_aper_n,
+                        CASE WHEN flux_aper_n_err IS NULL THEN 'NaN' ELSE flux_aper_n_err END AS flux_aper_n_err,
                         aperflags_0, aperflags_n\
                         """
                     ), "  " ) )
                     if include_raw:
-                        photcols += sql.SQL( ",\n  p.flux_apertures AS flux_apertures_raw"
-                                             ",\n  p.flux_apertures_err AS flux_apertures_raw_err" )
+                        photcols += sql.SQL( ",\n    p.flux_apertures AS flux_apertures_raw"
+                                             ",\n    p.flux_apertures_err AS flux_apertures_raw_err" )
                         photmetacols += sql.SQL( ",\n  flux_apertures_raw, flux_apertures_raw_err" )
+                if include_im_ids:
+                    # LEFT JOIN on the ref stuff because we weren't originally saving warped refs
+                    idjoin = sql.SQL( textwrap.indent( textwrap.dedent(
+                        """\
+                        INNER JOIN world_coordinates w ON z.wcs_id=w._id
+                        INNER JOIN source_lists s ON w.sources_id=s._id
+                        INNER JOIN refs r ON isc.ref_id=r._id
+                        INNER JOIN zero_points rz ON r.zp_id=rz._id
+                        LEFT JOIN source_lists wrs ON isc.warped_ref_sources_id=wrs._id
+                        """
+                    ), "  " ) )
+                    photcols += sql.SQL( ",\n" ) + sql.SQL( textwrap.indent( textwrap.dedent(
+                        """\
+                        s.image_id AS newid, z._id AS newzpid,
+                        wrs.image_id AS refid, rz._id AS refzpid,
+                        i._id AS subid\
+                        """
+                    ), "    " ) )
+                    photmetacols += sql.SQL( ",\n  newid, newzpid, refid, refzpid, subid" )
 
             q = sql.SQL( textwrap.dedent(
                 """\
@@ -504,12 +513,14 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
                   INNER JOIN images i ON p.subtraction_id=i._id
                   INNER JOIN image_subtraction_components isc ON isc.image_id=i._id
                   {zpjoin}
+                  {idjoin}
                   WHERE p.object_id={objid} AND p.provenance_id={provid}
                   {filtwhere}
                 ) subq
                 ORDER BY mjd
                 """ ) ).format( objid=obj.id, provid=prov.id, photcols=photcols,
-                                photmetacols=photmetacols, zpjoin=zpjoin, filtwhere=filtwhere )
+                                photmetacols=photmetacols, zpjoin=zpjoin, idjoin=idjoin,
+                                filtwhere=filtwhere )
 
             rows, cols = pgdb.execute( q )
             coldex = { c: i for i, c in enumerate(cols) }

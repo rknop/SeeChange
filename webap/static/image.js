@@ -127,6 +127,9 @@ seechange.Image = class extends( rkWebUtil.listener )
         
         this.shown_imview = null;
         this.shown_info = null;
+        this.zoomx0 = null;
+        this.zoomy0 = null;
+        this.zoomscale = null;
         if ( this.issub ) {
             this.infopromises = { 'new': null, 'ref': null };
             this.imviews = { 'new': null, 'ref': null, 'sub': null };
@@ -134,9 +137,6 @@ seechange.Image = class extends( rkWebUtil.listener )
             this.select_imview( 'sub' );
             this.thumbnails_promise = null;
             this.squares_rendered = { 'new': false, 'ref': false, 'sub': false };
-            this.zoomx0 = null;
-            this.zoomy0 = null;
-            this.zoomscale = null;
 
             let p = rkWebUtil.elemaker( "p", this.imview_div );
             this.newrefsub = rkWebUtil.elemaker( "select", p,
@@ -318,7 +318,11 @@ seechange.Image = class extends( rkWebUtil.listener )
         let dv = new DataView( data );
         let height = dv.getUint16( 0, true );
         let width = dv.getUint16( 2, true );
-        let imagedata = new DataView( data, 4 );
+        if ( ! ImView.is_little_endian() ) {
+            window.alert( "This webap doesn't work on a platform that's not little-endian." );
+            return;
+        }
+        let imagedata = new Float32Array( dv.buffer, 4, ( ( dv.byteLength - 4 ) / 4 ) );
         let imview = new ImView( { "data": imagedata,
                                    "width": width,
                                    "height": height,

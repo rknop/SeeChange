@@ -22,7 +22,6 @@ import h5py
 import PIL
 import astropy.time
 import astropy.visualization
-from astropy.io import fits
 from psycopg import sql
 
 import flask
@@ -738,12 +737,12 @@ class ImageInfo( BaseView ):
 class ImageData( BaseView ):
     def do_the_things( self, exporimid, provtag=None, sectionid=None, sub=0 ):
         if sectionid is None:
-            q = sql.SQL( "SELECT filepath FROM images WHERE _id={imgid}" ).format( imgid=exporimid )
+            q = sql.SQL( "SELECT * FROM images WHERE _id={imgid}" ).format( imgid=exporimid )
 
         else:
             q = sql.SQL( textwrap.dedent(
                 """\
-                SELECT {t}.filepath
+                SELECT {t}.*
                 FROM images i
                 INNER JOIN provenance_tags t ON i.provenance_id=t.provenance_id AND t.tag={provtag}
                 """
@@ -782,35 +781,31 @@ class ImageData( BaseView ):
 
         with PGDB( dictcursor=True ) as pgdb:
             rows = pgdb.execute( q )
-            filepath = rows[0]['filepath'] if len(rows) > 0 else None
+            if len(rows) > 1:
+                imorsub = ( "image" if ( ( sectionid is None ) or ( not sub ) )
+                            else f"subtraction from provtag {provtag}" )
+                return ( f"Database corruption: found more than one {imorsub} with "
+                         f"{f'id {exporimid}' if sectionid is None else f'exposure {exporimid} seciton {sectionid}'}"
+                        ), 422
+            imgobj = Image.create( **(rows[0]) ) if len(rows) > 0 else None
 
-        if filepath is None:
+        if imgobj is None:
             if sectionid is None:
                 return f"Failed to find image with id {exporimid}", 422
             else:
                 return f"No {'subtraction' if sub else 'image'} for exposure {exporimid} section {sectionid}", 422
 
         else:
-            cfg = Config.get()
-            # We're assuming file naming convention, whereas we should probably call a function.
-            #   But, I think the only function we have right now is get_fullpath, which will
-            #   make it relative to data_dir... augh, thought required.
-            for fz, hdun in zip( [ '', '.fz' ], [ 0, 1 ] ):
-                fullpath = pathlib.Path( cfg.value( 'archive.local_read_dir' ) ) / f'{filepath}.image.fits{fz}'
-                if fullpath.is_file():
-                    with fits.open( fullpath ) as hdu:
-                        # The convention for rkWebUtil ImView is little-endian 32-bit floats
-                        data = hdu[hdun].data.astype( "<f4" )
-                    barf = bytearray( 4 * data.shape[0] * data.shape[1] + 4 )
-                    barf[0] = data.shape[0] % 256
-                    barf[1] = data.shape[0] // 256
-                    barf[2] = data.shape[1] % 256
-                    barf[3] = data.shape[1] // 256
-                    barf[4:] = data.data
-                    app.logger.debug( f"Returning {len(barf)-4} bytes for a {data.shape[0]}×{data.shape[1]} image" )
-                    return bytes(barf)
-
-            return f"Failed to find image {filepath}.image.fits[.fz]", 422
+            # Seechange webap standard is little-endian
+            data = imgobj.data.astype( "<f4" )
+            barf = bytearray( 4 * data.shape[0] * data.shape[1] + 4 )
+            barf[0] = data.shape[0] % 256
+            barf[1] = data.shape[0] // 256
+            barf[2] = data.shape[1] % 256
+            barf[3] = data.shape[1] // 256
+            barf[4:] = data.data
+            app.logger.debug( f"Returning {len(barf)-4} bytes for a {data.shape[0]}×{data.shape[1]} image" )
+            return bytes(barf)
 
 
 # ======================================================================
@@ -1271,9 +1266,9 @@ class DiaForcedPhotForObj( BaseView ):
                 return f"Can't find provenance for tag {provtag} process diaforcedphot", 422
 
             ltcv, obj = DiaForcedPhot.get_lightcurve_for_object( objid, prov, include_apertures=True,
-                                                                 include_raw=True, include_subim_ids=True,
-                                                                 include_pos=True, return_format="dictoflists",
-                                                                 include_phot_ids=True, return_obj=True, pgdb=pgdb )
+                                                                 include_raw=True, include_im_ids=True,
+                                                                 include_pos=True, include_phot_ids=True,
+                                                                 return_format="dictoflists", return_obj=True )
             ltcv['objid'] = str(obj.id)
             ltcv['objname'] = obj.name
             ltcv['provtag'] = provtag
@@ -1284,26 +1279,19 @@ class DiaForcedPhotForObj( BaseView ):
 
 class DiaForcedPhotClips( BaseView ):
     def do_the_things( self, photid, clipsize=25 ):
-        clipsize = numpy.round( clipsize )
         if clipsize % 2 == 0:
             clipsize += 1
         with PGDB() as pgdb:
             phot = DiaForcedPhot.get_by_id( photid, pgdb=pgdb )
-            clips, paths = phot.get_clips( clip_size=clipsize, return_filepaths=True )
+            clips = phot.get_clips( clip_size=clipsize )
 
-        barf = bytearray( 4 * clipsize * clipsize + 2 )
+        clipsize = clips.shape[1]
+        barf = bytearray( 4 * clipsize * clipsize + 4 )
         barf[0] = clipsize % 256
         barf[1] = clipsize // 256
-        barf[2:] = clips.data
-
-        # OMG RACE CONDITION
-        # If another process is trying to access exactly the same clips at the exactly the same time,
-        #   we might be about to delete them out from under this other process.
-        #   I need a sane way of dealing with the fact that I know the webap can read directly
-        #   from the archive.  I did that in ImageData above, but I don't want to encode that
-        #   hack into models/diaforcedphot.py
-        for path in paths:
-            pathlib.Path( path ).unlink( missing_ok=True )
+        barf[2] = clipsize % 256
+        barf[3] = clipsize // 256
+        barf[4:] = clips.astype( "<f4" ).data
 
         return bytes(barf)
 
@@ -1406,7 +1394,7 @@ urls = {
     "/fakeanalysisdata/<expid>/<provtag>/<sectionid>": FakeAnalysisData,
     "/diaforcedphotforobj/<objid>/<provtag>": DiaForcedPhotForObj,
     "/diaforcedphotclips/<photid>": DiaForcedPhotClips,
-    "/diaforcedphotclips/<photid>/<clipsize>": DiaForcedPhotClips
+    "/diaforcedphotclips/<photid>/<int:clipsize>": DiaForcedPhotClips
 }
 
 usedurls = {}
