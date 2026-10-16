@@ -72,7 +72,8 @@ from util.util import asUUID, NumpyAndUUIDJsonEncoder, listify, retry_with_sleep
 
 
 # this is the root SeeChange folder
-CODE_ROOT = os.path.abspath(os.path.join(__file__, os.pardir, os.pardir))
+# os.path.abspath(os.path.join(__file__, os.pardir, os.pardir))
+CODE_ROOT = pathlib.Path( __file__ ).parent.parent.resolve()
 #
 # # printout the list of relevant environmental variables:
 # import io
@@ -1638,56 +1639,52 @@ class FileOnDiskMixin:
         if cls.local_path is None:
             cls.local_path = cfg.value('path.data_temp', None)
         if cls.local_path is None:
-            cls.local_path = os.path.join(CODE_ROOT, 'data')
+            cls.local_path = CODE_ROOT / 'data'
 
-        if not os.path.isabs(cls.local_path):
-            cls.local_path = os.path.join(CODE_ROOT, cls.local_path)
-        if not os.path.isdir(cls.local_path):
-            os.makedirs(cls.local_path, exist_ok=True)
+        cls.local_path = pathlib.Path( cls.local_path ).resolve()
+        if cls.local_path.exists():
+            if not cls.local_path.is_dir():
+                raise RuntimeError( f"path.data_root {cls.local_path} exists but is not a directory!" )
+        else:
+            cls.local_path.mkdir( parents=True, exist_ok=True )
 
         # use this to store temporary files (scratch files)
         cls.temp_path = cfg.value('path.data_temp', None)
         if cls.temp_path is None:
-            cls.temp_path = os.path.join(CODE_ROOT, 'data')
+            cls.temp_path = CODE_ROOT / 'data'
+        else:
+            cls.temp_path = pathlib.Path( cls.temp_path ).resolve()
 
-        if not os.path.isabs(cls.temp_path):
-            cls.temp_path = os.path.join(CODE_ROOT, cls.temp_path)
-        if not os.path.isdir(cls.temp_path):
-            os.makedirs(cls.temp_path, exist_ok=True)
+        if cls.temp_path.exists():
+            if not cls.temp_path.is_dir():
+                raise RuntimeError( f"path.data_temp {cls.temp_path} exists but is not a directory!" )
+        else:
+            close.temp_path.mkdir( parents=True, exist_ok=True )
+
 
     @classmethod
     def safe_mkdir(cls, path):
         if path is None or path == '':
             return  # ignore empty paths, we don't need to make them!
-        cfg = config.Config.get()
+        path = pathlib.Path( path )
 
-        allowed_dirs = []
+        allowed_dirs = set()
         if cls.local_path is not None:
-            allowed_dirs.append(cls.local_path)
-        temp_path = cfg.value('path.data_temp', None)
-        if temp_path is not None:
-            allowed_dirs.append(temp_path)
-
-        allowed_dirs = list(set(allowed_dirs))
+            allowed_dirs.add(cls.local_path)
+        if cls.temp_path is not None:
+            allowed_dirs.add(cls.temp_path)
 
         ok = False
 
-        for d in allowed_dirs:
-            parent = os.path.realpath(os.path.abspath(d))
-            child = os.path.realpath(os.path.abspath(path))
+        if not any( path.is_relative_to(d) for d in allowed_dirs ):
+            raise ValueError( f"Cannot make a new directory not beneath one of the following:\n"
+                              f"    {'\n    '.join(allowed_dirs)}\n\nAttempted directory: {path}" )
 
-            if os.path.commonpath([parent]) == os.path.commonpath([parent, child]):
-                ok = True
-                break
-
-        if not ok:
-            err_str = "Cannot make a new folder not inside the following folders: "
-            err_str += "\n".join(allowed_dirs)
-            err_str += f"\n\nAttempted folder: {path}"
-            raise ValueError(err_str)
-
-        # if the path is ok, also make the subfolders
-        os.makedirs(path, exist_ok=True)
+        if path.exists():
+            if not path.is_dir():
+                raise RuntimeError( f"safe_mkdir: path {path} exists but is not a directory." )
+        else:
+            path.mkdir( parents=True, exist_ok=True )
 
     @declared_attr
     def filepath(cls):  # noqa: N805

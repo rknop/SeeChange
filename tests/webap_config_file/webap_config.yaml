@@ -9,8 +9,7 @@ path:
   # data_root: /tmp
   # I AM A LITTLE AFRID OF THIS.  We should probably make sure the webap
   #   always mounts the archive directory readonly.
-  # BUT ALSO THIS DOESN'T WORK.  OMG.  Thought required.  Gah.
-  data_root: /archive-storage/base/test
+  data_root: /archive-storage-ro/base/test
   data_temp: /tmp
 
 storage:
@@ -43,7 +42,8 @@ db:
   
 archive:
   archive_url: null
-  local_read_dir: /archive-storage/base/test
+  local_read_dir: /archive-storage-ro/base/test
+  local_write_dir: /archive-storage/base/test
 
 email:
   email_from: 'Seechange <nobody@nowhere.org>'

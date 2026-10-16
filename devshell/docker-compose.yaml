@@ -12,9 +12,9 @@ services:
         target: /storage
     entrypoint: >
       bash -c
-      "mkdir -p /storage/base &&
-      chown ${USERID:-0}:${GROUPID:-0} /storage/base &&
-      chmod a+rwx /storage/base"
+      "mkdir -p /storage/base/test &&
+      chown -R ${USERID:-0}:${GROUPID:-0} /storage/base &&
+      chmod -R a+rwx /storage/base"
 
   archive:
     depends_on:
@@ -138,6 +138,10 @@ services:
       - type: volume
         source: archive-storage
         target: /archive-storage
+      - type: volume
+        source: archive-storage
+        target: /archive-storage-ro
+        read_only: true
       - type: volume
         source: webap-sessions
         target: /sessions
