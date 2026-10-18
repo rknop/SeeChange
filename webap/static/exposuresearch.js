@@ -10,7 +10,8 @@ seechange.ExposureSearch = class
     constructor( context )
     {
         this.context = context;
-        this.div = rkWebUtil.elemaker( "div", null, { 'id': 'exposuresearchdiv' } );
+        this.div = rkWebUtil.elemaker( "div", null, { 'id': 'exposuresearchdiv',
+                                                      'classes': [ "grow1", "vbox" ] } );
     }
 
 
@@ -65,7 +66,8 @@ seechange.ExposureSearch = class
         this.context.connector.sendHttpRequest( "projects", {}, (data) => { self.populate_project_wid(data) } );
 
         rkWebUtil.elemaker( "hr", this.div );
-        this.subdiv = rkWebUtil.elemaker( "div", this.div, { "id": "exposuresearchsubdiv" } );
+        this.subdiv = rkWebUtil.elemaker( "div", this.div, { "id": "exposuresearchsubdiv",
+                                                             "classes": [ "vbox", "grow1" ] } );
 
         this.emptiabledivs = {};
         this.tabbed = new rkWebUtil.Tabbed( this.subdiv );
@@ -88,7 +90,9 @@ seechange.ExposureSearch = class
                         };
         for ( let tab in tabstoadd ) {
             let focused = ( tab=="exposurelist" ? true : false );
-            this.emptiabledivs[tab] = new rkWebUtil.EmptiableDiv();
+            this.emptiabledivs[tab] = new rkWebUtil.EmptiableDiv( "div", null,
+                                                                  { "id": "exposuresearch_tab_" + tab,
+                                                                    "classes": [ "vbox", "grow1" ] } );
             this.tabbed.addTab( tab, tabstoadd[tab], this.emptiabledivs[tab].div, focused );
         }
     }

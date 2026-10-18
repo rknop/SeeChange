@@ -6,6 +6,8 @@ import { seechange } from "./seechange_ns.js";
 
 seechange.Image = class extends( rkWebUtil.listener )
 {
+    static _n_images = 0;
+
     constructor( context, info, params={} )
     {
         super();
@@ -13,11 +15,9 @@ seechange.Image = class extends( rkWebUtil.listener )
                                'provtag': null,
                                'box_width': 10,
                                'oversample': 5,
-                               'start_image': null,
                                'show_detections': true
                              };
-        Object.assign( this, default_params );
-        Object.assign( this, params );
+        rkWebUtil.paramParser( default_params, params, this );
 
         this._addsignal( 'image' );
         this._addsignal( 'detections' );
@@ -32,13 +32,13 @@ seechange.Image = class extends( rkWebUtil.listener )
         this.filename = (fncomps === null) ? "????" : fncomps[1];
 
         this._imagediv = null;
+        this.filename_h2 = null;
         this.imview_div = null;
         this.info_div = null;
         this.thumbnails_div = null;
         this.infopromises = {};
-        this.imview_promises = {};
-        this.imview_promise = null;
-        
+        this.image_promises = {};
+
         this.detections_wrapper = rkWebUtil.elemaker( 'div', null );
         this.detections_shown = 'neither';
         this.detectionsdiv_sans = null;
@@ -55,7 +55,7 @@ seechange.Image = class extends( rkWebUtil.listener )
         if ( this._imagediv === null ) this.make_image_div();
         return this._imagediv;
     }
-    
+
     show_imagediv()
     {
         let div = this.get_imagediv();
@@ -95,7 +95,7 @@ seechange.Image = class extends( rkWebUtil.listener )
         }
         return this.detections_wrapper;
     }
-        
+
     show_detectionsdiv( sans_measurements=true )
     {
         let div = this.get_detections_div( sans_measurements );
@@ -103,93 +103,85 @@ seechange.Image = class extends( rkWebUtil.listener )
         return this.detections_wrapper;
     }
 
-        
+
 
     // **********************************************************************
     // Image div
 
+    _image_data_getter( url )
+    {
+        return async () => {
+            let rval = await this.context.connector.httpPromise( url, null, false );
+            let dv = new DataView( rval );
+            let height = dv.getUint16( 0, true );
+            let width = dv.getUint16( 2, true );
+            if ( ! ImView.is_little_endian() ) {
+                throw new Error( "This webap doesn't work on a platform that's not little-endian." );
+            }
+            let data = new Float32Array( dv.buffer, 4, ( (dv.byteLength - 4) / 4 ) );
+            return { 'data': data, 'width': width, 'height': height }
+        }
+    }
+
     make_image_div( remake=false )
     {
         let self = this;
-        
+
         if ( ( this._imagediv !== null ) && ( ! remake ) ) return;
 
-        this._imagediv = rkWebUtil.elemaker( "div", null );
+        this._imagediv = rkWebUtil.elemaker( "div", null, { "id": "_image_div_" + Image.n_images,
+                                                            "classes": [ "vbox", "grow1" ] } );
+        Image.n_images += 1;
 
-        rkWebUtil.elemaker( "h2", this._imagediv,
-                            { "text": "Image: " + this.filename + "( " + this.info._id + " )" } );
-        
-        let hbox = rkWebUtil.elemaker( "div", this._imagediv, { "classes": [ "hbox" ] } );
+        this.filename_h2 = rkWebUtil.elemaker( "h2", this._imagediv,
+                                               { "text": "Image: " + this.filename + "( " + this.info._id + " )" } );
 
-        this.imview_div = rkWebUtil.elemaker( "div", hbox, { "classes": [ "vbox", "marginrightem" ] } );
-        this.info_div = rkWebUtil.elemaker( "div", hbox, { "classes": [ "marginrightem" ] } );
+        let hbox = rkWebUtil.elemaker( "div", this._imagediv, { "classes": [ "hbox", "width100p", "grow1" ] } );
+
+        this.imview_div = rkWebUtil.elemaker( "div", hbox, { "classes": [ "vbox", "marginrightem",
+                                                                          "grow1", "selfstretch" ] } );
+        this.info_div = rkWebUtil.elemaker( "div", hbox, { "classes": [ "imageinfodiv" ] } );
         this.thumbnails_div = rkWebUtil.elemaker( "div", hbox );
-        
+
         this.shown_imview = null;
         this.shown_info = null;
         this.zoomx0 = null;
         this.zoomy0 = null;
         this.zoomscale = null;
         if ( this.issub ) {
+            this.imview = new ImView( { 'parent_div': this.imview_div,
+                                        'clickcallback': (group, image, x, y) => {
+                                            self.clicked_on_image( image, x, y ) },
+                                        'show_image_selector': true,
+                                        'show_copy_zoom_button': true,
+                                        'image_change_callback': (name, group) => { self.load_info_view(name) },
+                                  } );
+            let ids = { 'sub': this.info._id, 'new': this.info.new_id, 'ref': this.info.warped_ref_id };
+            for ( let name in ids ) {
+                this.imview.add_image( { "name": name,
+                                         "data_getter": this._image_data_getter( "image_data/" + ids[name] )
+                                       } );
+            }
+
+            this.infoview = this.show_info_view( this.info, 'sub' );
             this.infopromises = { 'new': null, 'ref': null };
-            this.imviews = { 'new': null, 'ref': null, 'sub': null };
-            this.imview_promises = { 'new': null, 'ref': null, 'sub': null };
-            this.select_imview( 'sub' );
             this.thumbnails_promise = null;
-            this.squares_rendered = { 'new': false, 'ref': false, 'sub': false };
-
-            let p = rkWebUtil.elemaker( "p", this.imview_div );
-            this.newrefsub = rkWebUtil.elemaker( "select", p,
-                                                 { "change": (e) => {
-                                                     let which = self.newrefsub.value;
-                                                     self.load_info_view( which );
-                                                     self.select_imview( which );
-                                                 } } );
-            let n = rkWebUtil.elemaker( "option", this.newrefsub, { "text": "New", attributes: { "value": "new" } } );
-            let r = rkWebUtil.elemaker( "option", this.newrefsub, { "text": "Ref", attributes: { "value": "ref" } } );
-            let s = rkWebUtil.elemaker( "option", this.newrefsub, { "text": "Sub", attributes: { "value": "sub" } } );
-            let start_image = this.start_image;
-
-            // Make a new div underneath the dropdown we just made so the dropdown won't be wiped out
-            this.imview_div = rkWebUtil.elemaker( "div", this.imview_div );
-
-            if ( start_image === null ) {
-                if ( this.issub ) start_image = 'sub';
-                else start_image = 'image';
-            }
-            if ( start_image == 'sub' ) {
-                s.setAttribute( 'selected', 1 );
-                this.show_info_view( this.info, 'sub' );
-            }
-            else if ( start_image == 'ref' ) {
-                r.setAttribute( 'selected', 1 );
-                this.load_info_view( 'ref' );
-            }
-            else if ( start_image == 'new' ) {
-                n.setAttribute( 'selected', 1 );
-                this.load_info_view( 'new' );
-            }
-            else if ( start_image == 'image' ) {
-                n.setAttribute( 'selected', 1 );
-                this.load_info_view( this.info, 'image' );
-            }
-            else {
-                window.alert( "Unknown start_image " + start_image + ", can't show image info, many things broken." )
-                return;
-            }
+            this.squares_rendered = false;
         }
         else {
+            this.imview = new ImView( { 'parent_div': this.imview_div } );
+            this.imview.add_image( { "name": "image",
+                                     "data_getter": this._image_data_getter( "image_data/" + this.info._id )
+                                   } );
             this.infoview = this.show_info_view( this.info, 'image' );
-            this.imview = null;
-            this.imview_promise = null;
-            this.select_imview();
+            this.squared_rendered = false;
         }
     }
 
     load_info_view( which )
     {
         let self = this;
-        
+
         if ( ( which == 'sub' ) || ( which == 'image' ) ) {
             this.show_info_view( this.info, which );
         }
@@ -214,7 +206,7 @@ seechange.Image = class extends( rkWebUtil.listener )
             this.infopromises[which].then( (info) => { self.show_info_view( info, which ); } );
         }
     }
-    
+
     show_info_view( info, which='image' )
     {
         rkWebUtil.wipeDiv( this.info_div );
@@ -230,7 +222,7 @@ seechange.Image = class extends( rkWebUtil.listener )
         else if ( which != 'image' ) {
             rkWebUtil.elemaker( "h3", this.info_div, { "text": "Something has gone wrong." } );
         }
-            
+
         let propvalues = { 'mjd': seechange.nullorfixed( info['mjd'], 5),
                            'ra': seechange.nullorfixed( info['ra'], 5 ),
                            'dec': seechange.nullorfixed( info['dec'], 5 ),
@@ -261,115 +253,66 @@ seechange.Image = class extends( rkWebUtil.listener )
             }
         }
     }
-    
-    select_imview( which=null )
-    {
-        let self = this;
-        let imview = null;
-        let imgtorequest = null;
-        if ( this.issub ) {
-            imview = this.imviews[ which ];
-            if ( which == 'new' ) {
-                imgtorequest = this.info.new_id;
-            }
-            else if ( which == 'ref' ) {
-                imgtorequest = this.info.warped_ref_id;
-            }
-            else {
-                imgtorequest = this.info._id;
-            }
-        }
-        else {
-            which = 'image';
-            imview = this.imview;
-            imgtorequest = this.info._id;
-        }
 
-        if ( this.shown_imview == which ) return;
+    // create_imview( data, imgtorequest, which )
+    // {
+    //     let self = this;
 
-        rkWebUtil.wipeDiv( this.imview_div );
-        if ( imview !== null ) {
-            this.imview_div.appendChild( imview.div );
-            this.shown_imview = which;
-            return;
-        }
-        else {
-            if ( this.issub ) {
-                if ( this.imview_promises[which] == null ) {
-                    this.imview_promises[which] = this.context.connector.httpPromise( "image_data/" + imgtorequest,
-                                                                                      null, false );
-                }
-                this.imview_promises[which].then( (data) => { self.create_imview( data, imgtorequest, which ); } );
-            }
-            else {
-                if ( this.imview_promise == null ) {
-                    this.imview_promise = this.context.connector.httpPromise( "image_data/" + imgtorequest,
-                                                                              null, false );
-                }
-                this.imview_promise.then( (data) => { self.create_imview( data, imgtorequest, which ); } );
-            }
-        }
-    }
-    
-    create_imview( data, imgtorequest, which )
-    {
-        let self = this;
+    //     let dv = new DataView( data );
+    //     let height = dv.getUint16( 0, true );
+    //     let width = dv.getUint16( 2, true );
+    //     if ( ! ImView.is_little_endian() ) {
+    //         window.alert( "This webap doesn't work on a platform that's not little-endian." );
+    //         return;
+    //     }
+    //     let imagedata = new Float32Array( dv.buffer, 4, ( ( dv.byteLength - 4 ) / 4 ) );
+    //     let imview = new ImView( { "data": imagedata,
+    //                                "width": width,
+    //                                "height": height,
+    //                                "parent": this.imview_div,
+    //                                "dispwidth": 600,    // ... make this configurable?
+    //                                "dispheight": 600
+    //                              },
+    //                              true
+    //                            );
+    //     if ( this.zoomx0 !== null ) {
+    //         imview.x0 = this.zoomx0;
+    //         imview.y0 = this.zoomy0;
+    //         imview.scale = this.zoomscale;
+    //     }
+    //     this.imview_div.appendChild( imview.div );
+    //     imview.render_image();
+    //     this.shown_imview = which;
 
-        let dv = new DataView( data );
-        let height = dv.getUint16( 0, true );
-        let width = dv.getUint16( 2, true );
-        if ( ! ImView.is_little_endian() ) {
-            window.alert( "This webap doesn't work on a platform that's not little-endian." );
-            return;
-        }
-        let imagedata = new Float32Array( dv.buffer, 4, ( ( dv.byteLength - 4 ) / 4 ) );
-        let imview = new ImView( { "data": imagedata,
-                                   "width": width,
-                                   "height": height,
-                                   "parent": this.imview_div,
-                                   "dispwidth": 600,    // ... make this configurable?
-                                   "dispheight": 600
-                                 },
-                                 true
-                               );
-        if ( this.zoomx0 !== null ) {
-            imview.x0 = this.zoomx0;
-            imview.y0 = this.zoomy0;
-            imview.scale = this.zoomscale;
-        }
-        this.imview_div.appendChild( imview.div );
-        imview.render_image();
-        this.shown_imview = which;
+    //     if ( this.issub ) {
+    //         imview.clickcallback = (x, y) => { self.clicked_on_image(x, y); };
+    //         this.imviews[which] = imview;
+    //         let but = rkWebUtil.button( imview.zoom_buttonbox, "Copy Zoom", () => { self.copy_zoom(which); } );
+    //         but.classList.add( "marginleftex" );
+    //         if ( ( this.provtag !== null ) && this.show_detections ) {
+    //             this.load_cutouts( (data) => { self.show_detections_on_image(which, data); }, which );
+    //         }
+    //     } else {
+    //         this.imview = imview;
+    //     }
+    // }
 
-        if ( this.issub ) {
-            imview.clickcallback = (x, y) => { self.clicked_on_image(x, y); };
-            this.imviews[which] = imview;
-            let but = rkWebUtil.button( imview.zoom_buttonbox, "Copy Zoom", () => { self.copy_zoom(which); } );
-            but.classList.add( "marginleftex" );
-            if ( ( this.provtag !== null ) && this.show_detections ) {
-                this.load_cutouts( (data) => { self.show_detections_on_image(which, data); }, which );
-            }
-        } else {
-            this.imview = imview;
-        }
-    }
-
-    copy_zoom( which )
-    {
-        this.zoomx0 = this.imviews[which].x0;
-        this.zoomy0 = this.imviews[which].y0;
-        this.zoomscale = this.imviews[which].scale;
-        for ( let im of [ 'new', 'ref', 'sub' ] ) {
-            if ( im != which ) {
-                if ( this.imviews[im] != null ) {
-                    this.imviews[im].x0 = this.zoomx0;
-                    this.imviews[im].y0 = this.zoomy0;
-                    this.imviews[im].scale = this.zoomscale;
-                    this.imviews[im].render_image();
-                }
-            }
-        }
-    }
+    // copy_zoom( which )
+    // {
+    //     this.zoomx0 = this.imviews[which].x0;
+    //     this.zoomy0 = this.imviews[which].y0;
+    //     this.zoomscale = this.imviews[which].scale;
+    //     for ( let im of [ 'new', 'ref', 'sub' ] ) {
+    //         if ( im != which ) {
+    //             if ( this.imviews[im] != null ) {
+    //                 this.imviews[im].x0 = this.zoomx0;
+    //                 this.imviews[im].y0 = this.zoomy0;
+    //                 this.imviews[im].scale = this.zoomscale;
+    //                 this.imviews[im].render_image();
+    //             }
+    //         }
+    //     }
+    // }
 
     load_cutouts( callback=null, which=null )
     {
@@ -385,12 +328,12 @@ seechange.Image = class extends( rkWebUtil.listener )
             // Setting it here and not in the promise result so the callback won't be
             //   executed multiple times
             self.squares_rendered[which] = true;
-        }            
+        }
         if ( callback !== null ) {
             this.cutouts_promise.then( callback );
         }
     }
-    
+
     show_detections_on_image( which, data )
     {
         // This should only ever be called for a sub image
@@ -407,7 +350,7 @@ seechange.Image = class extends( rkWebUtil.listener )
         let self=this;
         this.load_cutouts( (data) => { self.process_clicked_on_image(x, y, data); }, which );
     }
-    
+
     process_clicked_on_image( x, y, data )
     {
         console.log( "Clicked on image at " + x + ", " + y );
@@ -425,7 +368,7 @@ seechange.Image = class extends( rkWebUtil.listener )
         rkWebUtil.wipeDiv( this.detections_wrapper );
         rkWebUtil.elemaker( 'h3', this.detections_wrapper, { "text": "Loading detections...",
                                                              "classes": [ "warning", "bold", "italic" ] } );
-        
+
         let self = this;
 
         if ( sans ) {
@@ -585,7 +528,7 @@ seechange.Image = class extends( rkWebUtil.listener )
 
         }
     }
-   
+
 }
 
 // **********************************************************************

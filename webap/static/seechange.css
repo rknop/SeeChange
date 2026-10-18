@@ -163,6 +163,7 @@ div.dispflex { display : flex; }
 div.dispblock { display : block; }
 
 .alignflexstart { align-items: flex-start; }
+.selfstretch { align-self: stretch; }
 
 div.hbox { display: flex;
            flex-direction: row;
@@ -191,6 +192,7 @@ div.shrink1 { flex-shrink: 1; }
 .flexeven { justify-content: space-evenly }
 .minwid25p { min-width: 25%; }
 .minwid40p { min-width: 40%; }
+.width100p { width: 100%; }
 .height100p { height: 100%; }
 .scrolly { overflow-y: scroll }
 .flexfitcontent { flex-basis: fit-content }
@@ -225,6 +227,12 @@ div.footer { color: var(--some-faded-color);
              font-size: 75%;
              font-style: italic }
 
+
+div.imageinfodiv { margin-left: 1em;
+                   width: 64em;
+                   flex-grow: 0;
+                 }
+
 canvas.clipcanvas { margin: 0; padding: 0; border: 0; z-index: 1; image-rendering: pixelated }
 
 div.conductorconfig { border: 4px inset var(--main-color);
@@ -238,7 +246,6 @@ div.conductorworkers { border: 4px inset var(--main-color);
                        padding: 1ex;
                        margin: 1em;
                        width: fit-content; }
-
 
 
 div.svgplottopdiv { position: relative;
