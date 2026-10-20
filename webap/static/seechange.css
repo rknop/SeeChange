@@ -164,6 +164,7 @@ div.dispblock { display : block; }
 
 .alignflexstart { align-items: flex-start; }
 .selfstretch { align-self: stretch; }
+.selfstart { align-self: start; }
 
 div.hbox { display: flex;
            flex-direction: row;

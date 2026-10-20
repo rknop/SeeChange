@@ -125,7 +125,7 @@ seechange.Conductor = class
                 rkWebUtil.elemaker( "input", td, { "attributes": { "type": "checkbox",
                                                                    "id": "search_state_" + i,
                                                                    "checked": 1 } } );
-            rkWebUtil.elemaker( "label", td, { "text": i, "attributess": { "for": "search_state_" + i } } );
+            rkWebUtil.elemaker( "label", td, { "text": i, "attributes": { "for": "search_state_" + i } } );
         }
         tr = rkWebUtil.elemaker( "tr", table );
         td = rkWebUtil.elemaker( "td", tr, { "classes": [ "right" ], "text": "claim time ≤" } );
