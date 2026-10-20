@@ -70,7 +70,6 @@ seechange.Exposure = class
         this.image_objects = {};
         this.image_promises = {};
         this.image_view_div = null;
-        this.cutouts_promises = {};
         this.cutoutsdiv = null;
         this.reports = null;
         this.reports_subdiv = null;
@@ -275,7 +274,9 @@ seechange.Exposure = class
         div = this.imagedetailsdiv;
         rkWebUtil.wipeDiv( div );
         rkWebUtil.elemaker( "h3", div, { "text": "Images for exposure " + this.exposurename } );
-        this.sectionfordetails_dropdown = rkWebUtil.elemaker( "select", div,
+        hbox = rkWebUtil.elemaker( "div", div, { "classes": [ "hbox" ] } );
+        rkWebUtil.elemaker( "text", hbox, "Show image for section: " );
+        this.sectionfordetails_dropdown = rkWebUtil.elemaker( "select", hbox,
                                                               { "change": () => { self.select_image_details() } } );
         rkWebUtil.elemaker( "option", this.sectionfordetails_dropdown, { "text": "<Choose Section For Details>",
                                                                          "attributes": {
@@ -288,7 +289,7 @@ seechange.Exposure = class
                                                                              } } );
         }
         this.image_view_div = rkWebUtil.elemaker( "div", div );
-    
+
 
         // Selection dropdown in the fakes div
         div = this.fakesdiv;
@@ -314,13 +315,13 @@ seechange.Exposure = class
                                                                     "attributes": {
                                                                         "value": "_select_image",
                                                                         "selected": 1 } } );
-        // Currently don't have code to support showing all images at once...
+        // Currently don't have code to support showing cutouts from all images at once...
         // rkWebUtil.elemaker( "option", this.cutoutsimage_dropdown, { "text": "All Successful Images",
         //                                                             "attributes": { "value": "_all_images" } } );
         for ( let imgrow of this.data.images ) {
             rkWebUtil.elemaker( "option", this.cutoutsimage_dropdown, { "text": imgrow.section_id,
                                                                         "attributes": {
-                                                                            "value": imgrow.subid } }  );
+                                                                            "value": imgrow.section_id } }  );
         }
         this.cutoutssansmeasurements_checkbox =
             rkWebUtil.elemaker( "input", p, { "change": () => { self.select_cutouts() },
@@ -333,7 +334,7 @@ seechange.Exposure = class
                                                     // + " (Ignored for \"All Successful Images\")" ),
                                           "attributes": { "for": "cutouts_sans_measurements_checkbox" } } );
         this.cutoutsdiv = rkWebUtil.elemaker( "div", this.detectionsdiv );
-        
+
         // // TODO : buttons for next, prev, etc.
 
     };
@@ -543,10 +544,15 @@ seechange.Exposure = class
 
     update_image_details( secid=null, nosel=false ) {
         if ( secid != null ) {
-            let oldevent = this.sectionfordetails_dropdown.onchange;
-            this.sectionfordetails_dropdown.onchange = null;
+            // I don't think all of this is necessary.  Javascript doesn't
+            //    issue events when you change the value of a widget
+            //    programmatically, only when it's done by the UI>
+            //     let oldevent = this.sectionfordetails_dropdown.onchange;
+            //     this.sectionfordetails_dropdown.onchange = null;
+            //     this.sectionfordetails_dropdown.value = secid;
+            //     this.sectionfordetails_dropdown.onchange = oldevent;
+            // }
             this.sectionfordetails_dropdown.value = secid;
-            this.sectionfordetails_dropdown.onchange = oldevent;
         }
 
         if ( ! nosel )
@@ -564,20 +570,23 @@ seechange.Exposure = class
         }
         return this.image_promises[sec];
     }
-    
+
     select_image_details()
     {
         let self = this;
         let p;
 
         rkWebUtil.wipeDiv( this.image_view_div );
-        
+
         let sec = this.sectionfordetails_dropdown.value.toString();
         if ( sec == "_select_section" )
             return;
 
         if ( this.image_objects.hasOwnProperty( sec ) ) {
             this.image_objects[ sec ].show_imagediv();
+            rkWebUtil.wipeDiv( this.cutoutsdiv );
+            // TODO : sans/avec
+            let div = this.image_objects[ sec ].show_detectionsdiv( true, this.cutoutsdiv );
             return;
         }
 
@@ -599,10 +608,12 @@ seechange.Exposure = class
     {
         let self = this;
         let sec = info.section_id;
-        
+
         if ( ! this.image_objects.hasOwnProperty( sec ) ) {
             this.image_objects[ sec ] = new seechange.Image( this.context, info,
-                                                             { 'provtag': this.data.provenancetag } );
+                                                             { 'provtag': this.data.provenancetag,
+                                                               'show_detections': true
+                                                             } );
             this.image_objects[ sec ].listen( 'image',
                                               (signal, stuff) => {
                                                   self.parenttabs.selectTab( "imagedetail" );
@@ -613,6 +624,68 @@ seechange.Exposure = class
         }
     }
 
+
+    // ****************************************
+
+    update_cutouts( dex, sansmeasurements ) {
+        if ( dex != null ) {
+            // See comment in update_image_details
+            // let oldevent = this.cutoutsimage_dropdown.onchange;
+            // this.cutoutsimage_dropdown.onchange = null;
+            // this.cutoutsimage_dropdown.value = dex;
+            // this.cutoutsimage_dropdown.onchange = oldevent;
+            this.cutoutsimage_dropdown.value = dex;
+        }
+
+        if ( sansmeasurements != null ) {
+            // See comment in update_image_details
+            // let oldevent = this.cutoutssansmeasurements_checkbox.onchange;
+            // this.cutoutssansmeasurements_checkbox.onchange = null;
+            // this.cutoutssansmeasurements_checkbox.checked = sansmeasurements
+            // this.cutoutssansmeasurements_checkbox.onchange = oldevent;
+            this.cutoutssansmeasurements_checkbox.checked = sansmeasurements
+        }
+
+        this.select_cutouts();
+    }
+
+    // ****************************************
+
+    select_cutouts()
+    {
+        let self = this;
+        let p;
+
+        rkWebUtil.wipeDiv( this.cutoutsdiv );
+        this.parenttabs.selectTab( "sources" );
+
+
+        let sec = this.cutoutsimage_dropdown.value.toString();
+        let sans = this.cutoutssansmeasurements_checkbox.checked;
+        if ( sec == "_select_image" )
+            return;
+
+        rkWebUtil.elemaker( "p", this.cutoutsdiv, { "text": "Loading cutouts...",
+                                                    "classes": [ "warning", "bold", "italic" ] });
+
+        let detections_callback = (signal, stuff) => { self.parenttabs.selectTab( "sources" );
+                                                       rkWebUtil.wipeDiv( self.cutoutsdiv );
+                                                       self.cutoutsdiv.appendChild( stuff.detectionsdiv );
+                                                     };
+
+        if ( this.image_objects.hasOwnProperty( sec ) ) {
+            this.image_objects[ sec ].listen( 'detections', detections_callback,
+                                              'exposure_detections_listener', true );
+            this.image_objects[ sec ].show_detectionsdiv( sans );
+            return
+        }
+
+        let promise = this.get_image_promise(sec );
+        promise.then( (info) => { self.make_image_detail(info);
+                                  this.image_objects[sec].listen( 'detections', detections_callback,
+                                                                  'exposure_detections_listener' );
+                                  self.image_objects[sec].show_detectionsdiv( sans ); } );
+    }
 
     // // ****************************************
 
@@ -1009,63 +1082,6 @@ seechange.Exposure = class
         magvmag.redraw();
     }
 
-
-    // ****************************************
-
-    update_cutouts( dex, sansmeasurements ) {
-        if ( dex != null ) {
-            let oldevent = this.cutoutsimage_dropdown.onchange;
-            this.cutoutsimage_dropdown.onchange = null;
-            this.cutoutsimage_dropdown.value = dex;
-            this.cutoutsimage_dropdown.onchange = oldevent;
-        }
-
-        if ( sansmeasurements != null ) {
-            let oldevent = this.cutoutssansmeasurements_checkbox.onchange;
-            this.cutoutssansmeasurements_checkbox.onchange = null;
-            this.cutoutssansmeasurements_checkbox.checked = sansmeasurements
-            this.cutoutssansmeasurements_checkbox.onchange = oldevent;
-        }
-
-        this.select_cutouts();
-    }
-
-    // ****************************************
-
-    select_cutouts()
-    {
-        let self = this;
-        let p;
-
-        rkWebUtil.wipeDiv( this.cutoutsdiv );
-
-        let sec = this.cutoutsimage_dropdown.value.toString();
-        let sans = this.cutoutssansmeasurements_checkbox.checked;
-        if ( sec == "_select_image" )
-            return;
-
-        let detections_callback = (signal, stuff) => { self.parenttabs.selectTab( "sources" );
-                                                       rkWebUtil.wipeDiv( self.cutoutsdiv );
-                                                       self.cutoutsdiv.appendChild( stuff.detectionsdiv );
-                                                     };
-            
-        if ( this.image_objects.hasOwnProperty( sec ) ) {
-            this.image_objects[ sec ].listen( 'detections', detections_callback,
-                                              'exposure_detections_listener', true );
-            this.image_objects[ sec ].show_detectionsdiv( sans );
-            return
-        }
-
-        this.parenttabs.selectTab( "sources" );
-        rkWebUtil.elemaker( "p", this.cutoutsdiv, { "text": "Loading cutouts...",
-                                                    "classes": [ "warning", "bold", "italic" ] });
-
-        let promise = this.get_image_promise(sec );
-        promise.then( (info) => { self.make_image_detail(info);
-                                  this.image_objects[sec].listen( 'detections', detections_callback,
-                                                                  'exposure_detections_listener' );
-                                  self.image_objects[sec].show_detectionsdiv( sans ); } );
-    }
 
 }
 

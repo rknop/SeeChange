@@ -102,15 +102,14 @@ seechange.DiaForcedPhot = class
         rkWebUtil.elemaker( "h2", this.div, { "text": "DIA Forced Photometry for " + this.data.objname
                                               + " ( " + this.data.objid + " )" } );
 
-        let hbox = rkWebUtil.elemaker( "div", this.div, { "classes": [ "hbox", "flexeven", "grow1" ] } );
+        let hbox = rkWebUtil.elemaker( "div", this.div, { "classes": [ "hbox", "grow1" ] } );
         this.ltcvdiv = rkWebUtil.elemaker( "div", hbox, { "classes": [ "mostlyborder", "mmargin", "padex",
                                                                        "flexfitcontent", "scrolly",
                                                                        "vbox", "grow1" ] } );
-        this.cutoutsdiv = rkWebUtil.elemaker( "div", hbox, { "classes": [ "mostlyborder", "mmargin", "padex",
-                                                                          "flexfitcontent",
-                                                                          "vbox", "grow0", "scrolly" ] } );
-        this.imagediv = rkWebUtil.elemaker( "div", hbox, { "classes": [ "mostlyborder", "margin", "padex",
-                                                                        "flexfitcontent", "grow0", "scrolly" ] } );
+        this.cutoutsdiv = rkWebUtil.elemaker( "div", hbox, { "classes": [ "mostlyborder", "padex", "scrolly",
+                                                                          "flexfitcontent", "vbox", "grow0" ] } );
+        this.imagediv = rkWebUtil.elemaker( "div", hbox, { "classes": [ "mostlyborder", "mmargin", "padex", "vbox",
+                                                                        "flexfitcontent", "selfstretch", "grow1" ] } );
 
         // ****************************************
         // ltcvdiv
@@ -235,6 +234,21 @@ seechange.DiaForcedPhot = class
             rkWebUtil.elemaker( "th", tr, { "classes": [ "right" ], "text": prop + ": " } );
             this.cliptabcells[prop] = rkWebUtil.elemaker( "td", tr );
         }
+
+        // ****************************************
+        // image div
+
+        this.imview = new ImView( { 'parent_div': this.imagediv,
+                                    'show_image_name': false,
+                                    'show_image_selector': true,
+                                    'show_group_selector': true,
+                                    'group_header': "Point:",
+                                    'display_name_in_group_selector': true,
+                                    'sort_group_selector': true,
+                                    'display_name_in_image_selector': false,
+                                    'show_copy_zoom_button': true,
+                                    'group_change_callback': (group) => { self.imview_group_change( group.name ) }
+                                  } );
     }
 
     select_aper_vs_psf()
@@ -254,11 +268,11 @@ seechange.DiaForcedPhot = class
 
         this.phottype = which;
         if ( this.phottype == "psf" ) {
-            for ( let filt in this.psfsets ) {
+            for ( let filt of this.filters ) {
                 this.svgplot.addDataset( this.psfsets[filt] );
             }
         } else {
-            for ( let filt in this.apersets ) {
+            for ( let filt of this.filters ) {
                 this.svgplot.addDataset( this.apersets[filt] );
             }
         }
@@ -266,11 +280,85 @@ seechange.DiaForcedPhot = class
         this.svgplot.redraw();
     }
 
-    click_on_svgplot( info )
+    update_imview( photid, which=null )
     {
         let self = this;
-        let photid = info.pointdata.id;
-        let i = info.pointdata.dex;
+
+        if ( which === null ) {
+            let curim = this.imview.current_image;
+            which = ( curim === null ) ? 'sub' : curim.name;
+        }
+
+        if ( ( this.imview.curent_group !== null ) && ( this.imview.current_group.name == photid ) &&
+             ( this.imview.current_iamge !== null ) && ( this.imview.current_image.name == which ) )
+            // Nothing to do
+            return;
+
+        let dex = this.datadex[ photid ];
+        let displayname = "MJD " + this.data.mjd[dex].toFixed(4) + " - " + this.data.filter[dex];
+        let group = this.imview.add_group( { 'name': photid, 'displayname': displayname }, false, true );
+
+        if ( ! this.imview.has_image( which, group ) ) {
+            let imgid = null;
+            if      ( which == "new" ) imgid = this.data.newid[ dex ];
+            else if ( which == "ref" ) imgid = this.data.refid[ dex ];
+            else                       imgid = this.data.subid[ dex ];
+            if ( imgid == null ) {
+                // TODO IMVIEW ERROR MESSAGE
+                window.alert( "Requested image doesn't exist." )
+                return;
+            }
+            else {
+                let getter = this.context._image_data_getter( "image_data/" + imgid );
+                this.imview.add_image( { 'name': which, 'data_getter': getter }, true, group );
+                this.imview.current_image.add_regionset( { "name": photid + "-" + which,
+                                                           "stroke": "#c00000",
+                                                           "shape": "box",
+                                                           "size": 5,
+                                                           "x": [ this.data.x[dex] ],
+                                                           "y": [ this.data.y[dex] ]
+                                                         } );
+                this.imview.render_image_and_regions();
+            }
+        }
+        else {
+            this.imview.set_current_image( group, which, true );
+            this.imview.render_image_and_regions();
+        }
+    }
+
+    click_on_svgplot( info )
+    {
+        this.select_thumbnails( info.pointdata.id );
+        this.update_imview( info.pointdata.id );
+    }
+
+    imview_group_change( photid )
+    {
+        // This callback will get called with the default group when the imview is first created;
+        //   try to detect that.
+        if ( ! this.datadex.hasOwnProperty( photid ) ) return;
+
+        this.select_thumbnails( photid );
+
+        let i = this.datadex[ photid ];
+        let filt = this.data.filter[ i ];
+        let setdex = this.filters.indexOf( filt );
+        let pointdex = -1;
+	if ( this.phottype == "psf" )
+            pointdex = this.psfphotids[ filt ].indexOf( photid );
+        else
+            pointdex = this.aperphotids[ filt ].indexOf( photid );
+        pointdex = ( pointdex >= 0 ) ? pointdex : null;
+        this.svgplot.highlight( setdex, pointdex );
+    }
+
+    select_thumbnails( photid )
+    {
+        // TODO : update highlight on svgplot !!!
+
+        let self = this;
+        let i = this.datadex[ photid ];
 
         let clipsdone = false;
         if ( this.clipcache.hasOwnProperty( this.clipsize ) ) {
@@ -424,65 +512,6 @@ seechange.DiaForcedPhot = class
     click_on_thumbnail( which )
     {
         if ( ( this.clips_clipsize === null ) || ( this.clips_photid === null ) ) return;
-
-        let self = this;
-
-        rkWebUtil.wipeDiv( this.imagediv );
-        let p = rkWebUtil.elemaker( "p", this.imagediv, { "classes": [ "warning", "bold", "italic" ],
-                                                          "text": "Loading image data..." } );
-
-        let dex = this.datadex[ this.clips_photid ];
-        let imgid = null;
-        if ( which == "new" ) {
-            imgid = this.data.newid[ dex ];
-        } else if ( which == "ref" ) {
-            imgid = this.data.refid[ dex ];
-        } else {
-            imgid = this.data.subid[ dex ];
-        }
-        if ( imgid === null ) {
-            rkWebUtil.wipeDiv( "p" );
-            rkWebUtil.elemaker( "text", p, { "classes": [ "error", "bold", "italic" ],
-                                             "text": "Requested image data doesn't exist." } );
-            return;
-        }
-
-        if ( this.imviewcache.hasOwnProperty( imgid ) ) {
-            rkWebUtil.wipeDiv( this.imagediv );
-            this.imagediv.appendChild( this.imviewcache[ imgid ].div );
-        }
-        else {
-            let promise = null;
-            if ( this.imagepromise.hasOwnProperty( imgid ) ) promise = this.imagepromise[ imgid ];
-            if ( promise === null ) {
-                promise = this.context.connector.httpPromise( "image_data/" + imgid, null, false );
-                this.imagepromise[ imgid ] = promise;
-            }
-            promise.then( (data) => { self.create_imview( imgid, data ) } );
-        }
+        this.update_imview( this.clips_photid, which );
     }
-
-    create_imview( imgid, data ) {
-        let self = this;
-
-        rkWebUtil.wipeDiv( this.imagediv );
-
-        let dv = new DataView( data );
-        let height = dv.getUint16( 0, true );
-        let width = dv.getUint16( 2, true );
-        if ( ! ImView.is_little_endian() ) {
-            window.alert( "This webap doesn't work on a platform that's not little-endian." );
-            return;
-        }
-        let imagedata = new Float32Array( dv.buffer, 4, ( ( dv.byteLength - 4 ) / 4 ) );
-        let imview = new ImView( { "data": imagedata,
-                                   "width": width,
-                                   "height": height,
-                                   "parent": this.imagediv,
-                                   "dispwidth": 600,    // ... make this configurable?
-                                   "dispheight": 600
-                                 } );
-        this.imviewcache[ imgid ] = imview;
-    }
-
 }

@@ -2,6 +2,18 @@ import { seechange } from "./seechange_ns.js"
 import "./seechange.js"
 
 // **********************************************************************
+// Make sure the user sees errors.  *Maybe* take this out once
+//   we think we're out of development.  If that ever happens.
+
+window.addEventListener( 'error', (event) => { alert( "Error in javascript: " + event.message
+                                                      + "\nFile: " + event.filename
+                                                      + "\nLine: " + event.lineno );
+                                             } );
+window.addEventListener( 'unhandledrejection', (event) => { alert( "Unhandled promise rejection: "
+                                                                   + event.reason )
+                                                          } );
+
+// **********************************************************************
 // **********************************************************************
 // **********************************************************************
 // Here is the thing that will make the code run when the document has loaded

@@ -134,7 +134,10 @@ seechange.ImageList = class
         let imgid = info._id;
 
         if ( ! this.image_objects.hasOwnProperty( imgid ) ) {
-            this.image_objects[ imgid ] = new seechange.Image( this.context, info, { 'provtag': this.provtag } );
+            this.image_objects[ imgid ] = new seechange.Image( this.context, info,
+                                                               { 'provtag': this.provtag,
+                                                                 'show_detections': info.is_sub
+                                                               } );
             this.image_objects[ imgid ].listen( 'image',
                                                 (signal, stuff) => {
                                                     self.parenttabs.selectTab( "imagedetail" );
@@ -142,6 +145,12 @@ seechange.ImageList = class
                                                     self.imagediv.appendChild( stuff.imagediv );
                                                 },
                                                 'image_list_image_listener' );
+            if ( info.is_sub ) {
+                // TODO, deal with avec/sans
+                let div = this.image_objects[imgid].show_detectionsdiv();
+                rkWebUtil.wipeDiv( this.cutoutsdiv );
+                this.cutoutsdiv.appendChild( div );
+            }
         }
     }
 

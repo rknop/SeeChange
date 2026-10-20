@@ -32,7 +32,7 @@ from util.config import Config
 from util.util import asUUID, listify
 from models.provenance import Provenance
 from models.enums_and_bitflags import ImageTypeConverter
-from models.base import PsycopgConnection, PGDB
+from models.base import PsycopgConnection, PGDB, FileOnDiskMixin
 from models.image import Image
 from models.deepscore import DeepScoreSet
 from models.fakeset import FakeSet, FakeAnalysis
@@ -1018,8 +1018,7 @@ class PngCutoutsForSubImage( BaseView ):
 
             hdf5files = {}
             for subid in cutoutsfiles.keys():
-                hdf5files[ subid ] = h5py.File( pathlib.Path( cfg.value( 'archive.local_read_dir' ) )
-                                                / cutoutsfiles[subid], 'r' )
+                hdf5files[ subid ] = h5py.File( FileOnDiskMixin.local_path / cutoutsfiles[subid], 'r' )
 
             def append_to_retval( subid, index_in_sources, section_id, row ):
                 retval['cutouts']['source_index'].append( index_in_sources )
@@ -1214,15 +1213,14 @@ class FakeAnalysisData( BaseView ):
             retval = { 'status': 'ok',
                        'sections': {} }
 
-            # Reading files directly from the archive because the web ap mounts the archive directory
             for row in rows:
                 secid = row[columns['section_id']]
                 if secid  not in retval['sections']:
                     retval['sections'][secid] = []
                 fakeset = FakeSet.get_by_id( row[columns['fakeset_id']], session=self.session )
-                fakeset.load( filepath=pathlib.Path( cfg.value( 'archive.local_read_dir' ) ) / fakeset.filepath )
+                fakeset.load()
                 fakeanal = FakeAnalysis.get_by_id( row[columns['fakeanal_id']], session=self.session )
-                fakeanal.load( filepath=pathlib.Path( cfg.value( 'archive.local_read_dir' ) ) / fakeanal.filepath )
+                fakeanal.load()
                 zp = row[columns['zp']]
                 # Just sticking numpy arrays directly, in hopes that the json encoding that flask
                 #   does handles this right....

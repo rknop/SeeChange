@@ -1,6 +1,7 @@
 import { seechange } from "./seechange_ns.js"
 import { rkAuth } from "./rkauth.js"
 import { rkWebUtil } from "./rkwebutil.js";
+import { ImView } from "./imview.js";
 import "./provenancetags.js";
 import "./exposuresearch.js";
 import "./exposurelist.js";
@@ -139,6 +140,22 @@ seechange.Context = class
             rkWebUtil.elemaker( "option", this.provtag_wid, { "text": provtag, "attributes": { "value": provtag } } );
         }
     };
+
+    _image_data_getter( url )
+    {
+        return async () => {
+            if ( ! ImView.is_little_endian() ) {
+                throw new Error( "This webap doesn't work on a platform that's not little-endian." );
+            }
+            let rval = await this.connector.httpPromise( url, null, false );
+            let dv = new DataView( rval );
+            let height = dv.getUint16( 0, true );
+            let width = dv.getUint16( 2, true );
+            let data = new Float32Array( dv.buffer, 4, ( (dv.byteLength - 4) / 4 ) );
+            return { 'data': data, 'width': width, 'height': height }
+        }
+    }
+
 }
 
 

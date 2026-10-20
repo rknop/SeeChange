@@ -14,7 +14,7 @@ seechange.Image = class extends( rkWebUtil.listener )
         let default_params = { 'nomeas_cutouts': false,
                                'provtag': null,
                                'oversample': 5,
-                               'show_detections': true,
+                               'show_detections': false,
                                'detections_box_size': 10,
                                'detections_box_color': '#008000'
                              };
@@ -53,7 +53,7 @@ seechange.Image = class extends( rkWebUtil.listener )
     }
 
     get_imagediv() {
-        if ( this._imagediv === null ) this.make_image_div();
+        if ( this._imagediv == null ) this.make_image_div();
         return this._imagediv;
     }
 
@@ -78,29 +78,38 @@ seechange.Image = class extends( rkWebUtil.listener )
     {
         if ( ! this.issub ) return null;
 
+        let self = this;
+
         if ( sans_measurements ) {
-            if ( this.detectionsdiv_sans === null ) this.make_detections_div( true, false );
-            if ( this.detections_shown != 'sans' ) {
-                rkWebUtil.wipeDiv( this.detections_wrapper );
-                this.detections_wrapper.appendChild( this.detectionsdiv_sans );
-                this.detections_shown = 'sans';
-            }
+            let showsans = (data) => {
+                if ( self.detections_shown != 'sans' ) {
+                    rkWebUtil.wipeDiv( self.detections_wrapper );
+                    self.detections_warpper.appendChild( self.detectionsdiv_sans );
+                    self.detections_shown = 'sans';
+                }
+            };
+            if ( this.detectionsdiv_sans == null ) this.make_detections_div( true, false, showsans );
+            else showsans( null );
         }
         else {
-            if ( this.detectionsdiv_avec === null ) this.make_detections_div( false, false );
-            if ( this.detections_shown != 'avec' ) {
-                rkWebUtil.wipeDiv( this.detections_warpper );
-                this.detections_wrapper.appendChild( this.detectionsdiv_avec );
-                this.detections_shown = 'avec';
-            }
+            let showavec = (data) => {
+                if ( self.detections_shown != 'avec' ) {
+                    rkWebUtil.wipeDiv( self.detections_wrapper );
+                    self.detections_wrapper.appendChild( self.detectionsdiv_avec );
+                    self.detections_shown = 'avec';
+                }
+            };
+            if ( this.detectionsdiv_avec == null ) this.make_detections_div( false, false, showavec );
+            else showavec( null );
         }
         return this.detections_wrapper;
     }
 
-    show_detectionsdiv( sans_measurements=true )
+    show_detectionsdiv( sans_measurements=true, parent=null )
     {
-        let div = this.get_detections_div( sans_measurements );
-        this.emit_signal( 'detections', { 'detectionsdiv': div } );
+        let div = this.get_detectionsdiv( sans_measurements );
+        if ( parent != null ) parent.appendChild( this.detections_wrapper );
+        this.emit_signal( 'detections', { 'detectionsdiv': this.detections_wrapper } );
         return this.detections_wrapper;
     }
 
@@ -108,21 +117,6 @@ seechange.Image = class extends( rkWebUtil.listener )
 
     // **********************************************************************
     // Image div
-
-    _image_data_getter( url )
-    {
-        return async () => {
-            let rval = await this.context.connector.httpPromise( url, null, false );
-            let dv = new DataView( rval );
-            let height = dv.getUint16( 0, true );
-            let width = dv.getUint16( 2, true );
-            if ( ! ImView.is_little_endian() ) {
-                throw new Error( "This webap doesn't work on a platform that's not little-endian." );
-            }
-            let data = new Float32Array( dv.buffer, 4, ( (dv.byteLength - 4) / 4 ) );
-            return { 'data': data, 'width': width, 'height': height }
-        }
-    }
 
     make_image_div( remake=false )
     {
@@ -155,14 +149,15 @@ seechange.Image = class extends( rkWebUtil.listener )
                                             self.clicked_on_image( image, x, y ) },
                                         'show_image_selector': true,
                                         'show_copy_zoom_button': true,
-                                        'image_change_callback': (name, group) => { self.load_info_view(name) },
+                                        'image_change_callback': (image, group) => { self.load_info_view(image.name) },
                                   } );
             let ids = { 'sub': this.info._id, 'new': this.info.new_id, 'ref': this.info.warped_ref_id };
             for ( let name in ids ) {
                 this.imview.add_image( { "name": name,
-                                         "data_getter": this._image_data_getter( "image_data/" + ids[name] )
+                                         "data_getter": this.context._image_data_getter( "image_data/" + ids[name] )
                                        } );
             }
+            this.imview.render_image();
 
             this.infoview = this.show_info_view( this.info, 'sub' );
             this.infopromises = { 'new': null, 'ref': null };
@@ -173,10 +168,9 @@ seechange.Image = class extends( rkWebUtil.listener )
         else {
             this.imview = new ImView( { 'parent_div': this.imview_div } );
             this.imview.add_image( { "name": "image",
-                                     "data_getter": this._image_data_getter( "image_data/" + this.info._id )
+                                     "data_getter": this.context._image_data_getter( "image_data/" + this.info._id )
                                    } );
             this.infoview = this.show_info_view( this.info, 'image' );
-            this.squared_rendered = false;
         }
     }
 
@@ -256,66 +250,6 @@ seechange.Image = class extends( rkWebUtil.listener )
         }
     }
 
-    // create_imview( data, imgtorequest, which )
-    // {
-    //     let self = this;
-
-    //     let dv = new DataView( data );
-    //     let height = dv.getUint16( 0, true );
-    //     let width = dv.getUint16( 2, true );
-    //     if ( ! ImView.is_little_endian() ) {
-    //         window.alert( "This webap doesn't work on a platform that's not little-endian." );
-    //         return;
-    //     }
-    //     let imagedata = new Float32Array( dv.buffer, 4, ( ( dv.byteLength - 4 ) / 4 ) );
-    //     let imview = new ImView( { "data": imagedata,
-    //                                "width": width,
-    //                                "height": height,
-    //                                "parent": this.imview_div,
-    //                                "dispwidth": 600,    // ... make this configurable?
-    //                                "dispheight": 600
-    //                              },
-    //                              true
-    //                            );
-    //     if ( this.zoomx0 !== null ) {
-    //         imview.x0 = this.zoomx0;
-    //         imview.y0 = this.zoomy0;
-    //         imview.scale = this.zoomscale;
-    //     }
-    //     this.imview_div.appendChild( imview.div );
-    //     imview.render_image();
-    //     this.shown_imview = which;
-
-    //     if ( this.issub ) {
-    //         imview.clickcallback = (x, y) => { self.clicked_on_image(x, y); };
-    //         this.imviews[which] = imview;
-    //         let but = rkWebUtil.button( imview.zoom_buttonbox, "Copy Zoom", () => { self.copy_zoom(which); } );
-    //         but.classList.add( "marginleftex" );
-    //         if ( ( this.provtag !== null ) && this.show_detections ) {
-    //             this.load_cutouts( (data) => { self.show_detections_on_image(which, data); }, which );
-    //         }
-    //     } else {
-    //         this.imview = imview;
-    //     }
-    // }
-
-    // copy_zoom( which )
-    // {
-    //     this.zoomx0 = this.imviews[which].x0;
-    //     this.zoomy0 = this.imviews[which].y0;
-    //     this.zoomscale = this.imviews[which].scale;
-    //     for ( let im of [ 'new', 'ref', 'sub' ] ) {
-    //         if ( im != which ) {
-    //             if ( this.imviews[im] != null ) {
-    //                 this.imviews[im].x0 = this.zoomx0;
-    //                 this.imviews[im].y0 = this.zoomy0;
-    //                 this.imviews[im].scale = this.zoomscale;
-    //                 this.imviews[im].render_image();
-    //             }
-    //         }
-    //     }
-    // }
-
     load_cutouts( callback=null )
     {
         // Should only ever be called if the image is a sub image
@@ -336,7 +270,7 @@ seechange.Image = class extends( rkWebUtil.listener )
                                                        'size': this.detections_box_size,
                                                        'x': data.cutouts.x,
                                                        'y': data.cutouts.y } );
-            this.imview.render_image();
+            this.imview.render_image_and_regions();
         }
     }
 
@@ -351,7 +285,6 @@ seechange.Image = class extends( rkWebUtil.listener )
     process_clicked_on_image( x, y, data )
     {
         let table, tr, td, ul, li, span, ttspan;
-        let oversample = this.oversample;
 
         for ( let dex in data.cutouts.x ) {
             if ( ( x <= data.cutouts.x[dex] + this.detections_box_size / 2. ) &&
@@ -373,15 +306,15 @@ seechange.Image = class extends( rkWebUtil.listener )
                                         { "attributes": {
                                             "src": ( "data:image/png;base64," +
                                                      data.cutouts[which + '_png'][dex] ),
-                                            "width": oversample * data.cutouts['w'][dex],
-                                            "height": oversample * data.cutouts['h'][dex],
+                                            "width": this.oversample * data.cutouts['w'][dex],
+                                            "height": this.oversample * data.cutouts['h'][dex],
                                             "alt": which } } );
                 }
 
                 ul = rkWebUtil.elemaker( "ul", this.thumbnails_div );
                 // row: source index, with good/bad
                 li = rkWebUtil.elemaker( "li", ul );
-                rkWebUtil.elemaker( "b", li, "source index:" );
+                rkWebUtil.elemaker( "b", li, "source index: " );
                 rkWebUtil.elemaker( "text", li, { "text": data.cutouts.source_index[dex] + "  "  } );
                 span = rkWebUtil.elemaker( "b", li, { "text": ( data.cutouts.is_bad[dex] ?
                                                                 "fails cuts" : "passes cuts" ) } );
@@ -463,9 +396,9 @@ seechange.Image = class extends( rkWebUtil.listener )
     // **********************************************************************
     // Detections div
 
-    make_detections_div( sans=true, remake=false )
+    make_detections_div( sans=true, remake=false, callback=null )
     {
-        if ( ! this.is_sub ) {
+        if ( ! this.issub ) {
             throw Error( "Can't make detections div when an image isn't a subtraction" );
         }
 
@@ -476,19 +409,25 @@ seechange.Image = class extends( rkWebUtil.listener )
         let self = this;
 
         if ( sans ) {
-            if ( ( this.detectionsdiv_sans !== null ) && ( ! remake ) ) return;
-            if ( this.detections_sans_promise !== null ) {
+            if ( this.detections_sans_promise == null ) {
+                remake = true;
                 let url = "png_cutouts_for_sub_image/" + this.info._id + "/" + this.provtag + "/1/0";
                 this.detections_sans_promise = this.context.connector.httpPromise( url );
             }
-            this.detections_sans_promise.then( (data) => { self._actually_make_detections_div( true, data ); } );
+            if ( remake )
+                this.detections_sans_promise.then( (data) => { self.actually_make_detections_div( true, data ); } );
+            if ( callback != null )
+                this.detections_sans_promise.then( (data) => { callback(data) } );
         } else {
-            if ( ( this.detectionsdiv_avec !== null ) && ( ! remake ) ) return;
-            if ( this.detections_avec_promise !== null ) {
-                let url = "png_cutoust_for_sub_image/" + this.info._id + "/" + this.provtag + "/1/1";
+            if ( this.detections_avec_promise == null ) {
+                remake = true;
+                let url = "png_cutouts_for_sub_image/" + this.info._id + "/" + this.provtag + "/1/1";
                 this.detections_avec_promise = this.context.connector.httpPromise( url );
             }
-            this.detections_avec_promise.then( (data) => { self.actually_make_detections_div( false, data ); } );
+            if ( remake )
+                this.detections_avec_promise.then( (data) => { self.actually_make_detections_div( false, data ); } );
+            if ( callback != null )
+                this.detections_avec_promise.then( (data) => { callback(data) } );
         }
     }
 
@@ -497,11 +436,14 @@ seechange.Image = class extends( rkWebUtil.listener )
         let div, table, tr, th, td, img, span, ttspan;
 
         rkWebUtil.wipeDiv( this.detections_wrapper );
+
         if ( sans_measurements ) {
-            this.detectionsdiv_sans = rkWebUtil( "div", this.detections_wrapper );
+            this.detectionsdiv_sans = rkWebUtil.elemaker( "div", this.detections_wrapper );
+            this.detections_shown = 'sans';
             div = this.detectionsdiv_sans;
         } else {
-            this.detectionsdiv_avec = rkWebUtil( "div", this.detections_wrapper );
+            this.detectionsdiv_avec = rkWebUtil.elemaker( "div", this.detections_wrapper );
+            this.detections_shown = 'avec';
             div = this.detectionsdiv_avec;
         }
 
@@ -512,19 +454,6 @@ seechange.Image = class extends( rkWebUtil.listener )
         th = rkWebUtil.elemaker( "th", tr, { "text": "ref" } );
         th = rkWebUtil.elemaker( "th", tr, { "text": "sub" } );
 
-        // Sorting is now done server-side... TODO, think about this
-        // // TODO : sort by r/b, make sort configurable
-        // let dexen = [...Array(data.cutouts.sub_id.length).keys()];
-        // dexen.sort( (a, b) => {
-        //     if ( ( data.cutouts['flux'][a] == null ) && ( data.cutouts['flux'][b] == null ) ) return 0;
-        //     else if ( data.cutouts['flux'][a] == null ) return 1;
-        //     else if ( data.cutouts['flux'][b] == null ) return -1;
-        //     else if ( data.cutouts['flux'][a] > data.cutouts['flux'][b] ) return -1;
-        //     else if ( data.cutouts['flux'][a] < data.cutouts['flux'][b] ) return 1;
-        //     else return 0;
-        // } );
-
-        // for ( let i of dexen ) {
         for ( let i in data.cutouts.sub_id ) {
             tr = rkWebUtil.elemaker( "tr", table );
             td = rkWebUtil.elemaker( "td", tr );
@@ -537,22 +466,22 @@ seechange.Image = class extends( rkWebUtil.listener )
             img = rkWebUtil.elemaker( "img", td,
                                       { "attributes":
                                         { "src": "data:image/png;base64," + data.cutouts['new_png'][i],
-                                          "width": oversample * data.cutouts['w'][i],
-                                          "height": oversample * data.cutouts['h'][i],
+                                          "width": this.oversample * data.cutouts['w'][i],
+                                          "height": this.oversample * data.cutouts['h'][i],
                                           "alt": "new" } } );
             td = rkWebUtil.elemaker( "td", tr );
             img = rkWebUtil.elemaker( "img", td,
                                       { "attributes":
                                         { "src": "data:image/png;base64," + data.cutouts['ref_png'][i],
-                                          "width": oversample * data.cutouts['w'][i],
-                                          "height": oversample * data.cutouts['h'][i],
+                                          "width": this.oversample * data.cutouts['w'][i],
+                                          "height": this.oversample * data.cutouts['h'][i],
                                           "alt": "ref" } } );
             td = rkWebUtil.elemaker( "td", tr );
             img = rkWebUtil.elemaker( "img", td,
                                       { "attributes":
                                         { "src": "data:image/png;base64," + data.cutouts['sub_png'][i],
-                                          "width": oversample * data.cutouts['w'][i],
-                                          "height": oversample * data.cutouts['h'][i],
+                                          "width": this.oversample * data.cutouts['w'][i],
+                                          "height": this.oversample * data.cutouts['h'][i],
                                           "alt": "sub" } } );
 
             // *** The info td, which is long
