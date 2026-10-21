@@ -53,11 +53,14 @@ class MainPage( BaseView ):
 
 class ProvTags( BaseView ):
     def do_the_things( self ):
-        with PsycopgConnection() as conn:
-            cursor = conn.cursor()
-            cursor.execute( 'SELECT DISTINCT ON(tag) tag FROM provenance_tags ORDER BY tag' )
-            tags = [ row[0] for row in cursor.fetchall() ]
-            tags.sort( key=lambda x: ( '0' if x=='default' else 1 if x=='current' else 2, x ) )
+        with PGDB() as pgdb:
+            rows, _cols = pgdb.execute( 'SELECT DISTINCT ON(tag) tag FROM provenance_tags ORDER BY tag' )
+            tags = [ row[0] for row in rows ]
+            tags.sort( key=lambda x: ( ( 0 if x=='default'
+                                         else 1 if x=='current'
+                                         else 2 if x=='default_diaforcedphot'
+                                         else 3 )
+                                       , x ) )
             return { 'status': 'ok',
                      'provenance_tags': tags
                     }

@@ -157,7 +157,7 @@ seechange.Image = class extends( rkWebUtil.listener )
                                          "data_getter": this.context._image_data_getter( "image_data/" + ids[name] )
                                        } );
             }
-            this.imview.render_image();
+            this.imview.render_image( false );
 
             this.infoview = this.show_info_view( this.info, 'sub' );
             this.infopromises = { 'new': null, 'ref': null };
@@ -270,7 +270,7 @@ seechange.Image = class extends( rkWebUtil.listener )
                                                        'size': this.detections_box_size,
                                                        'x': data.cutouts.x,
                                                        'y': data.cutouts.y } );
-            this.imview.render_image_and_regions();
+            this.imview.render_image();
         }
     }
 

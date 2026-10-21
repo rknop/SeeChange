@@ -184,7 +184,7 @@ seechange.DiaForcedPhot = class
             }
         }
 
-        this.filters = []
+        this.filters = [];
         this.psfphotids = {};
         this.aperphotids = {};
         this.psfphotdexen = {};
@@ -208,21 +208,23 @@ seechange.DiaForcedPhot = class
                 let psf_pointdata = [];
                 let aper_pointdata = [];
                 for ( let i in this.data.mjd ) {
-                    if ( ! this.data.psfflags[i] ) {
-                        psf_x.push( this.data.mjd[i] );
-                        psf_y.push( this.data.flux_psf[i] );
-                        psf_dy.push( this.data.flux_psf_err[i] );
-                        this.psfphotids[filt].push( this.data.diaforcedphotid[i] );
-                        this.psfphotdexen[filt].push( i );
-                        psf_pointdata.push( { 'id': this.data.diaforcedphotid[i], 'dex': i } );
-                    }
-                    if ( ! this.data.aperflags_0[i] ) {
-                        aper_x.push( this.data.mjd[i] );
-                        aper_y.push( this.data.flux_aper_0[i] );
-                        aper_dy.push( this.data.flux_aper_0_err[i] );
-                        this.aperphotids[filt].push( this.data.diaforcedphotid[i] );
-                        this.aperphotdexen[filt].push( i );
-                        aper_pointdata.push( { 'id': this.data.diaforcedphotid[i], 'dex': i } );
+                    if ( this.data.filter[i] == filt ) {
+                        if ( ! this.data.psfflags[i] ) {
+                            psf_x.push( this.data.mjd[i] );
+                            psf_y.push( this.data.flux_psf[i] );
+                            psf_dy.push( this.data.flux_psf_err[i] );
+                            this.psfphotids[filt].push( this.data.diaforcedphotid[i] );
+                            this.psfphotdexen[filt].push( i );
+                            psf_pointdata.push( { 'id': this.data.diaforcedphotid[i], 'dex': i } );
+                        }
+                        if ( ! this.data.aperflags_0[i] ) {
+                            aper_x.push( this.data.mjd[i] );
+                            aper_y.push( this.data.flux_aper_0[i] );
+                            aper_dy.push( this.data.flux_aper_0_err[i] );
+                            this.aperphotids[filt].push( this.data.diaforcedphotid[i] );
+                            this.aperphotdexen[filt].push( i );
+                            aper_pointdata.push( { 'id': this.data.diaforcedphotid[i], 'dex': i } );
+                        }
                     }
                 }
                 this.psfsets[filt] = new SVGPlot.Dataset( { 'x': psf_x, 'y': psf_y, 'dy': psf_dy,
@@ -266,11 +268,18 @@ seechange.DiaForcedPhot = class
         tab = rkWebUtil.elemaker( "table", this.cutoutsdiv, { "classes": [ "borderless", "margintopem",
                                                                            "font75" ] } );
         this.cliptabcells = {};
+        let tr;
         for ( let prop of [ "mjd", "filter", "flux_psf", "flux_aper_0", "flux_aper_n", "psfflags", "x", "y" ] ) {
-            let tr = rkWebUtil.elemaker( "tr", tab );
+            tr = rkWebUtil.elemaker( "tr", tab );
             rkWebUtil.elemaker( "th", tr, { "classes": [ "right" ], "text": prop + ": " } );
             this.cliptabcells[prop] = rkWebUtil.elemaker( "td", tr );
         }
+        tr = rkWebUtil.elemaker( "tr", tab );
+        // Hurm... looks like font size % is relative to what it would have been
+        //   if there were no font-size already specified... so doing font75 here
+        //   will make it .75 * .75 = 56.25%
+        this.cliptabcells['id'] = rkWebUtil.elemaker( "td", tr, { "attributes": { "colspan": 2 },
+                                                                  "classes": [ "font75" ] } );
 
         // ****************************************
         // image div
@@ -355,12 +364,12 @@ seechange.DiaForcedPhot = class
                                                            "x": [ this.data.x[dex] ],
                                                            "y": [ this.data.y[dex] ]
                                                          } );
-                this.imview.render_image_and_regions();
+                this.imview.render_image();
             }
         }
         else {
             this.imview.set_current_image( group, which, true );
-            this.imview.render_image_and_regions();
+            this.imview.render_image();
         }
     }
 
@@ -441,6 +450,7 @@ seechange.DiaForcedPhot = class
         this.cliptabcells["psfflags"].innerHTML = "0x" + this.data.psfflags[i].toString(16);
         this.cliptabcells["x"].innerHTML = this.data.x[i].toFixed( 2 );
         this.cliptabcells["y"].innerHTML = this.data.y[i].toFixed( 2 );
+        this.cliptabcells["id"].innerHTML = photid;
     }
 
     receive_thumbnails( data, photid, clipsize )
