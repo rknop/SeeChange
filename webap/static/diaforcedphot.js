@@ -29,21 +29,56 @@ seechange.DiaForcedPhotSearch = class
         this.ltcvid = rkWebUtil.elemaker( "input", p, { "id": "diaforcedphot_ltcvid",
                                                         "attributes": { "type": "text", "size": 36} } );
         p = rkWebUtil.elemaker( "p", vbox )
-        rkWebUtil.button( p, "Show Object", () => { self.show_lightcurve_for_object(); } );
+        rkWebUtil.button( p, "Show Object", () => { self.show_lightcurve_for_widget_object(); } );
 
         vbox = rkWebUtil.elemaker( "div", hbox, { "classes": [ "vbox", "padex", "xmargin", "mostlyborder" ] } );
-        rkWebUtil.elemaker( "p", vbox, { "text": "(Searching not implemented yet)" } );
-
+        rkWebUtil.elemaker( "p", vbox, { "text": "(Searching not implemented yet; for now:)" } );
+        rkWebUtil.button( vbox, "Show Them All!!!!!1!11!!1one11!!", (e) => { self.list_all_objs() } );
+        
         this.ltcv_parent_div = rkWebUtil.elemaker( "div", this.div, { "classes": [ "vbox", "grow1" ] } );
     }
 
+    list_all_objs() {
+        let self = this;
+        let provtag = this.context.provtag_wid.value;
+        let promise = this.context.connector.httpPromise( "objswithdiaforcedphot/" + provtag );
+        promise.then( (data) => { self.list_objects(data, provtag) } );
+    }
 
-    show_lightcurve_for_object()
+    list_objects( data, provtag ) {
+        let self = this;
+        
+        rkWebUtil.wipeDiv( this.ltcv_parent_div );
+        rkWebUtil.elemaker( "h3", this.ltcv_parent_div, ( "All objects in provtag " + provtag
+                                                          + " with dia_forced_photometry" ) );
+        let tab = rkWebUtil.elemaker( "table", this.ltcv_parent_div, { "classes": [ "borderedcells", "selfstart" ] } );
+        let tr = rkWebUtil.elemaker( "tr", tab );
+        rkWebUtil.elemaker( "th", tr, "Name" );
+        rkWebUtil.elemaker( "th", tr, "RA" );
+        rkWebUtil.elemaker( "th", tr, "Dec" );
+
+        for ( let i in data.name ) {
+            tr = rkWebUtil.elemaker( "tr", tab );
+            rkWebUtil.elemaker( "td", tr, { "text": data.name[i],
+                                            "click": (e) =>{ self.show_lightcurve_for_object(data._id[i]) },
+                                            "classes": [ "link" ] } );
+            rkWebUtil.elemaker( "td", tr, data.ra[i].toFixed(4) );
+            rkWebUtil.elemaker( "td", tr, data.dec[i].toFixed(4) );
+        }
+    }
+        
+    
+    show_lightcurve_for_widget_object()
     {
+        let objid = this.ltcvid.value.trim();
+        this.show_lightcurve_for_object( objid );
+    }
+
+    show_lightcurve_for_object( objid )
+    {        
         // TODO checkif we already have this in ltcv_divs
         let self = this;
         let provtag = this.context.provtag_wid.value;
-        let objid = this.ltcvid.value.trim();
         rkWebUtil.wipeDiv( this.ltcv_parent_div );
         rkWebUtil.elemaker( "h3", this.ltcv_parent_div, { "text": "Loading...",
                                                           "classes": [ "warning", "italic" ] } );
@@ -191,9 +226,11 @@ seechange.DiaForcedPhot = class
                     }
                 }
                 this.psfsets[filt] = new SVGPlot.Dataset( { 'x': psf_x, 'y': psf_y, 'dy': psf_dy,
-                                                            'pointdata': psf_pointdata, linewid: 0 } );
+                                                            'pointdata': psf_pointdata, linewid: 0,
+                                                            'color': filtercolors[filt] } );
                 this.apersets[filt] = new SVGPlot.Dataset( { 'x': aper_x, 'y': aper_y, 'dy': aper_dy,
-                                                             'pointdata': aper_pointdata, linewid: 0 } );
+                                                             'pointdata': aper_pointdata, linewid: 0,
+                                                             'color': filtercolors[filt] } );
                 this.svgplot.addDataset( this.psfsets[filt] );
             }
         }

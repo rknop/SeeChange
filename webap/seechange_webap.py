@@ -1293,6 +1293,25 @@ class DiaForcedPhotClips( BaseView ):
 
         return bytes(barf)
 
+# ======================================================================
+
+class AllObjsWithDiaForcedPhot( BaseView ):
+    def do_the_things( self, provtag ):
+        with PGDB() as pgdb:
+            q = sql.SQL( textwrap.dedent(
+                """\
+                SELECT DISTINCT ON(o.name) o._id, o.name, o.ra, o.dec
+                FROM dia_forced_photometry p
+                INNER JOIN objects o ON p.object_id=o._id
+                INNER JOIN provenance_tags t ON p.provenance_id=t.provenance_id
+                WHERE t.tag={provtag}
+                ORDER BY o.name
+                """
+            ) ).format( provtag=provtag )
+            rows, cols = pgdb.execute( q )
+
+        return { c: [ r[i] for r in rows ] for i, c in enumerate(cols) }
+    
 
 # =====================================================================
 # =====================================================================
@@ -1392,7 +1411,8 @@ urls = {
     "/fakeanalysisdata/<expid>/<provtag>/<sectionid>": FakeAnalysisData,
     "/diaforcedphotforobj/<objid>/<provtag>": DiaForcedPhotForObj,
     "/diaforcedphotclips/<photid>": DiaForcedPhotClips,
-    "/diaforcedphotclips/<photid>/<int:clipsize>": DiaForcedPhotClips
+    "/diaforcedphotclips/<photid>/<int:clipsize>": DiaForcedPhotClips,
+    "/objswithdiaforcedphot/<provtag>": AllObjsWithDiaForcedPhot
 }
 
 usedurls = {}
