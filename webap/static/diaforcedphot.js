@@ -34,7 +34,7 @@ seechange.DiaForcedPhotSearch = class
         vbox = rkWebUtil.elemaker( "div", hbox, { "classes": [ "vbox", "padex", "xmargin", "mostlyborder" ] } );
         rkWebUtil.elemaker( "p", vbox, { "text": "(Searching not implemented yet; for now:)" } );
         rkWebUtil.button( vbox, "Show Them All!!!!!1!11!!1one11!!", (e) => { self.list_all_objs() } );
-        
+
         this.ltcv_parent_div = rkWebUtil.elemaker( "div", this.div, { "classes": [ "vbox", "grow1" ] } );
     }
 
@@ -47,7 +47,7 @@ seechange.DiaForcedPhotSearch = class
 
     list_objects( data, provtag ) {
         let self = this;
-        
+
         rkWebUtil.wipeDiv( this.ltcv_parent_div );
         rkWebUtil.elemaker( "h3", this.ltcv_parent_div, ( "All objects in provtag " + provtag
                                                           + " with dia_forced_photometry" ) );
@@ -66,8 +66,8 @@ seechange.DiaForcedPhotSearch = class
             rkWebUtil.elemaker( "td", tr, data.dec[i].toFixed(4) );
         }
     }
-        
-    
+
+
     show_lightcurve_for_widget_object()
     {
         let objid = this.ltcvid.value.trim();
@@ -75,7 +75,7 @@ seechange.DiaForcedPhotSearch = class
     }
 
     show_lightcurve_for_object( objid )
-    {        
+    {
         // TODO checkif we already have this in ltcv_divs
         let self = this;
         let provtag = this.context.provtag_wid.value;
@@ -102,6 +102,8 @@ seechange.DiaForcedPhotSearch = class
 
 seechange.DiaForcedPhot = class
 {
+    static _n_diaforcedphots = 0;
+
     constructor( context, data, params )
     {
         this.context = context;
@@ -128,6 +130,8 @@ seechange.DiaForcedPhot = class
         this.clips_photid = null;
         this.imviewcache = {};
         this.imagepromise = {};
+        this.ordinal = seechange.DiaForcedPhot._n_diaforcedphots;
+        seechange.DiaForcedPhot._n_diaforcedphots += 1;
     }
 
     render()
@@ -160,7 +164,7 @@ seechange.DiaForcedPhot = class
         this.ltcvdiv.appendChild( this.svgplot.topdiv );
 
         this.apervspsf = rkWebUtil.elemaker( "select", this.svgplot.buttonbox,
-                                             { "change": (e) => { self.select_aper_vs_psf(); } } );
+                                             { "change": (e) => { self.update_datasets(); } } );
         rkWebUtil.elemaker( "option", this.apervspsf, { "text": "PSF photometry",
                                                         "attributes": { "value": "psf", "selected": 1 } } );
         rkWebUtil.elemaker( "option", this.apervspsf, { "text": "Aperture Photometry",
@@ -185,6 +189,7 @@ seechange.DiaForcedPhot = class
         }
 
         this.filters = [];
+        this.filtercheckboxes = {};
         this.psfphotids = {};
         this.aperphotids = {};
         this.psfphotdexen = {};
@@ -234,6 +239,17 @@ seechange.DiaForcedPhot = class
                                                              'pointdata': aper_pointdata, linewid: 0,
                                                              'color': filtercolors[filt] } );
                 this.svgplot.addDataset( this.psfsets[filt] );
+
+                rkWebUtil.elemaker( "span", this.svgplot.buttonbox, { "text": "   " } );
+                let checkboxid = "diaforcedphot-" + this.ordinal + "-checkbox-" + filt;
+                this.filtercheckboxes[filt] = rkWebUtil.checkbox( this.svgplot.buttonbox,
+                                                                  { "attributes": { "checked": 1 },
+                                                                    "change": (e) => { self.update_datasets() },
+                                                                    "id": checkboxid,
+                                                                    "text": filt,
+                                                                    "classes": [ "bold" ],
+                                                                    "style": { "color": filtercolors[filt] }
+                                                                  } );
             }
         }
 
@@ -297,32 +313,19 @@ seechange.DiaForcedPhot = class
                                   } );
     }
 
-    select_aper_vs_psf()
+    update_datasets()
     {
-        let which = this.apervspsf.value;
-        if ( which == this.phottype ) return;
-
-        if ( this.phottype == "psf" ) {
-            for ( let filt in this.psfsets ) {
-                this.svgplot.removeDataset( this.psfsets[filt] );
-            }
-        } else {
-            for ( let filt in this.apersets ) {
-                this.svgplot.removeDataset( this.apersets[filt] );
-            }
+        this.photttype = this.apervspsf.value;
+        let sets = ( this.photttype == "psf" ) ? this.psfsets : this.apersets;
+        let filts = [];
+        for ( let filt of Object.keys(this.filtercheckboxes) ) {
+            if ( this.filtercheckboxes[filt].checked ) filts.push( filt );
         }
 
-        this.phottype = which;
-        if ( this.phottype == "psf" ) {
-            for ( let filt of this.filters ) {
-                this.svgplot.addDataset( this.psfsets[filt] );
-            }
-        } else {
-            for ( let filt of this.filters ) {
-                this.svgplot.addDataset( this.apersets[filt] );
-            }
+        this.svgplot.clear( false );
+        for ( let filt of filts ) {
+            this.svgplot.addDataset( sets[filt] );
         }
-
         this.svgplot.redraw();
     }
 
