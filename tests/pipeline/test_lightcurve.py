@@ -1,4 +1,5 @@
 import pytest
+import uuid
 
 import numpy as np
 import pandas
@@ -136,114 +137,132 @@ def test_get_lightcurve_for_object( sim_lightcurve_lightcurves ):
     basic_keys = { 'mjd', 'filter', 'zp', 'psfflags', 'flux_psf', 'flux_psf_err' }
     raw_keys = { 'flux_psf_raw', 'flux_psf_raw_err' }
     pos_keys = { 'x', 'y' }
-    scalar_ap_keys = { 'flux_aper_0', 'flux_aper_0_err', 'flux_aper_n', 'flux_aper_n_err' }
+    imid_keys = { 'newid', 'newzpid', 'refid', 'refzpid', 'subid' }
+    photid_keys = { 'diaforcedphotid' }
+    scalar_ap_keys = { 'flux_aper_0', 'flux_aper_0_err', 'flux_aper_n', 'flux_aper_n_err',
+                       'aperflags_0', 'aperflags_n' }
     list_ap_keys = { 'aper_cors', 'aper_pix' }
-    raw_ap_keys = { 'flux_apertures_raw', 'flux_apertures_raw_err' }
+    raw_ap_keys = { 'flux_apertures_raw', 'flux_apertures_raw_err', 'aperflags_raw' }
 
-    # ....it's a four-loop.  No, a five-loop!  72 trials!
+    # ....it's a four-loop.  No, a five-loop!  72 trials!  NO!  a seven-loop!  288 trials!
     for obj, objinfo, expected_ltcv in zip( objs, objinfos, expected_ltcvs ):
         for searchby in ( obj, obj.id, obj.name ):
             for incraw in ( False, True ):
                 for incap in ( False, True ):
                     for incpos in ( False, True ):
-                        scalarcols = basic_keys
-                        allcols = basic_keys
-                        dfcols = basic_keys
-                        dftype = pandas.DataFrame
-                        extras = {}
-                        if incraw:
-                            scalarcols = scalarcols.union( raw_keys )
-                            dfcols = scalarcols
-                            allcols = scalarcols
-                            extras['include_raw'] = True
-                        if incpos:
-                            scalarcols = scalarcols.union( pos_keys )
-                            dfcols = scalarcols
-                            allcols = scalarcols
-                            extras['include_pos'] = True
-                        if incap:
-                            scalarcols = scalarcols.union( scalar_ap_keys )
-                            allcols = scalarcols.union( list_ap_keys )
-                            allcols = allcols.union( raw_ap_keys if incraw else set() )
-                            dftype = nested_pandas.NestedFrame
-                            dfcols = dfcols.union( { 'apphot' } ).union( scalar_ap_keys )
-                            dfapcols = list_ap_keys.union( raw_ap_keys if incraw else set() )
-                            extras['include_apertures'] = True
+                        for incimid in ( False, True ):
+                            for incphotid in ( False, True ):
+                                scalarcols = basic_keys
+                                allcols = basic_keys
+                                dfcols = basic_keys
+                                dftype = pandas.DataFrame
+                                extras = {}
+                                if incraw:
+                                    scalarcols = scalarcols.union( raw_keys )
+                                    dfcols = scalarcols
+                                    allcols = scalarcols
+                                    extras['include_raw'] = True
+                                if incpos:
+                                    scalarcols = scalarcols.union( pos_keys )
+                                    dfcols = scalarcols
+                                    allcols = scalarcols
+                                    extras['include_pos'] = True
+                                if incimid:
+                                    scalarcols = scalarcols.union( imid_keys )
+                                    dfcols = scalarcols
+                                    allcols = scalarcols
+                                    extras['include_im_ids'] = True
+                                if incphotid:
+                                    scalarcols = scalarcols.union( photid_keys )
+                                    dfcols = scalarcols
+                                    allcols = scalarcols
+                                    extras['include_phot_ids'] = True
+                                if incap:
+                                    scalarcols = scalarcols.union( scalar_ap_keys )
+                                    allcols = scalarcols.union( list_ap_keys )
+                                    allcols = allcols.union( raw_ap_keys if incraw else set() )
+                                    dftype = nested_pandas.NestedFrame
+                                    dfcols = dfcols.union( { 'apphot' } ).union( scalar_ap_keys )
+                                    dfapcols = list_ap_keys.union( raw_ap_keys if incraw else set() )
+                                    extras['include_apertures'] = True
 
-                        # Default is list of dicts
-                        ltcv = DiaForcedPhot.get_lightcurve_for_object( searchby, photprovid, **extras )
-                        assert isinstance( ltcv, list )
-                        assert isinstance( ltcv[0], dict )
-                        assert set( ltcv[0].keys() ) == allcols
-                        assert all( lc['filter'] == 'r' for lc in ltcv )
-                        mjds = np.array( [ lc['mjd'] for lc in ltcv ] )
-                        assert np.all( np.isclose( mjds, objinfo['mjds'], rtol=1e-14 ) )
-                        # fluxen = np.array( [ lc['flux_psf'] for lc in ltcv ] )
-                        # dfluxen = np.array( [ lc['flux_psf_err'] for lc in ltcv ] )
-                        # # ...these next two are more a test of pipeline/lightcurve.py than of
-                        # #   get_lightcurve_for_object, but oh well... should pass here too!
-                        # assert np.all( np.abs( ( fluxen - objinfo['fluxen'] ) / dfluxen ) < 3. )
-                        # assert ( ( (fluxen - objinfo['fluxen'] ) / dfluxen ) **2 ).sum() < 1.5 * ( len(fluxen) - 1 )
 
-                        # Ask for different formats of output and make sure the results are all consistent
+                                # Default is list of dicts
+                                ltcv = DiaForcedPhot.get_lightcurve_for_object( searchby, photprovid, **extras )
+                                assert isinstance( ltcv, list )
+                                assert isinstance( ltcv[0], dict )
+                                assert set( ltcv[0].keys() ) == allcols
+                                assert all( lc['filter'] == 'r' for lc in ltcv )
+                                mjds = np.array( [ lc['mjd'] for lc in ltcv ] )
+                                assert np.all( np.isclose( mjds, objinfo['mjds'], rtol=1e-14 ) )
+                                # fluxen = np.array( [ lc['flux_psf'] for lc in ltcv ] )
+                                # dfluxen = np.array( [ lc['flux_psf_err'] for lc in ltcv ] )
+                                # # ...these next two are more a test of pipeline/lightcurve.py than of
+                                # #   get_lightcurve_for_object, but oh well... should pass here too!
+                                # assert np.all( np.abs( ( fluxen - objinfo['fluxen'] ) / dfluxen ) < 3. )
+                                # assert ( ( (fluxen - objinfo['fluxen'] ) / dfluxen ) **2 ).sum()
+                                #          < 1.5 * ( len(fluxen) - 1 ) )
 
-                        ltcv2 = DiaForcedPhot.get_lightcurve_for_object( searchby, photprovid,
-                                                                         return_format='dictoflists', **extras )
-                        assert isinstance( ltcv2, dict )
-                        assert set( ltcv2.keys() ) == allcols
-                        for i, point in enumerate( ltcv ):
-                            for attr in allcols:
-                                if attr == 'filter':
-                                    assert point[attr] == ltcv2[attr][i]
-                                else:
-                                    if isinstance( point[attr], list ):
-                                        assert all ( ( np.isnan(a) and np.isnan(b) ) or ( a == b )
-                                                     for a, b in zip( point[attr], ltcv2[attr][i] ) )
+                                # Ask for different formats of output and make sure the results are all consistent
+
+                                ltcv2 = DiaForcedPhot.get_lightcurve_for_object( searchby, photprovid,
+                                                                                 return_format='dictoflists', **extras )
+                                assert isinstance( ltcv2, dict )
+                                assert set( ltcv2.keys() ) == allcols
+                                for i, point in enumerate( ltcv ):
+                                    for attr in allcols:
+                                        if ( attr == 'filter' ) or isinstance( point[attr], uuid.UUID ):
+                                            assert point[attr] == ltcv2[attr][i]
+                                        else:
+                                            if isinstance( point[attr], list ):
+                                                assert all ( ( np.isnan(a) and np.isnan(b) ) or ( a == b )
+                                                             for a, b in zip( point[attr], ltcv2[attr][i] ) )
+                                            else:
+                                                assert ( ( np.isnan(point[attr]) and np.isnan(ltcv2[attr][i]) )
+                                                         or ( point[attr] == ltcv2[attr][i] ) )
+
+
+                                ltcv3 = DiaForcedPhot.get_lightcurve_for_object( searchby, photprovid,
+                                                                                 return_format='dataframe', **extras )
+                                assert isinstance( ltcv3, dftype )
+                                assert set( ltcv3.columns ) == dfcols
+                                for key in scalarcols:
+                                    if ( key == 'filter' ) or isinstance( ltcv3[key].values[0], uuid.UUID ):
+                                        assert np.all( ltcv3[key] == np.array(ltcv2[key]) )
                                     else:
-                                        assert ( ( np.isnan(point[attr]) and np.isnan(ltcv2[attr][i]) )
-                                                 or ( point[attr] == ltcv2[attr][i] ) )
+                                        assert np.all( np.isclose( ltcv3[key], np.array(ltcv2[key]),
+                                                                   rtol=1e-6, equal_nan=True ) )
+                                if incap:
+                                    for key in list_ap_keys:
+                                        assert set( ltcv3.apphot.columns ) == dfapcols
+                                        assert all( np.all( np.isclose( ltcv3.apphot[i][key], ltcv2[key][i],
+                                                                        rtol=1e-6, equal_nan=True ) )
+                                                    for i in range(len(ltcv3)) )
 
-
-                        ltcv3 = DiaForcedPhot.get_lightcurve_for_object( searchby, photprovid,
-                                                                         return_format='dataframe', **extras )
-                        assert isinstance( ltcv3, dftype )
-                        assert set( ltcv3.columns ) == dfcols
-                        for key in scalarcols:
-                            if key == 'filter':
-                                assert np.all( ltcv3[key] == np.array(ltcv2[key]) )
-                            else:
-                                assert np.all( np.isclose( ltcv3[key], np.array(ltcv2[key]),
-                                                           rtol=1e-6, equal_nan=True ) )
-                        if incap:
-                            for key in list_ap_keys:
-                                assert set( ltcv3.apphot.columns ) == dfapcols
-                                assert all( np.all( np.isclose( ltcv3.apphot[i][key], ltcv2[key][i],
-                                                                rtol=1e-6, equal_nan=True ) )
-                                            for i in range(len(ltcv3)) )
-
-                        if incpos and incraw and incap:
-                            phots = DiaForcedPhot.get_lightcurve_for_object( searchby, photprovid,
-                                                                             return_format='dictoflists',
-                                                                             diaforcedphotobjs=True )
-                            assert set( phots.keys() ) == { 'mjd', 'filter', 'diaforcedphot' }
-                            assert all( isinstance( val, list ) for val in phots.values() )
-                            assert all( isinstance( val, DiaForcedPhot ) for val in phots['diaforcedphot'] )
-                            for point, mjd, filt, phot in zip( ltcv, phots['mjd'],
-                                                               phots['filter'], phots['diaforcedphot'] ):
-                                assert point['mjd'] == mjd
-                                assert point['filter'] == filt
-                                assert point['psfflags'] == phot.psfflags
-                                assert np.isclose( point['x'], phot.x, rtol=1e-6, equal_nan=True )
-                                assert np.isclose( point['y'], phot.y, rtol=1e-6, equal_nan=True )
-                                assert np.isclose( point['flux_psf_raw'], phot.flux_psf,
-                                                   rtol=1e-6, equal_nan=True )
-                                assert np.isclose( point['flux_psf_raw_err'], phot.flux_psf_err,
-                                                   rtol=1e-6, equal_nan=True )
-                                assert np.all( np.isclose( np.array(point['flux_apertures_raw']), phot.flux_apertures,
-                                                           rtol=1e-6, equal_nan=True ) )
-                                assert np.all( np.isclose( np.array(point['flux_apertures_raw_err']),
-                                                           phot.flux_apertures_err,
-                                                           rtol=1e-6, equal_nan=True ) )
+                                if incpos and incraw and incap:
+                                    phots = DiaForcedPhot.get_lightcurve_for_object( searchby, photprovid,
+                                                                                     return_format='dictoflists',
+                                                                                     diaforcedphotobjs=True )
+                                    assert set( phots.keys() ) == { 'mjd', 'filter', 'diaforcedphot' }
+                                    assert all( isinstance( val, list ) for val in phots.values() )
+                                    assert all( isinstance( val, DiaForcedPhot ) for val in phots['diaforcedphot'] )
+                                    for point, mjd, filt, phot in zip( ltcv, phots['mjd'],
+                                                                       phots['filter'], phots['diaforcedphot'] ):
+                                        assert point['mjd'] == mjd
+                                        assert point['filter'] == filt
+                                        assert point['psfflags'] == phot.psfflags
+                                        assert np.isclose( point['x'], phot.x, rtol=1e-6, equal_nan=True )
+                                        assert np.isclose( point['y'], phot.y, rtol=1e-6, equal_nan=True )
+                                        assert np.isclose( point['flux_psf_raw'], phot.flux_psf,
+                                                           rtol=1e-6, equal_nan=True )
+                                        assert np.isclose( point['flux_psf_raw_err'], phot.flux_psf_err,
+                                                           rtol=1e-6, equal_nan=True )
+                                        assert np.all( np.isclose( np.array(point['flux_apertures_raw']),
+                                                                   phot.flux_apertures,
+                                                                   rtol=1e-6, equal_nan=True ) )
+                                        assert np.all( np.isclose( np.array(point['flux_apertures_raw_err']),
+                                                                   phot.flux_apertures_err,
+                                                                   rtol=1e-6, equal_nan=True ) )
 
 
 # NOTE : the user and admin_user fixtures aren't really needed for this next test,

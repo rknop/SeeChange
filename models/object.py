@@ -1306,7 +1306,8 @@ class ObjectGaiaMatch( Base, ObjectCatalogMatch ):
                 maxdec = 90.
 
             gaiacat, fpath, _ = download_gaia_dr3( minra, maxra, mindec, maxdec, padding=0., minmag=None, maxmag=None )
-            gaiacat.filepath = fpath
+            # File is in tempdir so won't be "valid"
+            gaiacat.set_filepath( fpath, must_be_valid=False )
 
         sourceids = gaiacat.data[ 'GAIA_DR3_ID' ]
         starprobs = gaiacat.data[ 'STARPROB' ]

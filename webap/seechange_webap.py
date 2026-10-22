@@ -1296,6 +1296,7 @@ class DiaForcedPhotClips( BaseView ):
 
         return bytes(barf)
 
+
 # ======================================================================
 
 class AllObjsWithDiaForcedPhot( BaseView ):
@@ -1314,7 +1315,7 @@ class AllObjsWithDiaForcedPhot( BaseView ):
             rows, cols = pgdb.execute( q )
 
         return { c: [ r[i] for r in rows ] for i, c in enumerate(cols) }
-    
+
 
 # =====================================================================
 # =====================================================================
