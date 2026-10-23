@@ -867,7 +867,7 @@ class RefMaker:
             self.end_time = mjd + self.pars.fiducial_end_delta_days
 
         noncritical_start_time = ( noncritical_start_time if noncritical_start_time is not None
-                                   else self.pars.non_critical_start_time )
+                                   else self.pars.noncritical_start_time )
         noncritical_end_time = ( noncritical_end_time if noncritical_end_time is not None
                                  else self.pars.noncritical_end_time )
         if noncritical_start_time is not None:

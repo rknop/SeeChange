@@ -11,14 +11,14 @@ from psycopg import sql
 import improc.photometry
 import models.object
 from models.base import PGDB
-from models.provenance import Provenance
+from models.provenance import Provenance, ProvenanceTag
 from models.object import ObjectPosition
 from models.image import Image
 from models.source_list import SourceList
 from models.background import Background
 from models.psf import PSF
 from models.refset import RefSet
-from models.forcedphot import ForcedPhot
+from models.diaforcedphot import DiaForcedPhot
 from util.config import Config, NoValue
 from util.logger import SCLogger
 from util.util import listify
@@ -39,8 +39,12 @@ class ParsLightcurve(Parameters):
             docstring = ( "Provenance of the zeropoint to use when searching for images to build into the "
                           "lightcurve.  Pass either this or zp_prov_tag; if you pass both, zp_prov_tag is "
                           "ignored." ),
-            # Not critical, because the zp provenance will be in the forced photometry provenance upstreams
-            critical = False
+            # Strictly speaking, this doesn't need to be critical, because the zeropoint provenance
+            #   will be in this process' provenance's upstreams.  But!  We need it here, because we don't
+            #   only want Provenance.parameters to be enough to uniquely specify the provenance (together
+            #   with process, code_version, and upsterams), but also we want to be able to use
+            #   Provenance.parmaeters to instantiate a pipeline worker object.
+            critical = True
         )
 
         self.zp_prov_tag = self.add_par(
@@ -66,8 +70,7 @@ class ParsLightcurve(Parameters):
             par_types = ( str, None ),
             docstring = ( "Provenance if the object position to use for finding the object's position.  If neither "
                           "this nor object_position_prov_tag is given, will use the raw position from the object." ),
-            # Not critical because the positon provenance will be an upstream of the forced phot provenance
-            critical = False
+            critical = True
         )
 
         self.object_position_prov_tag = self.add_par(
@@ -118,7 +121,7 @@ class ParsLightcurve(Parameters):
             par_types = dict,
             docstring = ( "A dictionary with subtraction config.  Will override what's in config files "
                           "and defaults for subtraction." ),
-            # Not critical because a subtraction provenance will be in the upstreams of the forced
+            # Not critical because a subtraction provenance will be in the upstreams of the dia forced
             #   phot provenance
             critical = False
         )
@@ -156,7 +159,7 @@ class ParsLightcurve(Parameters):
             default = None,
             par_types = ( str, None ),
             docstring = "The instrument that we're building a lightcurve for.  Only do one instrument at a time.",
-            # Not critical because the forced phot upstream provs will have an image prov that (effectively)
+            # Not critical because the dia forced phot upstream provs will have an image prov that (effectively)
             #   specifies instrument
             critical = False
         )
@@ -213,7 +216,7 @@ class ParsLightcurve(Parameters):
 
 class Lightcurve:
     def __init__( self, **kwargs ):
-        """Do forced photometry."""
+        """Do forced photometry on difference images."""
 
         cfg = Config.get()
 
@@ -240,11 +243,22 @@ class Lightcurve:
         self.imgs = None
         self.wcsen = None
         self.zps = None
-        self.forced_phots = None
+        self.dia_forced_phots = None
+
+        self._has_been_setup = False
 
 
     def setup( self, object_id=NoValue(), object_name=NoValue(), mjd0=NoValue(),
-               mjd1=NoValue(), filters=NoValue(), pgdb=None ):
+               mjd1=NoValue(), filters=NoValue(), pgdb=None, **kwargs ):
+        if self._has_been_setup:
+            # Doing this because we set some parameters below.  If we wanted to make
+            #   this reusable, we'd have to be able to restore them.
+            #   (Honestly, that may be true of lots of other objects as well -- they may
+            #   set parameters when they're run, not only when they're instantiated, which
+            #   means there's a hysteresis.  Should check.)
+            raise RuntimeError( "Lightcurve is a single-use object." )
+        self._has_been_setup = True
+
         pgdb_in = pgdb
 
         self.pars.object_id = object_id if not isinstance( object_id, NoValue ) else self.pars.object_id
@@ -278,6 +292,7 @@ class Lightcurve:
                 elif self.pars.zp_prov_tag is not None:
                     self.zp_prov = Provenance.get_for_tag( self.pars.zp_prov_tag, self.pars.zp_prov_tag_process,
                                                            pgdb=pgdb )
+                    self.pars.zp_prov = self.zp_prov.id
 
             if self.zp_prov is None:
                 raise RuntimeError( f"Could not find a zeropoint provenance to use to find images. "
@@ -306,6 +321,7 @@ class Lightcurve:
                         raise ValueError( f"Could not find object position provenance for "
                                           f"tag {self.pars.object_position_prov_tag} and "
                                           f"process { self.pars.object_position_prov_tag_process}" )
+                    self.pars.object_position_prov = self.object_position_prov.id
 
             if self.subtractor.pars.refset is None:
                 raise ValueError( "Subtractor has no refset defined!" )
@@ -332,7 +348,7 @@ class Lightcurve:
                     raise RuntimeError( "This should never happen, I don't think, but I'm not really sure." )
                 elif len(rows) == 0:
                     raise ValueError( f"Could not find object position for object {self.object.id} "
-                                      f"and object position provenacne {self.object_position_prov.id}" )
+                                      f"and object position provenance {self.object_position_prov.id}" )
                 else:
                     self.object_position = ObjectPosition( **(rows[0]) )
 
@@ -341,6 +357,8 @@ class Lightcurve:
             else:
                 self.ra = self.object.ra
                 self.dec = self.object.dec
+
+            return self.make_prov_tree( pgdb=pgdb, **kwargs )
 
 
     def _generate_provenances( self, provtree, pgdb=None ):
@@ -400,26 +418,26 @@ class Lightcurve:
             if set( subupsteps ) != set( provtree.upstream_steps['subtraction'] ):
                 raise ValueError( "Subtraction upstream steps mismatch." )
 
-        # Get the forced photometry provenance
+        # Get the dia forced photometry provenance
         ups = [ subprov ]
         upsteps = [ 'subtraction' ]
         if self.object_position_prov is not None:
             ups.append( provtree['positioning'] )
             upsteps.append( 'positioning' )
-        forcedprov = Provenance( code_version_id=Provenance.get_code_version('forcedphot', pgdb=pgdb).id,
-                                 process='forcedphot', parameters=self.pars.get_critical_pars(),
-                                 upstreams=ups )
-        if 'forcedphot' in provtree:
-            if forcedprov.id != provtree['forcedphot'].id:
-                raise ValueError( f"Found provenance for forced photometry {provtree['forcedphot'].id} does not "
-                                  f"match what this pipeline will create {forcedprov.id}" )
-            if set( upsteps ) != set( provtree.upstream_steps['forcedphot'] ):
-                raise ValueError( "Forced photometry upstream steps mismatch." )
+        diaforcedprov = Provenance( code_version_id=Provenance.get_code_version('diaforcedphot', pgdb=pgdb).id,
+                                    process='diaforcedphot', parameters=self.pars.get_critical_pars(),
+                                    upstreams=ups )
+        if 'diaforcedphot' in provtree:
+            if diaforcedprov.id != provtree['diaforcedphot'].id:
+                raise ValueError( f"Found provenance for dia forced photometry {provtree['diaforcedphot'].id} does not "
+                                  f"match what this pipeline will create {diaforcedprov.id}" )
+            if set( upsteps ) != set( provtree.upstream_steps['diaforcedphot'] ):
+                raise ValueError( "Dia forced photometry upstream steps mismatch." )
 
-        return forcedprov, subprov, trimprovs
+        return diaforcedprov, subprov, trimprovs
 
 
-    def make_prov_tree( self, just_read=False, save=True, save_tag=True, provtag=None, pgdb=None,
+    def make_prov_tree( self, just_read=False, save_prov=True, save_tag=True, provtag=None, pgdb=None,
                         ok_if_preexisting_prov_tag_without_forcedphot=False ):
         """Make a provenance tree for the Lightcurve.
 
@@ -434,30 +452,33 @@ class Lightcurve:
               the parameters attached to the Lightcurve object, and
               attached to the Subtractor object that the Lightcurve
               object makes.  Provenances will be generated for all of
-              forcedphot, subtraction, Image.trim, Image.trim.sources,
-              Image.trm.wcs, and Image.trim.zp.  If just_read is true,
-              all of that is thrown out, and instead the provenances are
-              read from the database using provtag.  WARNING: if you do
-              this, then don't generate new forced photometry, just read
-              what's there!
+              diaforcedphot, subtraction, Image.trim,
+              Image.trim.sources, Image.trm.wcs, and Image.trim.zp.  If
+              just_read is true, all of that is thrown out, and instead
+              the provenances are read from the database using provtag.
+              WARNING: if you do this, then don't generate new dia
+              forced photometry, just read what's there!
 
-           save : bool, default True
+           save_prov : bool, default True
               Save any generated provenances to the database?  Must be
               False if just_read is True.
 
            provtag : str, default None
               The provenance tag to use to find existing subtraction and
-              forcedphot provenances.  If save and save_tags are both
-              true, than any newly generated provenacnes will be tagged
-              with this provenacne tag.  If just_read is False, then if
+              diaforcedphot provenances.  If save_prov and save_tag are both
+              true, than any newly generated provenances will be tagged
+              with this provenance tag.  If just_read is False, then if
               preexisting provenances in the database with this tag are
               inconsistent with the ones generated using the object's
               configured parameters, an exception will be raised.
 
            save_tag : bool, default True
-              Ignored if save is False.  If True, then all provenances
+              Ignored if save_prov is False.  If True, then all provenances
               saved to the database are also tagged with the provenance
               tag given in provtag.
+
+           ok_if_preexisting_prov_tag_without_forcedphot: bool, default False
+              NOT IMPELMENTED
 
            pgdb : base.PGDB, default None
               A database connection.  If not given, one will be created
@@ -469,14 +490,14 @@ class Lightcurve:
 
         """
 
-        if just_read and save:
-            raise ValueError( "Can't use just_read and save together." )
+        if just_read and save_prov:
+            raise ValueError( "Can't use just_read and save_prov together." )
 
         if just_read and ( provtag is None ):
             raise ValueError( "just_read requires provtag" )
 
-        if save_tag and ( not save ):
-            SCLogger.warning( "save_tag is True but save is False, ignoring save_tag." )
+        if save_tag and ( not save_prov ):
+            SCLogger.warning( "save_tag is True but save_prov is False, ignoring save_tag." )
 
         # Build a full provenance tree for DataStore to chew on
         # DataStore.make_prov_tree is designed for use with top_level, and is
@@ -488,16 +509,16 @@ class Lightcurve:
         #   of what we must have to do anything, and what is allowed.
 
         must_have_procs = { 'starting_point', 'extraction', 'astrocal', 'photocal', 'referencing' }
-        all_procs = must_have_procs.union( { 'subtraction', 'forcedphot' } )
+        all_procs = must_have_procs.union( { 'subtraction', 'diaforcedphot' } )
         trim_procs = [ 'Image.trim', 'Image.trim.sources', 'Image.trim.wcs', 'Image.trim.zp']
 
         provtree = ProvenanceTree( noupstreams=['positioning', 'referencing', 'starting_point'],
                                    processmap={'preprocessing': 'starting_point',
                                                'test_image': 'starting_point'} )
         with PGDB( pgdb_in ) as pgdb:
-            # First, see if we can find the forced photometry tag
+            # First, see if we can find the dia forced photometry tag
             if provtag is not None:
-                found_prov = Provenance.get_for_tag( provtag, 'forcedphot', pgdb=pgdb )
+                found_prov = Provenance.get_for_tag( provtag, 'diaforcedphot', pgdb=pgdb )
             else:
                 found_prov = None
 
@@ -515,11 +536,11 @@ class Lightcurve:
                     must_have_procs = all_procs
                 else:
                     # Generate expected provenances for later validation
-                    forcedprov, subprov, trimprovs = self._generate_provenances( provtree )
+                    diaforcedprov, subprov, trimprovs = self._generate_provenances( provtree )
 
             else:
                 if just_read:
-                    raise RuntimeError( "just_read is true, but could not find forced photometry provenance for "
+                    raise RuntimeError( "just_read is true, but could not find dia forced photometry provenance for "
                                         "provenance tag {provtag}" )
 
                 # Based on config, we know what processes are legal
@@ -530,10 +551,9 @@ class Lightcurve:
                     ):
                     all_procs.add( 'positioning' )
 
-                # OK... didn't find an existing forcedphot provenance so try to read as much as we can
+                # OK... didn't find an existing diaforcedphot provenance so try to read as much as we can
                 # First, there's *gotta* be a reference provenances, or we won't be able to do anything
-                # (Use Provenance.get_by_id here rather than self.refset.provenance property, so that
-                # we can use pgdb.)
+                # (Use Provenance.get here rather than self.refset.provenance property, so that we can use pgdb.)
                 refprov = Provenance.get( self.refset.provenance_id, pgdb=pgdb )
                 if refprov is None:
                     raise RuntimeError( f"Failed to find provenance {self.refset.provenance_id} for "
@@ -581,7 +601,7 @@ class Lightcurve:
                     # Get the trim provenances if any
                     found_trimprovs = []
                     for proc in [ 'Image.trim', 'Image.trim.sources', 'Image.trim.wcs', 'Image.trim.zp' ]:
-                        found_trimprovs.append( Provenance.get_for_tag( provtag, proc, pgd=pgdb ) )
+                        found_trimprovs.append( Provenance.get_for_tag( provtag, proc, pgdb=pgdb ) )
                     if any( i is not None for i in found_trimprovs ):
                         if not all( i is not None for i in found_trimprovs ):
                             raise RuntimeError( f"Database corruption: found some, but not all, image trim provs "
@@ -592,11 +612,11 @@ class Lightcurve:
                     # Get the subtraction provenance if any
                     found_subprov = Provenance.get_for_tag( provtag, 'subtraction', pgdb=pgdb )
                     if found_subprov is not None:
-                        # Add the subtraction provenacne and its upstreams.  Most (all?) of the upstreams
+                        # Add the subtraction provenance and its upstreams.  Most (all?) of the upstreams
                         #   will have already been added above, but _append_provs (supposedly) handles that.
                         provtree.append_provenance( found_subprov, pgdb=pgdb )
 
-                # ...and we don't need to get the forced phot prov here because we wouldn't be
+                # ...and we don't need to get the dia forced phot prov here because we wouldn't be
                 #   inside this "else" if it could be found.
 
             # Make sure stuff we read out of the database has processes we expected
@@ -613,7 +633,7 @@ class Lightcurve:
                 # Make the provenances for the things this pipeline will create; if they were found in
                 #   the database, make sure they match.
 
-                forcedprov, subprov, trimprovs = self._generate_provenances( provtree, pgdb=pgdb )
+                diaforcedprov, subprov, trimprovs = self._generate_provenances( provtree, pgdb=pgdb )
 
                 # Add the generated provenances to the provenance tree.  Do this piece by piece,
                 #   so that self-consistency will be checeked.  (It does mean redundant database
@@ -623,8 +643,8 @@ class Lightcurve:
                         provtree.append_provenance( p, nodb=True )
                     must_have_procs = must_have_procs.union( trim_procs )
                 provtree.append_provenance( subprov, nodb=True )
-                provtree.append_provenance( forcedprov, nodb=True )
-                must_have_procs = must_have_procs.union( { 'subtraction', 'forcedphot' } )
+                provtree.append_provenance( diaforcedprov, nodb=True )
+                must_have_procs = must_have_procs.union( { 'subtraction', 'diaforcedphot' } )
 
                 # So... the provenance three thinks it's self consistent.  Let's check again
                 #    that the expected provenances are there, and they should ALL be there now.
@@ -637,17 +657,17 @@ class Lightcurve:
 
 
                 # Save them if necessary.  Do this in the right order so upstreams exist.
-                if save:
+                if save_prov:
                     provs = []
                     if self.pars.crop_image is not None:
                         provs.extend( provtree[p] for p in [ 'Image.trim', 'Image.trim.sources',
                                                              'Image.trim.wcs', 'Image.trim.zp' ] )
-                    provs.extend( [ provtree['subtraction'], provtree['forcedphot'] ] )
+                    provs.extend( [ provtree['subtraction'], provtree['diaforcedphot'] ] )
                     for prov in provs:
                         prov.insert_if_needed( pgdb=pgdb, nocommit=True )
                     pgdb.commit()
                     if provtag is not None:
-                        Provenance.addtag( provtag, provs, pgdb=pgdb )
+                        ProvenanceTag.addtag( provtag, provs, pgdb=pgdb )
 
         return provtree
 
@@ -671,6 +691,11 @@ class Lightcurve:
         # Trim if we have to
         if self.pars.crop_image is not None:
             xctr, yctr = ds.wcs.wcs.world_to_pixel_values( self.ra, self.dec )
+            # RAGE.  I hate that these get returned as np.array(<value>), i.e. a 0-dimension array,
+            #   rather than a scalar, because that confuses all kinds of code later.  So,
+            #   convert them to floats.
+            xctr = float( xctr )
+            yctr = float( yctr )
             ixctr = int( np.floor( xctr + 0.5 ) )
             iyctr = int( np.floor( yctr + 0.5 ) )
             x0 = ixctr - ( self.pars.crop_image[0] // 2 )
@@ -710,30 +735,30 @@ class Lightcurve:
         if self.pars.save_to_db:
             ds.save_and_commit( save_warped_ref=self.subtractor.pars.save_warped_ref, overwrite=False )
 
-        # See if we can load pre-existing forced photometry from the database
-        forcedphot = None
+        # See if we can load pre-existing dia forced photometry from the database
+        diaforcedphot = None
         with PGDB( dictcursor=True ) as pgdb:
             q = sql.SQL( textwrap.dedent(
                 """\
-                SELECT * FROM forced_photometry
+                SELECT * FROM dia_forced_photometry
                 WHERE object_id={obj}
                   AND provenance_id={prov}
                   AND subtraction_id={sub}
                   AND object_position_id{posclause}
                 """
             ) ).format( obj=self.object.id,
-                        prov=ds.prov_tree['forcedphot'].id,
+                        prov=ds.prov_tree['diaforcedphot'].id,
                         sub=sub_image.id,
                         posclause=( sql.SQL( "={posid}".format(posid=self.object_position.id) )
                                     if self.object_position is not None
                                     else sql.SQL( " IS NULL" ) ) )
             rows = pgdb.execute( q )
             if len(rows) > 1:
-                raise RuntimeError( "Database corruption, forced phot multiply defined." )
+                raise RuntimeError( "Database corruption, dia forced phot multiply defined." )
             elif len(rows) == 1:
-                forcedphot = ForcedPhot( **(rows[0]) )
+                diaforcedphot = DiaForcedPhot( **(rows[0]) )
 
-        if forcedphot is None:
+        if diaforcedphot is None:
             # Now actually do photometry
             # First, make things the way photutils wants them
             sub_mask = np.full_like( sub_image.flags, False, dtype=bool )
@@ -750,26 +775,30 @@ class Lightcurve:
                                                          psfobj=new_psf, apers=new_zp.aper_cor_radii )
             measurements = measurements[0]
 
-            forcedphot = ForcedPhot(
+            diaforcedphot = DiaForcedPhot(
                 object_id=self.object.id,
                 object_position_id=None if self.object_position is None else self.object_position_id,
-                provenance_id=ds.prov_tree['forcedphot'].id,
+                provenance_id=ds.prov_tree['diaforcedphot'].id,
                 subtraction_id=sub_image.id,
+                x=xctr,
+                y=yctr,
                 flux_psf=measurements.flux_psf,
                 flux_psf_err=measurements.flux_psf_err,
+                psfflags = measurements.psf_fit_flags,
                 flux_apertures=measurements.flux_apertures,
-                flux_apertures_err=measurements.flux_apertures_err
+                flux_apertures_err=measurements.flux_apertures_err,
+                aperflags=measurements.apertures_flags
             )
 
             if self.pars.save_to_db:
-                forcedphot.insert()
+                diaforcedphot.insert()
 
         # For convenience for tests, stick the aperture corrections in
-        # the forcedphot object.  The "right" way to do this is go
+        # the diaforcedphot object.  The "right" way to do this is go
         # from subtraction_id to zp_id and get it there.
-        forcedphot._aper_cors = ds.get_zp().aper_cors
+        diaforcedphot._aper_cors = ds.get_zp().aper_cors
 
-        return forcedphot
+        return diaforcedphot
 
     def write_csv_file( self, filepath ):
         raise NotImplementedError( "File writing not implemented." )
@@ -807,7 +836,7 @@ class Lightcurve:
         self.wcsen = wcsen
         self.zps = zps
         self.filters = filters
-        self.forced_phots = [ None ] * len(imgs)
+        self.dia_forced_phots = [ None ] * len(imgs)
 
     def find_refs( self, pgdb=None ):
         # Make an empty datastore to do use for finding references.  (Issue #550)
@@ -852,34 +881,33 @@ class Lightcurve:
         self.refs = refs
 
     def load( self, *args, **kwargs ):
-        self.setup( *args, **kwargs )
-        self.provtree = self.make_prov_tree( save=False )
+        self.provtree = self.setup( *args, save=False, **kwargs )
         self.find_images()
         self.find_refs()
 
-        self.forced_phots = []
+        self.dia_forced_phots = []
         with PGDB() as pgdb:
-            q = sql.SQL( "SELECT f.* FROM forced_photometry f "
+            q = sql.SQL( "SELECT f.* FROM dia_forced_photometry f "
                          "INNER JOIN images i ON i._id=f.subtracton_id "
                          "WHERE object_id={obj} "
                          "AND provenance_id={prov} "
                          "AND object_position_id{poscaluse}"
                          "ORDER BY i.mjd"
                         ).format( obj=self.object.id,
-                                  provid=self.provtree['forcedphot'].id,
+                                  provid=self.provtree['diaforcedphot'].id,
                                   posclause=( sql.SQL( "={posid}".format(posid=self.object_position.id) )
                                               if self.object_position is not None
                                               else sql.SQL( " IS NULL" ) ) )
             rows = pgdb.execute( q )
 
         for row in rows:
-            self.forced_phots.append( **row )
+            self.dia_forced_phots.append( **row )
 
-        SCLogger.info( "Loaded forced photometry for {len(self.forced_phots)} out of {len(self.mgs)}" )
+        SCLogger.info( "Loaded dia forced photometry for {len(self.dia_forced_phots)} out of {len(self.mgs)}" )
 
 
     def export_image_mess( self, namebase="phot_" ):
-        for phot in self.forced_phots:
+        for phot in self.dia_forced_phots:
             with PGDB() as pgdb:
                 subim = Image.get_by_id( phot.subtraction_id, pgdb=pgdb )
                 _q = sql.SQL( textwrap.dedent(
@@ -893,7 +921,7 @@ class Lightcurve:
 
 
     def run( self, *args, die_on_fail=False, **kwargs ):
-        """Do forced photometry based on the object configuration.
+        """Do dia forced photometry based on the object configuration.
 
         Parameters
         ----------
@@ -916,15 +944,14 @@ class Lightcurve:
 
         Returns
         -------
-          List of ForcedPhot
+          List of DiaForcedPhot
 
-          That list is also in self.forced_phots
+          That list is also in self.dia_forced_phots
 
         """
 
 
-        self.setup( *args, **kwargs )
-        self.provtree = self.make_prov_tree( save=True )
+        self.provtree = self.setup( *args, **kwargs )
 
         SCLogger.info( "Lightcurve finding images." )
         self.find_images()
@@ -937,11 +964,11 @@ class Lightcurve:
         SCLogger.info( f"Lightcurve finding refs for {len(self.filters)} filters." )
         self.find_refs()
 
-        SCLogger.info( f"Lightcurve doing forced photometry on "
+        SCLogger.info( f"Lightcurve doing dia forced photometry on "
                        f"{len([ i for i in self.imgs if i.filter in self.refs ])} images." )
         for i in range( len(self.imgs) ):
             try:
-                self.forced_phots[i] = self.process_one_image(i)
+                self.dia_forced_phots[i] = self.process_one_image(i)
             except Exception as ex:
                 if die_on_fail:
                     raise
@@ -949,7 +976,7 @@ class Lightcurve:
                     SCLogger.exception( f"Exception on image {self.imgs[i].filepath}: {ex}; moving on." )
 
         SCLogger.info( "Lightcurve complete" )
-        return self.forced_phots
+        return self.dia_forced_phots
 
 
 # ======================================================================
@@ -1005,7 +1032,7 @@ defined in the ParsLightcurve class definition.
                          help=( "Database name of object to build a lightcurve for.  Unless, perversely, "
                                 "you've set one in config, you need either this or --ojbect-id." ) )
     parser.add_argument( "-s", "--save-to-db", default=False, action="store_true",
-                         help="Save trimmed images, subtractions, and forced photometry to database?" )
+                         help="Save trimmed images, subtractions, and dia forced photometry to database?" )
     parser.add_argument( "-n", "--numprocs", type=int, default=1,
                          help="Run this many subprocesses in parallel.  1=run fully serially.  NOT IMLEMENTED." )
     parser.add_argument( "-v", "--verbose", default=False, action="store_true",
@@ -1045,9 +1072,9 @@ defined in the ParsLightcurve class definition.
     lightcurve = Lightcurve( **kwargs )
     lightcurve.run()
 
-    nfail = len( [ f for f in lightcurve.forced_phots if f is None ] )
+    nfail = len( [ f for f in lightcurve.dia_forced_phots if f is None ] )
     if nfail > 0:
-        SCLogger.warning( f"{nfail} out of {len(lightcurve.forced_phots)} (at least!) failed.  "
+        SCLogger.warning( f"{nfail} out of {len(lightcurve.dia_forced_phots)} (at least!) failed.  "
                           f"(The others returned values, but that doesn't mean they're good....)" )
 
     if outfile is not None:

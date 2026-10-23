@@ -2,6 +2,7 @@ import pytest
 import os
 import uuid
 import copy
+import textwrap
 import collections.abc
 
 import numpy as np
@@ -14,6 +15,7 @@ from astropy.coordinates import SkyCoord
 
 from models.base import PGDB
 from models.provenance import Provenance
+import models.object
 from models.exposure import Exposure
 from models.image import Image
 from models.source_list import SourceList
@@ -25,6 +27,7 @@ from models.instrument import Instrument
 
 from pipeline.data_store import DataStore
 from pipeline.top_level import Pipeline
+from pipeline.lightcurve import Lightcurve
 
 from improc.simulator import Simulator
 from improc.tools import make_gaussian
@@ -204,7 +207,6 @@ def generate_image_fixture(commit=True, filter=None, seed=None ):
         #  would get an error about unknown exposure id
         #  when trying to commit the image.
         exp = commit_exposure(exp)
-        exp.update_instrument()
 
         im = Image.from_exposure(exp, section_id=0)
         im.provenance_id = provenance_preprocessing.id
@@ -267,7 +269,6 @@ def sim_reference(provenance_preprocessing, provenance_extraction, provenance_ex
         exp.dec = dec
         exposures.append( exp )
 
-        exp.update_instrument()
         im = Image.from_exposure(exp, section_id=0)
         im.data = im.raw_data - np.median(im.raw_data)
         im.flags = rng.integers(0, 100, size=im.raw_data.shape, dtype=np.int16)
@@ -729,19 +730,19 @@ def sim_lightcurve_persistent_sources():
           'dec': -3.14735274,
           'mjdmaxoff': 29.5,
           'sigmadays': 5.,
-          'maxflux': 100000.
+          'maxflux': 10000.
          },
         { 'ra': 123.45663172,   # At x=128.8, y=229.3
           'dec': -3.12999611,
           'mjdmaxoff': 42.2,
           'sigmadays': 10.,
-          'maxflux': 20000.,
+          'maxflux': 2000.,
          },
         { 'ra': 123.45339241,
           'dec': -3.14136222,   # At x=157.2, y=129.5
           'mjdmaxoff': 49.7,
           'sigmadays': 18.,
-          'maxflux': 30000.,
+          'maxflux': 3000.,
           }
     ]
 
@@ -917,7 +918,8 @@ def sim_lightcurve_reference_module(  sim_lightcurve_reference_image_unsaved ):
 
 # This fixture is used in pipeline/test_lightcurve.py
 @pytest.fixture( scope='module' )
-def sim_lightcurve_forcedphot_references_module( sim_lightcurve_reference_module, sim_lightcurve_persistent_sources ):
+def sim_lightcurve_diaforcedphot_references_module( sim_lightcurve_reference_module,
+                                                    sim_lightcurve_persistent_sources ):
     _ref, ds = sim_lightcurve_reference_module
     refs = []
     imgs = []
@@ -943,7 +945,7 @@ def sim_lightcurve_forcedphot_references_module( sim_lightcurve_reference_module
             ref.insert( pgdb=pgdb )
             refs.append( ref )
 
-    refset = RefSet( name='sim_lightcurve_forcedphot_reference', provenance_id=refprov.id )
+    refset = RefSet( name='sim_lightcurve_diaforcedphot_reference', provenance_id=refprov.id )
     refset.insert()
 
     yield refs
@@ -1247,3 +1249,120 @@ def sim_lightcurve_one_complete_ds_module( sim_lightcurve_reference, sim_lightcu
     pip = Pipeline( **sim_lightcurve_pipeline_parameters )
     ds = pip.run( ds )
     return ref, refds, ds, pip
+
+
+@pytest.fixture( scope="module" )
+def sim_lightcurve_lightcurves( sim_lightcurve_persistent_sources,
+                                sim_lightcurve_news_module,
+                                sim_lightcurve_diaforcedphot_references_module,
+                                sim_lightcurve_image_parameters ):
+    """Three lightcurves from the images produced by sim_lightcurve_news_module.
+
+    Yields
+    ------
+      lightcurves, objinfos, ltcvprovid
+
+         lightcurves is a list of lists of DiaForcedPhot objects
+         objinfo is a list of dicts with keys 'ra', 'dec', 'mjds', 'fluxen'
+         obj is a list of Object objects
+         ltcvprovid is a str, the provenance_id for the DiaForcedPhot objects
+
+    """
+
+    srcs = sim_lightcurve_persistent_sources
+    imageinfo, _ = sim_lightcurve_image_parameters
+    newdsen = sim_lightcurve_news_module
+
+    objinfos = []
+    objs = []
+    for source in srcs:
+        objinfos.append( { 'ra': source['ra'],
+                           'dec': source['dec'],
+                           'mjds': imageinfo['mjdoffs'] + imageinfo['refmjd'],
+                           'fluxen': source['maxflux'] * np.exp( -( imageinfo['mjdoffs'] - source['mjdmaxoff'] ) **2
+                                                                 / ( 2 * source['sigmadays']**2 ) )
+                          } )
+
+    # Ideally, everything is cleaned up when upstreams in the parent fixtures
+    # are deleted.  However, I don't think we can count on them doing it
+    # in the right order.  So, try to clean up everything we make here.
+    nukes = { 'loose_files': [],
+              'diaforcedphot': [],
+              'subimids': [],
+              'objects': [] }
+    ltcvprovid = None
+    lightcurves = []
+    try:
+        for obji, objinfo in enumerate( objinfos ):
+            # Create an object
+            obj = models.object.Object( name=f'test_lightcurve_object_{obji}',
+                                        ra=objinfo['ra'], dec=objinfo['dec'] )
+            obj.insert()
+            nukes['objects'].append( obj )
+            objs.append( obj )
+
+            # Lightcurve builder
+            ltcv = Lightcurve( zp_prov = newdsen[0].zp.provenance_id,
+                               crop_image = [150, 150],
+                               mjd0 = imageinfo['refmjd'] + imageinfo['mjdoffs'][0] - 0.1,
+                               mjd1 = imageinfo['refmjd'] + imageinfo['mjdoffs'][-1] + 0.1,
+                               instrument='DemoInstrument',
+                               object_name=f'test_lightcurve_object_{obji}',
+                               subtraction_config={ 'refset': 'sim_lightcurve_diaforcedphot_reference',
+                                                    'save_warped_ref': True,
+                                                    'method': 'hotpants',
+                                                    'hotpants_ko': 0,
+                                                    'hotpants_bgo': 0,
+                                                    'hotpants_numregions': [1, 1],
+                                                    'alignment': { 'min_matched': 6,
+                                                                   'swarp_trust_raw_wcs': True,
+                                                                   'swarp_use_unwarped_psf': True },
+                                                    'reference': { 'min_overlap': None,
+                                                                   'max_dist': 0.003 }
+                                                   },
+                               save_to_db=True
+                              )
+            ltcv.run( provtag='sim_lightcurve', save_tag=True, save_prov=True )
+            lightcurves.append( ltcv.dia_forced_phots )
+            ltcvprovid = ltcvprovid if ltcvprovid is not None else ltcv.dia_forced_phots[-1].provenance_id
+            nukes['diaforcedphot'].extend( ltcv.dia_forced_phots )
+            nukes['subimids'].extend( p.subtraction_id for p in ltcv.dia_forced_phots )
+
+        yield lightcurves, objinfos, objs, ltcvprovid
+
+    finally:
+        # Delete test files if any
+        for f in nukes['loose_files']:
+            f.unlink( missing_ok=True )
+
+        # Delete dia forced phot first, because it's furthest downstream
+        for p in nukes['diaforcedphot']:
+            p.delete_from_disk_and_database()
+
+        # Should be safe to delete objects now:
+        for o in nukes['objects']:
+            o.delete_from_disk_and_database()
+
+        # For subtractions, trace back to the parent trimmed image so
+        # that we can delete that, trusting on its downstream deleting
+        # to get down to the subtraction.  (Again, these trimmed images
+        # are supposed to be deleted as downstreams of the fixture-made
+        # images, but the fixtures aren't currently deleting things in
+        # the right order to avoid all RESTRICT foreign keys.  Besides,
+        # it's nice to clean up after ourselves, yes?)
+        if len( nukes['subimids'] ) > 0:
+            with PGDB( dictcursor=True ) as pgdb:
+                q = sql.SQL( textwrap.dedent(
+                    """
+                    SELECT i.* FROM images i
+                    INNER JOIN source_lists s ON s.image_id=i._id
+                    INNER JOIN world_coordinates w ON w.sources_id=s._id
+                    INNER JOIN zero_points z ON z.wcs_id=w._id
+                    INNER JOIN image_subtraction_components isc ON isc.new_zp_id=z._id
+                    WHERE isc.image_id=ANY(ARRAY[{subids}])
+                    """
+                ) ).format( subids=sql.SQL(",").join( nukes['subimids'] ) )
+                rows = pgdb.execute( q )
+            for row in rows:
+                img = Image.create( **(row) )
+                img.delete_from_disk_and_database()

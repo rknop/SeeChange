@@ -1,12 +1,12 @@
-import os
 import pytest
-import re
-import psutil
 import gc
 import hashlib
+import os
 import pathlib
-import uuid
+import psutil
+import re
 import time
+import uuid
 import warnings
 
 from psycopg import sql
@@ -645,8 +645,6 @@ def test_image_preproc_bitflag( sim_image1, provenance_base ):
 
 
 def test_image_from_exposure( provenance_base, sim_exposure1 ):
-    sim_exposure1.update_instrument()
-
     # demo instrument only has one section
     with pytest.raises(ValueError, match='section_id must be 0 for this instrument.'):
         _ = Image.from_exposure(sim_exposure1, section_id=1)
@@ -717,7 +715,6 @@ def test_image_from_exposure( provenance_base, sim_exposure1 ):
 
 
 def test_image_from_exposure_filter_array(sim_exposure_filter_array):
-    sim_exposure_filter_array.update_instrument()
     im = Image.from_exposure(sim_exposure_filter_array, section_id=0)
     filt = sim_exposure_filter_array.filter_array[0]
     assert im.filter == filt
@@ -980,9 +977,6 @@ def test_image_subtraction(sim_exposure1, sim_exposure2, provenance_base, proven
     ref = None
     im = None
     try:
-        sim_exposure1.update_instrument()
-        sim_exposure2.update_instrument()
-
         # make sure exposures are in chronological order...
         if sim_exposure1.mjd > sim_exposure2.mjd:
             sim_exposure1, sim_exposure2 = sim_exposure2, sim_exposure1
@@ -1226,10 +1220,10 @@ def test_image_products_are_deleted(ptf_datastore, data_dir, archive):
     archive_files = []
     for obj in [ds.image, ds.psf, ds.sources, ds.wcs]:
         for file in obj.get_fullpath(as_list=True):
-            archive_file = file[len(obj.local_path)+1:]  # grap the end of the path only
-            archive_file = os.path.join(archive.test_folder_path, archive_file)  # prepend the archive path
-            assert os.path.isfile(file)
-            assert os.path.isfile(archive_file)
+            file = pathlib.Path( file )
+            archive_file = archive.test_folder_path / file.relative_to( obj.local_path )
+            assert file.is_file()
+            assert archive_file.is_file()
             local_files.append(file)
             archive_files.append(archive_file)
 
@@ -1238,10 +1232,10 @@ def test_image_products_are_deleted(ptf_datastore, data_dir, archive):
 
     # make sure the files are gone (including cascading down to things dependent on the image)
     for file in local_files:
-        assert not os.path.isfile(file)
+        assert not file.exists()
 
     for file in archive_files:
-        assert not os.path.isfile(file)
+        assert not file.exists()
 
 
 @pytest.mark.skip(reason="This test regularly fails, even when flaky is used. See Issue #263")

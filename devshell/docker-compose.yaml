@@ -1,6 +1,6 @@
 services:
   make-archive-directories:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/file-archive-server:${IMGTAG:-test20260831}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/file-archive-server:${IMGTAG:-test20261022}
     build:
       context: ../extern/file-archive-server
       args:
@@ -12,15 +12,15 @@ services:
         target: /storage
     entrypoint: >
       bash -c
-      "mkdir -p /storage/base &&
-      chown ${USERID:-0}:${GROUPID:-0} /storage/base &&
-      chmod a+rwx /storage/base"
+      "mkdir -p /storage/base/test &&
+      chown -R ${USERID:-0}:${GROUPID:-0} /storage/base &&
+      chmod -R a+rwx /storage/base"
 
   archive:
     depends_on:
       make-archive-directories:
         condition: service_completed_successfully
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/file-archive-server:${IMGTAG:-test20260831}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/file-archive-server:${IMGTAG:-test20261022}
     build:
       context: ../extern/file-archive-server
       args:
@@ -48,7 +48,7 @@ services:
     user: ${USERID:-0}:${GROUPID:-0}
 
   postgres:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/postgres:${IMGTAG:-test20260831}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/postgres:${IMGTAG:-test20261022}
     build:
       context: ../docker/postgres
     environment:
@@ -61,7 +61,7 @@ services:
       retries: 5
 
   setuptables:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/seechange:${IMGTAG:-test20260831}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/seechange:${IMGTAG:-test20261022}
     build:
       context: ../
       dockerfile: ./docker/application/Dockerfile
@@ -85,7 +85,7 @@ services:
         - "${MAILHOG_PORT:-8025}:8025"
 
   kafka-server:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/kafka:${IMGTAG:-test20260831}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/kafka:${IMGTAG:-test20261022}
     build:
       context: ../docker/test_kafka
     environment:
@@ -119,7 +119,7 @@ services:
         condition: service_completed_successfully
       make-archive-directories:
         condition: service_completed_successfully
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/seechange-webap:${IMGTAG:-test20260831}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/seechange-webap:${IMGTAG:-test20261022}
     build:
       context: ../
       dockerfile: ./docker/application/Dockerfile
@@ -139,6 +139,10 @@ services:
         source: archive-storage
         target: /archive-storage
       - type: volume
+        source: archive-storage
+        target: /archive-storage-ro
+        read_only: true
+      - type: volume
         source: webap-sessions
         target: /sessions
       - type: bind
@@ -148,7 +152,7 @@ services:
     # entrypoint: [ "tail", "-f", "/etc/issue" ]
 
   runtests:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/seechange:${IMGTAG:-test20260831}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/seechange:${IMGTAG:-test20261022}
     build:
       context: ../
       dockerfile: ./docker/application/Dockerfile
@@ -178,7 +182,7 @@ services:
     entrypoint: "pytest -v /seechange/$TEST_SUBFOLDER"
 
   runalltests:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/seechange:${IMGTAG:-test20260831}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/seechange:${IMGTAG:-test20261022}
     build:
       context: ../
       dockerfile: ./docker/application/Dockerfile
@@ -208,7 +212,7 @@ services:
     entrypoint: "pytest -v /seechange/tests"
 
   runruff:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/seechange:${IMGTAG:-test20260831}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/seechange:${IMGTAG:-test20261022}
     build:
       context: ../
       dockerfile: ./docker/application/Dockerfile
@@ -226,7 +230,7 @@ services:
 
 
   shell:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/seechange:${IMGTAG:-test20260831}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/seechange:${IMGTAG:-test20261022}
     build:
       context: ../
       dockerfile: ./docker/application/Dockerfile
@@ -262,7 +266,7 @@ services:
 
 
   justshell:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/seechange:${IMGTAG:-test20260831}
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-c3-time-domain}/seechange:${IMGTAG:-test20261022}
     build:
       context: ../
       dockerfile: ./docker/application/Dockerfile

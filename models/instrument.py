@@ -542,7 +542,7 @@ class Instrument:
         self.check_section_id(section_id, mustbegood=mustbegood)
 
         if self.sections is None:
-            raise RuntimeError("No sections loaded for this instrument. Use fetch_sections() first.")
+            self.fetch_sections()
 
         return self.sections.get( str(section_id) )
 

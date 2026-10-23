@@ -274,6 +274,9 @@ class PSF(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
 
     @classmethod
     def create( cls, **kwargs ):
+        if '_id' in kwargs and isinstance( kwargs['_id'], str ):
+            kwargs['_id'] = asUUID( kwargs['_id'] )
+
         if '_format' in kwargs:
             psfformat = kwargs['_format']
         elif 'format' in kwargs:

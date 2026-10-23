@@ -282,7 +282,7 @@ def decam_exposure_factory(download_url, data_dir, decam_cache_dir):
         exphdrinfo = decam.extract_header_info( hdr, [ 'mjd', 'exp_time', 'filter', 'project', 'target',
                                                        'ra','dec' ] )
 
-        exposure = Exposure( filepath=filename, instrument='DECam', **exphdrinfo )
+        exposure = Exposure( filepath=filename, instrument='DECam', format='fits', **exphdrinfo )
         exposure.save()  # save to archive and get an MD5 sum
         exposure.insert()
 
@@ -366,7 +366,7 @@ def decam_datastore(
         decam_exposure,
         'S2',
         cache_dir=decam_cache_dir,
-        cache_base_name='007/c4d_20211025_044847_S2_r_Sci_QFYCXG',
+        cache_base_name='007/c4d_20211025_044847_S2_r_Sci_SLALP4',
         overrides={ 'subtraction': { 'refset': 'test_refset_decam' } },
         save_original_image=True,
         provtag='decam_datastore'
@@ -423,7 +423,7 @@ def decam_partial_datastore_factory( datastore_factory, decam_cache_dir,
         mat = re.search( r'^c4d_(?P<yymmdd>\d{6})_(?P<hhmmss>\d{6})_ori\.fits\.fz$', str(exposure.filepath) )
         if mat is None:
             raise ValueError( f"Failed to match {exposure.filepath}" )
-        cache_base_name = f'007/c4d_20{mat.group("yymmdd")}_{mat.group("hhmmss")}_S2_r_Sci_QFYCXG'
+        cache_base_name = f'007/c4d_20{mat.group("yymmdd")}_{mat.group("hhmmss")}_S2_r_Sci_SLALP4'
 
         ds = datastore_factory(
             exposure,

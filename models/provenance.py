@@ -15,7 +15,7 @@ from sqlalchemy.schema import UniqueConstraint
 from util.util import NumpyAndUUIDJsonEncoder, asUUID, listify
 from util.logger import SCLogger
 
-from models.base import Base, UUIDMixin, SeeChangeBase, SmartSession, PGDB
+from models.base import Base, UUIDMixin, SeeChangeBase, PGDB
 
 
 
@@ -73,10 +73,10 @@ class CodeVersion(Base, UUIDMixin):
         'extraction': (0,9,0),
         'astrocal' : (0,6,0),
         'photocal' : (0,3,0),
-        'subtraction': (0,4,0),
+        'subtraction': (0,5,0),
         'detection': (0,4,0),
         'cutting': (0,2,0),
-        'measuring': (0,2,0),
+        'measuring': (0,4,0),
         'scoring': (0,2,0),
         'alerting': (0,1,0),
         'fakeinjection' : (0,2,0),
@@ -90,14 +90,14 @@ class CodeVersion(Base, UUIDMixin):
         'Image.trim.sources': (0,1,0),
         'Image.trim.wcs': (0,1,0),
         'Image.trim.zp': (0,1,0),
-        'forcedphot': (0,1,0),
+        'diaforcedphot': (0,2,0),
 
         # The next couple are processes whose direct data products
         #   are not saved to the database.  If their versions change,
         #   then probably the subtraction, and maybe the coadd,
         #   version should change too, as changes in these processes
         #   will affect both subtraction and coadd.
-        'alignment' : (0,4,0),
+        'alignment' : (0,5,0),
         'inpainting' : (0,2,0),
 
         # These are processes for downloading stuff
@@ -412,6 +412,11 @@ class Provenance(Base):
     def get( cls, provid, pgdb=None, session=None ):
         """Get a provenance given an id, or None if it doesn't exist.
 
+        If pvid is a Provenance, it is just returned.  (This may be used
+        as a convenience function to allow somebody to pass either a
+        Provenance or its id; just call this to make sure you have the
+        Provenance object.)
+
         Parameters
         ----------
            provid : str or Provenance
@@ -436,12 +441,14 @@ class Provenance(Base):
         if isinstance( provid, Provenance ):
             return provid
         
-        pgdb = pgdb if pgdb is not None else session
         with PGDB( pgdb, dictcursor=True ) as pgdb:
             rows = pgdb.execute( sql.SQL( "SELECT * FROM provenances WHERE _id={provid}" )
                                  .format( provid=provid ) )
             if len(rows) == 0:
-                return None
+                if must_exist:
+                    return RuntimeError( "Failed to find provenance with id {provid}" )
+                else:
+                    return None
             elif len(rows) > 1:
                 raise RuntimeError( "This should never happen." )
             else:
@@ -522,10 +529,11 @@ class Provenance(Base):
         # for hash get the static versions from codeversion rather than UUID which changes each run of tests
         cv_string = None
         if self.code_version_id is not None:
-            with SmartSession() as sess:
-                cv = sess.query( CodeVersion ).filter( CodeVersion._id == self.code_version_id ).first()
+            with PGDB() as pgdb:
+                rows, _cols = pgdb.execute( sql.SQL( "SELECT version_major, version_minor FROM code_versions "
+                                                     "WHERE _id={cvid}").format( cvid=self.code_version_id ) )
                 # Don't use patch because patch shouldn't change data thus require a provenance change
-                cv_string = f"{cv.version_major}.{cv.version_minor}"
+                cv_string = f"{rows[0][0]}.{rows[0][1]}"
 
         superdict = dict(
             process=self.process,

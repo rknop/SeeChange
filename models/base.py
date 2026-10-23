@@ -72,7 +72,8 @@ from util.util import asUUID, NumpyAndUUIDJsonEncoder, listify, retry_with_sleep
 
 
 # this is the root SeeChange folder
-CODE_ROOT = os.path.abspath(os.path.join(__file__, os.pardir, os.pardir))
+# os.path.abspath(os.path.join(__file__, os.pardir, os.pardir))
+CODE_ROOT = pathlib.Path( __file__ ).parent.parent.resolve()
 #
 # # printout the list of relevant environmental variables:
 # import io
@@ -740,13 +741,19 @@ class SeeChangeBase:
     type_annotation_map = { UUID: sqlUUID }
 
     @classmethod
-    def create( cls, **kwargs ):
+    def create( cls, create_uuidify=True, **kwargs ):
         """Create an object.  Usually use this instead of the object constructor directly.
 
         For most objects, it just calls the object constructor.  Some classes may subclass this
         so that they can create objects of different classes based on what's passed.
 
         """
+        if create_uuidify:
+            mess = sa.inspect( cls )
+            knowncols = { c.name: c for c in mess.columns }
+            for k in kwargs:
+                if ( k in knowncols ) and ( isinstance( knowncols[k].type, sqlUUID ) ):
+                    kwargs[k] = None if kwargs[k] is None else asUUID( kwargs[k] )
         return cls( **kwargs )
 
     def __init__(self, **kwargs):
@@ -1180,10 +1187,10 @@ class SeeChangeBase:
         """Get a list of tuples of (type, id) for all direct upstreams of this object (non-recursive)."""
         raise NotImplementedError( f'get_upstream_ids not implemented for this {self.__class__.__name__}' )
 
-    def get_upstreams(self, nofile=False, session=None):
+    def get_upstreams(self, nofile=False, pgdb=None, session=None):
         """Get all data products that were directly used to create this object (non-recursive)."""
         upstreams = []
-        with PGDB( session, dictcursor=True ) as pgdb:
+        with PGDB( pgdb if pgdb is not None else session, dictcursor=True ) as pgdb:
             upstream_info = self.get_upstream_ids( pgdb=pgdb )
             for cls, upid in upstream_info:
                 q = sql.SQL( "SELECT * FROM {tab} WHERE _id={objid}" ).format( tab=sql.Identifier(cls.__tablename__),
@@ -1198,10 +1205,10 @@ class SeeChangeBase:
         """Get a list of tuples of (type, id) for all direct downstreams of this object (non-recursive)."""
         raise NotImplementedError( f'get_downstream_ids not implemented for this {self.__class__.__name__}' )
 
-    def get_downstreams(self, session=None):
+    def get_downstreams(self, pgdb=None, session=None):
         """Get all data products that were created directly from this object (non-recursive)."""
         downstreams = []
-        with PGDB( session, dictcursor=True ) as pgdb:
+        with PGDB( pgdb if pgdb is not None else session, dictcursor=True ) as pgdb:
             downstream_info = self.get_downstream_ids( pgdb )
             for cls, dwnid in downstream_info:
                 q = sql.SQL( "SELECT * FROM {tab} WHERE _id={objid}" ).format( tab=sql.Identifier(cls.__tablename__),
@@ -1627,61 +1634,58 @@ class FileOnDiskMixin:
     @classmethod
     def configure_paths(cls):
         cfg = config.Config.get()
+
+        # This is where paths in the database are relative to on the local system
         cls.local_path = cfg.value('path.data_root', None)
 
         if cls.local_path is None:
             cls.local_path = cfg.value('path.data_temp', None)
         if cls.local_path is None:
-            cls.local_path = os.path.join(CODE_ROOT, 'data')
+            cls.local_path = CODE_ROOT / 'data'
 
-        if not os.path.isabs(cls.local_path):
-            cls.local_path = os.path.join(CODE_ROOT, cls.local_path)
-        if not os.path.isdir(cls.local_path):
-            os.makedirs(cls.local_path, exist_ok=True)
+        cls.local_path = pathlib.Path( cls.local_path ).resolve()
+        if cls.local_path.exists():
+            if not cls.local_path.is_dir():
+                raise RuntimeError( f"path.data_root {cls.local_path} exists but is not a directory!" )
+        else:
+            cls.local_path.mkdir( parents=True, exist_ok=True )
 
-        # use this to store temporary files (scratch files)
+        # Use this to store temporary files (scratch files)
         cls.temp_path = cfg.value('path.data_temp', None)
         if cls.temp_path is None:
-            cls.temp_path = os.path.join(CODE_ROOT, 'data')
+            cls.temp_path = CODE_ROOT / 'data'
+        else:
+            cls.temp_path = pathlib.Path( cls.temp_path ).resolve()
 
-        if not os.path.isabs(cls.temp_path):
-            cls.temp_path = os.path.join(CODE_ROOT, cls.temp_path)
-        if not os.path.isdir(cls.temp_path):
-            os.makedirs(cls.temp_path, exist_ok=True)
+        if cls.temp_path.exists():
+            if not cls.temp_path.is_dir():
+                raise RuntimeError( f"path.data_temp {cls.temp_path} exists but is not a directory!" )
+        else:
+            cls.temp_path.mkdir( parents=True, exist_ok=True )
+
 
     @classmethod
     def safe_mkdir(cls, path):
         if path is None or path == '':
             return  # ignore empty paths, we don't need to make them!
-        cfg = config.Config.get()
+        path = pathlib.Path( path )
 
-        allowed_dirs = []
+        allowed_dirs = set()
         if cls.local_path is not None:
-            allowed_dirs.append(cls.local_path)
-        temp_path = cfg.value('path.data_temp', None)
-        if temp_path is not None:
-            allowed_dirs.append(temp_path)
+            allowed_dirs.add(cls.local_path)
+        if cls.temp_path is not None:
+            allowed_dirs.add(cls.temp_path)
 
-        allowed_dirs = list(set(allowed_dirs))
+        if not any( path.is_relative_to(d) for d in allowed_dirs ):
+            nl = "\n    "
+            raise ValueError( f"Cannot make a new directory not beneath one of the following:\n"
+                              f"    {nl.join(allowed_dirs)}\n\nAttempted directory: {path}" )
 
-        ok = False
-
-        for d in allowed_dirs:
-            parent = os.path.realpath(os.path.abspath(d))
-            child = os.path.realpath(os.path.abspath(path))
-
-            if os.path.commonpath([parent]) == os.path.commonpath([parent, child]):
-                ok = True
-                break
-
-        if not ok:
-            err_str = "Cannot make a new folder not inside the following folders: "
-            err_str += "\n".join(allowed_dirs)
-            err_str += f"\n\nAttempted folder: {path}"
-            raise ValueError(err_str)
-
-        # if the path is ok, also make the subfolders
-        os.makedirs(path, exist_ok=True)
+        if path.exists():
+            if not path.is_dir():
+                raise RuntimeError( f"safe_mkdir: path {path} exists but is not a directory." )
+        else:
+            path.mkdir( parents=True, exist_ok=True )
 
     @declared_attr
     def filepath(cls):  # noqa: N805
@@ -1780,32 +1784,50 @@ class FileOnDiskMixin:
         return True
 
     def __setattr__(self, key, value):
-        if key == 'filepath' and isinstance(value, str):
-            value = self._validate_filepath(value)
+        if key == 'filepath' and isinstance(value, (str,pathlib.Path)):
+            # THOUGH REQUIRED : do we want to start making all paths Paths?
+            #   Almost certainly lots of code will need to be edited.
+            value = str( self._validate_filepath(value) )
 
         super().__setattr__(key, value)
 
-    def _validate_filepath(self, filepath):
+    def set_filepath( self, filepath, must_be_valid=True ):
+        filepath = str( self._validate_filepath( filepath, must_be_valid=must_be_valid ) )
+        super().__setattr__( 'filepath', filepath )
+
+    def _validate_filepath(self, filepath, must_be_valid=True):
         """Make sure the filepath is legitimate.
 
-        If the filepath starts with the local path
-        (i.e., an absolute path is given) then
-        the local path is removed from the filepath,
-        forcing it to be a relative path.
+        If the path is underneath self.local_path (which comes from
+        path.data_root in the config), then return the path relative to
+        that directory.  Otherwise, just return the path that was
+        passed.
 
         Parameters
         ----------
-        filepath: str
+        filepath: str or pathlib.Path
             The filepath to validate.
+
+        must_be_valid: bool, default False
+            If filepath is absolute and not relative to self.local_path,
+            raise an exception.
 
         Returns
         -------
-        filepath: str
-            The validated filepath.
-        """
-        if filepath.startswith(self.local_path):
-            filepath = filepath[len(self.local_path) + 1:]
+        filepath: pathlib.Path
+            The filepath relative to self.local_path
 
+            If must_be_valid is False, filepath is absolute, and
+            filepath is not underneath self.local_path, then just return
+            a pathlib.Path version of filepath.
+
+        """
+        filepath = pathlib.Path( filepath )
+        if filepath.is_absolute():
+            if filepath.is_relative_to( self.local_path ):
+                filepath = filepath.relative_to( self.local_path )
+            elif must_be_valid:
+                raise ValueError( f"Path {filepath} is not underneath path.data_root {self.local_path}" )
         return filepath
 
     def _file_suffix( self, comp=None ):
@@ -1981,17 +2003,20 @@ class FileOnDiskMixin:
             fname += f'.{comp}{self._file_suffix(comp)}'
 
         downloaded = False
-        fullname = os.path.join(self.local_path, fname)
-        if ( not nofile ) and ( not os.path.exists(fullname) ) and download and ( self.archive is not None ):
-            if md5sum is None:
-                raise RuntimeError(f"Don't have md5sum in the database for {fname}, can't download")
-            self.archive.download( fname, fullname, verifymd5=True, clobbermismatch=False, mkdir=True )
-            downloaded = True
+        fullname = self.local_path / fname
 
         if not nofile:
-            if not os.path.exists(fullname):
+            if ( not fullname.exists() ) and download and ( self.archive is not None ):
+                if md5sum is None:
+                    raise RuntimeError(f"Don't have md5sum in the database for {fname}, can't download")
+                self.archive.download( fname, fullname, verifymd5=True, clobbermismatch=False, mkdir=True )
+                downloaded = True
+
+            if not fullname.exists():
                 raise FileNotFoundError(f"File {fullname} not found!")
-            elif always_verify_md5 and not downloaded and md5sum is not None:
+            elif not fullname.is_file():
+                raise FileNotFoundError( f"File {fullname} exists but is not a file!" )
+            elif always_verify_md5 and ( not downloaded ) and ( md5sum is not None ):
                 # self.archive.download will have already verified the md5sum
                 filemd5 = hashlib.md5()
                 with open(fullname, "rb") as ifp:
@@ -2001,7 +2026,7 @@ class FileOnDiskMixin:
                     raise ValueError( f"{fname} has md5sum {localmd5} on disk, which doesn't match the "
                                       f"database value of {md5sum}" )
 
-        return fullname
+        return str( fullname )
 
 
     def save(self, data, component=None, overwrite=True, exists_ok=True, verify_md5=True, no_archive=False):
@@ -2309,16 +2334,14 @@ class FileOnDiskMixin:
         if self.filepath is not None:
             # get the filepath, but don't check if the file exists!
             for f in self.get_fullpath(as_list=True, nofile=True):
-                if os.path.exists(f):
-                    os.remove(f)
+                f = pathlib.Path( f )
+                if f.exists():
+                    f.unlink()
                     if remove_folders:
-                        folder = f
-                        for i in range(10):
-                            folder = os.path.dirname(folder)
-                            if len(os.listdir(folder)) == 0:
-                                os.rmdir(folder)
-                            else:
-                                break
+                        par = f.parent
+                        while not any( par.iterdir() ):
+                            par.rmdir()
+                            par = par.parent
 
 
 # load the default paths from the config
@@ -2400,6 +2423,9 @@ class UUIDMixin:
           object of type cls
 
         """
+
+        # We will raise an exception here if the parameter uuid isn't a valid representation of a uuid
+        uuid = asUUID( uuid )
 
         with PGDB( (pgdb if pgdb is not None else session), dictcursor=True ) as pgdb:
             q = sql.SQL( "SELECT * FROM {table} WHERE _id=%(id)s" ).format( table=sql.Identifier(cls.__tablename__) )

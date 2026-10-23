@@ -272,6 +272,7 @@ class DataStore:
     ]
 
     # these get cleared but not saved
+    # SORT OF.  Aligned stuff gets saved, but it's currently done ad-hoc
     products_to_clear = [
         'reference',
         'aligned_ref_image',
@@ -279,12 +280,6 @@ class DataStore:
         'aligned_ref_bg',
         'aligned_ref_psf',
         'aligned_ref_zp',
-        'aligned_new_image',
-        'aligned_new_sources'
-        'aligned_new_bg',
-        'aligned_new_psf',
-        'aligned_new_zp'
-        'aligned_wcs',
         '_sub_image',
         'reference',
         'exposure_id',
@@ -405,9 +400,7 @@ class DataStore:
             self._sources = None
             self._bg = None
             self._psf = None
-            self._wcs = None
-            self._zp = None
-            self.sub_image = None
+            self.wcs = None
         else:
             if self._image is None:
                 raise RuntimeError( "Can't set DataStore sources until it has an image." )
@@ -463,7 +456,7 @@ class DataStore:
     def wcs( self, val ):
         if val is None:
             self._wcs = None
-            self.sub_image = None
+            self.zp = None
         else:
             if self._sources is None:
                 raise RuntimeError( "Can't set DataStore wcs until it has a sources." )
@@ -480,6 +473,7 @@ class DataStore:
     def zp( self, val ):
         if val is None:
             self._zp = None
+            self.aligned_ref_image = None
             self.sub_image = None
         else:
             if self._sources is None:
@@ -536,6 +530,109 @@ class DataStore:
     @ref_zp.setter
     def ref_zp( self, val ):
         raise RuntimeError( "Don't directly set ref_zp, call get_reference" )
+
+    #####
+    # Aligned images are currently a special case, will be fixed in the massive
+    #   refactor in the "workflow" branch.
+    # Originally we didn't save these.  Now we do.  So, we have to make sure to
+    #   clear them if an upstream thing is cleared.  BUT, don't clear
+    #   sub_image when aligned_ref_* is cleared, even though that *should*
+    #   happen, because handling of aligned refs for saving is kind of ad hoc right now.
+
+    @property
+    def aligned_ref_image( self ):
+        return self._aligned_ref_image
+
+    @aligned_ref_image.setter
+    def aligned_ref_image( self, val ):
+        if val is None:
+            self._aligned_ref_image = None
+            self.aligned_ref_sources = None
+        else:
+            if not isinstance( val, Image ):
+                raise TypeError( f"DataStore.aligned_ref_image should be an Image, not a {type(val)}" )
+            self._aligned_ref_image = val
+            if ( self._aligned_ref_sources is not None ) and ( self._aligned_ref_sources.image_id != val.id ):
+                self.aligned_ref_sources = None
+
+    @property
+    def aligned_ref_sources( self ):
+        return self._aligned_ref_sources
+
+    @aligned_ref_sources.setter
+    def aligned_ref_sources( self, val ):
+        if val is None:
+            self._aligned_ref_sources = None
+            self._aligned_ref_bg = None
+            self._aligned_ref_psf = None
+            self.aligned_ref_wcs = None
+        else:
+            if self._aligned_ref_image is None:
+                raise RuntimeError( "Can't set DataStore aligned_ref_sources until it has an aligned_ref_image" )
+            if not isinstance( val, SourceList ):
+                raise TypeError( f"Datastore.aligned_ref_image should be a SourceList, not a {type(val)}" )
+            if ( ( ( self._aligned_ref_bg is not None ) and ( self._aligned_ref_bg.sources_id != val.id ) ) or
+                 ( ( self._aligned_ref_psf is not None ) and ( self._aligned_ref_psf.sources_id != val.id ) )
+                ):
+                raise ValueError( "Can't set a DataStore aligned_ref_sources inconsistent with other "
+                                  "existing attributes." )
+            self._aligned_ref_sources = val
+
+    @property
+    def aligned_ref_bg( self ):
+        return self._aligned_ref_bg
+
+    @aligned_ref_bg.setter
+    def aligned_ref_bg( self, val ):
+        if val is None:
+            self._aligned_ref_bg = None
+            self._aligned_ref_wcs = None
+        else:
+            if self._aligned_ref_sources is None:
+                raise RuntimeError( "Can't set a DataStore aligned_Ref_bg until it has an aligned_ref_sources" )
+            if not isinstance( val, Background ):
+                raise TypeError( f"Datastore.aligned_ref_bg must be a Background, not a {type(val)}" )
+            self._aligned_ref_bg = val
+            self._aligned_ref_bg.sources_id = self._aligned_ref_sources.id
+
+    @property
+    def aligned_ref_psf( self ):
+        return self._aligned_ref_psf
+
+    @aligned_ref_psf.setter
+    def aligned_ref_psf( self, val ):
+        if val is None:
+            self._aligned_ref_psf = None
+            self.aligned_ref_wcs = None
+        else:
+            if self._aligned_ref_sources is None:
+                raise RuntimeError( "Can't set a DataStore aligned_ref_psf until it has an aligned_ref_sources" )
+            if not isinstance( val, PSF ):
+                raise TypeError( f"Datastore.aligned_ref_psf must be a PSF, not a {type(val)}" )
+            self._aligned_ref_psf = val
+            self._aligned_ref_psf.sources_id = self._aligned_ref_sources.id
+
+
+    # aligned_ref_wcs and aligned_ref_zps are special cases because they are probably
+    #    just pointers to _wcs and _ref_zp, so don't do anything special here
+    @property
+    def aligned_ref_wcs( self ):
+        return self._aligned_ref_wcs
+
+    @aligned_ref_wcs.setter
+    def aligned_ref_wcs( self, val ):
+        self._aligned_ref_wcs = val
+
+    @property
+    def aligned_ref_zp( self ):
+        return self._aligned_ref_zp
+
+    @aligned_ref_zp.setter
+    def aligned_ref_zp( self, val ):
+        self._aligned_ref_zp = val
+
+    # End of aligned thingies
+    #####
 
     @property
     def sub_image( self ):
@@ -805,17 +902,11 @@ class DataStore:
 
         # these need to be added to the products_to_clear list
         self.reference = None
-        self.aligned_ref_image = None
-        self.aligned_ref_sources = None
-        self.aligned_ref_bg = None
-        self.aligned_ref_psf = None
-        self.aligned_ref_zp = None
-        self.aligned_new_image = None
-        self.aligned_new_sources = None
-        self.aligned_new_bg = None
-        self.aligned_new_psf = None
-        self.aligned_new_zp = None
-        self.aligned_wcs = None
+        self._aligned_ref_image = None
+        self._aligned_ref_sources = None
+        self._aligned_ref_bg = None
+        self._aligned_ref_psf = None
+        self._aligned_ref_zp = None
         self._sub_image = None  # subtracted image
         self._reference = None  # the Reference object needed to make subtractions
         self._exposure_id = None  # use this and section_id to find the raw image
@@ -2269,27 +2360,27 @@ class DataStore:
 
         return self.sub_image
 
-    def get_detections(self, provenance=None, reload=False, session=None):
+    def get_detections(self, provenance=None, reload=False, pgdb=None, session=None):
         """Get a SourceList for sources from the subtraction image, from memory or from database."""
         return self._get_data_product( "detections", SourceList, "sub_image", SourceList.image_id, "detection",
-                                       provenance=provenance, reload=reload, session=session )
+                                       provenance=provenance, reload=reload, pgdb=pgdb, session=session )
 
-    def get_cutouts(self, provenance=None, reload=False, session=None):
+    def get_cutouts(self, provenance=None, reload=False, pgdb=None, session=None):
         """Get a list of Cutouts, either from memory or from database."""
         return self._get_data_product( "cutouts", Cutouts, "detections", Cutouts.sources_id, "cutting",
-                                       provenance=provenance, reload=reload, session=session )
+                                       provenance=provenance, reload=reload, pgdb=pgdb, session=session )
 
-    def get_measurement_set( self, provenance=None, reload=False, session=None ):
+    def get_measurement_set( self, provenance=None, reload=False, pgdb=None, session=None ):
         """Get the MeasurementsSet, either form memory, or from database."""
         return self._get_data_product( "measurement_set", MeasurementSet, "cutouts", MeasurementSet.cutouts_id,
                                        "measuring", is_list=False, provenance=provenance, reload=reload,
-                                       session=session  )
+                                       pgdb=pgdb, session=session  )
 
-    def get_deepscore_set( self, provenance=None, reload=False, session=None ):
+    def get_deepscore_set( self, provenance=None, reload=False, pgdb=None, session=None ):
         """Get the DeepScore set, either from memory or from the database."""
         return self._get_data_product( "deepscore_set", DeepScoreSet, "measurement_set",
                                        DeepScoreSet.measurementset_id, "scoring", is_list=False,
-                                       provenance=provenance, reload=reload, session=session )
+                                       provenance=provenance, reload=reload, pgdb=pgdb, session=session )
 
     def get_deepscores(self, provenance=None, reload=False, session=None):
         """Get a list of DeepScores, either from memory or from database.
@@ -2299,11 +2390,12 @@ class DataStore:
         """
         return self.get_deepscore_set( self, provenance=provenance, reload=reload, session=session ).deepscores
 
-    def get_fakes( self, provenance=None, reload=False, session=None ):
+    def get_fakes( self, provenance=None, reload=False, pgdb=None, session=None ):
         """Get a FakeSet"""
 
         return self._get_data_product( "fakes", FakeSet, "zp", FakeSet.zp_id, "fakeinjection",
-                                       match_prov=True, provenance=provenance, reload=reload, session=session )
+                                       match_prov=True, provenance=provenance, reload=reload,
+                                       pgdb=pgdb, session=session )
 
 
     def get_fakeanal( self, orig_deepscore_set_id, reload=False, session=None ):
@@ -2411,7 +2503,7 @@ class DataStore:
                         exists_ok=False,
                         overwrite=True,
                         no_archive=False,
-                        save_warped_ref=False,
+                        save_warped_ref=True,
                         update_image_header=False,
                         update_image_record=True,
                         force_save_everything=False ):
@@ -2470,9 +2562,20 @@ class DataStore:
             If True, will not push files up to the archive, will only
             save on local disk.
 
-        save_warped_ref: bool, default False
+        save_warped_ref: bool, default True
             If True, save the aligned reference image, sources, wcs, and
-            zeropoint to the database.
+            zeropoint to the database; otherwise, don't.  Historically,
+            we didn't save these, on the principle that we already had
+            the cutouts, and could regenerate these deterministically if
+            we needed to.  However, later, for convenience of looking at
+            things for diagnostics, we started wishing we'd saved them.
+            If for some reason you want the old behavbior, you can set
+            this to False, but be aware that throughout the code (in
+            tests and in top-level pipeline codes) there are calls to
+            save_and_commit() that just use the default value of this
+            parameter.  (Making this a globally configurable thing, or
+            updating top-level pipelines to have a config parameter for
+            this, is probably a TODO....)
 
         update_image_header: bool, default False
             See above.  If this is true, then the if there is an Image
@@ -2545,12 +2648,14 @@ class DataStore:
         # Do NOT do this within the "with PGDB()" above, because this saving could take a while,
         #   and we don't want to hold the database connection open during all that time.
         for att in products_to_save:
-            if att in already_in_db:
-                SCLogger.debug( f"DataStore: {att} is already in the database, not trying to save it." )
-                continue
-
             obj = getattr(self, att, None)
             if obj is None:
+                continue
+
+            if ( ( att in already_in_db )
+                 and not ( isinstance( obj, Image ) and update_image_header )
+                ):
+                SCLogger.debug( f"DataStore: {att} is already in the database, not trying to save it." )
                 continue
 
             strio = io.StringIO()
@@ -2686,12 +2791,6 @@ class DataStore:
                 self.zp.insert( load_defaults=True, pgdb=pgdb, nocommit=True )
                 commits.append( 'zp' )
 
-            # subtraction Image
-            if ( self.sub_image is not None ) and ( 'sub_image' not in already_in_db ):
-                SCLogger.debug( "save_and_commit inserting sub_image" )
-                self.sub_image.insert( load_defaults=True, pgdb=pgdb, nocommit=True )
-                commits.append( 'sub_image' )
-
             # warped image
             if ( save_warped_ref and ( self.aligned_ref_image is not None ) and
                  ( 'aligned_ref_image' not in already_in_db )
@@ -2719,6 +2818,12 @@ class DataStore:
                 ):
                 SCLogger.debug( "save_and_commit inserting aligned_ref_bg" )
                 self.aligned_ref_bg.insert( load_defaults=True, pgdb=pgdb, nocommit=True )
+
+            # subtraction Image
+            if ( self.sub_image is not None ) and ( 'sub_image' not in already_in_db ):
+                SCLogger.debug( "save_and_commit inserting sub_image" )
+                self.sub_image.insert( load_defaults=True, pgdb=pgdb, nocommit=True )
+                commits.append( 'sub_image' )
 
             # detections
             if ( self.detections is not None ) and ( 'detections' not in already_in_db ):
@@ -2787,8 +2892,9 @@ class DataStore:
                 self.fakeanal.insert( load_defaults=True, pgdb=pgdb, nocommit=True )
                 commits.append( "fakeanal" )
 
-            self.products_committed = ",".join( commits )
             if len( commits ) > 0:
+                self.products_committed += "," if len(self.products_committed)>0 else ""
+                self.products_committed += ",".join( commits )
                 SCLogger.info( f"DataStore commtting {len(commits)} data products to databsae." )
                 pgdb.commit()
 
@@ -2878,12 +2984,9 @@ class DataStore:
                 self.exposure._header = None
 
         # TODO : free() for fakes and fakeanal
-        for prop in [ self._image, self.aligned_ref_image, self.aligned_new_image,
-                      self.reference, self._sub_image,
-                      self._bg, self.aligned_ref_bg, self.aligned_new_bg,
-                      self._sources, self.aligned_ref_sources, self.aligned_new_sources,
-                      self._psf, self.aligned_ref_psf, self.aligned_new_psf,
-                      self._wcs ]:
+        for prop in [ self._image, self._sources, self._bg, self._psf, self._wcs, self._sub_image,
+                      self._aligned_ref_image, self.aligned_ref_sources, self._aligned_ref_bg, self._aligned_ref_psf,
+                      self.reference ]:
             if prop is not None:
                 prop.free()
 
