@@ -567,7 +567,7 @@ class GetKnownExposures( ConductorBaseView ):
             try:
                 ra = float( args['ra'] )
                 dec = float( args['dec'] )
-                raidus = float( args['radius'] )
+                radius = float( args['radius'] )
             except Exception:
                 raise RuntimeError( f'ra, dec, and radius must all be floats, '
                                     f'got ("{args["ra"]}", "{args["dec"]}", "{args["radius"]}")' )
@@ -577,8 +577,8 @@ class GetKnownExposures( ConductorBaseView ):
                 raise RuntimeError( f"radius must be positive, got {radius:.4f}" )
             if radius > 20.:
                 raise RuntimeError( f"radius must be ≤ 20°, got {radius:.4f}" )
-            q += SQL.sql( "{_AND} q3c_radial_query(ke.ra,ke.dec,{ra},{dec},{radius})"
-                          .format( ra=ra, dec=dec, radius=radius ) )
+            q += sql.SQL( "{_and} q3c_radial_query(ke.ra,ke.dec,{ra},{dec},{radius})"
+                         ).format( ra=ra, dec=dec, radius=radius, _and=_and )
             _and = sql.SQL( "  AND" )
 
         if args['provtag'] is not None:
