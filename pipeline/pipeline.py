@@ -10,9 +10,10 @@ from models.provenance import Provenance, CodeVersion
 from util.config import NotDefined
 from util.logger import SCLogger
 
-from pipeline.data_store import ProvenanceTree
+from pipeline.data_store import ProvenanceTree, DataStore
 from pipeline.split_exposure import ExposureSplitter
 from pipeline.calibrator_builder import CalibratorBuilder
+from pipeline.processobject import ProcessObject
 from pipeline.preprocessing import Preprocessor
 from pipeline.detection import Detector
 from pipeline.astro_cal import AstroCalibrator
@@ -25,7 +26,7 @@ from pipeline.measuring import Measurer
 from pipeline.scoring import Scorer
 from pipeline.alerting import Alerting
 
-class Pipeline:
+class Pipeline( ProcessObject ):
     """An abstract pipeline class.
 
     Instantiate a Pipeline with:
@@ -43,18 +44,18 @@ class Pipeline:
     consistent with starting_prov; they trust that you've passed
     consistent things!  Stuff may break, or, worse, stuff may run but
     not do the right thing, if you mess this up.
-    
+
     The remaining arguments are dictionaries of configuration parameters
     for the processes that correspond to the keys of the provenance tree
     that get_prov_tree will produce.  Any or all may be omitted.  Each
     process worker object is configured with:
-    
+
       1. the defaults for that process
-      2. <process> at the top leve of the config
+      2. <process> at the top level of the config
       3. <pipeline_name>.<process> in the config
       4. The value of the <process> kwarg passed to the Pipeline
          constructor.
-    
+
     where a later thing in the list above overrides an earlier thing.
 
     """
@@ -78,15 +79,25 @@ class Pipeline:
         if not isinstance( tree, ProvenanceTree ):
             raise TypeError( f"prov_tree must be a ProvenanceTree, not a {tree.__class__.__name__}" )
         self._prov_tree = tree
-    
-    def __init__( self, starting_prov, *args, starting_point=NotDefined, **kwargs ):
-        if self.__class__.__name__ = "Pipeline":
+
+    def __init__( self, no_process_objects=NotDefined, **kwargs ):
+                  
+        if self.__class__.__name__ == "Pipeline":
             raise TypeError( "Can't instantiate a Pipeline, it's abstract.  Instantiate a Pipeline subclass." )
 
-        if starting_point != NotDefined:
-            kwargs['starting_point'] = starting_point
+        treepars = { 'starting_prov', 'starting_process', 'provtag', 'read_pars_from_prov', 'pars',
+                     'match_code_version', 'match_full_code_version',
+                     'handle_unexpected_processes', 'validate_upstream_steps', 
+                     'pgdb', '_tree_upstreams', 'process_classes', '_external_pipeline_processes'
+                    }
+        treekwargs = { k: v for k, v in kwargs.items() if k in treepars }
+        treekwargs['no_process_objects'] = ( read_pars_from_prov if no_process_objects == NotDefined
+                                             else no_process_objects )
+        parskwargs = { k: v for k, v in kwargs.items() if k not in treepars }
+
+        super(ProcessObject, self).__init__( pipeline=None, ignore_missing_config_values=True, **parskwargs )
             
-        self.prov_tree = self.get_prov_tree( starting_prov, *args, **kwargs )
+        self.prov_tree = self.get_prov_tree( **treekwargs )
         self.process_objects = {}
 
 
@@ -103,9 +114,9 @@ class Pipeline:
         last-step provenance, and build a tree including that provenance
         and all of its upstreams (honoring starting_prov and
         starting_process/provtag if given).
-        
+
         Will save any not-yet-saved provenances to the database.
-        
+
         See datastore.py::ProvenanceTree for what a ProvenanceTree is.
         But, basically, it's a dict of { process: Provenance }, where
         process is a string.  It also includes a dictionary
@@ -114,7 +125,7 @@ class Pipeline:
 
         Will also fill self.process_objects with instances of classes
         that perform pipeline steps, unless no_process_objects is True.
-        
+
         Parameters
         ----------
           starting_prov : Provenance or str
@@ -135,7 +146,7 @@ class Pipeline:
             read_pars_from_prov is True, this function will try to
             automatically figure out the starting point.  Hopefully it
             guesses right.
-        
+
           provtag : str, default None
             If not None, then associate these provenances with this provenance tag.
 
@@ -166,7 +177,7 @@ class Pipeline:
             and the dict are the **kwargs you'd pass to the cosntructor
             of the process class for that process.  If you want to use
             all the defaults for critical parameters from config, then
-            you don't need to pass this.  If read_provs_from_prov is
+            you don't need to pass this.  If read_pars_from_prov is
             True, then you shouldn't pass this.  Otherwise, you need to
             pass this so that the right Provenances can be constructed.
 
@@ -192,16 +203,17 @@ class Pipeline:
             every Pipeline subclass should define an internal variable
             that specifies it — this says what to do if processes are
             read for a provtag that aren't expected.  This can easily
-            happen if you associate a given provenance tag with additional
-            things beyond what is done by the pipeilne.  If this
-            is "ignore", the default, then those unexpected processes
-            are just ignored.  If this is "warning", then those unexpected
-            processes produce a warning, but are otherwise ignored.
-            If this is "error", then when that happens an exception is raised.
-        
+            happen if you associate a given provenance tag with
+            additional things beyond what is done by the pipeilne.  If
+            this is "ignore", the default, then those unexpected
+            processes are just ignored.  If this is "warning", then
+            those unexpected processes produce a warning, but are
+            otherwise ignored.  If this is "error", then when that
+            happens an exception is raised.
+
           validate_upstream_steps : bool, default True
             Ignored if read_pars_from_prov is False.  If everything's
-            working the way it's suppsoed to, then this shouldn't be
+            working the way it's supposed to, then this shouldn't be
             needed if match_code_version is True.  However, by default
             do it anyway to be safe.  Even if match_code_version is
             False, you might still want to do this.  If this is True,
@@ -226,7 +238,7 @@ class Pipeline:
         """
 
         _pgdb = pgdb
-        
+
         if self.__class__.__name__ == "Pipeline":
             # This may be redundant given the check in __init__
             raise TypeError( "Don't call get_prov_tree on a Pipeline object, Pipeline is an abstract class. "
@@ -237,7 +249,7 @@ class Pipeline:
              ( starting_prov.process != starting_process ) ):
             raise ValueError( f"Gave both starting_prov and starting_process, but starting_prov's process "
                               f"{starting_prov.process} doesn't match starting_process {starting_process}" )
-        
+
         default_upstream_steps = self._tree_upstreams if _tree_upstreams == NotDefined else _tree_upstreams
         process_classes = self._process_classes if _process_classes == NotDefined else _process_classes
         external_pipeline_processes = ( self._external_pipeline_processes if _external_pipeline_processes == NotDefined
@@ -279,7 +291,7 @@ class Pipeline:
 
                 # Sort so upstreams are before their downstreams
                 sortedprocs = ProvenanceTree.sort_processes( upstream_steps )
-                
+
                 # Crop out everything before the starting point if that is given and found
                 if starting_process is not None:
                     try:
@@ -321,7 +333,7 @@ class Pipeline:
                     if len(mismatches) > 0:
                         nl = "\n    "
                         raise ValueError( f"Unexpected provenance tree structure:{nl}{nl.join(mismatches)}" )
-                
+
                 # Validate code versions
                 for step in sortedsteps:
                     process = starting_process if step == 'starting_point' else step
@@ -330,7 +342,7 @@ class Pipeline:
                     errmsg = ( f"Current version for process {process} is "
                                f"{curcv.version_major}.{curcv.version_minor}.{curcv.version_patch}, "
                                f"which does not match what's found for provenance tag {provtag}: "
-                               f"{provcv.version_major}.{provcv.version_minor}.{provcv.version_patch" )
+                               f"{provcv.version_major}.{provcv.version_minor}.{provcv.version_patch}" )
                     if curcv.id == provcv.id:
                         # If curcv.id = provcv.id, then major and minor must match, but patch may not
                         if curcv.version_patch != provcv.version_patch:
@@ -360,8 +372,8 @@ class Pipeline:
 
         else:
             # If we're here, read_pars_from_prov was false, so we have to construct all the
-            #   provenances from parameters. 
-                
+            #   provenances from parameters.
+
             if starting_prov is None:
                 if ( starting_process is None ) or ( provtag is None ):
                     raise RuntimeError( "Must either give a starting_prov, or a starting_process and "
@@ -413,7 +425,7 @@ class Pipeline:
                                     "just an indication that more code needs to be written right here to move "
                                     "it around.  But maybe it is an error.  If you see this exception, then tell "
                                     "Rob about it, and he will have to think harder." )
-            
+
             # Make process objects and provenance tree
             known_steps = set( process_classes.keys() ).union( { 'starting_point' } )
             if not set( sortedprocs ).is_subset( known_steps ):
@@ -453,19 +465,42 @@ class Pipeline:
                             provs[step] = prov
                             self.process_objects[step] = procobj
 
-            # Associate and verify provenance tags
+            # Associate and verify the provenance tag
+            if provtag is not None:
+                Provenance.addtag( provtag, tags.values(), pgdb=pgdb )
 
-            ROB TODO YOU NEED TO DO THIS OMG
-                            
             # Done
             provs.upstream_steps = upstream_steps
             return provs
-                        
 
-    def make_process_objects( self, always_remake=False ):
-        """Create the process objects the pipeline will use."""
-        raise NotImplementedError( f"{self.__class__.__name__} needs to implement make_process_objects" )
+    def run( self, *args, save=NotDefined, save_after_each_step=NotDefined, save_after_steps=NotDefined, **kwargs ):
+        """The default run method is probably not good enough; subclasses should override."""
+
+        if save == NotDefined:
+            if hasattr( self.pars, "save" ) save = self.pars.save
+            else save = False
+        if save_after_each_step == NotDefined:
+            if hasattr( self.pars, "save_after_each_step" ) save_after_each_step = self.pars.save_after_each_step
+            else save_after_each_step = False
+        if save_after_steps == NotDefined:
+            if hasattr( self.pars, "save_after_steps" ) save_after_steps = self.pars.save_after_steps
+            else save_after_steps = []
         
+        ds = DataStore( *args, **kwargs )
+        just_saved = False
+        for step, procobj in self.process_objects.items():
+            just_saved = False
+            SCLogger.info( f"Running step {step}" )
+            ds = procobj( ds )
+            if save and ( save_after_each_step or ( step in save_after_steps ) ):
+                SCLogger.info( f"Saving data products after step {step}" )
+                ds.save_and_commit()
+                just_saved = True
+
+        if save and ( not just_saved ):
+            ds.save_and_commit()
+
+        return ds
 
 
 # ======================================================================
@@ -516,10 +551,12 @@ class DifferenceImagingTransientDiscoveryPipeline( Pipeline ):
                          'scoring': Scorer,
                          'alerting': Alerter
                         }
-        
-                        
-    def get_prov_tree( self, starting_prov, starting_point=Exposure ):
-    """See Pipeline::get_prov_Tree.
+
+
+    def make_prov_tree( self, starting_prov, starting_point=Exposure,
+                        save_raw_image=False, image_already_preprocessed=False,
+                        **kwargs ):
+        """See Pipeline::make_prov_tree.
 
         starting_point must be either Exposure or Image
 
@@ -532,12 +569,35 @@ class DifferenceImagingTransientDiscoveryPipeline( Pipeline ):
 
         """
 
-        if starting_point not in ( Exposure, Image ):
+        if starting_point not in ( Exposure, Image, 'Exposure', 'Image' ):
             raise TypeError( f"starting_point must be Exposure or Image, not {starting_point}" )
-        
+
         starting_prov = Provenance.get( starting_prov )
         if starting_prov is None:
             raise ValueError( f"Failed to find provenance {starting_prov}" )
 
+        if image_already_preprocessed and save_raw_image:
+            SCLogger.warning( f"save_raw_image ignored,image_already_preprocessed is set" )
+
         upstreams = copy.deepcopy( self._tree_upstreams )
-        
+        if starting_point in ( Image, 'Image' ):
+            del upstreams[ 'split_exposure' ]
+            if image_already_preprocessed:
+                del upstreams[ 'preprocessing' ]
+                # TODO THINK : is secure_calibrators only for preprocessing?
+                del upstreams[ 'secure_calibrators' ]
+                upstreams['extraction'] = [ 'starting_point' ]
+            else:
+                upstreams['preprocessing'] = [ 'starting_point', 'secure_calibrators' ]
+
+        else:
+            if image_already_preprocessed:
+                del upstreams['preprocessing']
+                # TODO THINK : is secure_calibrators only for preprocessing?
+                del upstreams[ 'secure_calibrators' ]
+                upstreams['extraction'] = [ 'split_exposure' ]
+            elif not save_raw_image:
+                del upstreams['split_exposure']
+                upstreams['preprocessing'] = [ 'starting_point', 'secure_calibrators' ]
+
+        return super().make_prov_tree( starting_prov, _tree_upstreams=upstreams, **kwargs )

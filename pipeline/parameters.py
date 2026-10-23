@@ -7,6 +7,7 @@ import pyarrow.parquet
 import healpy
 
 from util.logger import SCLogger
+from util.config import Config
 from util.radec import ra_cross_zero_avgra
 
 # parameters that are propagated from one Parameters object
@@ -36,6 +37,23 @@ class Parameters:
     - show_pars() shows the parameters and descriptions.
     - vprint() prints the text given if the verbose level exceeds a threshold.
 
+    Setting parameter values
+    ------------------------
+    The best way to set all the parameter values (in order to configure
+    whatever process is using these parameters) is to call the
+    merge_configs method of a Parameters object.  The first time you do
+    this, you probably want nothing in the before list passed to
+    merge_configs, as you want the defaults defined in the source to be
+    overridden by anything else you pass.  (There may be other use cases
+    for that function where you do want to use the before list.)
+
+    Thereafter, if you want to set a single parameter value, you can
+    just say pars.key = value, where pars is a Parmaeters object, key is
+    a defined parameter, and value is the value.  If
+    _enforce_no_new_attrs is True (see below), this will raise an
+    exception if you try to set a non-existing key, or if value is not
+    of an allowed type.
+    
     Adding new parameters
     ---------------------
     To add new parameters directly on the object,
@@ -94,6 +112,40 @@ class Parameters:
     parameters, and locking it back to True at the end.
     After locking the object, call self.override(**kwargs)
     to set parameters from the initialization call.
+
+    Embedding configs for different objects
+    ---------------------------------------
+    Sometimes you want to embed default configs for different objects in
+    the config for the current object.  For example,
+    pipeline/lightcurve.py has 'subtraction_config' which embeds a
+    config for pipeline/subtraction.py, as you might want to have
+    a different config for subtraction when used there as opposed
+    to used in the discovery pipeline.
+
+    Do this with care.
+
+    In general, you will want the embedded config to be *not* critical,
+    because you will make the provenance of the process of the embedded
+    config an upstream of the provenance of the current process... so
+    the emedded config will be reflected in the provenance id anyway.
+    (There are exceptions to this, if you think hard enough.)
+
+    When using merge_configs, do it right.  It's easy to do it wrong.
+    In the lightcurve.py example, you would probably want to merge the
+    configs with:
+
+      subpars = { 'subtraction_config': cfg.get( 'subtraction' ) }
+      lightcurve_pars.merge_configs( before=[ subpars ], after=[ 'lightcurve', paramdict ] )
+
+    where cfg is a config.Config object, and paramdict is something that
+    was passed at runtime with specific overrides.  That will make all
+    of the subtraction parameters in lightcurve_pars.subtraction_config
+    be what you'd get just using 'subtraction' from the config,
+    overridden by the defaults in defined for subtraction_config in the
+    ParsLightcurve class definition, then overriden by the
+    lightcurve.subtraction_config config, then finally overidden by
+    paramdict if relevant.
+
     """
 
     def __init__(self, **kwargs):
@@ -120,6 +172,7 @@ class Parameters:
         self.__docstrings__ = {}
         self.__critical__ = {}
         self.__aliases__ = {}
+        self.__omit_from_merge__ = {}
 
         self.verbose = self.add_par(
             "verbose", 0, int, "Level of verbosity (0=quiet).", critical=False
@@ -352,7 +405,7 @@ class Parameters:
     def __setitem__(self, key, value):
         setattr(self, key, value)
 
-    def add_par(self, name, default, par_types, docstring, critical=True):
+    def add_par(self, name, default, par_types, docstring, critical=True, omit_from_merge=False):
         """Add a parameter to the list of allowed parameters.
 
         To add a value in one line (in the __init__ method):
@@ -363,17 +416,24 @@ class Parameters:
         name: str
             Name of the parameter. Must match the name of the variable
             that the return value is assigned to, e.g., self.new_var.
+
         default: any
             The default value of the parameter. Must match the given par_types.
+
         par_types: type or tuple of types
             The type(s) of the parameter. Will be enforced using isinstance(),
             when _enforce_type_checks=True.
+
         docstring: str
             A description of the parameter. Will be used in the docstring of the class,
             and when using the print() method or _get_par_string() method.
-        critical: bool
+
+        critical: bool, default True
             If True, the parameter is included in the list of parameters
             that have an important effect on the download/analysis results.
+
+        omit_from_merge: bool, default False
+            TODO document.
 
         Returns
         -------
@@ -392,6 +452,7 @@ class Parameters:
         self.__docstrings__[name] = docstring
         self.__defaultpars__[name] = default
         self.__critical__[name] = critical
+        self.__omit_from_merge__[name] = omit_from_merge
         self.__aliases__[name] = name
 
         self[name] = default  # this should fail if wrong type?
@@ -417,6 +478,28 @@ class Parameters:
         self.__aliases__[alias] = name
 
     def _recursive_merge( self, left, right, toplevel=True ):
+        """Returns new object where eveything in left is overriden by corresponding things in right.
+
+        The merge works by:
+          * If left is a dict and right is not a dict, return a copy of right
+          * If left is not a dict and right is a dict, return a copy of right
+          * If left is a dict and right is a dict, then for every key in right,
+              if the key exists in left, call _recursive_merge; otherwise, just
+              set the key in left to the value from right.
+          * If left is not a dict, then just return a copy 
+
+        Deep copies are made while doing this; because of the recursion,
+        this may be redundant, but hopefully it's safe, and hopefully
+        config trees are never so big that the extra copies will ever be
+        a real issue.
+
+        If toplevel is True, assume that the keys of left and right are
+        both supposed to be parameters of this object, and resolve all
+        keys of each dictionary to go from aliases to the real parameter
+        name.
+
+        """
+        
         if toplevel:
             # First, fix the keys for the real keys.
             # This means more deepcopies than strictly necessary, but oh well.
@@ -447,7 +530,7 @@ class Parameters:
         else:
             return copy.deepcopy( right )
 
-    def merge_configs( self, before=[], after=[] ):
+    def merge_configs( self, before=[], after=[], ignore_missing_config_values=False, cfg=None ):
         """Does a particular kind of merge.
 
         It's designed for configs that have subconfigs where you might
@@ -456,14 +539,19 @@ class Parameters:
         order, then the current value of the parameters in this object
         are merged in, then everything in after is merged in order.
 
-        Each pairwise merge is a "left/right" merge.  left and right
-        must both be dictionaries (so before and after have to be lists
-        of dicts.)  If left[key] and right[key] are not both
-        dictionaries, then left[key] is replaced with right[key].  (So,
-        lists are fully replaced, not extended!)  Otherwise, right
-        updates left, sorta... because instead of a straight
-        left.update(right), it crawls down through both dictionaries so
-        that dictionaries of dictionaries will all have things updated.
+        Each element of before and after can be either a string or a
+        dictionary.  If a string, then the dictionary will be pulled
+        from cfg.value(element).  (cfg will be config.Config.get() if
+        not passed.)  An exception will be rasied if the final result
+        isn't a dictionary.
+        
+        Each pairwise merge is a "left/right" merge.  If left[key] and
+        right[key] are not both dictionaries, then left[key] is replaced
+        with right[key].  (So, lists are fully replaced, not extended!)
+        Otherwise, right updates left, sorta... because instead of a
+        straight left.update(right), it crawls down through both
+        dictionaries so that dictionaries of dictionaries will all have
+        things updated.
 
         Lots of deepcopies are done in the process, so, presuming we
         didn't screw it up, your dictionaries should all be untouched.
@@ -518,14 +606,35 @@ class Parameters:
         """
 
         if ( not isinstance(before, list) ) or ( not isinstance(after, list) ):
-            raise TypeError( "Must pass lists of dicts ot merge_config" )
+            raise TypeError( "Must pass lists to merge_config, where each element is a dict or a string." )
 
         everything = before.copy()
         everything.append( self.to_dict() )
         everything.extend( after )
 
+        for i in range(len(everything)):
+            if not isinstance( everything[i], ( dict, Parameters, None ) ):
+                if not isinstance( everything[i], str ):
+                    raise TypeError( f"Must pass either strings or dicts in each element of before and after." )
+                if cfg is None:
+                    cfg = config.Config.get()
+                try:
+                    d = cfg.value( everything[i] )
+                except:
+                    if not ignore_missing_config_values:
+                        raise
+                    everything[i] = None
+                else:
+                    if not isinstance( d, dict ):
+                        raise TypeError( f"Config for {everything[i]} is not a dict." )
+                everything[i] = cfg.value( everything[i] )
+
         result = {}
         for item in everything:
+            if item is None:
+                if not ignore_missing_config_values:
+                    raise RuntimeError( "One of the things to merge was None" )
+                continue
             if isinstance( item, Parameters ):
                 result = self._recursive_merge( result, item.to_dict() )
             else:
@@ -534,7 +643,6 @@ class Parameters:
         self.override( result )
 
     def override(self, dictionary, ignore_addons=False):
-
         """Read parameters from a dictionary.
 
         If any parameters were already defined,

@@ -81,12 +81,14 @@ class ProvenanceTree(dict):
           upstream_steps : dict
             A dictionary of process name : list of upstream process names
 
-          noupstreams : list of str, default ['positioning', 'referenceing', 'coaddition', 'starting_point']
-            Used in append_provenance (cf).
+          noupstreams : list of str, default ['positioning', 'referencing', 'coaddition', 'starting_point']
+            Used in append_provenance (cf).  These defaults are what
+            would be used in the standard difference-imaging discovery
+            pipeline (defined in pipeline/<PUT_FILENAME_HERE>.py).
 
           processmap: dict of str: str, default {'preprocessing': 'starting_point'}
-            Used in append_provenance (cf)
-
+            Used in append_provenance (cf).  Defaults are for the
+            standard difference-imaging discovery pipeline.
 
         """
         super().__init__( provs )
@@ -105,7 +107,7 @@ class ProvenanceTree(dict):
                 if cls._is_upstream( upstream_steps, test_up, process_up ):
                     return True
             return False
-        
+
     @classmethod
     def sort_processes( cls, upstream_steps ):
         """Get a list of processes, in order such that if a is upstream of b, a is earlier than b in the list.
@@ -127,7 +129,7 @@ class ProvenanceTree(dict):
         for proc in allprocs[1:]:
             did = False
             for dex in range( len(sortedprocs) ):
-                if _isupstream( proc, sortedprocs[dex] ):
+                if cls._isupstream( proc, sortedprocs[dex] ):
                     sortedprocs.insert( dex, proc )
                     did = True
                     break
@@ -136,7 +138,7 @@ class ProvenanceTree(dict):
 
         return sortedprocs
 
-        
+
     @property
     def sorted_processes( self ):
         """Get a list of processes, in order such that if a is upstream of b, a is earlier than b in the list."""
@@ -197,9 +199,9 @@ class ProvenanceTree(dict):
             expected_upstreams = set()
         else:
             if nodb and ( prov._upstreams is None ):
-                raise RuntimeError( "nodb but contacting database" )
+                raise RuntimeError( "nodb given, but we need to contact the database to get upstreams" )
             expected_upstreams = { processmap[p.process] if p.process in processmap else p.process
-                                   for p in prov.upstreams }
+                                   for p in prov.get_upstreams( pgdb=pgdb ) }
 
         if process in self.keys():
             if prov.id != self[process].id:
@@ -209,7 +211,7 @@ class ProvenanceTree(dict):
             if process not in noupstreams:
                 found_upstreams = ( set() if process in noupstreams
                                     else set( p.process if p.process not in processmap else processmap[p.process]
-                                              for p in prov.upstreams ) )
+                                              for p in prov.get_upstreams( pgdb=pgdb ) )
                 if found_upstreams != expected_upstreams:
                     raise RuntimeError( f"Process {process} came up with inconsistent upstream "
                                         f"steps when building the provenance tree!  "
@@ -220,7 +222,7 @@ class ProvenanceTree(dict):
             self.upstream_steps[useproc] = expected_upstreams
 
         if process not in noupstreams:
-            for upprov in prov.upstreams:
+            for upprov in prov.get_upstreams( pgdb=pgdb ):
                 self.append_provenance( upprov, noupstreams=noupstreams, processmap=processmap, pgdb=pgdb )
 
 

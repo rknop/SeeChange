@@ -279,6 +279,10 @@ class Provenance(Base):
             self.get_upstreams( save_to_object=True )
         return self._upstreams
 
+    # Because Provenances are write-once, and aren't too *terribly* big, and may get read
+    #   repeatedly, cache the ones that were read.
+    _provenance_cache = {}
+
 
     def __init__(self, dont_update_id=False, _id=None, pgdb=None, **kwargs):
         """Create a provenance object.
@@ -409,7 +413,7 @@ class Provenance(Base):
 
 
     @classmethod
-    def get( cls, provid, pgdb=None, session=None ):
+    def get( cls, provid, must_exist=False, pgdb=None, session=None ):
         """Get a provenance given an id, or None if it doesn't exist.
 
         If pvid is a Provenance, it is just returned.  (This may be used
@@ -437,11 +441,18 @@ class Provenance(Base):
            If the provenance was not found in the database, returns None.
 
         """
+        if provid is None:
+            if must_exist:
+                raise ValueError( "Dude.  You passed None as provid, and then set must_exist.  What did you expect?" )
+            return None
 
         if isinstance( provid, Provenance ):
             return provid
-        
-        with PGDB( pgdb, dictcursor=True ) as pgdb:
+
+        if provid in Provenance._provenance_cache:
+            return Provenance._provenance_cache[ provid ]
+
+        with PGDB( pgdb if pgdb is not None else session, dictcursor=True ) as pgdb:
             rows = pgdb.execute( sql.SQL( "SELECT * FROM provenances WHERE _id={provid}" )
                                  .format( provid=provid ) )
             if len(rows) == 0:
@@ -452,17 +463,28 @@ class Provenance(Base):
             elif len(rows) > 1:
                 raise RuntimeError( "This should never happen." )
             else:
-                return Provenance( dont_update_id=True, **(rows[0]) )
+                prov = Provenance( dont_update_id=True, **(rows[0]) )
+                Provenance._provenance_cache[ prov.id ] = prov
+                return prov
 
 
     @classmethod
     def get_batch( cls, provids, session=None ):
-        """Get a list of provenances given a list of ids."""
+        """Get a list of provenances given a list of ids.
+
+        They will not necessarily be returned in the same order as they were passed,
+        and the lenght of the returned list may be shorter (if some of the requested
+        ids don't exist).
+
+        """
         with PGDB( session, dictcursor=True ) as pgdb:
             provids = listify( provids, require_string=True )
+            rval = [ Provenance._provenance_cache[pid] for pid in provids if pid in Provenance._provenance_cache ]
+            missing = [ pid for pid in provids if pid not in Provenance._provenance_cache ]
             rows = pgdb.execute( sql.SQL( "SELECT * FROM provenances WHERE _id=ANY(ARRAY[{provids}])" )
-                                 .format( provids=sql.SQL(",").join(provids) ) )
-            return [ Provenance(dont_update_id=True, **r) for r in rows ]
+                                 .format( provids=sql.SQL(",").join(missing) ) )
+            rval.extend( [ Provenance(dont_update_id=True, **r) for r in rows ] )
+            return rval
 
 
     @classmethod
@@ -514,14 +536,20 @@ class Provenance(Base):
             elif len(rows) == 0:
                 return None
             else:
-                return Provenance( dont_update_id=True, **rows[0] )
+                pid = rows[0]['id']
+                if pid not in Provenance._provenance_cache:
+                    Provenance._provenance_cache[ pid ] = Provenance( dont_update_id=True, **rows[0] )
+                return Provenance._provenance_cache[ pid ]
 
         else:
-            return { r['process']: Provenance( dont_update_id=True, **r ) for r in rows }
+            provs = { r['process']: Provenance( dont_update_id=True, **r ) for r in rows }
+            for prov in provs.values():
+                if prov.id not in Provenance._provenance_cache:
+                    Provenance._provenance_cache[ prov.id ] = prov
+            return provs
 
 
     def update_id(self):
-
         """Update the id using the code_version, process, parameters and upstream_hashes."""
         if self.process is None or self.parameters is None or self.code_version_id is None:
             raise ValueError('Provenance must have process, code_version_id, and parameters defined. ')
@@ -699,7 +727,8 @@ class Provenance(Base):
 
                 SCLogger.debug( f"Adding provenance {self.id} to database" )
                 SeeChangeBase.insert( self, pgdb, nocommit=True )
-                upstreams = self._upstreams if self._upstreams is not None else self.get_upstreams( pgdb=pgdb )
+                upstreams = ( self._upstreams if self._upstreams is not None else
+                              self.get_upstreams( pgdb=pgdb, save_to_object=True ) )
                 if len(upstreams) > 0:
                     SCLogger.debug( f"Inserting upstreams of {self.id}: {[p.id for p in upstreams]}" )
                     for upstream in upstreams:
@@ -727,9 +756,11 @@ class Provenance(Base):
 
         pgdb = pgdb if pgdb is not None else session
         self.insert( pgdb=pgdb, _exists_ok=True, nocommit=nocommit )
+        if self.id not in Provenance._provenance_cache:
+            Provenance._provenance_cache[ self.id ] = self
 
 
-    def get_upstreams( self, pgdb=None, save_to_object=False, always_reload=True ):
+    def get_upstreams( self, pgdb=None, save_to_object=True, always_reload=False ):
         """Get the upstream provenances of this provenance.
 
         Parameters
@@ -740,14 +771,12 @@ class Provenance(Base):
              base.PsycopgConnection or base.Session, but those are
              deprecated and should not be used in new code.)
 
-           save_to_object: bool, default False
+           save_to_object: bool, default True
              If True, then update self._upstreams with what is found.
-             (This defaults to False for backwards compatibility.)
 
-           always_reload: bool, default True
+           always_reload: bool, default False
              If False and self._upstreams is not None, then just return
-             that.  If True, always go to the database.  (This defalts
-             to True for backwards compatiblity.)
+             that.  If True, always go to the database.
 
         Returns
         -------
@@ -771,6 +800,9 @@ class Provenance(Base):
                 upstreams = [ Provenance(dont_update_id=True, **row) for row in rows ]
                 if save_to_object:
                     self._upstreams = upstreams
+                for upstream in upstreams:
+                    if upstream.id not in Provenance._provenance_cache:
+                        Provenance._provenance_cache[ upstream.id ] = upstream
                 return upstreams
 
     def get_downstreams( self, pgdb=None ):
@@ -784,28 +816,11 @@ class Provenance(Base):
                 """
             ) ).format( me=self.id )
             rows = pgdb.execute( q )
-            return [ Provenance(dont_update_id=True, **row) for row in rows ]
-
-
-    # def get_upstreams( self, session=None ):
-    #     with SmartSession( session ) as sess:
-    #         upstreams = ( sess.query( Provenance )
-    #                       .join( provenance_self_association_table,
-    #                              provenance_self_association_table.c.upstream_id==Provenance._id )
-    #                       .where( provenance_self_association_table.c.downstream_id==self.id )
-    #                       .order_by( Provenance._id )
-    #                      ).all()
-    #         return upstreams
-
-    # def get_downstreams( self, session=None ):
-    #     with SmartSession( session ) as sess:
-    #         downstreams = ( sess.query( Provenance )
-    #                         .join( provenance_self_association_table,
-    #                                provenance_self_association_table.c.downstream_id==Provenance._id )
-    #                         .where( provenance_self_association_table.c.upstream_id==self.id )
-    #                         .order_by( Provenance._id )
-    #                        ).all()
-    #     return downstreams
+            downstreams = [ Provenance(dont_update_id=True, **row) for row in rows ]
+            for downstream in downstreams:
+                if downstream.id not in Provenance._provenance_cache:
+                    Provenance._provenance_cache[ downstream.id ] = downstream
+            return downstreams
 
 
 class ProvenanceTagExistsError(Exception):
@@ -915,16 +930,10 @@ class ProvenanceTag(Base, UUIDMixin):
             missing = set()
             conflict = set()
             for row in rows:
-                if row['process'] == 'referencing':
-                    if 'referencing' not in known:
-                        known['referencing'] = [ row['_id'] ]
-                    else:
-                        known['referencing'].append( row['_id'] )
-                else:
-                    if row['process'] in known:
-                        raise RuntimeError( f"Database corruption error!  The process {row['process']} "
-                                            f"has more than one entry for provenance tag {tag}." )
-                    known[row['process']] = row['_id']
+                if row['process'] in known:
+                    raise RuntimeError( f"Database corruption error!  The process {row['process']} "
+                                        f"has more than one entry for provenance tag {tag}." )
+                known[row['process']] = row['_id']
 
             if len(known) == 0:
                 # If the provenance tag didn't exist at all, then create it even
@@ -932,27 +941,14 @@ class ProvenanceTag(Base, UUIDMixin):
                 add_missing_processes_to_provtag = True
 
             for prov in provs:
-                # Special case handling for 'referencing', because there we do allow
-                #   multiple provenances tagged with the same tag.
-                # ...OR DO WE?  I don't think we do any more?
-                if prov.process == 'referencing':
-                    if 'referencing' not in known:
-                        known['referencing'] = []
-                    if prov.id not in known['referencing']:
-                        if add_missing_processes_to_provtag:
-                            mustadd.add( prov )
-                            known['referencing'].append( prov.id )
-                        else:
-                            missing.add( prov )
-                else:
-                    if prov.process not in known:
-                        if add_missing_processes_to_provtag:
-                            mustadd.add( prov )
-                        else:
-                            missing.add( prov )
-                            known[prov.process] = prov.id
-                    elif known[prov.process] != prov.id:
-                        conflict.add( prov )
+                if prov.process not in known:
+                    if add_missing_processes_to_provtag:
+                        mustadd.add( prov )
+                    else:
+                        missing.add( prov )
+                        known[prov.process] = prov.id
+                elif known[prov.process] != prov.id:
+                    conflict.add( prov )
 
             return known, mustadd, missing, conflict
 

@@ -10,6 +10,7 @@ from util.logger import SCLogger
 class NoValue:
     pass
 
+
 NotDefined = NoValue()
 
 
