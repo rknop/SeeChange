@@ -244,12 +244,18 @@ class Pipeline( ProcessObject ):
             raise TypeError( "Don't call get_prov_tree on a Pipeline object, Pipeline is an abstract class. "
                              "Call it on an object of a subclass." )
 
-        starting_prov = None if starting_prov is None else Provenance.get( starting_prov )
-        if ( ( starting_process is not None ) and ( starting_prov is not None ) and
-             ( starting_prov.process != starting_process ) ):
-            raise ValueError( f"Gave both starting_prov and starting_process, but starting_prov's process "
-                              f"{starting_prov.process} doesn't match starting_process {starting_process}" )
-
+        if read_pars_from_prov and ( provtag is None ):
+            raise ValueError( "read_pars_from_prov requires a non-None provtag" )
+        
+        starting_prov = None if starting_prov is None else Provenance.get( starting_process, pgdb=_pgdb )
+        if starting_process is None:
+            if starting_prov is not None:
+                starting_process = starting_prov.process
+        else:
+            if ( starting_prov is not None ) and ( starting_prov.process != starting_process ):
+                raise ValueError( f"starting_prov process {starting_prov.process} doesn't match "
+                                  f"starting_process {starting_process}" )
+            
         default_upstream_steps = self._tree_upstreams if _tree_upstreams == NotDefined else _tree_upstreams
         process_classes = self._process_classes if _process_classes == NotDefined else _process_classes
         external_pipeline_processes = ( self._external_pipeline_processes if _external_pipeline_processes == NotDefined
@@ -257,8 +263,6 @@ class Pipeline( ProcessObject ):
 
         # See if we're just reading everything
         if read_pars_from_prov:
-            if provtag is None:
-                raise ValueError( "read_pars_from_prov requires a non-None provtag" )
             prov_tree = ProvenanceTree()
             self.process_objects = {}
             upstream_steps = {}

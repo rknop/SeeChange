@@ -62,10 +62,7 @@ class ProvenanceTree(dict):
 
     """
 
-    def __init__( self, provs={}, upstream_steps={},
-                  noupstreams=['positioning', 'referencing', 'coaddition', 'starting_point'],
-                  processmap={'preprocessing': 'starting_point'}
-                 ):
+    def __init__( self, provs={}, starting_process=None, upstream_steps={}, noupstreams=[], processmap={} ):
         """Create a ProvenanceTree.
 
         Once created, the provences can be accessed from the
@@ -78,23 +75,29 @@ class ProvenanceTree(dict):
           provs : dict
             A dictionary of processname : provenance
 
+          starting_process : str
+            The key in provs that represents the beginning provenance of the tree.
+        
           upstream_steps : dict
             A dictionary of process name : list of upstream process names
 
-          noupstreams : list of str, default ['positioning', 'referencing', 'coaddition', 'starting_point']
-            Used in append_provenance (cf).  These defaults are what
-            would be used in the standard difference-imaging discovery
-            pipeline (defined in pipeline/<PUT_FILENAME_HERE>.py).
+          noupstreams : list of str
+            Used in append_provenance (cf).
 
-          processmap: dict of str: str, default {'preprocessing': 'starting_point'}
-            Used in append_provenance (cf).  Defaults are for the
-            standard difference-imaging discovery pipeline.
+          processmap: dict of str: str
+            Used in append_provenance (cf).
 
         """
         super().__init__( provs )
         self.upstream_steps = upstream_steps
         self._noupstreams = noupstreams
         self._processmap = processmap
+        self.starting_process = starting_process
+        if ( ( starting_process is not None ) and ( starting_process in upstream_steps ) and
+             ( len( upstream_steps[starting_process ) != 0 ) )
+            ):
+            raise ValueError( f"starting process is {starting_process}, but it has upstream steps." )
+
 
     @classmethod
     def _is_upstream( cls, upstream_steps, process_down, process_up ):
@@ -109,7 +112,7 @@ class ProvenanceTree(dict):
             return False
 
     @classmethod
-    def sort_processes( cls, upstream_steps ):
+    def sort_processes( cls, upstream_steps, first=None ):
         """Get a list of processes, in order such that if a is upstream of b, a is earlier than b in the list.
 
         Processes will always be as late in the list as possible,
@@ -124,17 +127,23 @@ class ProvenanceTree(dict):
 
         """
 
+        if ( first is not None ) and ( len( upstream_steps[first] ) > 0 ):
+            raise ValueError( f"first process {first} has upstream steps." )
+        
         allprocs = list( upstream_steps.keys() )
         sortedprocs = [ allprocs[0] ]
         for proc in allprocs[1:]:
             did = False
-            for dex in range( len(sortedprocs) ):
-                if cls._isupstream( proc, sortedprocs[dex] ):
-                    sortedprocs.insert( dex, proc )
-                    did = True
-                    break
-            if not did:
-                sortedprocs.append( proc )
+            if ( first is not None ) and ( proc == first ):
+                sortedprocs.insert( 0, first )
+            else:
+                for dex in range( len(sortedprocs) ):
+                    if cls._isupstream( proc, sortedprocs[dex] ):
+                        sortedprocs.insert( dex, proc )
+                        did = True
+                        break
+                if not did:
+                    sortedprocs.append( proc )
 
         return sortedprocs
 
@@ -145,7 +154,7 @@ class ProvenanceTree(dict):
 
         # TODO: caching so we don't sort every time we access this property?
         # We'd have to also have a "dirty" flag to mark if the dict or the upstream_steps were changed.
-        return self.sort_processes( self.upstream_steps )
+        return self.sort_processes( self.upstream_steps, first=self.starting_process )
 
 
     @property
