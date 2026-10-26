@@ -74,7 +74,9 @@ except ImportError as exc:
 
 # -------------------------------------------------------------------- constants
 
-CODE_VERSION = "zp_gaia_ls4cam 0.1"
+# 0.2: FWHM = 2*sqrt(2 ln2)*sigma.  0.1 used 2*sqrt(ln2)*sigma, so its SEEING is
+#      low by sqrt(2) and its LMT_MG 0.376 mag too faint; ZPs are unaffected.
+CODE_VERSION = "zp_gaia_ls4cam 0.2"
 GAIA_EPOCH = astropy.time.Time("2016.0", format="jyear", scale="tdb")
 
 # SEP flag bits.  In SEP <= 1.2.x there's no public constant for this, so
@@ -472,8 +474,8 @@ class GaiaZP:
                 sub, objs["x"], objs["y"], radius, subpix=1, mask=sep_mask,
                 err=err_map,
             )
-        # Approx Gaussian FWHM from ellipse axes
-        fwhm = 2.0 * np.sqrt(np.log(2.0)) * np.sqrt(a * b)
+        # Gaussian FWHM from the second-moment axes (a = b = sigma for a Gaussian)
+        fwhm = 2.0 * np.sqrt(2.0 * np.log(2.0)) * np.sqrt(a * b)
 
         # Mask-based rejections.  Sources we drop:
         #   - APER_HASMASKED: any pixel in the 2.5*Kron aperture was masked

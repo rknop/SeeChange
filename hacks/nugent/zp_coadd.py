@@ -97,7 +97,7 @@ def main():
     kron = np.where(np.isfinite(kron) & (kron > 0), kron, 2.5)
     flux, fluxerr, sflag = sep.sum_ellipse(sub, objs["x"], objs["y"], a, b, theta,
                                            2.5 * kron, subpix=1, mask=mask, err=err)
-    fwhm = 2.0 * np.sqrt(np.log(2.0)) * np.sqrt(a * b)
+    fwhm = 2.0 * np.sqrt(2.0 * np.log(2.0)) * np.sqrt(a * b)   # Gaussian FWHM = 2*sqrt(2 ln2)*sigma
     ixp = np.clip(np.round(objs["x"]).astype(int), 0, nx - 1)
     iyp = np.clip(np.round(objs["y"]).astype(int), 0, ny - 1)
     good = (np.isfinite(flux) & np.isfinite(fluxerr) & (fluxerr > 0)
@@ -176,6 +176,7 @@ def main():
         H["LMT_MG"] = (lmt, "5-sigma limiting mag (approx)")
         H["ZP_CAT"] = ("GAIADR3+LS4CAM", "ZP calibration source")
         H["ZP_EPOCH"] = (args.epoch, "Gaia PM epoch (jyear)")
+        H["ZP_VER"] = ("zp_coadd 0.2", "FWHM=2sqrt(2ln2)sig; absent=old scale")
         hu.flush()
     # matched-star catalog
     cat_path = str(coadd).replace(".fits", ".zp.ecsv")
