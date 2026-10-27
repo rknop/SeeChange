@@ -137,7 +137,7 @@ class Reference(Base, UUIDMixin, HasBitFlagBadness):
     @property
     def zp( self ):
         if self._zp is None:
-            self._load_zp_data_products()
+            self._load_ref_data_products()
         return self._zp
 
 

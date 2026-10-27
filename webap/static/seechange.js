@@ -91,7 +91,15 @@ seechange.Context = class
 
             p = rkWebUtil.elemaker( "p", this.frontpagediv, { "text": "Use provenance tag: " } );
             this.provtag_wid = rkWebUtil.elemaker( "select", p, { 'id': 'provtag_wid' } );
-            this.connector.sendHttpRequest( "provtags", {}, (data) => { self.populate_provtag_wid(data) } );
+            button = rkWebUtil.button( p, "Refresh Tags", null, [ "marginleftem" ] );
+            this.loading_provtags = rkWebUtil.elemaker( "span", p, { "classes": [ "warning", "bold",
+                                                                                  "italic", "marginleftem" ] } );
+            let callback = (e) => {
+                self.loading_provtags.innerHTML = "Loading provtags...";
+                self.connector.sendHttpRequest( "provtags", {}, (data) => { self.populate_provtag_wid(data) } )
+            };
+            button.addEventListener( "click", callback );
+            callback( null );
 
             this.frontpagetabs = new rkWebUtil.Tabbed( this.frontpagediv );
             this.frontpagetabs.div.setAttribute( 'id', 'frontpagetabs' );
@@ -109,7 +117,7 @@ seechange.Context = class
             this.diaforcedphot = new seechange.DiaForcedPhotSearch( this );
             this.diaforcedphot.render();
             this.frontpagetabs.addTab( "diaforcedphot", "DIA Forced Photometry", this.diaforcedphot.div );
-            
+
             this.provenancetags = new seechange.ProvenanceTags( this );
             this.provenancetags.render();
             this.frontpagetabs.addTab( "provtags", "Provenance Tags", this.provenancetags.div );
@@ -136,8 +144,14 @@ seechange.Context = class
 
     populate_provtag_wid( data )
     {
+        this.loading_provtags.innerHTML = "";
+        let cursel = this.provtag_wid.value;
+        rkWebUtil.wipeDiv( this.provtag_wid );
         for ( let provtag of data.provenance_tags ) {
-            rkWebUtil.elemaker( "option", this.provtag_wid, { "text": provtag, "attributes": { "value": provtag } } );
+            let option = rkWebUtil.elemaker( "option", this.provtag_wid,
+                                             { "text": provtag, "attributes": { "value": provtag } } );
+            if ( provtag == cursel )
+                option.setAttribute( "selected", "1" );
         }
     };
 

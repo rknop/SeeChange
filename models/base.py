@@ -1791,6 +1791,10 @@ class FileOnDiskMixin:
 
         super().__setattr__(key, value)
 
+    def set_filepath( self, filepath, must_be_valid=True ):
+        filepath = str( self._validate_filepath( filepath, must_be_valid=must_be_valid ) )
+        super().__setattr__( 'filepath', filepath )
+
     def _validate_filepath(self, filepath, must_be_valid=True):
         """Make sure the filepath is legitimate.
 

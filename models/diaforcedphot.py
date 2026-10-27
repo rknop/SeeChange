@@ -384,7 +384,7 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
                 [ refid -- uuid, id of the warped ref image, only present if include_im_ids is True ]
                 [ refzpid -- uuid, id of the zp of the ref image, only present if include_im_ids is True ]
                 [ subid -- uuid, id of the subtraction image, only present if include_im_ids is True ]
-                [ diaforcedphotid -- uuid, id of the diaforcedphot table row, only present if yadda yadda ]
+                [ diaforcedphotid-- uuid, id of the diaforcedphot table row, only present if include_phot_ids is True ]
                 [ x -- position on subtraction image, only if include_pos is True ]
                 [ y -- position on subtraction image, only if include_pos is True ]
 
@@ -467,7 +467,7 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
                           10^((31.4-z.zp-z.aper_cors[array_upper(z.aper_cors, 1)])/2.5) AS flux_aper_n,
                         p.flux_apertures_err[array_upper(p.flux_apertures_err, 1)] *
                           10^((31.4-z.zp-z.aper_cors[array_upper(z.aper_cors, 1)])/2.5) AS flux_aper_n_err,
-                        p.aperflags[1] AS aperflags_0, p.aperflags[array_upper(p.aperflags, 1)] AS aperflags_n\
+                        p.aperflags[1] AS aperflags_0, p.aperflags[array_upper(p.aperflags, 1)] AS aperflags_n
                         """
                     ), "    " ) )
                     photmetacols += sql.SQL( ",\n") + sql.SQL( textwrap.indent( textwrap.dedent(
@@ -482,8 +482,9 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
                     ), "  " ) )
                     if include_raw:
                         photcols += sql.SQL( ",\n    p.flux_apertures AS flux_apertures_raw"
-                                             ",\n    p.flux_apertures_err AS flux_apertures_raw_err" )
-                        photmetacols += sql.SQL( ",\n  flux_apertures_raw, flux_apertures_raw_err" )
+                                             ",\n    p.flux_apertures_err AS flux_apertures_raw_err"
+                                             ",\n    p.aperflags AS aperflags_raw" )
+                        photmetacols += sql.SQL( ",\n  flux_apertures_raw, flux_apertures_raw_err, aperflags_raw" )
                 if include_im_ids:
                     # LEFT JOIN on the ref stuff because we weren't originally saving warped refs
                     idjoin = sql.SQL( textwrap.indent( textwrap.dedent(
@@ -563,7 +564,7 @@ class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
                     # This magic was suggested by Kostya
                     tonest = [ 'aper_cors', 'aper_pix' ]
                     if include_raw:
-                        tonest.extend( [ 'flux_apertures_raw', 'flux_apertures_raw_err' ] )
+                        tonest.extend( [ 'flux_apertures_raw', 'flux_apertures_raw_err', 'aperflags_raw' ] )
                     rval = rval.nest_lists( tonest, 'apphot' )
                 else:
                     rval = pandas.DataFrame( rows, columns=cols )

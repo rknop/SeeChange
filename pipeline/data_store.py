@@ -567,7 +567,7 @@ class DataStore:
     def aligned_ref_bg( self, val ):
         if val is None:
             self._aligned_ref_bg = None
-            self.aligned_ref_wcs = None
+            self._aligned_ref_wcs = None
         else:
             if self._aligned_ref_sources is None:
                 raise RuntimeError( "Can't set a DataStore aligned_Ref_bg until it has an aligned_ref_sources" )

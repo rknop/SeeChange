@@ -1,12 +1,12 @@
-import os
 import pytest
-import re
-import psutil
 import gc
 import hashlib
+import os
 import pathlib
-import uuid
+import psutil
+import re
 import time
+import uuid
 import warnings
 
 from psycopg import sql
@@ -1220,10 +1220,10 @@ def test_image_products_are_deleted(ptf_datastore, data_dir, archive):
     archive_files = []
     for obj in [ds.image, ds.psf, ds.sources, ds.wcs]:
         for file in obj.get_fullpath(as_list=True):
-            archive_file = file[len(obj.local_path)+1:]  # grap the end of the path only
-            archive_file = os.path.join(archive.test_folder_path, archive_file)  # prepend the archive path
-            assert os.path.isfile(file)
-            assert os.path.isfile(archive_file)
+            file = pathlib.Path( file )
+            archive_file = archive.test_folder_path / file.relative_to( obj.local_path )
+            assert file.is_file()
+            assert archive_file.is_file()
             local_files.append(file)
             archive_files.append(archive_file)
 
@@ -1232,10 +1232,10 @@ def test_image_products_are_deleted(ptf_datastore, data_dir, archive):
 
     # make sure the files are gone (including cascading down to things dependent on the image)
     for file in local_files:
-        assert not os.path.isfile(file)
+        assert not file.exists()
 
     for file in archive_files:
-        assert not os.path.isfile(file)
+        assert not file.exists()
 
 
 @pytest.mark.skip(reason="This test regularly fails, even when flaky is used. See Issue #263")
