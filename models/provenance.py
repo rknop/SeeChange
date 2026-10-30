@@ -4,6 +4,7 @@ import base64
 import hashlib
 import textwrap
 import uuid
+import collections
 
 from psycopg import sql
 import sqlalchemy as sa
@@ -488,7 +489,7 @@ class Provenance(Base):
 
 
     @classmethod
-    def get_for_tag( cls, tag, process=None, pgdb=None ):
+    def get_for_tag( cls, tag, process=None, all_upstreams=False, return_dict=True, pgdb=None ):
         """Return either the provenance for a tag and process, or all provenances for a tag.
 
         Parameters
@@ -501,6 +502,15 @@ class Provenance(Base):
              will get the provenances for all processes defined for the
              tag.
 
+          all_upstreams : bool, default False
+             Ignored if process is not None.  If process is None,
+             then in addition to getting all provenances tagged with
+             tag, also recusvely get all upstreams of those provenances,
+             even if the upstreams aren't tagged with tag.
+
+          return_dict : bool, default True
+             Ignored if process is not None.  Otherwise, see Returns below.
+        
           conn : PGDB, psycopg.Connection, psycopg.Cursor, or (shudder) sa Session, default None
              If given, use this connection to the database.  Otherwise,
              a new connection will be created and closed in this
@@ -508,13 +518,17 @@ class Provenance(Base):
 
         Returns
         -------
-          Provenance, None, or dict of Provenance
+          Provenance, None, dict, or list
 
           If process is not None, you will get back a single Provenance
           object, or None if there isn't one that matches the given tag
-          and process.  If process is none, you will get a dictionary of
-          process(string): Provenance (which will be empty if the
-          provenance tag is not defined).
+          and process.
+
+          If process is None, then if return_dict is true, you will get
+          a dictionary of process(string): Provenance (which will be
+          empty if the provenance tag is not defined, or if there are no
+          provenances associated with the tag).  If return_dict is
+          false, you just get back a list of Provenance objects.
 
         """
         with PGDB( pgdb, dictcursor=True ) as pgdb:
@@ -529,25 +543,50 @@ class Provenance(Base):
                 q += sql.SQL( "  AND p.process={process}" ).format( process=process )
             rows = pgdb.execute( q )
 
-        if process is not None:
-            if len(rows) > 1:
-                raise ValueError( f"Database corruption!  There are multiple provenances for "
-                                  f"tag {tag} and process {process}." )
-            elif len(rows) == 0:
-                return None
+            if process is not None:
+                if len(rows) > 1:
+                    raise ValueError( f"Database corruption!  There are multiple provenances for "
+                                      f"tag {tag} and process {process}." )
+                elif len(rows) == 0:
+                    return None
+                else:
+                    pid = rows[0]['id']
+                    if pid not in Provenance._provenance_cache:
+                        Provenance._provenance_cache[ pid ] = Provenance( dont_update_id=True, **rows[0] )
+                    return Provenance._provenance_cache[ pid ]
+
             else:
-                pid = rows[0]['id']
-                if pid not in Provenance._provenance_cache:
-                    Provenance._provenance_cache[ pid ] = Provenance( dont_update_id=True, **rows[0] )
-                return Provenance._provenance_cache[ pid ]
+                provs = [ Provenance( dont_update_id=True, **r ) for r in rows ]
+                provids = set( p.id for p in provs )
+                for prov in provs:
+                    if prov.id not in Provenance._provenance_cache:
+                        Provenance._provenance_cache[ prov.id ] = prov
 
-        else:
-            provs = { r['process']: Provenance( dont_update_id=True, **r ) for r in rows }
-            for prov in provs.values():
-                if prov.id not in Provenance._provenance_cache:
-                    Provenance._provenance_cache[ prov.id ] = prov
-            return provs
+                if return_dict:
+                    provdict = [ p.process: p for p in provs ]
 
+                # This doesn't detect circular upstreams
+                # Circular upstreams are bad.  Baaaaaaad.
+                # I suspect you wouldn't be able to save on in the first place.
+                #   because the id calculation would go nuts.
+                if all_upstreams:
+                    did = set()
+                    q = collections.deque( provs )
+                    while q:
+                        prov = q.popleft()
+                        if prov.id not in did:
+                            if prov.process in provs:
+                                if return_dict and ( provdict[prov.prodcess].id != prov.id )
+                                    raise RuntimeError( f"process {process} shows up in upstreams more than once" )
+                            else:
+                                provs.append( prov )
+                                provids.add( prov.id )
+                                if return_dict:
+                                    provdict[ prov.process ] = prov
+                            did.add( prov.id )
+                            q.append( prov.upstreams )
+
+                return provs if not return_dict else provdict
 
     def update_id(self):
         """Update the id using the code_version, process, parameters and upstream_hashes."""
@@ -797,13 +836,15 @@ class Provenance(Base):
                     """
                 ) ).format( me=self.id )
                 rows = pgdb.execute( q )
-                upstreams = [ Provenance(dont_update_id=True, **row) for row in rows ]
-                if save_to_object:
-                    self._upstreams = upstreams
-                for upstream in upstreams:
-                    if upstream.id not in Provenance._provenance_cache:
-                        Provenance._provenance_cache[ upstream.id ] = upstream
-                return upstreams
+
+            upstreams = []
+            for row in rows:
+                if row['id'] not in Provenance._provenance_cache:
+                    Provenance._provenance_cache[ row['id'] ] = Provenance( dont_update_id=True, **row )
+                usptreams.append( Provenance._provenance_cache[ row['id'] ] )
+            if save_to_object:
+                self._upstreams = upstreams
+            return upstreams
 
     def get_downstreams( self, pgdb=None ):
         with PGDB( pgdb, dictcursor=True ) as pgdb:
@@ -816,11 +857,13 @@ class Provenance(Base):
                 """
             ) ).format( me=self.id )
             rows = pgdb.execute( q )
-            downstreams = [ Provenance(dont_update_id=True, **row) for row in rows ]
-            for downstream in downstreams:
-                if downstream.id not in Provenance._provenance_cache:
-                    Provenance._provenance_cache[ downstream.id ] = downstream
-            return downstreams
+
+        downstreams = []
+        for row in rows:
+            if row['id'] not in Provenance._provenance_cache:
+                Provenance._provenance_cache[ row['id'] ] = Provenacne( dont_update_id=True, **row )
+            downstreams.append( Provenance._provenance_cache[ row['id'] ] )
+        return downstreams
 
 
 class ProvenanceTagExistsError(Exception):

@@ -1,5 +1,6 @@
 import copy
 import textwrap
+import collections
 
 from psycopg import sql
 
@@ -35,7 +36,7 @@ class Pipeline( ProcessObject ):
                                     <process>=<dict>, <process>=<dict>, ... )
 
     starting_prov is either the Provenance, or the id of a Provenance,
-    of the object that the pipline would start workign on.
+    of the object that the pipline would start working on.
     starting_point is the class of the starting object.  For instance,
     for DifferenceImagingTransientDiscoveryPipeline, starting_point must
     be either Exposure or Image, and defaults to Exposure.
@@ -60,10 +61,15 @@ class Pipeline( ProcessObject ):
 
     """
 
-    # Subclasses need to define all four of these
+    # Subclasses need to define all four of these.
+    # Do NOT define a _name that already exists!
+    # Before writing a new class, try calling Pipeline.get( name )
+    #   on your name to see if it returns anything.  If it
+    #   raises a ValueError with "Unknown pipeline", then you're safe.
     _name = "unknown_pipeline"
     _external_pipeline_processes = []
     _process_classes = {}
+    _process_products = {}
     _tree_upstreams = None
 
     @property
@@ -80,7 +86,23 @@ class Pipeline( ProcessObject ):
             raise TypeError( f"prov_tree must be a ProvenanceTree, not a {tree.__class__.__name__}" )
         self._prov_tree = tree
 
-    def __init__( self, no_process_objects=NotDefined, **kwargs ):
+
+    @classmethod
+    def get( cls, pipeline, *args, **kwargs ):
+        queue = collections.deque( cls.__subclasses__() )
+        subclasses = {}
+        while queue:
+            subclass = queue.popleft()
+            if subclass._name not in subclasses:
+                subclasses[ subclass._name ] = subclass
+                queue.extend( subclass.__subclasses__() )
+        if pipeline not in subclasses:
+            raise ValueError( f"Unknown pipeline {pipeline}" )
+        else:
+            return subclasses[ pipeline ]( *args, **kwargs)
+        
+
+    def __init__( self, no_process_objects=NotDefined, reports=False, **kwargs ):
                   
         if self.__class__.__name__ == "Pipeline":
             raise TypeError( "Can't instantiate a Pipeline, it's abstract.  Instantiate a Pipeline subclass." )
@@ -91,7 +113,8 @@ class Pipeline( ProcessObject ):
                      'pgdb', '_tree_upstreams', 'process_classes', '_external_pipeline_processes'
                     }
         treekwargs = { k: v for k, v in kwargs.items() if k in treepars }
-        treekwargs['no_process_objects'] = ( read_pars_from_prov if no_process_objects == NotDefined
+        treekwargs['no_process_objects'] = ( treekwargs['read_pars_from_prov']
+                                             if no_process_objects == NotDefined
                                              else no_process_objects )
         parskwargs = { k: v for k, v in kwargs.items() if k not in treepars }
 
@@ -99,9 +122,17 @@ class Pipeline( ProcessObject ):
             
         self.prov_tree = self.get_prov_tree( **treekwargs )
         self.process_objects = {}
+        self._reports = reports
+        
+
+    def make_prov_tree( self, starting_product=None, pars={}, provtag=None,
+                        read_pars_from_provs=False, match_code_verson=True, match_full_code_version=False,
+                        
 
 
-    def make_prov_tree( self, starting_prov=None, starting_process=None,
+
+
+starting_prov=None, starting_process=None,
                         provtag=None, read_pars_from_prov=False, no_process_objects=False, pars={},
                         match_code_version=True, match_full_code_version=False,
                         handle_unexpected_processes='ignore', validate_upstream_steps=True,
@@ -247,7 +278,7 @@ class Pipeline( ProcessObject ):
         if read_pars_from_prov and ( provtag is None ):
             raise ValueError( "read_pars_from_prov requires a non-None provtag" )
         
-        starting_prov = None if starting_prov is None else Provenance.get( starting_process, pgdb=_pgdb )
+        starting_prov = None if starting_prov is None else Provenance.get( starting_prov, pgdb=_pgdb )
         if starting_process is None:
             if starting_prov is not None:
                 starting_process = starting_prov.process
@@ -477,6 +508,7 @@ class Pipeline( ProcessObject ):
             provs.upstream_steps = upstream_steps
             return provs
 
+
     def run( self, *args, save=NotDefined, save_after_each_step=NotDefined, save_after_steps=NotDefined, **kwargs ):
         """The default run method is probably not good enough; subclasses should override."""
 
@@ -525,7 +557,7 @@ class DifferenceImagingTransientDiscoveryPipeline( Pipeline ):
     #   subtraction, and provenance of calibrators is defined by the
     #   calibset parameter of preprocessing.
     _external_pipeline_processes = { 'secure_calibrators', 'referencing' }
-    _tree_upstreams = { 'starting_point': [],
+    _process_upstreams = { 'starting_point': [],
                         'split_exposure': [ 'starting_point' ],
                         'secure_calibrators': [],
                         'preprocessing': [ 'split_exposure', 'secure_calibrators' ],
@@ -550,11 +582,67 @@ class DifferenceImagingTransientDiscoveryPipeline( Pipeline ):
                          'ref_maker': RefMaker,
                          'alignment': Aligner,
                          'subtraction': Subtractor,
+                         'detection': Detector,
                          'cutting': Cutter,
                          'measuring': Measurer,
                          'scoring': Scorer,
                          'alerting': Alerter
                         }
+
+    _process_products = { 'split_exposure': [ ( Image, 'raw_image' ) ],
+                          'secure_calibrators': [],
+                          'preprocessing': [ ( Image, 'image' ) ],
+                          'extraction': [ ( SourceList, 'sources' ),
+                                          ( Background, 'bg' ),
+                                          ( PSF, 'psf' ) ],
+                          'astrocal': [ ( WorldCoordinates, 'wcs' ) ],
+                          'photocal': [ ( ZeroPoint, 'zp' ) ],
+                          'referencing': [ ( Reference, 'ref' ) ],
+                          'alignment': [ ( ZeroPoint, 'warped_ref_zp' ),
+                                         ( WorldCoordinates, 'warped_ref_wcs' ),
+                                         ( SourceList, 'warped_ref_sources'),
+                                         ( Background, 'warped_ref_bg' ),
+                                         ( PSF, 'warped_ref_psf' ),
+                                         ( Image, 'warped_ref_image' )
+                                        ],
+                          'subtraction': [ ( Image, 'sub_image' ) ],
+                          'detection': [ ( 'SourceList', 'detections' ) ],
+                          'cutting': [ ( Cutouts, 'cutouts' ) ],
+                          'measuring' [ ( MeasurmentSet, 'measurement_set' ),
+                                        ( Measurements, 'measurements', True ),
+                                       ],
+                          'scoring': [ ( DeepScoreSet, 'deepscore_set' ),
+                                       ( Deepscores, 'deepscores', True ) ],
+                          'alerting': []
+                         }
+
+    _provless = { 'bg', 'psf', 'wapred_ref_bg', 'warped_ref_psf' }
+    _product_upstreams = { 'exposure': [],
+                           'raw_image': [ ( 'exposure', 'exposure_id' ) ],
+                           'image': [ ( 'raw_image', 'parent_image_id' ) ],
+                           'sources': [ ( 'image', 'image_id' ) ],
+                           'bg': [ ( 'sources', 'sources_id' ) ],
+                           'psf': [ ( 'sources', 'sources_id' ) ],
+                           'wcs': [ ( 'sources', 'sources_id' ) ],
+                           'zp': [ ( 'wcs', 'wcs_id' ) ],
+                           'ref': [],
+                           'warped_ref_image': [ ( 'ref.zp', 'unwarped_zp_id' ),
+                                                 ( 'wcs', 'target_wcs_id' ) ],
+                           'warped_ref_sources': [ ( 'warped_ref_image', 'image_id' ) ],
+                           'warped_ref_bg': [ ( 'warped_ref_sources', 'sources_id' ) ],
+                           'warped_ref_psf': [ ( 'warped_ref_sources', 'sources_id' ) ],
+                           'warped_ref_wcs': [ ( 'wapred_ref_sources', 'sources_id' ) ],
+                           'warped_ref_zp': [ ( 'warped_ref_wcs', 'wcs_id' ) ],
+                           'sub_image': [ ( 'ref', 'ref_id' ),
+                                          ( 'warped_ref_sources', 'warped_ref_sources_id' ),
+                                          ( 'zp', 'new_zp_id' ) ],
+                           'detections': [ ( 'sub_image', 'image_id' ) ],
+                           'cutouts': [ ( 'detections', 'sources_id' ) ],
+                           'measurementset': [ ( 'cutouts', 'cutouts_id' ) ],
+                           'measurements': [ ( 'measurementset', 'measurementset_id' ) ],
+                           'deepscoreset': [ ( 'measurementset', 'measurementset_id' ) ],
+                           'deepscores': [ ( 'deepscoreset', 'deepscoreset_id' ) ]
+                          }
 
 
     def make_prov_tree( self, starting_prov, starting_point=Exposure,

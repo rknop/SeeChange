@@ -162,6 +162,14 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         )
     )
 
+    parent_image_id = sa.Column(
+        sa.ForeignKey( 'images._id', ondelete='SET NULL', name='images_parent_image_id_fkey' ),
+        nullabel = True,
+        index = True,
+        doc = ( "ID of the image that this is derived from via preprocessing.  Do not use this "
+                "for trimming, warping, or subtraction; those have their own association tables." )
+    )
+    
     is_coadd = sa.Column(
         sa.Boolean,
         nullable=False,

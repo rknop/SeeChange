@@ -1,4 +1,6 @@
+import datetime
 import time
+import inspect
 import textwrap
 import re
 
@@ -8,88 +10,82 @@ from sqlalchemy import orm
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as sqlUUID
 
-from models.base import Base, SeeChangeBase, UUIDMixin
-from models.enums_and_bitflags import (
-    bitflag_to_string,
-    string_to_bitflag,
-    process_steps_dict,
-    process_steps_inverse,
-    pipeline_products_dict,
-    pipeline_products_inverse,
-)
+from models.base import Base, SeeChangeBase, UUIDMixin, PGDB
+from models.provenance import Provenance
 
 from util.logger import SCLogger
+from util.util import parse_dateobs, asUUID
 
 
 class Report(Base, UUIDMixin):
-    """A report on the status of analysis of one section from an Exposure.
-
-    The report's main role is to keep a database record of when we started
-    and finished processing this section of the Exposure. It also keeps
-    track of any errors or warnings that came up during processing.
-    """
+    """A report on the status of a pipeline."""
     __tablename__ = 'reports'
 
-    exposure_id = sa.Column(
-        sa.ForeignKey('exposures._id', ondelete='CASCADE', name='reports_exposure_id_fkey'),
-        nullable=True,
-        index=True,
-        doc=(
-            "ID of the exposure for which the report was made. "
-        )
-    )
-
-    section_id = sa.Column(
+    pipeline_name = sa.Column(
         sa.Text,
-        nullable=True,
-        index=True,
-        doc=(
-            "ID of the section of the exposure for which the report was made. "
-        )
+        nullable = False,
+        index = True,
+        doc = "Name of the pipeline (the _name property of the class)"
     )
 
-    # Not making this a formal foreign key, because in at least one case
-    #   in our tests the image is not yet committed to the database when
-    #   we try to save the report to the database.  (Originally, reports
-    #   assumed they came off of an exposure, and the pipeline assumes
-    #   exposure are committed before starting.  The pipeline is able to
-    #   run on an image that's not committed to the database, however.)
-    image_id = sa.Column(
-        # sa.ForeignKey( 'images._id', ondelete='CASCADE', name='reports_image_id_fkey' ),
+    starting_class = sa.Column(
+        sa.Text,
+        nullable = False,
+        index = True,
+        doc = "Class of the starting point of the pipeline."
+    )
+
+    starting_point = sa.Column(
         sqlUUID,
-        nullable=True,
-        index=True,
-        doc="ID of the image for which the report was made.  Report has (exposure_id,sectionid) XOR image_id."
+        nullable = False,
+        index = True
+        doc = "ID of the object that is the starting point for the pipeline."
+    )
+
+    final_prov_id = sa.Column(
+        sa.Text,
+        sa.ForeignKey( 'provenances._id', ondelete='CASCADE', name='reports_final_prov_id_fkey' ),
+        nullable = False,
+        index = True,
+        doc = "The final provenance expected for this run of this pipeline."
+    )
+
+    process_steps = sa.Column(
+        sa.ARRAY( sa.Text ),
+        nulalble = False,
+        index = False,
+        server_default = "[]::text[]"
+        doc = "Steps of the pipeline.",
+    )
+    
+    process_provid = sa.Column(
+        JSONB,
+        nullable = True,
+        index = False,
+        doc = ( "Dictionary of process→provenance_id for the provenances used in pipeline process.  "
+                "The keys of this dictionary should be the same as the elements of process_steps.  "
+                "Both are here because you can't count on JSONB dictionaries being ordered." )
     )
 
     start_time = sa.Column(
         sa.DateTime,
-        nullable=False,
-        index=True,
-        doc=(
-            "Time when processing of the section started. "
-        )
+        nullable = False,
+        index = False,
+        doc = "When did the pipeline say it started."
     )
 
-    finish_time = sa.Column(
-        sa.DateTime,
-        nullable=True,
-        index=True,
-        doc=(
-            "Time when processing of the section finished. "
-            "If an error occurred, this will show the time of the error. "
-            "If the processing is still ongoing (or hanging) this will be NULL. "
-        )
+    end_time = sa.Column(
+        sa.DateTime
+        nullable = True,
+        index = False,
+        doc = "When the pipeline ended, if it told us it ended."
     )
 
     success = sa.Column(
         sa.Boolean,
-        nullable=False,
-        index=False,
-        server_default='false',
-        doc=(
-            "Whether the processing of this section was successful. "
-        )
+        nullable = True,
+        index = False,
+        doc = "Was the pipeline successful?  NULL = dunno, or dunno yet."
     )
 
     # These next two are not a composite foreign key because
@@ -97,426 +93,226 @@ class Report(Base, UUIDMixin):
     #   able to see reports for workers that have exited.
     cluster_id = sa.Column(
         sa.Text,
-        nullable=True,
-        doc=(
-            "ID of the cluster that ran this section (see PipelineWorker). "
-        )
+        nullable = True,
+        index = False,
+        doc = "ID of the cluster that ran this section (see PipelineWorker). "
     )
 
     node_id = sa.Column(
         sa.Text,
-        nullable=True,
-        doc=(
-            "ID of the node where the worker/process ran this section (see PipelineWorker). "
-        )
+        nullable = True,
+        index = False,
+        doc = "ID of the node where the worker/process ran this section (see PipelineWorker). "
     )
 
     error_step = sa.Column(
         sa.Text,
-        nullable=True,
-        doc=(
-            "Name of the processing step where an error occurred. "
-        )
+        nullable = True,
+        index = False,
+        doc = "Name of the processing step where an error occurred. "
     )
 
     error_type = sa.Column(
         sa.Text,
-        nullable=True,
-        doc=(
-            "Type of error that was raised during processing. "
-        )
+        nullable = True,
+        index = False,
+        doc= "Type of error that was raised during processing. "
     )
 
     error_message = sa.Column(
         sa.Text,
-        nullable=True,
-        doc=(
-            "Error message that was raised during processing. "
-        )
+        nullable = True,
+        index = False,
+        doc = "Error message that was raised during processing. "
     )
 
     warnings = sa.Column(
-        sa.Text,
-        nullable=True,
-        doc=(
-            "Comma-separated string of warnings that were raised during processing. "
-            "Each warning begins with the processing step name, followed by the warning type and message. "
-        )
-    )
-
-    process_provid = sa.Column(
-        JSONB,
-        nullable=True,
-        index=False,
-        doc="Dictionary of process→provenance_id for the provenances used in pipeline process."
+        sa.ARRAY( sa.Text ),
+        nullable = False,
+        index = False,
+        server_default = "[]::text[]",
+        doc=( "Warnings that were raised during processing.  Each warning begins with the processing step name, "
+              "followed by a colon and the the warning message." )
     )
 
     process_memory = sa.Column(
         JSONB,
-        nullable=False,
-        server_default='{}',
-        doc='Memory usage of the process during processing. '
-            'Each key in the dictionary is for a processing step, '
-            'and the value is the memory usage in megabytes. '
+        nullable = False,
+        index = False,
+        server_default = '{}',
+        doc = ( "Memory usage of the process during processing. Each key in the dictionary is for a "
+                "processing step, and the value is the memory usage in megabytes." )
     )
 
     process_runtime = sa.Column(
         JSONB,
-        nullable=False,
-        server_default='{}',
-        doc='Runtime of the process during processing. '
-            'Each key in the dictionary is for a processing step, '
-            'and the value is the runtime in seconds. '
+        nullable = False,
+        server_default = '{}',
+        doc =( "Runtime of the process during processing. Each key in the dictionary is for a "
+               "processing step, and the value is the runtime in seconds." )
     )
 
     progress_steps_bitflag = sa.Column(
-        sa.BIGINT,
+        sa.Integer,
         nullable=False,
         server_default=sa.sql.elements.TextClause( '0' ),
         index=False,
-        doc='Bitflag recording what processing steps have already been applied to this section. '
+        doc=( "Bitflag recording what processing steps have already been applied to this section. "
+              "Bit n corresponds to 0-offset index n in the process_steps array.  We're assuming there "
+              "will never be more than 31 steps in any pipeline...." )
     )
 
-    @property
-    def progress_steps(self):
-        """A comma separated string of the processing steps that have already been applied to this section. """
-        return bitflag_to_string(self.progress_steps_bitflag, process_steps_dict)
+    def __init__( self, pipeline_name, starting_class, starting_point, final_prov_id,
+                  process_steps, process_provid, start_time=None, **kwargs
+                 ):
+        if any ( x is None for x in ( pipeline_name, starting_class, starting_point, final_prov_id ) ):
+            raise ValueError( "None of pipeline_name, starting_class, or starting_point can be None" )
+        final_prov_id = final_prov_id.id if isinstance( final_prov_id, Provenance ) else final_prov_id
+        process_steps = [] if process_steps is None else process_steps
+        process_provid = {} if process_provid is None else process_provid
+        start_time = datetime.datetime.now( datetime.UTC ) if start_time is None else parse_dateobs( start_time )
+        starting_point = asUUID( starting_point )
+        if inspect.isclass( starting_class ):
+            starting_class = starting_class.__name__
+        elif not isinstance( starting_class, str ):
+            raise TypeError( f"starting_class must either be a class or the name of a class" )
 
-    @progress_steps.setter
-    def progress_steps(self, value):
-        """Set the progress steps for this report using a comma separated string. """
-        self.progress_steps_bitflag = string_to_bitflag(value, process_steps_inverse)
+        super().__init__( pipeline_name=pipeline_name, starting_class=starting_class,
+                          starting_point=starting_point, final_prov_id=final_prov_id,
+                          process_steps=process_steps, process_provid=process_provid, start_time=start_time,
+                          **kwargs )
 
-    def append_progress(self, value):
-        """Add some keywords (in a comma separated string)
-        describing what is processing steps were done on this section.
-        The keywords will be added to the list "progress_steps"
-        and progress_bitflag for this report will be updated accordingly.
-        """
-        self.progress_steps_bitflag |= string_to_bitflag(value, process_steps_inverse)
+        self.last_udpate = datetime.datetime.now( datetime.UTC )
+        self.errored_out = False
+        self.finished = False
 
-    products_exist_bitflag = sa.Column(
-        sa.BIGINT,
-        nullable=False,
-        server_default=sa.sql.elements.TextClause( '0' ),
-        index=False,
-        doc='Bitflag recording which pipeline products were not None when the pipeline finished. '
-    )
 
-    @property
-    def products_exist(self):
-        """A comma separated string representing which products
-        have already been filled on the datastore when the pipeline finished.
-        """
-        return bitflag_to_string(self.products_exist_bitflag, pipeline_products_dict)
+    def finish( self, pgdb=None ):
+        self.finished = True
+        self.end_time = datetime.datetime.now( datetime.UTC )
+        with PGDB( pgdb ) as pgdb:
+            pgdb.execute( sql.SQL( "UPDATE reports SET end_time={t} WHERE _id={selfid}" )
+                          .format( selfid=self.id, t=self.end_time ) )
+            pgdb.commit()
 
-    @products_exist.setter
-    def products_exist(self, value):
-        """Set the products_exist for this report using a comma separated string. """
-        self.products_exist_bitflag = string_to_bitflag(value, pipeline_products_inverse)
 
-    def append_products_exist(self, value):
-        """Add some keywords (in a comma separated string)
-        describing which products existed (were not None) on the datastore.
-        The keywords will be added to the list "products_exist"
-        and products_exist_bitflag for this report will be updated accordingly.
-        """
-        self.products_exist_bitflag |= string_to_bitflag(value, pipeline_products_inverse)
+    def error_out( self, step, exception, pgdb=None ):
+        if self.errored_out or self.finished:
+            raise RuntimeError( "Can't error out after erroring out or finishing." )
 
-    products_committed_bitflag = sa.Column(
-        sa.BIGINT,
-        nullable=False,
-        server_default=sa.sql.elements.TextClause( '0' ),
-        index=False,
-        doc='Bitflag recording which pipeline products were not None when the pipeline finished. '
-    )
+        self.errored_out = True
+        self.error_step = step
+        self.error_type = exception.__name__
+        self.error_message = str(exception)
+        self.end_time = datetime.datetime.now( datetime.UTC )
+        with PGDB( pgdb ) as pgdb:
+            pgdb.execute( sql.SQL( "UPDATE reports SET error_step={errstep}, error_type={errtype}, "
+                                   "error_message={errmsg}, end_time={tf}, success=False "
+                                   "WHERE id={selfid}"
+                                  ).format( selfid=self.id, errstep=step, errtype=self.error_type,
+                                            errmsg=self.error_message, end_time=self.end_time )
+                         )
+            pgdb.commit()
+
+
+    def complete_step( self, step, memory=None, pgdb=None ):
+        if self.errored_out or self.finished:
+            raise RuntimeError( "Can't complete a step after erroring out or finishing!" )
+
+        try:
+            bit = self.process_steps.index( step )
+        except ValueError:
+            raise ValueError( f"Unknown process step {step}" )
+        
+        now = datetime.datetime.now( datetime.UTC )
+        dt = ( now - self.last_update ).total_seconds()
+        self.last_update = now
+
+        with PGDB( pgdb ) as pgdb:
+            # ...maybe should lock the report table here, but not going to, because
+            #  I think that's overdoing it.  Each instance of a running pipeline is going
+            #  to get a new Report object with a new id, so in general there should not
+            #  be collisions.
+            me = Report.get_by_id( me.id, pgdb=pgdb )
+            if ( me is None ):
+                raise RuntimeError( "Error completing step, report not saved to database!" )
+            self.process_memory = me.process_memory
+            self.process_runtime = me.process_runtime
+            self.process_steps_bitflag = me.progress_steps_bitflag
+            
+            self.process_runtime[step] = dt
+            self.progress_steps_bitflag |= 1 << bit
+            if memory is not None:
+                self.process_memory[step] = memory
+
+            pgdb.execute( sql.SQL(
+                "UPDATE reports SET process_memory={mem}, process_runtime={t}, progress_steps_bitflag={bits} "
+                "WHERE _id={selfid}"
+            ).format( selfid=self.id, mem=self.process_memory, t=self.process_runtime,
+                      bits=self.progress_steps_bitflag ) )
+            pgdb.commit()
+
+    def warning( self, step, message, pgdb=None ):
+        if self.errored_out or self.finished:
+            raise RuntimeError( "Can't add warnings after erroring out or finishing" )
+
+        self.warnings = [] if self.warnings is None else self.warnings
+        newwarning = f"{step}: {message}"
+        self.warnings.append( newwarning )
+        with PGDB( pgdb ) as pgdb:
+            pgdb.execute( sql.SQL(
+                "UPDATE reports SET warnings=array_append(warnings, {newwarning}) WHERE _id={selfid}"
+            ).format( selfid=self.id, newwarning=newwarining ) )
+            pgdb.commit()
+            
+        
+    @classmethod
+    def get_reports( cls, pipeline_name, starting_class, starting_point, final_prov_id=None, pgdb=None ):
+        with PGDB( pgdb, dictcursor=True ) as pgdb:
+            q = sql.SQL( textwrap.dedent(
+                """\
+                SELECT * FROM reports
+                WHERE pipeline_name={pip}
+                  AND starting_class={cls}
+                  AND starting_point={startid}
+                  {fprov}
+                ORDER BY start_time
+                """
+            ) ).format( pip=pipeline_name, cls=starting_class, startid=starting_point,
+                        fprov=( sql.SQL( "AND final_prov_id={provid}" ).format( provid=final_prov_id )
+                                if final_prov_id is not None else sql.SQL( "" ) ) )
+            rows = pgdb.execute( q )
+
+        return [ cls.create( **r ) for r in rows ]
 
     @classmethod
-    def query_for_reports( cls, prov_tag=None, section_id=None, fields=None ):
-        """Return a SQL query to find reports.
+    def get_reports_for_exposure( cls, pipeline_name, exposureid, final_prov_id=None, pgdb=None ):
+        if isinstance( exposureid, Exposure ):
+            exposureid = exposureid.id
+        exposureid = asUUID( exposureid )
 
-        --> Queries with this in it are in fact too slow.  This needs to be revisited.
-        TRY: if you join to this query, use a hint IndexScan(re2 ix_reports_exposure_id)
-
-        Returns a query that, when passed, will find all of the most
-        recent reports for each section_id for a given exposure where
-        all of the process provenance ids in that report match the
-        desired provenance tag.
-
-        You might wrap this inside a JOIN or a SELECT ... FROM (...) where
-        join on, or where on, exposure_id.
-
-        See seechange_webap.py::Exposures for an example of usage.
-
-        Parameters
-        ----------
-          prov_tag : str, default None
-            The provenance tag that all processes in the report must
-            have provenances tagged with.  Omitted, then just will get
-            the most recent report for the exposure regardless of
-            provenances.
-
-          section_id : str, default None
-            The section to find reports.  If not given, will get reports
-            for all sections of the requested exposure.
-
-          fields : str, default None
-            Fields of the report table you want.  If not given you, you
-            get all of them except for process_provid.  This can NOT
-            include process_provid.
-
-        Returns
-        -------
-          sql.SQL
-            ...really a subclass of that.  Something that can added into
-            another sql.SQL as part of a join or something.
-
-        """
-
-        # ZOMG
-        #
-        # The goal here is to find all the reports where *all* of the process_provid in the reports
-        # are tagged with provtag.  It's not good enough that some processes are tagged.  E.g.,
-        # you could easily have a report where all the steps through "subtraction" are tagged with
-        # both provtag1 and provtag2, but the later steps are tagged only with provtag2.
-        # If you're looking for a report where all steps are tagged with provtag1, then that report
-        # is not the one you're looking for.  (Jedi hand wave.)
-        #
-        # We do this, going from inside to out, by:
-
-        #      1. (subquery re2) explode the process_provid dictionary (it's a jsonb column) into lots of
-        #         rows— each row is expanded into separate rows for each process/provenance pair.  Join to
-        #         the provenance tags so we have a table of report*, process, provtag; report* is repeated
-        #         lots of times, at least once for each process in the report.  Process *might* be
-        #         repeated if the provenance id is tagged with multiple tags (which is common).
-        #
-        #      2. Set aggregate (array w/ distinct) all of the tags for a given (report*, process)
-        #         (subquery re1)
-        #
-        #      3. Array aggregate over processes, making a new array where each element is true
-        #         if the process associated with that element has provtag in its provtag array,
-        #         false otherwise
-        #         (subquery re)
-        #
-        #      4. Select out only the reports where every element from the previous step is true.
-        #         (subquery r)
-
-        # NOTE : keep this synced with the fields that exist in reports
-        # Could perhaps do this with introspection....
-        allfields = [ '_id', 'exposure_id', 'section_id', 'image_id', 'start_time', 'finish_time',
-                      'success', 'cluster_id', 'node_id', 'error_step', 'error_type', 'error_message',
-                      'warnings', 'process_memory', 'process_runtime', 'progress_steps_bitflag',
-                      'products_exist_bitflag', 'products_committed_bitflag' ]
-        fields = ( allfields if fields is None else fields ).copy()
-        badfields = set()
-        # Make sure we aren't going to be bobble tablesed
-        for f in fields:
-            if f not in allfields:
-                badfields.add( f )
-        if len(badfields) != 0:
-            raise ValueError( f"Invalid fields: {','.join(badfields)}" )
-
-        if not all( [ isinstance( field, str ) for field in fields ] ):
-            raise ValueError( "Each field in fields must be a string" )
-        if len(fields) < 1:
-            raise ValueError( "If fields is not None, it must be a list with at least one element." )
-        alphanum = re.compile( '^[a-z0-9_]+' )
-        if not all( [ alphanum.search(field) for field in fields ] ):
-            # This should be redundant, but, you know, Bobble Tables is a monster
-            raise ValueError( "Each field in fields must be a sequence of [a-z0-9_]" )
-        disallowed_fields = [ 'process_provid' ]
-        if any( [ f in [ disallowed_fields ] for f in fields ] ):
-            raise ValueError( f"Fields selected cannot include any of {', '.join(disallowed_fields)}" )
-
-        q = ( sql.SQL( "SELECT DISTINCT ON(re.exposure_id, re.section_id) {fields}\n" )
-              .format( fields=sql.SQL(",").join( sql.Identifier("re", f) for f in fields ) ) )
-
-        if prov_tag is None:
-            q += sql.SQL( "FROM reports re\n" )
-            if section_id is not None:
-                q += sql.SQL( "WHERE section_id={secid} re\n" ).format( secid=section_id )
-        else:
-            for f in [ "_id", "section_id", "start_time" ]:
-                if f not in fields:
-                    fields.insert( 0, f )
-            fields2 = fields.copy()
-            for f in [ 'exposure_id', 'section_id', 'success', 'error_message', 'start_time' ]:
-                if f not in fields2:
-                    fields2.append( f )
-            q += sql.SQL( textwrap.dedent(
+        with PGDB( pgdb, dictcursor=True ) as pgdb:
+            q = sql.SQL( textwrap.dedent(
                 """\
-                FROM ( SELECT {fields1}, array_agg({provtag}=ANY(re1.tags)) AS gotem
-                       FROM ( SELECT {fields2}, array_agg(re2.tag) as tags
-                              FROM ( SELECT DISTINCT ON( re3._id, x.key, r3pt.tag )
-                                            {fields3}, x.key AS process, r3pt.tag
-                                     FROM reports re3
-                                     CROSS JOIN jsonb_each_text( re3.process_provid ) x
-                                     INNER JOIN provenance_tags r3pt ON x.value=r3pt.provenance_id
+                SELECT r.*, i.section_id FROM reports r
+                INNER JOIN images i ON r.starting_point=i._id
+                INNER JOIN exposure e ON i.exposure_id=e._id
+                WHERE e._id={expid}
+                  AND r.pipeline_name={pip}
+                  {fprov}
+                ORDER BY i.section_id, r.start_time
                 """
-            ) ).format( fields1=sql.SQL(",").join( sql.Identifier("re1", f) for f in fields ),
-                        provtag=prov_tag,
-                        fields2=sql.SQL(",").join( sql.Identifier("re2", f) for f in fields2 ),
-                        fields3=sql.SQL(",").join( sql.Identifier("re3", f) for f in fields2 )
-                       )
+            ) ).format( expid=exposureid, pip=pipeline_name,
+                        fprov=( sql.SQL( "AND final_prov_id={provid} " ).format( provid=final_prov_id )
+                                if final_prov_id is not None else sql.SQL( "" ) ) )
+            rows = pgdb.execute( q )
 
-            if section_id is not None:
-                q += sql.SQL( "                      WHERE section_id={secid}\n'" ).format( secid=section_id )
-            q += sql.SQL( textwrap.dedent(
-                """\
-                                      ORDER BY re3._id, r3pt.tag
-                                    ) re2
-                               GROUP BY ( {fields2} )
-                             ) re1
-                        GROUP BY ( {fields1} )
-                      ) re
-                WHERE true=ALL( gotem )
-                """
-            ) ).format( fields1=sql.SQL(",").join( sql.Identifier("re1", f) for f in fields ),
-                        fields2=sql.SQL(",").join( sql.Identifier("re2", f) for f in fields2 )
-                       )
-        q += sql.SQL( 'ORDER BY re.exposure_id, re.section_id, re.start_time DESC\n' )
+        reports = {}
+        for row in rows:
+            if row['section_id'] not in reports:
+                reports['section_id'] = []
+            del row['section_id']
+            reports['section_id'].append( cls.create( **row ) )
 
-        return q
-
-
-    @property
-    def products_committed(self):
-        """A comma separated string representing which products
-        have already been successfully saved using the datastore when the pipeline finished.
-        """
-        return bitflag_to_string(self.products_committed_bitflag, pipeline_products_dict)
-
-    @products_committed.setter
-    def products_committed(self, value):
-        """Set the products_committed for this report using a comma separated string. """
-        self.products_committed_bitflag = string_to_bitflag(value, pipeline_products_inverse)
-
-    def append_products_committed(self, value):
-        """Add some keywords (in a comma separated string)
-        describing which products were successfully saved by the datastore.
-        The keywords will be added to the list "products_committed"
-        and products_committed_bitflag for this report will be updated accordingly.
-        """
-        self.products_committed_bitflag |= string_to_bitflag(value, pipeline_products_inverse)
-
-    def __init__(self, **kwargs):
-        SeeChangeBase.__init__(self)  # do not pass kwargs to Base.__init__, as there may be non-column attributes
-
-        # verify these attributes get their default even if the object is not committed to DB
-        self.success = False
-        self.progress_steps_bitflag = 0
-        self.products_exist_bitflag = 0
-        self.products_committed_bitflag = 0
-        self.process_provid = {}
-        self.process_memory = {}
-        self.process_runtime = {}
-
-        # manually set all properties (columns or not)
-        self.set_attributes_from_dict(kwargs)
-
-    @orm.reconstructor
-    def init_on_load(self):
-        SeeChangeBase.init_on_load(self)
-
-    def scan_datastore( self, ds, process_step=None ):
-        """Go over all the data in a datastore and update the report accordingly.
-        Will commit the Report object to the database.
-        If there are any exceptions pending on the datastore it will re-raise them.
-
-        Parameters
-        ----------
-        ds : DataStore
-            The datastore to scan for information.
-        process_step : str, optional
-            The name of the process step that was just completed.
-            This will be added to the progress bitflag.
-            If not given, will skip adding the progress flag,
-            but will also skip checking warnings and errors...
-            Use without a process_step just to update general
-            properties of the datastore like the runtime and memory usage,
-            or for updating the products_exist and products_committed bitflags
-            (e.g., after saving the datastore).
-        session : sqlalchemy.orm.Session, optional
-            The session to use for committing the changes to the database.
-            If not given, will open a session and close it at the end
-            of the function.
-
-        """
-        t0 = time.perf_counter()
-        if 'reporting' not in self.process_runtime:
-            self.process_runtime['reporting'] = 0.0
-
-        # check which objects exist on the datastore, and which have been committed
-        for prod in pipeline_products_dict.values():
-            if getattr(ds, prod) is not None:
-                self.append_products_exist(prod)
-
-        # Make sure image id is set if appropriate
-        if ds.image is not None:
-            self.image_id = ds.image.id
-
-        # Set the cluster and node IDs if they're known
-        if hasattr( ds, 'cluster_id' ):
-            self.cluster_id = ds.cluster_id
-        if hasattr( ds, 'node_id' ):
-            self.node_id = ds.node_id
-
-        # Products that have been committed
-        self.products_committed = ds.products_committed
-
-        # store the runtime and memory usage statistics
-        self.process_runtime.update(ds.runtimes)
-        self.process_memory.update(ds.memory_usages)
-
-        if process_step is not None:
-            # append the newest step to the progress bitflag
-            if process_step in process_steps_inverse:  # skip steps not in the dict
-                self.append_progress(process_step)
-
-            # parse the warnings, if they exist
-            if isinstance(ds.warnings_list, list):
-                new_string = self.read_warnings(process_step, ds.warnings_list)
-                if self.warnings is None or self.warnings == '':
-                    self.warnings = new_string
-                else:
-                    self.warnings += '\n***|***|***\n' + new_string
-
-        if ( ds.exceptions is not None ) and ( len(ds.exceptions) > 0 ):
-            # The first exception is going to be the reported error type
-            if self.error_step is None:
-                self.error_step = process_step if process_step is not None else "(unknown)"
-                self.error_type = ds.exceptions[0].__class__.__name__
-            if self.error_message is None:
-                self.error_message = ''
-            else:
-                self.error_message += '\n***|***|***\n'
-            for e in ds.exceptions:
-                self.error_message += ( f"Exception {f'in step {process_step}' if process_step is not None else ''}: "
-                                        f"{str(e)}\n" )
-
-            # Now that we've reported them, clear out the exceptions
-            ds.exceptions = []
-
-        self.upsert()
-
-        self.process_runtime['reporting'] += time.perf_counter() - t0
-
-
-    @staticmethod
-    def read_warnings(process_step, warnings_list):
-        """Convert a list of warnings into a comma separated string. """
-        formatted_warnings = []
-        for w in warnings_list:
-            text = f'{process_step}: {w.category} {w.message} ({w.filename}:{w.lineno})'
-            formatted_warnings.append(text)
-            SCLogger.warning(text)  # make sure warnings also get printed to the log/on screen.
-
-        warnings_list.clear()  # remove all the warnings but keep the list object
-
-        return ', '.join(formatted_warnings)
-
-    # ...upstreams are complicated for reports, so punt.
-
-    def get_downstream_ids( self, pgdb=None ):
-        """Reports have no downstreams."""
-        return []
+        return reports
+                         
