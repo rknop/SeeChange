@@ -3613,7 +3613,6 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             if len(rows) == 0:
                 return rval
             elif len(rows) > 1:
-                import pdb; pdb.set_trace()
                 raise RuntimeError( f"Found multiple rows for image_id={self.id}, provtag {provtag}, "
                                     f"processes {processes}, and provenances {provenances}; "
                                     f"this should never happen." )
