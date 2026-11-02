@@ -1385,7 +1385,6 @@ def test_badness_basic( sim_image_uncommitted, provenance_base ):
     # No need to clean up, the exposure from which sim_image_uncommitted was generated
     #  will clean up all its downstreams.
 
-
+# Image.trim is tested in test_psf.py::test_trim
 # def test_image_trim( sim_image1 ):
-#     import pdb; pdb.set_trace()
-#     pass
+#     assert False

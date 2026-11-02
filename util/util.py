@@ -265,6 +265,37 @@ def as_datetime( string ):
         raise ValueError( f'Error, {string} is not a valid date and time.' )
 
 
+def validate_integers( seq, return_list=False, strict=False ):
+    if strict:
+        if not all( isinstance( x, numbers.Integral ) for x in seq ):
+            raise TypeError( f"Not all are integers: {seq}" )
+        if return_list:
+            return listify( seq )
+        else:
+            return np.array( seq, dtype=np.int32 )
+
+    else:
+        origarray = np.array( seq )
+        if isinstance( seq, np.ndarray ):
+            intarray = np.array( np.floor( seq + 0.5 ), dtype=np.int32 )
+        else:
+            intarray = np.array( [ int(x + 0.5) for x in seq ], dtype=np.int32 )
+        # What is close enough?  Where this function is used is in looking
+        # at image coordinates, making sure they are integers.  If we assume
+        # images will never be bigger than 16384×16384, given that 32-bit
+        # floats store 6-7 bits of precision, we can't be better than a
+        # tenth of a pixel... but let's push it.  Really, though, the user
+        # should have passed integers, so the comparison should be perfect,
+        # but if they passed a floatified integer, those can be perfectly
+        # represented up to 2²⁴=16,777,216.
+        if not np.all( np.isclose( origarray, intarray, rtol=0., atol=0.01 ) ):
+            raise TypeError( f"Not all of {seq} are integers" )
+        if return_list:
+            return [ int(x) for x in intarray ]
+        else:
+            return intarray
+
+
 def env_as_bool(varname):
     """Parse an environmental variable as a boolean."""
     return parse_bool(os.getenv(varname))

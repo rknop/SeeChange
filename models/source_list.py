@@ -21,7 +21,7 @@ from models.enums_and_bitflags import (
     SourceListFormatConverter,
     source_list_badness_inverse,
 )
-from util.util import ensure_file_does_not_exist, asUUID
+from util.util import ensure_file_does_not_exist, asUUID, validate_integers
 from util.logger import SCLogger
 import util.ldac
 
@@ -670,6 +670,8 @@ class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
 
         if any( i is None for i in (x0, x1, y0, y1) ):
             raise ValueError( "x0, x1, y0, y1 must all be given" )
+
+        x0, x1, y0, y1 = validate_integers( [ x0, x1, y0, y1 ], return_list=True )
 
         if self._format == 0:
             # Null format
