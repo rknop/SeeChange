@@ -3,7 +3,6 @@ import base64
 import hashlib
 import textwrap
 import random
-import numbers
 
 import numpy as np
 from psycopg import sql
@@ -21,7 +20,7 @@ from astropy.time import Time
 from astropy.wcs import WCS
 from astropy.io import fits
 
-from util.util import parse_dateobs, listify, asUUID
+from util.util import parse_dateobs, listify, asUUID, validate_integers
 from util.fits import read_fits_image, save_fits_image_file
 from util.radec import parse_ra_hms_to_deg, parse_dec_dms_to_deg
 from util.logger import SCLogger
@@ -1761,13 +1760,14 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             raise ValueError( "save_prov was set but self.provenance_id is None" )
         if ( provtag is not None ) and ( not save_prov ):
             raise ValueError( "Passing a provtag requires save_prov=True" )
-        if not all( isinstance( i, numbers.Integral ) for i in [ x0, x1, y0 ,y1 ] ):
-            raise TypeError( "x0, x1, y0, y1 must all be integers." )
         for val, name in zip( [ bg, psf, wcs ], [ 'bg', 'psf', 'wcs' ] ):
             if ( val is not None ) and ( sources is None ):
                 raise ValueError( f"Passing {name} requires passing sources" )
         if ( zp is not None ) and ( wcs is None ):
             raise ValueError( "Passing zp requires passing wcs" )
+
+        # Should we do strict=True?
+        x0, x1, y0, y1 = validate_integers( [ x0, x1, y0, y1 ], return_list=True )
 
         # Calculate xcen and ycen *before* adjusting for limits, because we want
         #   the filepath to reflect the aspirational center.
@@ -1785,7 +1785,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
             if ( x0 < 0 ) or ( x1 > self.data.shape[1] ) or ( y0 < 0 ) or ( y1 > self.data.shape[0] ):
                 raise ValueError( "Trim limits [{x0}:{x1}, {y0}:y1}] are outside image borders." )
 
-        trimimprov = trimsrcprov = trimwcsprov = None
+        trimimprov = trimsrcprov = trimwcsprov = trimzpprov = None
         trimim = trimsrc = trimbg = trimpsf = trimwcs = trimzp = None
 
         if self.provenance_id is not None:

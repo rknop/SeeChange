@@ -138,3 +138,8 @@ def test_save_load_backgrounds(decam_raw_image, decam_raw_image_provenance):
             b1.delete_from_disk_and_database()
         if 'b2' in locals():
             b2.delete_from_disk_and_database()
+
+# Background.trim is tested in test_psf.py::test_trim... sorta.  Only for
+#   constant backgrounds, which is too easy.  TODO, more serious tests here.
+# def test_background_trim():
+#     assert False

@@ -18,7 +18,7 @@ from models.enums_and_bitflags import PSFFormatConverter, psf_badness_inverse
 from models.image import Image
 from models.source_list import SourceList
 from util.logger import SCLogger
-from util.util import asUUID
+from util.util import asUUID, validate_integers
 
 
 class PSF(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
@@ -82,7 +82,8 @@ class PSF(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         doc=( 'If this is not None, then the PSF data was actually originally for a larger image, but now '
               'this object is associated with a smaller image.  Any evaluation of the PSF will assume '
               'that the lower-left pixel is offset by this much from (0,0) when interpreting the internal '
-              'PSF data.  This should (...should...) be transparent outside this class.' )
+              'PSF data.  This should (...should...) be transparent outside this class.  (Not all '
+              'subclasses use this for trimming, e.g. PSFExPSF just adjusts header values.)' )
     )
 
     offset_y = sa.Column(
@@ -96,14 +97,14 @@ class PSF(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
         sa.SMALLINT,
         nullable=True,
         server_default=None,
-        doc='Width of the trimmed image this PSF is for.'
+        doc='Width of the trimmed image this PSF is for; see offset_x.'
     )
 
     trimmed_height = sa.Column(
         sa.SMALLINT,
         nullable=True,
         server_default=None,
-        doc='Height of the trimmed image this PSF is for.'
+        doc='Height of the trimmed image this PSF is for; see offset_x.'
     )
 
 
@@ -117,8 +118,6 @@ class PSF(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
     }
 
     # ****************************************
-
-    _supports_offset_psf = False
 
     @property
     def data( self ):
@@ -485,6 +484,8 @@ class PSF(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
 
         if any( i is None for i in (x0, x1, y0, y1) ):
             raise ValueError( "x0, x1, y0, y1 must all be given" )
+
+        x0, x1, y0, y1 = validate_integers( [ x0, x1, y0, y1 ], return_list=True )
 
         newpsf = self.copy()
         newpsf.offset_x = x0 if newpsf.offset_x is None else newpsf.offset_x + x0
@@ -900,8 +901,6 @@ class PSFExPSF(PSF):
         "polymorphic_identity": 1
     }
 
-    _supports_offset_psf = True
-
     def __init__( self, *args, **kwargs ):
         super().__init__( *args, **kwargs )
         self.format = 'psfex'
@@ -923,15 +922,16 @@ class PSFExPSF(PSF):
         self._raw_clip_shape = self.data.shape[1:]
 
     def trim( self, x0, x1, y0, y1, trimmed_sources=None ):
-        # This subclass does *not* use offset_x and offset_y,
-        #   but instead adjusts the header.
         newpsf = PSF.trim( self, x0, x1, y0, y1, trimmed_sources=trimmed_sources )
-        # Gotta copy the header so we can mangle it
-        newpsf.header = fits.Header( newpsf.header )
-        newpsf.header['POLZERO1'] += x0
-        newpsf.header['POLZERO2'] += y0
+        # Gotta copy the header so we can mangle it.  The *data* can stay the same.  I hope.
+        newpsf.header = fits.Header( newpsf.header, copy=True )
+        newpsf.header['POLZERO1'] -= x0
+        newpsf.header['POLZERO2'] -= y0
         newpsf.header['IMAXIS1'] = x1 - x0
         newpsf.header['IMAXIS2'] = y1 - y0
+        # This subclass does *not* use offset_x and offset_y,
+        #   but instead adjusts the header.  So, None out
+        #   the fields that PSF.trim() set.
         newpsf.offset_x = None
         newpsf.offset_y = None
         newpsf.trimmed_width = None
@@ -945,10 +945,6 @@ class PSFExPSF(PSF):
         xsc = float( self.header['POLSCAL1'] )
         y0 = float( self.header['POLZERO2'] ) - 1
         ysc = float( self.header['POLSCAL2'] )
-
-        if self.offset_x is not None:
-            x += self.offset_x
-            y += self.offset_y
 
         psfbase = np.zeros_like( self.data[0,:,:], dtype=dtype )
         off = 0
@@ -1042,9 +1038,6 @@ class DeltaPSF(PSF):
         "polymorphic_identity": 2
     }
 
-    # Supporting offset PSF here is trivial becasue the PSF is not spatially varaible
-    _supports_offset_psf = True
-
     def __init__( self, *args, **kwargs ):
         super().__init__( *args, **kwargs )
         self.format = 'delta'
@@ -1127,9 +1120,6 @@ class GaussianPSF(PSF):
         "polymorphic_identity": 3
     }
 
-    # Supporting offset PSF here is trivial becasue the PSF is not spatially varaible
-    _supports_offset_psf = True
-
     def __init__( self, *args, **kwargs ):
         super().__init__( *args, **kwargs )
         self.format = 'gaussian'
@@ -1189,9 +1179,6 @@ class ImagePSF(PSF):
         # "image" in enums_and_bitflags.py::PSFFormatConverter
         "polymorphic_identity": 4
     }
-
-    # Supporting offset PSF here is near-trivial becasue the PSF is not spatially varaible
-    _supports_offset_psf = True
 
     def __init__( self, *args, **kwargs ):
         super().__init__( *args, **kwargs )
