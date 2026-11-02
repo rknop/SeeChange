@@ -108,6 +108,25 @@ def listify( val, require_string=False ):
         return [ val ]
 
 
+def key_sorted_dict( d ):
+    """Return a new dictionary with keys sorted.
+
+    Any values that are themselves dictionaries will also have
+    their keys sorted, recursively.
+
+    Copies are made of any dictionary values, but not of anything else,
+    so this is somewhere between a shallow and a deep copy.  (It's
+    shallow, except where it can't be.)
+
+    """
+
+    if not isinstance( d, dict ):
+        raise TypeError( "Must pass a dict, not a {type(d)}, to key_sorted_dict." )
+    keys = list( d.keys() )
+    keys.sort()
+    return { k: key_sorted_dict(d[k]) if isinstance(d[k], dict) else d[k] for k in keys }
+
+
 def remove_empty_folders(path, remove_root=True):
     """Recursively remove any empty folders in the given path.
 
@@ -276,10 +295,7 @@ def validate_integers( seq, return_list=False, strict=False ):
 
     else:
         origarray = np.array( seq )
-        if isinstance( seq, np.ndarray ):
-            intarray = np.array( np.floor( seq + 0.5 ), dtype=np.int32 )
-        else:
-            intarray = np.array( [ int(x + 0.5) for x in seq ], dtype=np.int32 )
+        intarray = np.array( np.floor( origarray + 0.5 ), dtype=np.int32 )
         # What is close enough?  Where this function is used is in looking
         # at image coordinates, making sure they are integers.  If we assume
         # images will never be bigger than 16384×16384, given that 32-bit

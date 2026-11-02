@@ -3371,10 +3371,14 @@ class FourCornersWithGood( FourCorners ):
             # Figure out what is the outer "bad region" that we want to throw out
             # or along y to get the xs that have any good pixels
             xok = np.where( np.any( mask==0, axis=0 ) )[0]
+            if xok.size == 0:
+                raise ValueError( "set_corners_from_wcs failed: no unmasked pixels!" )
             xgood0 = np.min( xok )
             xgood1 = np.max( xok )
             # or along x to get the ys that have any good pixels
             yok = np.where( np.any( mask==0, axis=1 ) )[0]
+            if yok.size == 0:
+                raise ValueError( "set_corners_from_wcs failed: no unmasked pixels!" )
             ygood0 = np.min( yok )
             ygood1 = np.max( yok )
 
