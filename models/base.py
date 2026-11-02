@@ -379,6 +379,10 @@ class PGDB:
            rows, cols = dbcon.execute( query, subdict )
            # do other things
 
+    If you access this outside a context manager (i.e. just making the
+    object directly), make SURE to call its close() method when you are
+    done with it.
+
     It will automatically close the connection when the with block ends.
     You can pass either a psycopg.connection or a PGDB object to the
     PGDB constructor, and it will reuse that connection; in that case,

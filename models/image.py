@@ -3469,5 +3469,169 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         self._nanscore = value
 
 
+    def get_sources( self, provtag=None, process='extraction', provenance=None, pgdb=None ):
+        """Get the SourceList associated with this image.
+
+        Must give either provtag or provenance_id.
+
+        Parameters
+        ----------
+          provtag: str, default None
+            Ignored if provenance_id is not None.  Find the sources in
+            this provenance tag.
+
+          process: str, default 'extraction'
+            Ignored if provenance_id is not None.  Find the sources in
+            provenance tag provtag with this process.
+
+          provenance: str or Provenance, default None
+            Find sources from this provenance.
+
+          pgdb: PGDB, default None
+            Database connection.  If not given, will open and close a new one.
+
+        Returns
+        -------
+          SourceList or None
+
+        """
+
+        provenance_id = ( None if provenance is None else
+                          provenance.id if isinstance( provenance, Provenance )
+                          else str(provenance) )
+        with PGDB( pgdb, dictcursor=True ) as pgdb:
+            if provenance_id is None:
+                if provtag is None:
+                    raise ValueError( "Must pass either provenance= or provtag=" )
+                provenance = Provenance.get_for_tag( provtag, process=process )
+                if provenance is None:
+                    raise RuntimeError( f"Could not find provenance for provtag {provtag} process {process}" )
+                provenance_id = provenance.id
+
+            q = sql.SQL( "SELECT * FROM source_lists WHERE image_id={imid} AND provenance_id={provid}"
+                        ).format( imid=self.id, provid=provenance_id )
+            rows = pgdb.execute( q )
+            if len(rows) == 0:
+                return None
+            elif len(rows) > 1:
+                raise RuntimeError( f"Database corruption, found more than one source_lists entry for "
+                                    f"image id {self.id} and provenance id {provenance_id}; "
+                                    f"this should never happen." )
+            else:
+                from models.source_list import SourceList
+                return SourceList.create( **(rows[0]) )
+
+
+    def get_sources_wcs_zp( self, provtag=None, provenances=None, pgdb=None,
+                            processes={ 'sources': 'extraction', 'wcs': 'astrocal', 'zp': 'photocal' } ):
+        """Get downstream data products through zeropoint for this image.
+
+        Must pass either provtag or provenances.
+
+        Parameters
+        ----------
+          provtag: str, default None
+            Ignored if provenances is not None.  Find downstream
+            products from this provenance tag.
+
+          processes: dict, default { 'sources': 'extraction', 'wcs': 'astrocasl', 'zp': 'photocal' }
+            Ignored if provenances is not None.  The processes for each
+            product to associate with provtag.  Usually the defaults are
+            what you want.
+
+          provenances: dict, default None
+            If given, must be a dictionary with keys 'sources', 'wcs',
+            and 'zp', and values that are either Provenance objects or
+            provenance ids for the corresponding data products.
+
+            It's up to you to make sure you pass consistent provenances.
+            Easier to use provtag if you can.
+
+        Returns
+        -------
+          dict: { 'sources': SourceList or None,
+                  'bg': Background or None,
+                  'psf': PSF or None,
+                  'wcs': WorldCoordinates or None,
+                  'zp': ZeroPoint or None }
+
+          If you pass provenances, and some of the dictionary values are
+          None, those products will not be searched for.
+
+        """
+
+        rval = { 'sources': None,
+                 'bg': None,
+                 'psf': None,
+                 'wcs': None,
+                 'zp': None }
+
+        with PGDB( pgdb, dictcursor=True ) as pgdb:
+            if provenances is not None:
+                if ( not isinstance(provenances, dict) ) or ( set( provenances.keys() ) != { 'sources', 'wcs', 'zp' } ):
+                    raise ValueError( "provenances must be a dict with keys sources, wcs, zp" )
+                for k in provenances.keys():
+                    provenances[k] = ( None if provenances[k] is None
+                                       else provenances[k].id if isinstance( provenances[k], Provenance )
+                                       else str(provenances[k]) )
+                if all( v is None for v in provenances.values() ):
+                    return ValueError( "You passed a dictionary of Nones for provenances, can't do anything." )
+            else:
+                if provtag is None:
+                    raise ValueError( "Must give either provenances or provtag" )
+                provs = Provenance.get_for_tag( provtag )
+                provenances = { k: None if processes[k] not in provs else provs[processes[k]].id
+                                for k in ( 'sources', 'wcs', 'zp' ) }
+
+                if all( v is None for v in provenances.values() ):
+                    SCLogger.warning( f"Could not find any provenances in provtag {provtag} for proceses {processes}" )
+                    return rval
+
+            fields = sql.SQL( "s._id AS sources_id, b._id AS bg_id, p._id AS psf_id" )
+            joins = sql.SQL( "" )
+            if ( provenances['wcs'] is not None ) or ( provenances['zp'] is not None ):
+                joins += sql.SQL( "LEFT JOIN world_coordinates w ON w.sources_id=s._id\n" )
+                fields += sql.SQL( ", w._id AS wcs_id" )
+                if provenances['zp'] is not None:
+                    joins += sql.SQL( "LEFT JOIN zero_points z ON z.wcs_id=w._id\n" )
+                    fields += sql.SQL( ", z._id AS zp_id" )
+            q = sql.SQL( textwrap.dedent(
+                """\
+                SELECT {fields}
+                FROM source_lists s
+                LEFT JOIN backgrounds b ON b.sources_id=s._id
+                LEFT JOIN psfs p ON p.sources_id=s._id
+                {joins}
+                WHERE s.image_id={imid}
+                """ ) ).format( fields=fields, joins=joins, imid=self.id )
+            for ( tab, key ) in zip( [ 's', 'w', 'z' ], [ 'sources', 'wcs', 'zp' ] ):
+                if provenances[key] is not None:
+                    q += sql.SQL( "  AND {tab}.provenance_id={provid}\n"
+                                 ).format( tab=sql.Identifier(tab), provid=provenances[key] )
+
+            rows = pgdb.execute( q )
+            if len(rows) == 0:
+                return rval
+            elif len(rows) > 1:
+                import pdb; pdb.set_trace()
+                raise RuntimeError( f"Found multiple rows for image_id={self.id}, provtag {provtag}, "
+                                    f"processes {processes}, and provenances {provenances}; "
+                                    f"this should never happen." )
+            else:
+                row = rows[0]
+                from models.source_list import SourceList
+                from models.background import Background
+                from models.psf import PSF
+                from models.world_coordinates import WorldCoordinates
+                from models.zero_point import ZeroPoint
+                for ( field, cls ) in zip( [ 'sources', 'bg', 'psf', 'wcs', 'zp' ],
+                                           [ SourceList, Background, PSF, WorldCoordinates, ZeroPoint ] ):
+                    col = f"{field}_id"
+                    if ( col in row ) and ( row[col] is not None ):
+                        rval[field] = cls.get_by_id( row[col], pgdb=pgdb )
+
+                return rval
+
+
 if __name__ == '__main__':
     SCLogger.warning( "Running image.py doesn't actually do anything." )

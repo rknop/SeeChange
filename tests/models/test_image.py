@@ -1385,6 +1385,15 @@ def test_badness_basic( sim_image_uncommitted, provenance_base ):
     # No need to clean up, the exposure from which sim_image_uncommitted was generated
     #  will clean up all its downstreams.
 
+
+def test_get_sources_wcs_zp( sim_lightcurve_reference ):
+    ds = sim_lightcurve_reference
+
+    products= ds.image.get_sources_wcs_zp( provtag='sim_lightcurve_reference' )
+    import pdb; pdb.set_trace()
+    pass
+
+
 # Image.trim is tested in test_psf.py::test_trim
 # def test_image_trim( sim_image1 ):
 #     assert False
