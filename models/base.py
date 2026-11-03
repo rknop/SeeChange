@@ -379,6 +379,10 @@ class PGDB:
            rows, cols = dbcon.execute( query, subdict )
            # do other things
 
+    If you access this outside a context manager (i.e. just making the
+    object directly), make SURE to call its close() method when you are
+    done with it.
+
     It will automatically close the connection when the with block ends.
     You can pass either a psycopg.connection or a PGDB object to the
     PGDB constructor, and it will reuse that connection; in that case,
@@ -3367,10 +3371,14 @@ class FourCornersWithGood( FourCorners ):
             # Figure out what is the outer "bad region" that we want to throw out
             # or along y to get the xs that have any good pixels
             xok = np.where( np.any( mask==0, axis=0 ) )[0]
+            if xok.size == 0:
+                raise ValueError( "set_corners_from_wcs failed: no unmasked pixels!" )
             xgood0 = np.min( xok )
             xgood1 = np.max( xok )
             # or along x to get the ys that have any good pixels
             yok = np.where( np.any( mask==0, axis=1 ) )[0]
+            if yok.size == 0:
+                raise ValueError( "set_corners_from_wcs failed: no unmasked pixels!" )
             ygood0 = np.min( yok )
             ygood1 = np.max( yok )
 

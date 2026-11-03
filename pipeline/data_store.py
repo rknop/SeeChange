@@ -2065,7 +2065,7 @@ class DataStore:
                   'overlap_frac' in choice_criteria,
                   'overlap_fraction' in choice_criteria,
                   'overlapfrac' in choice_criteria,
-                  'overlapfratcion' in choice_criteria,
+                  'overlapfraction' in choice_criteria,
                   ( search_by == 'target/section' ) and ( ( target is None ) or ( section_id is None ) ),
                  ] ):
             self.get_image( pgdb=_pgdb )
@@ -2078,7 +2078,7 @@ class DataStore:
                   'overlap_frac' in choice_criteria,
                   'overlap_fraction' in choice_criteria,
                   'overlapfrac' in choice_criteria,
-                  'overlapfratcion' in choice_criteria,
+                  'overlapfraction' in choice_criteria,
                  ] ):
             self.get_wcs( pgdb=_pgdb )
 

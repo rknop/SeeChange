@@ -44,6 +44,7 @@ from models.fakeset import FakeSet
 from util.util import remove_empty_folders, env_as_bool
 from util.retrydownload import retry_download
 from util.logger import SCLogger
+import util.ldac
 
 from pipeline.data_store import DataStore, ProvenanceTree
 
@@ -636,12 +637,26 @@ class PSFPaletteMaker:
         rng = np.random.default_rng( seed=42 )
         self.img += rng.normal( 0., self.noiselevel, self.img.shape )
 
+        self.flags = np.zeros_like( self.img, dtype=np.int16 )
+        self.weight = 1. / ( np.fabs(self.img) + self.noiselevel**2 )
+
         hdu = fits.PrimaryHDU( data=self.img )
         hdu.writeto( self.imagename, overwrite=True )
-        hdu = fits.PrimaryHDU( data=np.zeros_like( self.img, dtype=np.int16 ) )
+        hdu = fits.PrimaryHDU( self.flags )
         hdu.writeto( self.flagsname, overwrite=True )
-        hdu = fits.PrimaryHDU( data=np.full( self.img.shape, 1. / ( self.noiselevel**2 ) ) )
+        hdu = fits.PrimaryHDU( self.weight )
         hdu.writeto( self.weightname, overwrite=True )
+
+        imgobj = Image( id=uuid.UUID('cb39c350-3d50-4974-92fc-731b2204b9b5'),
+                        format='fits', width=self.img.shape[1], height=self.img.shape[0],
+                        type='Sci', mjd=60000., end_mjd=60000.006944, exp_time=600.,
+                        instrument='DemoInstrument', project='conftest', section_id='0',
+                        target='test psfs', preproc_bitflag=0x17, airmass=1.0, ra=42., dec=-13. )
+        imgobj.calculate_coordinates()
+        imgobj.data = self.img
+        imgobj.weight = self.weight
+        imgobj.flags = self.flags
+        self.image = imgobj
 
     def extract_and_psfex( self ):
         astromatic_dir = None
@@ -700,7 +715,17 @@ class PSFPaletteMaker:
         res = subprocess.run( command, capture_output=True, timeout=60 )
         assert res.returncode == 0
 
-        self.psf = PSFExPSF()
+        self.sources_info, self.sources_table = util.ldac.get_table_from_ldac( self.catname, frame=1,
+                                                                               imghdr_as_header=True )
+        self.sources = SourceList( id=uuid.UUID('7c410565-afbc-4c82-8dd0-9994ea953df5'),
+                                   format='sextrfits', image_id=self.image.id, aper_rads=['4.7'],
+                                   best_aper_num=-1, num_sources=len( self.sources_table),
+                                   data=self.sources_table, info=self.sources_info )
+        self.bg = Background( id=uuid.UUID('48e5e84d-46e8-4f70-a1fe-0ec8b61a9714'), format='scalar',
+                              sourcers_id=self.sources.id, value=0., noise=self.noiselevel,
+                              image_shape=self.img.shape )
+
+        self.psf = PSFExPSF( uuid=uuid.UUID('b66e897e-d3d7-4796-83b3-b4cbfce139cc'), sources_id=self.sources.id )
         self.psf.load( psfpath=self.psfname, psfxmlpath=self.psfxmlname )
         self.psf.fwhm_pixels = float( self.psf.header['PSF_FWHM'] )
 
@@ -733,7 +758,6 @@ def psf_palette():
     yield palette
 
     palette.cleanup()
-
 
 
 # ======================================================================
