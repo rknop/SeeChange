@@ -3,10 +3,10 @@ from sqlalchemy import orm
 from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.schema import CheckConstraint
 
-from models.base import Base, SeeChangeBase, UUIDMixin, FileOnDiskMixin
+from models.base import Base, SeeChangeBase, UUIDMixin, HasProvenance, FileOnDiskMixin
 
 
-class DataFile( Base, UUIDMixin, FileOnDiskMixin ):
+class DataFile( Base, UUIDMixin, HasProvenance, FileOnDiskMixin ):
     """Miscellaneous data files."""
 
     __tablename__ = "data_files"

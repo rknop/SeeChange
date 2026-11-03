@@ -6,8 +6,8 @@ import warnings
 import pyarrow.parquet
 import healpy
 
+import util.config
 from util.logger import SCLogger
-from util.config import Config
 from util.radec import ra_cross_zero_avgra
 
 # parameters that are propagated from one Parameters object
@@ -53,7 +53,7 @@ class Parameters:
     _enforce_no_new_attrs is True (see below), this will raise an
     exception if you try to set a non-existing key, or if value is not
     of an allowed type.
-    
+
     Adding new parameters
     ---------------------
     To add new parameters directly on the object,
@@ -486,7 +486,7 @@ class Parameters:
           * If left is a dict and right is a dict, then for every key in right,
               if the key exists in left, call _recursive_merge; otherwise, just
               set the key in left to the value from right.
-          * If left is not a dict, then just return a copy 
+          * If left is not a dict, then just return a copy
 
         Deep copies are made while doing this; because of the recursion,
         this may be redundant, but hopefully it's safe, and hopefully
@@ -499,7 +499,7 @@ class Parameters:
         name.
 
         """
-        
+
         if toplevel:
             # First, fix the keys for the real keys.
             # This means more deepcopies than strictly necessary, but oh well.
@@ -544,7 +544,7 @@ class Parameters:
         from cfg.value(element).  (cfg will be config.Config.get() if
         not passed.)  An exception will be rasied if the final result
         isn't a dictionary.
-        
+
         Each pairwise merge is a "left/right" merge.  If left[key] and
         right[key] are not both dictionaries, then left[key] is replaced
         with right[key].  (So, lists are fully replaced, not extended!)
@@ -615,12 +615,12 @@ class Parameters:
         for i in range(len(everything)):
             if not isinstance( everything[i], ( dict, Parameters, None ) ):
                 if not isinstance( everything[i], str ):
-                    raise TypeError( f"Must pass either strings or dicts in each element of before and after." )
+                    raise TypeError( "Must pass either strings or dicts in each element of before and after." )
                 if cfg is None:
-                    cfg = config.Config.get()
+                    cfg = util.config.Config.get()
                 try:
                     d = cfg.value( everything[i] )
-                except:
+                except Exception:
                     if not ignore_missing_config_values:
                         raise
                     everything[i] = None

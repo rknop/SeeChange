@@ -31,6 +31,7 @@ from models.base import (
     SeeChangeBase,
     PGDB,
     UUIDMixin,
+    HasProvenance,
     FileOnDiskMixin,
     SpatiallyIndexed,
     FourCorners,
@@ -118,7 +119,7 @@ image_warp_parent = sa.Table(
 )
 
 
-class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, HasBitFlagBadness):
+class Image(Base, UUIDMixin, HasProvenance, FileOnDiskMixin, SpatiallyIndexed, FourCorners, HasBitFlagBadness):
     __tablename__ = 'images'
 
     @declared_attr
@@ -169,7 +170,7 @@ class Image(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, FourCorners, Has
         doc = ( "ID of the image that this is derived from via preprocessing.  Do not use this "
                 "for trimming, warping, or subtraction; those have their own association tables." )
     )
-    
+
     is_coadd = sa.Column(
         sa.Boolean,
         nullable=False,

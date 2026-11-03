@@ -15,6 +15,7 @@ from models.base import (
     Base,
     SeeChangeBase,
     UUIDMixin,
+    HasProvenance,
     FileOnDiskMixin,
     HasBitFlagBadness,
 )
@@ -43,7 +44,7 @@ class Co_Dict(dict):
         return super().__getitem__(key)
 
 
-class Cutouts(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
+class Cutouts(Base, UUIDMixin, HasProvenance, FileOnDiskMixin, HasBitFlagBadness):
 
     __tablename__ = 'cutouts'
 

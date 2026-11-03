@@ -9,7 +9,7 @@ from sqlalchemy.dialects.postgresql import UUID as sqlUUID
 
 import astropy.time
 
-from models.base import Base, SeeChangeBase, HasBitFlagBadness, FourCorners, UUIDMixin, PGDB
+from models.base import Base, SeeChangeBase, HasBitFlagBadness, FourCorners, UUIDMixin, HasProvenance, PGDB
 from models.enums_and_bitflags import reference_badness_inverse
 from models.provenance import Provenance
 from models.image import Image
@@ -56,7 +56,7 @@ image_subtraction_components = sa.Table(
 )
 
 
-class Reference(Base, UUIDMixin, HasBitFlagBadness):
+class Reference(Base, UUIDMixin, HasProvenance, HasBitFlagBadness):
     """A table that keeps track of subtraction references.
 
     A reference is defined by a zeropoint.  While this seems

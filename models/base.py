@@ -2401,6 +2401,27 @@ class UUIDMixin:
     def id( self, val ):
         self._id = asUUID( val )
 
+    @staticmethod
+    def get_object( objid, cls, no_none=False, pgdb=None ):
+        if isinstance( objid, str ):
+            objid = asUUID( objid )
+        elif not isinstance( objid, uuid.UUID ):
+            if not isinstance( objid, cls ):
+                raise TypeError( f"Got a {type(objid)}, not an instanceof {cls.__name__}." )
+            return objid
+
+        obj = cls.get_by_id( objid, pgdb=pgdb )
+        if obj is None:
+            if no_none:
+                raise ValueError( f"Could not find {cls.__name__} with id {objid}" )
+            else:
+                return None
+        elif not isinstance( obj, cls ):
+            raise RuntimeError( "This should never happen." )
+
+        return obj
+
+
     @classmethod
     def get_by_id( cls, uuid, session=None, pgdb=None, **kwargs ):
         """Get an object of the current class that matches the given uuid.
@@ -2503,6 +2524,44 @@ class UUIDMixin:
                                           vals=sql.SQL(",").join(values) ) )
         return [ cls.create(pgdb=pgdb, **r) for r in rows ]
 
+
+class HasProvenance:
+    """A mixin for tables that have provenance_id."""
+
+    # IMPORTANT : each class that includes this mixin must define this property themselves,
+    #   otherwise there's no way to set the foreign key constraint name
+    # provenance_id = sa.Column(
+    #     sa.ForeignKey( 'provenances._id', ondelete="CASCADE", name='OMG_I_DONT_KNOW_WHAT_TO_DO' ),
+    #     nullable=False,
+    #     inddex=True,
+    #     doc="Provenance id for this object"
+    # )
+
+    def __init__( self, *args, **kwargs ):
+        self._provenance = None
+
+    @property
+    def provenance( self ):
+        if ( self._provenance is not None ) and ( self._provenance.id == self.provenance_id ):
+            return self._provenance
+        else:
+            return self.load_provenance()
+
+    @provenance.setter
+    def provenance( self, prov ):
+        from models.provenance import Provenance
+        if not isinstance( prov, Provenance ):
+            raise TypeError( f"prov must be a Provenance, not a {type(prov)}" )
+        self._provenance = prov
+        self.provenance_id = prov.id
+
+    def load_provenance( self, must_exist=False,pgdb=None ):
+        from models.provenance import Provenance
+        if self.provenance_id is None:
+            self._provenance = None
+        elif ( self._provenance is None ) or ( self._provenance.id != self.provenance_id ):
+            self._provenance = Provenance.get( self.provenance_id, must_exist=must_exist, pgdb=pgdb )
+        return self._provenance
 
 
 class SpatiallyIndexed:

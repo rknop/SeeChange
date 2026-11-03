@@ -777,7 +777,7 @@ class ImageAligner:
     # TODO : pass a DataStore for source and target instead of all these parameters
     def run( self,
              source_image, source_sources, source_bg, source_psf, source_wcs, source_zp,
-             target_image, target_sources, target_wcs ):
+             target_image, target_sources, target_wcs, upstr_provenance_id=None ):
         """Warp source image so that it is aligned with target image.
 
         If the source_image and target_image are the same, will just create
@@ -812,6 +812,12 @@ class ImageAligner:
           target_wcs: WorldCoordiantes
              corresponding to target_sources
 
+          upstr_provenance_id: Provenance, str, or None
+             If not None, use this provenance in place of source_zp.provenance_id
+             as the primary upstream for the aligned image.  Used so that
+             a subrtaction pipeline can make the ref provenance the upstream
+             rather than the provenance of the zeropoint in the ref.
+
         Returns
         -------
           Image, Sources, Background, PSF, dict
@@ -831,7 +837,12 @@ class ImageAligner:
         SCLogger.debug( f"ImageAligner.run: aligning image {source_image.id} ({source_image.filepath}) "
                         f"to {target_image.id} ({target_image.filepath})" )
 
-        upstrprovs = Provenance.get_batch( [ source_zp.provenance_id, target_wcs.provenance_id ] )
+        if upstr_provenance_id is not None:
+            if isinstance( upstr_provenance_id, Provenance ):
+                upstr_provenance_id = upstr_provenance_id.id
+        else:
+            upstr_provenance_id = source_zp.provenance_id
+        upstrprovs = Provenance.get_batch( [ upstr_provenance_id, target_wcs.provenance_id ] )
         source_sources_prov = Provenance.get( source_sources.provenance_id )
         warped_provs = self.get_provenances( upstrprovs, source_sources_prov )
         warped_prov = warped_provs[ 'warped' ]

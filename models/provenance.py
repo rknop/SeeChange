@@ -70,6 +70,7 @@ class CodeVersion(Base, UUIDMixin):
     CODE_VERSION_DICT = {
         # The core processes of the pipeline
         'acquire_exposure': (0,2,0),
+        'split_exposure': (0,1,0),
         'preprocessing': (0,11,0),
         'extraction': (0,9,0),
         'astrocal' : (0,6,0),
@@ -510,7 +511,7 @@ class Provenance(Base):
 
           return_dict : bool, default True
              Ignored if process is not None.  Otherwise, see Returns below.
-        
+
           conn : PGDB, psycopg.Connection, psycopg.Cursor, or (shudder) sa Session, default None
              If given, use this connection to the database.  Otherwise,
              a new connection will be created and closed in this
@@ -563,7 +564,7 @@ class Provenance(Base):
                         Provenance._provenance_cache[ prov.id ] = prov
 
                 if return_dict:
-                    provdict = [ p.process: p for p in provs ]
+                    provdict = { p.process: p for p in provs }
 
                 # This doesn't detect circular upstreams
                 # Circular upstreams are bad.  Baaaaaaad.
@@ -576,7 +577,7 @@ class Provenance(Base):
                         prov = q.popleft()
                         if prov.id not in did:
                             if prov.process in provs:
-                                if return_dict and ( provdict[prov.prodcess].id != prov.id )
+                                if return_dict and ( provdict[prov.prodcess].id != prov.id ):
                                     raise RuntimeError( f"process {process} shows up in upstreams more than once" )
                             else:
                                 provs.append( prov )
@@ -841,7 +842,7 @@ class Provenance(Base):
             for row in rows:
                 if row['id'] not in Provenance._provenance_cache:
                     Provenance._provenance_cache[ row['id'] ] = Provenance( dont_update_id=True, **row )
-                usptreams.append( Provenance._provenance_cache[ row['id'] ] )
+                upstreams.append( Provenance._provenance_cache[ row['id'] ] )
             if save_to_object:
                 self._upstreams = upstreams
             return upstreams
@@ -861,7 +862,7 @@ class Provenance(Base):
         downstreams = []
         for row in rows:
             if row['id'] not in Provenance._provenance_cache:
-                Provenance._provenance_cache[ row['id'] ] = Provenacne( dont_update_id=True, **row )
+                Provenance._provenance_cache[ row['id'] ] = Provenance( dont_update_id=True, **row )
             downstreams.append( Provenance._provenance_cache[ row['id'] ] )
         return downstreams
 

@@ -16,7 +16,7 @@ from util.util import parse_dateobs, listify, asUUID
 
 from improc.tools import make_cutouts
 
-from models.base import PGDB, Base, SeeChangeBase, UUIDMixin, HasBitFlagBadness
+from models.base import PGDB, Base, SeeChangeBase, UUIDMixin, HasProvenance, HasBitFlagBadness
 from models.provenance import Provenance
 import models.object # OMG why did we name one of our classes Object????
 from models.object import ObjectPosition
@@ -25,7 +25,7 @@ from models.background import Background
 from models.enums_and_bitflags import measurements_badness_inverse
 
 
-class DiaForcedPhot( Base, UUIDMixin, HasBitFlagBadness ):
+class DiaForcedPhot( Base, UUIDMixin, HasProvenance, HasBitFlagBadness ):
     __tablename__ = 'dia_forced_photometry'
 
     @declared_attr

@@ -10,6 +10,7 @@ from sqlalchemy.ext.declarative import declared_attr
 from models.base import ( Base,
                           SeeChangeBase,
                           UUIDMixin,
+                          HasProvenance,
                           SpatiallyIndexed,
                           HasBitFlagBadness,
                           SmartSession,
@@ -24,7 +25,7 @@ from models.enums_and_bitflags import measurements_badness_inverse
 # from util.logger import SCLogger
 
 
-class MeasurementSet( Base, UUIDMixin, HasBitFlagBadness ):
+class MeasurementSet( Base, HasProvenance, UUIDMixin, HasBitFlagBadness ):
     # A measurement set is a way of having a single upstream for things
     #   that depend on a wholse set of Measurements (like a ScoreSet,
     #   and, depending on the ScoreSet, a Report, or a FakeAnalysis).

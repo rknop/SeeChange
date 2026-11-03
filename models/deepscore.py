@@ -9,12 +9,12 @@ from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.declarative import declared_attr
 
-from models.base import Base, UUIDMixin, SeeChangeBase, PGDB, HasBitFlagBadness
+from models.base import Base, UUIDMixin, HasProvenance, SeeChangeBase, PGDB, HasBitFlagBadness
 from models.enums_and_bitflags import DeepscoreAlgorithmConverter
 from models.measurements import MeasurementSet
 
 
-class DeepScoreSet( Base, UUIDMixin, HasBitFlagBadness ):
+class DeepScoreSet( Base, UUIDMixin, HasProvenance, HasBitFlagBadness ):
     # A DeepScoreSet is a way of having a single upstream for things that depend on
     #   a whole set of DeepScores (like a FakeAnalysis).
 

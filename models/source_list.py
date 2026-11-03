@@ -15,7 +15,7 @@ from sqlalchemy.dialects.postgresql import ARRAY
 import astropy.table
 import matplotlib.pyplot as plt
 
-from models.base import Base, UUIDMixin, FileOnDiskMixin, SeeChangeBase, HasBitFlagBadness, PGDB
+from models.base import Base, UUIDMixin, HasProvenance, FileOnDiskMixin, SeeChangeBase, HasBitFlagBadness, PGDB
 from models.image import Image
 from models.enums_and_bitflags import (
     SourceListFormatConverter,
@@ -26,7 +26,7 @@ from util.logger import SCLogger
 import util.ldac
 
 
-class SourceList(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
+class SourceList(Base, UUIDMixin, HasProvenance, FileOnDiskMixin, HasBitFlagBadness):
     """Encapsulates a source list.
 
     By default, uses SExtractor.

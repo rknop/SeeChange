@@ -19,6 +19,7 @@ from models.base import (
     Base,
     SeeChangeBase,
     UUIDMixin,
+    HasProvenance,
     FileOnDiskMixin,
     SpatiallyIndexed,
     HasBitFlagBadnessButNoUpstream,
@@ -150,7 +151,7 @@ class ExposureImageIterator:
             raise StopIteration
 
 
-class Exposure(Base, UUIDMixin, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBadnessButNoUpstream):
+class Exposure(Base, UUIDMixin, HasProvenance, FileOnDiskMixin, SpatiallyIndexed, HasBitFlagBadnessButNoUpstream):
     """Encapsulates one exposure, which includes many images each on different sensor sections (chips).
 
     The assumption for any Exposure is that there's a file on disk to go

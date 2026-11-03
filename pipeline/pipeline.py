@@ -1,36 +1,21 @@
+import io
 import copy
-import textwrap
 import collections
 
 from psycopg import sql
 
-from models.base import PGDB
-from models.exposure import Exposure
-from models.image import Image
+from models.base import PGDB, UUIDMixin, HasProvenance
 from models.provenance import Provenance, CodeVersion
 from util.config import NotDefined
 from util.logger import SCLogger
 
-from pipeline.data_store import ProvenanceTree, DataStore
-from pipeline.split_exposure import ExposureSplitter
-from pipeline.calibrator_builder import CalibratorBuilder
 from pipeline.processobject import ProcessObject
-from pipeline.preprocessing import Preprocessor
-from pipeline.detection import Detector
-from pipeline.astro_cal import AstroCalibrator
-from pipeline.photo_cal import PhotCalibrator
-from pipeline.ref_maker import RefMaker
-from pipeline.alignment import Aligner
-from pipeline.subtraction import Subtractor
-from pipeline.cutting import Cutter
-from pipeline.measuring import Measurer
-from pipeline.scoring import Scorer
-from pipeline.alerting import Alerting
+
 
 class Pipeline( ProcessObject ):
     """An abstract pipeline class.
 
-    Instantiate a Pipeline with:
+    Instantiate a Pipeline of subclass <Pipeline> with:
 
       pipeline_object = <Pipeline>( starting_prov, starting_point=<class>,
                                     <process>=<dict>, <process>=<dict>, ... )
@@ -62,33 +47,212 @@ class Pipeline( ProcessObject ):
     """
 
     # Subclasses need to define all four of these.
-    # Do NOT define a _name that already exists!
-    # Before writing a new class, try calling Pipeline.get( name )
-    #   on your name to see if it returns anything.  If it
-    #   raises a ValueError with "Unknown pipeline", then you're safe.
+    # See dia_discovery_pipeline.py for the canonical example.
+
+    # This is the name of the pipeline.
+    #   Do NOT define a _name that already exists!  Before writing a new
+    #   class, try calling Pipeline.get( name ) on your name to see if
+    #   it returns anything.  If it raises a ValueError with "Unknown
+    #   pipeline", then you're safe.
     _name = "unknown_pipeline"
-    _external_pipeline_processes = []
-    _process_classes = {}
+
+    # This is the subclass of Parameters that holds the parameters
+    #   for this pipeline.  (This is actually defined originally
+    #   in ProcessObject, the superclass of this class, and also
+    #   the superclass of all process classes.)
+    _pars_class = None
+
+    # This is the default name for this process.  Config will use this
+    #   as the top-level key to get the base configuration for this
+    #   process.  (Configuration is complicated, ROB WRITE MORE.)
+    _process_name = None
+
+    # A list of strings; all the steps (process names) of this pipeline
+    # in the order they will normally be run.
+    _all_steps = []
+
+    # A dict of str: class.  The keys are the names of properties that
+    #   the pipeline needs to get started.  The values are the
+    #   classes of those starting products.  Many pipelines will
+    #   only have a single entry in this dictionary.
+    _starting_products = {}
+
+    # A dict of str: list of tuple, where each tuple is (class, str) or
+    #    (list, str, class).  The key defines the prodcess that produces
+    #    products in the list.  In the tuple that is each element of the
+    #    list, str defines the property of a DataStore that holds a data
+    #    product (or input), and class is the class of that product.  In
+    #    the case of a 3-element tuple, the first element is literally
+    #    list, not a list.  In that case, the property# str points to a
+    #    list of objects whose class is defined by the third element of
+    #    the tuple.
     _process_products = {}
-    _tree_upstreams = None
+
+    # A dict of str: str.  The key is a process product (which is either
+    # one of the second elements of one of the tupels from the lists in
+    # the values of _process_products, or is something that the pipeline
+    # will start with).  The value is the name of the process used for
+    # looking up the provenance (e.g. with a provenance tag).  If the
+    # value is None, this indicates that this is a process that does not
+    # have a provenance.  (E.g., Background and PSF do not have
+    # provenances, because there is a 1:1 relationship between
+    # SourceList and each of those, so the SourceList provenance defines
+    # the Background and PSF provenance.)  If the value is NotDefined,
+    # that indicates the pipeline has to do something custom to set this
+    # provenance process.  (That will be the case for data products that
+    # are pre-defined as starting points for the pipeline.)  If a product
+    # does not appear in this dictionary, then the process is the key
+    # from _process_products where this data product appeared.  (So, in principle,
+    # this could be a nearly empty dictionary.)
+    #
+    # This dictionary does *not* need to be complete.  It will be automatically
+    # populated from _starting_products and _process_products.  Only
+    # put in here entries where a product has a provenance, but the
+    # process of that provenances doesn't match the step name of the process.
+    _product_provenance_processes = {}
+
+    # A dict of str: list of str.  The key is a data product, the value
+    # is a list of data products that are immediately upstream of this
+    # data product.  Those upstream data products are used both to
+    # construct Provenances, and for a Pipeline to find things.  Every
+    # data product that will be referenced by the pipeline, or that will
+    # be produced by the pipeline, should have an entry.  If the data
+    # product is something that's not actually produced by the pipeline
+    # (because it's a starting point, or because the process that
+    # produces it is a loader process, not the thing that actually makes
+    # it), the value should be NotDefined instead of a list of str.
+    _product_upstreams = {}
+
+    # A dict of str: class.  For each process (step) that is part of
+    # this pipeline's running, the class is the class that performs that
+    # process.
+    _process_classes = {}
+
+    # A dictionary of product: function, special code for loading
+    # self.products for that product.
+    _product_loaders = {}
+
+    # A dictionary of product: function, special code for validating
+    # that a data product is consistent with other data products
+    # already stored.  Should raise an exception if it's not.
+    _product_validators = {}
+
 
     @property
     def name( self ):
         return self._name
 
-    @property
-    def prov_tree( self ):
-        return self._prov_tree
-
-    @prov_tree.setter
-    def prov_tree( self, tree ):
-        if not isinstance( tree, ProvenanceTree ):
-            raise TypeError( f"prov_tree must be a ProvenanceTree, not a {tree.__class__.__name__}" )
-        self._prov_tree = tree
-
 
     @classmethod
-    def get( cls, pipeline, *args, **kwargs ):
+    def get( cls, pipeline, pars=None, provtag=None, read_pars_from_prov=False, never_execute=NotDefined,
+             match_code_version=True, match_full_code_version=False,
+             validate_upstream_steps=True, ok_processes_missing=True, handle_unexpected_processes='ignore',
+             pgdb=None, **kwargs ):
+        """Get a Pipeline subclass.
+
+        Different subclasses may have different additional requirements,
+        but you must supply one of the following sets of kwargs.  (You
+        may well want to provide others as well!)
+
+          * <product>=<object, uuid, or str> [, <product>=<object>, ...]
+              The starting points for the pipeline.  For example, for
+              the image reduction pipeline, you could do:
+
+                 pip = Pipeline.get( exposure=exp )
+
+              where exposure_obj is either the instance of an Exposure,
+              or the id of an exposure.
+
+          * provtag=str, <product>=<object, uuid, or str>
+              Pass any data product that's anywhere in the pipeline.
+              You can pass the appropriate object, or the id of the
+              object.  For instance, for the image reduction pipeline,
+              you could do
+                 pip = Pipeline.get( provatag='mytag', wcs=my_wcs )
+              The pipeline will complain if it cannot find all the
+              provenances it needs given what you gave it.
+
+              You *probably* want to set read_pars_from_prov=True when
+              using this version.
+
+          * starting_prov : either a str, Provenance, or a dict of str: (str or Provenance)
+              For pipelines that have a single starting point
+              (e.g. ImageReductionPipeline starts with 'exposure"), this
+              is the provenance (or provenance id ) of we'd
+              start with.  For a pipeline with multiple starting points,
+              the dictionary gives all of them.
+
+          * provtag=str, read_pars_from_prov=True
+              In this case, read all of the Provenances from the given provenance tag.
+
+        Parameters
+        ----------
+          pipeline : str
+             The name of the pipeline, e.g. 'image_reduction',
+             'dia_transientsearch', etc.  Controls the class of the
+             object that will be returned.
+
+          pars : dictionary, default None
+             OMG complicated, Rob write docs.
+
+          provtag : str, default None
+             A provenance tag.  If given, and read_pars_from_prov is
+             True, then all pipeline process object parameters are read
+             from the provenances in the database, and the config is
+             completely ignored.  If read_pars_from_prov is False, then
+             if any Provenances saved in this provenance tag are
+             inconsistent with the parameters in active configuration
+             files and what was passed in pars, an exception will be
+             raised.  Additionally, if read_pars_from_prov is False,
+             the pipeline will create Provenances and save them to the
+             database, tagged with this tag (if it's not None).
+
+          read_pars_from_prov: str, default False
+             If True, then pars must not be given.  The config will be
+             ignored (...sort of...), and all process object parameters
+             will be set by what's read from the provenances tagged with
+             this provenance.  Use this when you just want to get existing
+             data products that may not be from the current configuration.
+
+          never_execute : bool, default NotDefined
+             If this is not given, then it defaults to True if
+             read_pars_from_prov is given, otherwise it defaults to
+             False.  When this is True, the pipeline will not create any
+             new Provenances, nor will it do anything.
+
+          match_code_version : bool, default True
+             Ignored if provtag is not given.  If any found Provenances have
+             a major or minor code version that doesn't match what's current,
+             raise an exception. You *might* be able to use this with
+             read_pars_from_prov if you know what you're doing; otherwise,
+             you really don't want to make this False.
+
+          match_full_code_version : bool, default False
+             Ignored if porvtag isn't given. Require that the patch
+             part of the code version also match.  If we did our
+             semantic verisoning right, then it should be safe to leave
+             this at False.  Make it True if you don't trust us.  I
+             don't know if I trust us.
+
+          validate_upstream_steps : bool, default True
+             Ignored if provtag isn't given.  Leave this as True.
+
+          ok_processes_missing : bool, default True
+             Ignored if provtag isn't given.  When provenances are read
+             from the database, if this is False and provenances aren't
+             found for all expected processes, raise an Exception.
+
+          handle_unexpected_processes : str, default 'ignore'
+             Ignored if provtag isn't given.  If processes are found
+             in provtag that aren't part of what this pipeline expects,
+             raise an exception.  That can easily happen, so you probably
+             just want to leave this at ignore.
+
+        Returns
+        -------
+          An object of the appropriate subclass of Pipeline
+
+        """
         queue = collections.deque( cls.__subclasses__() )
         subclasses = {}
         while queue:
@@ -99,597 +263,405 @@ class Pipeline( ProcessObject ):
         if pipeline not in subclasses:
             raise ValueError( f"Unknown pipeline {pipeline}" )
         else:
-            return subclasses[ pipeline ]( *args, **kwargs)
-        
-
-    def __init__( self, no_process_objects=NotDefined, reports=False, **kwargs ):
-                  
-        if self.__class__.__name__ == "Pipeline":
-            raise TypeError( "Can't instantiate a Pipeline, it's abstract.  Instantiate a Pipeline subclass." )
-
-        treepars = { 'starting_prov', 'starting_process', 'provtag', 'read_pars_from_prov', 'pars',
-                     'match_code_version', 'match_full_code_version',
-                     'handle_unexpected_processes', 'validate_upstream_steps', 
-                     'pgdb', '_tree_upstreams', 'process_classes', '_external_pipeline_processes'
-                    }
-        treekwargs = { k: v for k, v in kwargs.items() if k in treepars }
-        treekwargs['no_process_objects'] = ( treekwargs['read_pars_from_prov']
-                                             if no_process_objects == NotDefined
-                                             else no_process_objects )
-        parskwargs = { k: v for k, v in kwargs.items() if k not in treepars }
-
-        super(ProcessObject, self).__init__( pipeline=None, ignore_missing_config_values=True, **parskwargs )
-            
-        self.prov_tree = self.get_prov_tree( **treekwargs )
-        self.process_objects = {}
-        self._reports = reports
-        
-
-    def make_prov_tree( self, starting_product=None, pars={}, provtag=None,
-                        read_pars_from_provs=False, match_code_verson=True, match_full_code_version=False,
-                        
+            return subclasses[ pipeline ]( **kwargs)
 
 
+    def _is_product_upstream( self, downstream, upstream ):
+        if self.product_upstreams[ downstream ] == NotDefined:
+            return False
+        elif upstream in self.product_upstreams[ downstream ]:
+            return True
+        else:
+            for check in self.product_upstreams[ downstream ]:
+                if self._is_product_upstream( check, upstream ):
+                    return True
+        return False
 
 
-starting_prov=None, starting_process=None,
-                        provtag=None, read_pars_from_prov=False, no_process_objects=False, pars={},
-                        match_code_version=True, match_full_code_version=False,
-                        handle_unexpected_processes='ignore', validate_upstream_steps=True,
-                        pgdb=None,
-                        _tree_upstreams=NotDefined, _process_classes=NotDefined,
-                        _external_pipeline_processes=NotDefined ):
-        """Return a ProvenanceTree for the full run of this pipeline.
-
-        TODO : add a final_prov paramter, that, if given, specifies the
-        last-step provenance, and build a tree including that provenance
-        and all of its upstreams (honoring starting_prov and
-        starting_process/provtag if given).
-
-        Will save any not-yet-saved provenances to the database.
-
-        See datastore.py::ProvenanceTree for what a ProvenanceTree is.
-        But, basically, it's a dict of { process: Provenance }, where
-        process is a string.  It also includes a dictionary
-        upstream_steps of { process: [ list of process ] }, where all of
-        "process" are strings.
-
-        Will also fill self.process_objects with instances of classes
-        that perform pipeline steps, unless no_process_objects is True.
-
-        Parameters
-        ----------
-          starting_prov : Provenance or str
-            The Provenance, or the id of the Provenance in the database,
-            for the starting point object.  You must either give this,
-            or you must give starting_process and provtag; in the latter
-            case, the provenance defined by (starting_process, provtag)
-            must exist in the database.
-
-          starting_process : str, default None
-            The process that should be the starting point of this
-            provenance tree.  You don't need to give this if you give
-            starting_prov.  In the returned ProvenanceTree, this process
-            will not appear in as a key; rather, the provenance for that
-            process will have the key 'starting_point'.
-
-            If neither this nor starting_prov is given, if
-            read_pars_from_prov is True, this function will try to
-            automatically figure out the starting point.  Hopefully it
-            guesses right.
-
-          provtag : str, default None
-            If not None, then associate these provenances with this provenance tag.
-
-          read_pars_from_prov : bool, default False
-            If False (default), then process objects will be generated
-            using the parameters in pars (which override what's in the
-            config and the process defaults).  If True, then we are
-            assuming all of the provenances already exist and are tagged
-            with provtag.  Read those provenances, and instantiate the
-            process objects using those parameters.
-
-            WARNING: in this case, pars is ignored, and there is no
-            validation to find out if the parameters in the provenances
-            read from the database match anything you passed in pars.
-
-          no_process_objects : bool, default False
-            Ignored if read_pars_from_prov is False; in that case,
-            process objects will always be made, as they'll be needed to
-            determine provenances.  By default, this method will load up
-            self.process_objects with a dictionary of str->object, where
-            object is an object of the class needed to perform that
-            step.  If this is True AND read_pars_from_prov is True,
-            then don't do this, and leave self.process_objects
-            untouched.
-
-          pars : dict
-            A dictionary of {str: dict}, where str is a process name,
-            and the dict are the **kwargs you'd pass to the cosntructor
-            of the process class for that process.  If you want to use
-            all the defaults for critical parameters from config, then
-            you don't need to pass this.  If read_pars_from_prov is
-            True, then you shouldn't pass this.  Otherwise, you need to
-            pass this so that the right Provenances can be constructed.
-
-          match_code_version : bool, default True
-            Ignored if read_pars_from_prov is False.  If this is True, and the
-            major.minor of a code version read from the provenance does not match
-            the current code's major.minor version, raise an exception.  Otherwise,
-            just issue a warning.
-
-          match_full_code_version : bool, default False
-            Ignored if read_pars_from_prov is False.  If this is True, and the
-            major.minor.patch of a code version read from the provenance does not match
-            the current code's major.minor version, raise an exception.  Otherwise,
-            just issue a warning.  (Note that provenance hashes are built only from
-            major.minor, so it's possible that two different code versions will be
-            associated with the same provenance.  The idea is that we're really doing
-            semantic verisoning right, and a change in the patch version will NOT change
-            any existing data products were the process rerun with the same parameters.)
-
-          handle_unexpected_processes : str, default "ignore"
-            Ignored if read_pars_from_prov is False.  If the structure
-            of the provenance tree is known — as it should be, because
-            every Pipeline subclass should define an internal variable
-            that specifies it — this says what to do if processes are
-            read for a provtag that aren't expected.  This can easily
-            happen if you associate a given provenance tag with
-            additional things beyond what is done by the pipeilne.  If
-            this is "ignore", the default, then those unexpected
-            processes are just ignored.  If this is "warning", then
-            those unexpected processes produce a warning, but are
-            otherwise ignored.  If this is "error", then when that
-            happens an exception is raised.
-
-          validate_upstream_steps : bool, default True
-            Ignored if read_pars_from_prov is False.  If everything's
-            working the way it's supposed to, then this shouldn't be
-            needed if match_code_version is True.  However, by default
-            do it anyway to be safe.  Even if match_code_version is
-            False, you might still want to do this.  If this is True,
-            make sure that the upstream steps of all the processes read
-            from the database match what's expected.
-
-          pgdb: PGDB, default None
-            A database connection.  If not given, a new one will be
-            opened and closed.
-
-          _tree_upstreams, _process_classes, _external_pipeline_processes:
-            These are all used internally and should only be passed by
-            subclasses' get_prov_tree methods calling this parent method.
-
-        Returns
-        -------
-          ProvenanceTree, or None
-
-            If you set read_pars_from_prov, and no provenances were
-            found in provtag, then you will get None back.
-
-        """
+    def __init__( self, starting_prov=None, provtag=None, pars=None, read_pars_from_prov=False,
+                  match_code_version=True, match_full_code_version=False,
+                  handle_unexpected_processes='ignore', ok_processes_missing=True, validate_upstream_steps=True,
+                  reports=False, pgdb=None, _preset_provenances={}, _ok_to_instantiate=False, **kwargs
+                 ):
+        """Do not ever directly instantiate a Pipeline or subclass.  Use Pipeline.get()."""
 
         _pgdb = pgdb
 
+        if not _ok_to_instantiate:
+            raise RuntimeError( f"Don't instantiate a {self.__class__.__name__}, instead use Pipeline.get()" )
+
         if self.__class__.__name__ == "Pipeline":
-            # This may be redundant given the check in __init__
-            raise TypeError( "Don't call get_prov_tree on a Pipeline object, Pipeline is an abstract class. "
-                             "Call it on an object of a subclass." )
+            raise TypeError( "Can't instantiate a Pipeline, it's abstract.  Instantiate a Pipeline subclass." )
 
-        if read_pars_from_prov and ( provtag is None ):
-            raise ValueError( "read_pars_from_prov requires a non-None provtag" )
-        
-        starting_prov = None if starting_prov is None else Provenance.get( starting_prov, pgdb=_pgdb )
-        if starting_process is None:
-            if starting_prov is not None:
-                starting_process = starting_prov.process
-        else:
-            if ( starting_prov is not None ) and ( starting_prov.process != starting_process ):
-                raise ValueError( f"starting_prov process {starting_prov.process} doesn't match "
-                                  f"starting_process {starting_process}" )
-            
-        default_upstream_steps = self._tree_upstreams if _tree_upstreams == NotDefined else _tree_upstreams
-        process_classes = self._process_classes if _process_classes == NotDefined else _process_classes
-        external_pipeline_processes = ( self._external_pipeline_processes if _external_pipeline_processes == NotDefined
-                                        else _external_pipeline_processes )
+        pars = pars if pars is not None else {}
+        if not isinstance( pars, dict ):
+            raise TypeError( f"pars must be a dict, not a {type(pars)}")
 
-        # See if we're just reading everything
-        if read_pars_from_prov:
-            prov_tree = ProvenanceTree()
-            self.process_objects = {}
-            upstream_steps = {}
-            with PGDB( _pgdb ) as pgdb:
-                rows, _cols = pgdb.execute( sql.SQL( "SELECT provenance_id FROM provenance_tags WHERE tag={tag}" )
-                                            .format( tag=provtag ) )
-                if len(rows) == 0:
-                    return None
-
-                # Build prov_tree and upstream_steps
-                processes_seen = set()
-                for row in rows:
-                    prov = Provenance.get( row[0], pgdb=pgdb )
-                    if prov.process in processes_seen:
-                        raise RuntimeError( f"process {prov.process} shows up more than once for provenance tag "
-                                            f"{provtag}; this should never happen." )
-                    processes_seen.add( prov.process )
-                    prov_tree[ prov.process ] = prov
-                    if ( ( starting_prov is None ) and ( starting_process is not None ) and
-                         ( prov.process == starting_process ) ):
-                        starting_prov = prov
-                    elif ( ( starting_process is None ) and ( starting_prov is not None ) and
-                           ( prov.id == starting_prov.id ) ):
-                        starting_process = prov.process
-                    if prov.process in external_pipeline_processes:
-                        upstream_steps[ prov.process ] = []
-                    else:
-                        upstream_steps[ prov.process ] = [ p.process for p in
-                                                           prov.get_upstreams( pgdb=pgdb, save_to_object=True ) ]
-
-                # Sort so upstreams are before their downstreams
-                sortedprocs = ProvenanceTree.sort_processes( upstream_steps )
-
-                # Crop out everything before the starting point if that is given and found
-                if starting_process is not None:
-                    try:
-                        dex = sortedprocs.index( starting_process )
-                    except Exception:
-                        starting_process = None
-                        starting_prov = None
-                        dex = -1
-                    if dex > 0:
-                        for proc in sortedprocs[ :dex ]:
-                            del prov_tree[ proc ]
-                            del upstream_steps[ proc ]
-                        sortedprocs = sortedprocs[ dex: ]
-
-                # Call the first step starting_point, and wipe out its upstream steps (since it's the starting point!)
-                upstream_steps['starting_point'] = []
-                del upstream_steps[ sortedsteps[0] ]
-                prov_tree['starting_point'] = prov_tree[ sortedsteps[0] ]
-                del prov_tree[ sortedsteps[0] ]
-                sortedsteps[0] = 'starting_point'
-
-                # Validate upstream steps if requested
-                if validate_upstream_steps:
-                    mykeys = set( upstream_steps.keys() )
-                    defaultkeys = set( default_upstream_steps.keys() ).union( {'starting_point'}  )
-                    if not mykeys.issubset( defaultkeys ):
-                        raise ValueError( f"The set of steps found for provenance tags {provtag} "
-                                          f"included some unexpected things: {mykeys - defaultkeys}" )
-                    mismatches = []
-                    for proc in upstream_steps:
-                        if proc == 'starting_point':
-                            continue
-                        myups = set( upstream_steps[proc] )
-                        defups = set( default_upstream_steps[proc] )
-                        if myups != defups:
-                            mismatches.append( f"Upstream steps found for process {key} in provtag {provtag} "
-                                               f"{upstream_steps[key]} does not match what was "
-                                               f"expected {default_upstream_steps[key]}" )
-                    if len(mismatches) > 0:
-                        nl = "\n    "
-                        raise ValueError( f"Unexpected provenance tree structure:{nl}{nl.join(mismatches)}" )
-
-                # Validate code versions
-                for step in sortedsteps:
-                    process = starting_process if step == 'starting_point' else step
-                    curcv = Provenance.get_code_version( process, pgdb=pgdb )
-                    provcv = CodeVersion.get_by_id( prov_tree[step].code_version_id, pgdb=pgdb )
-                    errmsg = ( f"Current version for process {process} is "
-                               f"{curcv.version_major}.{curcv.version_minor}.{curcv.version_patch}, "
-                               f"which does not match what's found for provenance tag {provtag}: "
-                               f"{provcv.version_major}.{provcv.version_minor}.{provcv.version_patch}" )
-                    if curcv.id == provcv.id:
-                        # If curcv.id = provcv.id, then major and minor must match, but patch may not
-                        if curcv.version_patch != provcv.version_patch:
-                            if match_full_code_version:
-                                raise ValueError( errmsg )
-                            else:
-                                SCLogger.warning( errmsg )
-                    else:
-                        if match_code_version:
-                            raise ValueError( errmsg )
-                        else:
-                            SCLogger.warning( errmsg )
-
-            # Make all the process objects
-            if not no_process_objects:
-                thingstomake = sortedsteps if starting_process is None else sortedsteps[1:]
-                if not set(thingstomake).issubset(process_classes.keys()):
-                    raise ValueError( f"There are steps found for which we don't have process classes: "
-                                      f"{set(thingstomake) - set(proces_classes.keys())}" )
-                self.process_objects = {}
-                for step in thingstomake:
-                    self.process_objects[step] = process_classes[step]( **(prov_tree[step].params) )
-
-            # Done
-            prov_tree.upstream_steps = upstream_steps
-            return prov_tree
-
-        else:
-            # If we're here, read_pars_from_prov was false, so we have to construct all the
-            #   provenances from parameters.
-
-            if starting_prov is None:
-                if ( starting_process is None ) or ( provtag is None ):
-                    raise RuntimeError( "Must either give a starting_prov, or a starting_process and "
-                                        "a provtag so we can find it in the database." )
-                starting_prov = Provenance.get_for_tag( provtag, process=process )
-                if starting_prov is None:
-                    raise ValueError( f"Could not find starting point provenance for process {process} "
-                                      f"in provenance tag {provtag}" )
+        # Make copies of the pipeline definition so we can modify it for this instance
+        for prop in [ 'all_steps', 'starting_products', 'process_products',
+                      'product_provenance_processes', 'product_upstreams', 'process_classes' ]:
+            if prop in kwargs:
+                setattr( self, prop, copy.deepcopy( kwargs[prop] ) )
             else:
-                # Convert id to Provenance object if necessary
-                starting_prov = Provenance.get( starting_prov )
-                if starting_prov is None:
-                    raise ValueError( f"Unknown starting provenance {starting_prov}" )
+                setattr( self, prop, copy.deepcopy( getattr( self, f"_{prop}" ) ) )
 
-            upstream_steps = copy.deepcopy( default_upstream_steps )
+        self._do_reports = reports
 
-            pars = {} if pars is None else pars
-            if ( ( not isinstance( pars, dict ) ) or
-                 ( not all( isinstance( v, dict ) for v in pars.values() ) ) or
-                 ( not all( isinstance( k, str ) for k in pars.keys() ) )
-                ):
-                raise TypeError( "pars must be a dictionary of str:dict" )
+        # Make a dictionary of product classes.  The keys of
+        #   self.product_classes will have every product we might try to
+        #   access inside the pipeline itself (so process objects called
+        #   by the pipeline may access other things), or that we will
+        #   produce as part of the running of the pipeline.  The value
+        #   of the dictionary will *usually* be a class, but it might be
+        #   a tuple of (list, class).
+        #
+        # Also, at the same time, make sure that
+        #   self.product_provenance_processes is complete (has an entry
+        #   for everything in self.product_classes).  It will be
+        #   NotDefined for products that are starting points, and None
+        #   for classes that aren't subclasses of HasProvenance.  for
+        #   products that don't have provenances.
+        self.product_classes = self.starting_products.copy()
+        self.product_provenance_processes.extend( { c: NotDefined for c in self.product_classes.keys() } )
+        for process, mess in self.process_products.items():
+            for tup in mess:
+                islist = tup[0] is list
+                product = tup[1]
+                cls = tup[2] if islist else tup[0]
 
-            if ( ( upstream_steps is None ) or
-                 ( not isinstance( upstream_steps, dict ) ) or
-                 ( not all( isinstance( k, str ) for k in upstream_steps.keys() ) ) or
-                 ( not all( isinstance( v, list ) for v in upstream_steps.values() ) ) or
-                 ( not all( all( isinstance( vv, str ) for vv in v ) for v in upstream_steps.values() ) ) or
-                 ( 'starting_point' not in upstream_steps ) or
-                 ( len( upstream_steps['starting_point'] ) > 0 )
-                ):
-                raise TypeError( "upstream_steps must be a dict of str: list of str, "
-                                 "and must include a starting_point that has no upstreams" )
+                if product in self.product_classes:
+                    raise RuntimeError( f"{self.__class__.__name__} is ill-defined, {product} shows up "
+                                        f"more than once either in _starting_products or _process_products" )
+                if islist:
+                    self.product_classes[ product ] = ( list, cls )
+                else:
+                    self.product_classes[ product ] = cls
 
-            errors = []
-            known_steps = set( upstream_steps.keys() )
-            for process, upstreams in upstream_steps.items():
-                ups = set( upstreams )
-                if not ups.issubset( known_steps ):
-                    errors.append( f"Unknown upstreams for {process}: {ups - known_steps}" )
-            if len(errors) > 0:
-                raise ValueError( "\n".join( errors ) )
-
-            # Figure out the order the steps need to go in
-            sortedprocs = ProvenanceTree.sort_processes( upstream_steps )
-
-            if sortedprocs[0] != 'starting_point':
-                raise RuntimeError( "starting_point didn't come first.  This might actually not be an error, "
-                                    "just an indication that more code needs to be written right here to move "
-                                    "it around.  But maybe it is an error.  If you see this exception, then tell "
-                                    "Rob about it, and he will have to think harder." )
-
-            # Make process objects and provenance tree
-            known_steps = set( process_classes.keys() ).union( { 'starting_point' } )
-            if not set( sortedprocs ).is_subset( known_steps ):
-                raise ValueError( f"Some steps don't have known process objects: {set(sortedprocs) - known_steps}" )
-
-            if not set( pars.keys() ).issubset( known_steps ):
-                raise ValueError( f"Parameters given for unknown steps: {set(pars.keys()) - known_steps}" )
-
-            provs = ProvenanceTree()
-            self.process_objects = {}
-            with PGDB( pgdb ) as pgdb:
-                for step in sortedprocs:
-                    if step == 'starting_point':
-                        provs[step] = starting_prov
+                if cls not in self.product_provenance_processes:
+                    if isinstance( cls, HasProvenance ):
+                        self.product_provenance_processes[product] = process
                     else:
-                        if step in external_pipeline_processes:
-                            provs[step] = Provenance.get( external_pipeline_processes[step] )
-                            # TODO : gracefully fail if this provenance doesn't exist.  That could
-                            #   happen, if a pipeline has been configured but things that have to
-                            #   be run before this pipeline could run haven't happened yet.
-                            #   In this case, we'll probably need to wipe out all downstreams.
-                            if provs[step] is None:
-                                raise RuntimeError( f"Failed to find provenance for external process {step}.  "
-                                                    f"Ideally, the code should handle this, but it doesn't yet." )
-                            self.process_objects[step] = process_classes[step]( **(prov.params) )
+                        self.product_provenance_processes[product] = None
+
+        # Make sure all our dicts of products to stuff all have the same keys
+        produpkeys = set( self.product_upstreams.keys() )
+        prodclskeys= set( self.product_classes.keys() )
+        prodprovprockeys =set( self.product_provenance_processes.keys() )
+        if ( produpkeys != prodclskeys ) or ( produpkeys != prodprovprockeys ):
+            strio = io.StringIO()
+            strio.write( f"{self.__class__.__name__} is ill-defined. The keys of _product_upstreams "
+                         f"don't match both the keys of product_classes and product_provenance_processes." )
+            if len( produpkeys - prodclskeys ) != 0:
+                strio.write( f"  In product_upstreams but not product_classes: {produpkeys-prodclskeys}" )
+            if len( prodclskeys - produpkeys ) != 0:
+                strio.write( f"  In product_classes but not product_upstreams: {prodclskeys-produpkeys}" )
+            if len( produpkeys - prodprovprockeys ) != 0:
+                strio.write( f"  In product_upstreams but not product_provenance_processes: "
+                             f"{produpkeys-prodprovprockeys}" )
+            if len( prodprovprockeys - produpkeys ) != 0:
+                strio.write( f"  In product_provenance_processes but not product_upstreams: "
+                             f"{prodprovprockeys-produpkeys}" )
+            SCLogger.exception( strio.getvalue())
+            raise RuntimeError( strio.getvalue() )
+
+        # Initialize our internal tracking of provenaces (values are all Provenance)
+        # This is preliminary... we're later going to validate this against the provtag
+        # and/or the provenances of all the process objects.
+        self.provenances = { k: Provenance.get(v, pgdb=_pgdb) for k, v in _preset_provenances }
+
+        # Populate any passed data products (and update self.provenances with them)
+        self.products = {}
+        for k, cls in self.product_classes.items():
+            if k in kwargs:
+                obj = UUIDMixin.get_object( kwargs[k], cls, no_none=True, pgdb=_pgdb )
+                if ( k in self.provenances ) and ( obj.provenance_id != self.provenances[k].id ):
+                    raise ValueError( f"Passed {k} has provenance_id {obj.provenance_id}, which doesn't match "
+                                      f"already-determined provenance of {self.provenances[k].id}" )
+                self.provenances[ k ] = Provenance.get( obj.provenance_id, pgdb=_pgdb )
+                self.products[ k ] = obj
+                del kwargs[ k ]
+
+        # Make sure we got enough to go on
+        self.starting_prov = {}
+        if starting_prov is None:
+            gotallstarts = all( k in self.products for k in self.starting_products.keys() )
+            gotonederived = any( ( k in self.products ) and ( k not in self.starting_products.keys() )
+                                 for k in self.product_classes.keys() )
+            if gotallstarts:
+                if any( (prod in self.product_upstreams) and (self.product_upstrams[prod] != NotDefined)
+                        for prod in self.starting_products.keys() ):
+                    raise RuntimeError( "Something bad has happened." )
+
+                self.starting_prov = { k: Provenance.get( getattr( self, k ).provenance_id,
+                                                          must_exist=True, pgdb=_pgdb )
+                                       for k in self.starting_products }
+
+            if not ( gotallstarts or gotonederived ):
+                if ( provtag is None ) or ( not read_pars_from_prov ):
+                    raise ValueError( "Not enough information to instantiate a pipeline.  Look at the "
+                                      "docstring for pipeline.Pipeline.get" )
+
+        else:
+            if not isinstance( starting_prov, dict ):
+                if len( self.starting_products ) != 1:
+                    raise ValueError( f"{self.__class__.__name__} has {len(self.starting_products)} "
+                                      f"starting products ({self.starting_products}), but you only "
+                                      f"gave one starting_prov." )
+                if isinstance( starting_prov, ( Provenance, str ) ):
+                    if isinstance( starting_prov, str ):
+                        starting_prov = Provenance.get( starting_prov, must_exist=True, pgdb=_pgdb )
+                    self.starting_prov = { self.starting_products[0] : starting_prov }
+                else:
+                    given = set( starting_prov.keys() )
+                    needed = set( self.starting_products.keys() )
+                    if given != needed:
+                        strio = io.StringIO()
+                        strio.write( "Didn't give the right set of starting provenances." )
+                        if len( needed - given ) > 0:
+                            strio.write( f"  Missing: {needed-given}" )
+                        if len( given - needed ) > 0:
+                            strio.write( f"  Unknown: {given-needed}" )
+                        raise ValueError( strio.getvalue() )
+                    self.starting_prov = { k: v if isinstance( v, Provenance )
+                                           else Provenance.get(v, must_exist=True, pgdb=_pgdb)
+                                           for k, v in starting_prov.items() }
+
+        # Read existing provenancs and do a consistency check.
+        if provtag is not None:
+            existingprovs = self.read_existing_provenances( provtag,
+                                                            match_code_version=match_code_version,
+                                                            match_full_code_version=match_full_code_version,
+                                                            validate_upstream_steps=validate_upstream_steps,
+                                                            handle_unexpected_processes=handle_unexpected_processes,
+                                                            pgdb=pgdb )
+            mismatches = {}
+            for process, prov in self.provenances:
+                if ( process in existingprovs ) and ( self.provenances[process].id !=
+                                                      existingprovs[process].id ):
+                    mismatches[process] = ( self.provenancnes[process].id, existingprovs[process].id )
+
+            if len(mismatches) > 0:
+                strio = io.StringIO()
+                strio.write( f"Some provenances in the database for provtag {provtag} don't match "
+                             f"provenances you gave me, or provenances of objects you gave me." )
+                for process, them in mismatches.items():
+                    strio.write( f"\n  {process:>24s} : database : {them[1]}  given : {them[0]}" )
+                SCLogger.error( strio.getvalue() )
+                raise ValueError( strio.getvalue() )
+
+
+        # If read_pars_from_prov was true, then update the pars dictionary accordingly
+        if read_pars_from_prov:
+            readpars = { proc: self.provenances[proc].parameters
+                         for proc in self.provenances if proc in self.all_steps }
+            overlaps = set( readpars.keys() ).intersection( pars.keys() )
+            if len(overlaps) != 0:
+                SCLogger.warning( f"You passed parameters for {overlaps}, but set read_pars_from_prov; "
+                                  f"the parameters you passed are going to get wiped out." )
+            pars.update( readpars )
+
+            if not ok_processes_missing:
+                needed = set( p for p in self.all_steps if len(self.process_products[p]) > 0 )
+                if not needed.issubset( readpars ):
+                    raise RuntimeError( f"Failed to read provenances for processes: {needed-readpars}" )
+
+        # We are finally ready to call our superclass
+        super(ProcessObject, self).__init__( pipeline=None, ignore_missing_config_values=True, **pars )
+
+        # Make process objects
+        self.process_objects = { process: cls( pipeline=self, process_name=process )
+                                 for process, cls in self.process_classes }
+
+        # Fill out the products array
+        for product in self.product_classes.keys():
+            if product not in self.products:
+                self.products[ product ] = None
+
+
+    # ======================================================================
+
+    def get_product( self, product, do_not_load=False, always_load=False, pgdb=None ):
+        if ( not always_load ) and ( self.products[ product ] is not None ):
+            return self.products[ product ]
+
+        if do_not_load:
+            return self.products[ product ]
+
+        if product in self._product_loaders:
+            self.products[ product ] = self._product_loaders[ product ]( do_not_load=do_not_load,
+                                                                         always_load=always_load,
+                                                                         pgdb=pgdb )
+        else:
+            if self.product_upstreams[ product ] == NotDefined:
+                self.products[ product ] = None
+
+            else:
+                upstrs = {}
+                for produp in self.product_upstreams[ product ]:
+                    upstrs[produp] = self.get_product( produp, do_not_load=do_not_load,
+                                                       always_load=always_load, pgdb=pgdb )
+                if any( v is None for v in upstrs.values() ):
+                    self.products[ product ] = None
+                else:
+                    with PGDB( pgdb, dictcursor=True ) as pgdb:
+                        tab = sql.Identifier( self.product_classes[product].__tablename__ )
+                        q = sql.SQL( "SELECT * FROM {tab}").format( tab=tab )
+                        where = sql.SQL( "WHERE" )
+                        for produp, upstr in upstrs.items():
+                            q += sql.SQL( " {where} {column}={upid}"
+                                          ).format( where=where,
+                                                    column=sql.Identfier( f"{produp}_id" ),
+                                                    upid=upstr.id )
+                            where = sql.SQL( "AND" )
+                        rows = pgdb.execute( q )
+                        if len(rows) > 1:
+                            raise RuntimeError( "This should never happen." )
+                        elif len(rows) == 0:
+                            self.products[ product ] = None
                         else:
-                            kwargs = pars[step] if step in pars else {}
-                            procobj = process_classes[step]( **kwargs )
-                            params = {} if not hasattr( procobj, 'pars' ) else procobj.pars.get_critical_pars()
-                            upstreams = [ provs[s] for s in upstream_steps[step] ]
-                            upstreams.sort( key=lambda x: x.id )
-                            code_version = Provenance.get_code_version( process=step ).id
-                            prov = Provenance( code_version=code_version,
-                                               process=step,
-                                               parameters=params,
-                                               upstreams=upstreams )
-                            provs[step] = prov
-                            self.process_objects[step] = procobj
+                            self.products[ product ] = self.product_clases[product].create( **(rows[0]))
 
-            # Associate and verify the provenance tag
-            if provtag is not None:
-                Provenance.addtag( provtag, tags.values(), pgdb=pgdb )
+        return self.products[ product ]
 
-            # Done
-            provs.upstream_steps = upstream_steps
-            return provs
 
+    # ======================================================================
+
+    def set_product( self, product, value ):
+        if not isinstance( value, self.product_classes[ product ] ):
+            raise TypeError( f"{product} must be a {self.product_classes[product].__name__}, not a {type(value)}" )
+
+        provprod = self.product_provenance_processes[ product ]
+        if ( provprod is not None ) and ( value.provenance_id != provprod.id ):
+            raise ValueError( f"Can't set {product} with an object whose provenance id is {value.provenance_id}, "
+                              f"that product needs to have provenance {provprod.id}" )
+
+        if product in self._product_validators():
+            self._product_validators[product]( value )
+
+        else:
+            if self.product_upstreams[ product ] != NotDefined:
+                for upstr in self.product_upstrems[ product ]:
+                    if self.products[ upstr ] is None:
+                        raise RuntimeError( f"Can't set {product}, need {upstr} to be set first." )
+                    if getattr( value, f"{upstr}_id" ) != self.products[ upstr ].id:
+                        raise ValueError( f"Can't set {product}, it's {upstr}_id is not consistent with "
+                                          f"the id of the existing {upstr}" )
+
+        self.products[ product ] = value
+
+
+    # ======================================================================
+
+    def read_existing_provenances( self, provtag, match_code_version=True, match_full_code_version=False,
+                                   validate_upstream_steps=True, handle_unexpected_processes='ignore',
+                                   pgdb=None ):
+        match_code_version = match_code_version or match_full_code_version
+
+        provs = Provenance.get_for_tag( provtag )
+
+        if handle_unexpected_processes != 'ignore':
+            # ...this is gonna happen, just leave it at ignore
+            if not set( provs.keys() ).issubset( set( self.all_steps ) ):
+                raise ValueError( f"Provenance tag {provtag} has unexpected processes "
+                                  f"{set(provs.keys()) - set(self.all_steps)}" )
+
+        if match_code_version:
+            for process in self.all_steps:
+                if process in provs:
+                    cv = CodeVersion.get_by_id( provs[process].code_version_id, pgdb=pgdb )
+                    curcv = Provenance.get_code_version( process, pgdb=pgdb )
+                    tomatch = ( ('version_major', 'version_minor', 'version_patch') if match_full_code_version
+                                else ('version_major', 'version_minor') )
+                    if any( getattr(cv, par) != getattr(curcv, par) for par in tomatch ):
+                        raise RuntimeError( f"Code version for process {process} in provenance tag {provtag}"
+                                            f"is {cv.version_major}.{cv.version_minor}.{cv.version_patch}, "
+                                            f"which doesn't match the current code version for "
+                                            f"{curcv.version_major}.{curcv.version_minor}.{curcv.version_patch}" )
+
+        if validate_upstream_steps:
+            mismatches = []
+            for product, process in self.product_provenance_processes.items():
+                if ( ( process is not None ) and ( process in provs ) and
+                     ( self.product_upstreams[product] != NotDefined )
+                    ):
+                    upstr_products = set( self.product_upstreams[product] )
+                    expected_upprocs = set( self.product_provenance_processes[p] for p in upstr_products )
+                    provupprocs = set( p.process for p in provs[process].upstreams )
+
+                    # OK... if any of the upstream products are starting products, then
+                    #   we may not actually know what the process is supposed to be.
+                    #   Figure out if we have to worry about this.
+                    upstr_starts = set( p for p in upstr_products if p in self.starting_products.keys() )
+                    unknown_provs = upstr_starts - set( self.starting_prov.keys() )
+
+                    if len( unknown_provs ) == 0:
+                        # Woot.  Somehow we know all the provenances we need to know, so we can do a direct comparsion.
+                        if provupprocs != expected_upprocs:
+                            mismatches.append( [ product, process, provupprocs, expected_upprocs ] )
+                    else:
+                        # This is more painful.
+                        # First, all the ones that are from this pipeline had better be there
+                        knownupprocs = set( self.product_provenance_processes[p]
+                                            for p in ( upstr_products - unknown_provs ) )
+                        if not knownupprocs.issubset( provupprocs ):
+                            mismatches.append( [ product, process, provupprocs, knownupprocs ] )
+                        else:
+                            # The number of processes that we don't recognize should be what we expect.
+                            other_upstrs = provupprocs - knownupprocs
+                            if len(other_upstrs) != len(unknown_provs):
+                                mismatches.append( [ product, process, provupprocs, knownupprocs ] )
+
+            if len(mismatches) > 0:
+                strio = io.StringIO()
+                strio.write( f"Provenances found in provenance tag {provtag} did not have upstream provenances "
+                             f"with the processes that we exepcted." )
+                for uhoh in mismatches:
+                    strio.write( f"\n    product {uhoh[0]} process {uhoh[1]}"
+                                 f"\n        expected upstreams: {uhoh[3]}"
+                                 f"\n        database provenance upstreams: {uhoh[2]}" )
+                SCLogger.error( strio.getvalue() )
+                raise ValueError( strio.getvalue() )
+
+        return provs
+
+
+    # ======================================================================
 
     def run( self, *args, save=NotDefined, save_after_each_step=NotDefined, save_after_steps=NotDefined, **kwargs ):
         """The default run method is probably not good enough; subclasses should override."""
 
         if save == NotDefined:
-            if hasattr( self.pars, "save" ) save = self.pars.save
-            else save = False
+            if hasattr( self.pars, "save" ):
+                save = self.pars.save
+            else:
+                save = False
         if save_after_each_step == NotDefined:
-            if hasattr( self.pars, "save_after_each_step" ) save_after_each_step = self.pars.save_after_each_step
-            else save_after_each_step = False
+            if hasattr( self.pars, "save_after_each_step" ):
+                save_after_each_step = self.pars.save_after_each_step
+            else:
+                save_after_each_step = False
         if save_after_steps == NotDefined:
-            if hasattr( self.pars, "save_after_steps" ) save_after_steps = self.pars.save_after_steps
-            else save_after_steps = []
-        
-        ds = DataStore( *args, **kwargs )
+            if hasattr( self.pars, "save_after_steps" ):
+                save_after_steps = self.pars.save_after_steps
+            else:
+                save_after_steps = []
+
         just_saved = False
         for step, procobj in self.process_objects.items():
             just_saved = False
             SCLogger.info( f"Running step {step}" )
-            ds = procobj( ds )
+            procobj( self )
             if save and ( save_after_each_step or ( step in save_after_steps ) ):
                 SCLogger.info( f"Saving data products after step {step}" )
-                ds.save_and_commit()
+                self.save_and_commit()
                 just_saved = True
 
         if save and ( not just_saved ):
-            ds.save_and_commit()
+            self.save_and_commit()
 
-        return ds
+    # ======================================================================
 
+    def save_and_commit( self ):
+        """Save all dataproducts to disk, commit all data products to the database."""
 
-# ======================================================================
-
-class DifferenceImagingTransientDiscoveryPipeline( Pipeline ):
-
-    _name = "dia_transientsearch"
-
-    _all_steps = [ 'split_exposure', 'secure_calibrators', 'preprocessing', 'extraction', 'astrocal', 'photocal',
-                   'referencing', 'alignment', 'subtraction', 'detection', 'cutting', 'measuring', 'scoring',
-                   'alerting' ]
-
-    # NOTE : referencing and secure_calibrators are special cases.
-    #   referencing always has upstreams, and secure_calibrators *might*
-    #   have upstreams, but those are handled in separate pipelines, so
-    #   the upstreams are not tracked here.  The provenance resulting
-    #   from referencing is defined by the refset parameter of
-    #   subtraction, and provenance of calibrators is defined by the
-    #   calibset parameter of preprocessing.
-    _external_pipeline_processes = { 'secure_calibrators', 'referencing' }
-    _process_upstreams = { 'starting_point': [],
-                        'split_exposure': [ 'starting_point' ],
-                        'secure_calibrators': [],
-                        'preprocessing': [ 'split_exposure', 'secure_calibrators' ],
-                        'extraction': [ 'preprocessing' ],
-                        'astrocal': [ 'extraction' ],
-                        'photocal': [ 'astrocal' ],
-                        'referencing': [],
-                        'alignment': [ 'referencing', 'photocal' ],
-                        'subtraction': [ 'alignment' ],
-                        'detection': [ 'subtraction' ],
-                        'cutting': [ 'detection' ],
-                        'measuring': [ 'cutting' ],
-                        'scoring': [ 'measuring' ]
-                       }
-
-    _process_classes = { 'split_exposure': ExposureSplitter,
-                         'calibrator_builder': CalibratorBuilder,
-                         'preprocessing': Preprocessor,
-                         'extraction': Detector,
-                         'astrocal': AstroCalibrator,
-                         'photocal': PhotCalibrator,
-                         'ref_maker': RefMaker,
-                         'alignment': Aligner,
-                         'subtraction': Subtractor,
-                         'detection': Detector,
-                         'cutting': Cutter,
-                         'measuring': Measurer,
-                         'scoring': Scorer,
-                         'alerting': Alerter
-                        }
-
-    _process_products = { 'split_exposure': [ ( Image, 'raw_image' ) ],
-                          'secure_calibrators': [],
-                          'preprocessing': [ ( Image, 'image' ) ],
-                          'extraction': [ ( SourceList, 'sources' ),
-                                          ( Background, 'bg' ),
-                                          ( PSF, 'psf' ) ],
-                          'astrocal': [ ( WorldCoordinates, 'wcs' ) ],
-                          'photocal': [ ( ZeroPoint, 'zp' ) ],
-                          'referencing': [ ( Reference, 'ref' ) ],
-                          'alignment': [ ( ZeroPoint, 'warped_ref_zp' ),
-                                         ( WorldCoordinates, 'warped_ref_wcs' ),
-                                         ( SourceList, 'warped_ref_sources'),
-                                         ( Background, 'warped_ref_bg' ),
-                                         ( PSF, 'warped_ref_psf' ),
-                                         ( Image, 'warped_ref_image' )
-                                        ],
-                          'subtraction': [ ( Image, 'sub_image' ) ],
-                          'detection': [ ( 'SourceList', 'detections' ) ],
-                          'cutting': [ ( Cutouts, 'cutouts' ) ],
-                          'measuring' [ ( MeasurmentSet, 'measurement_set' ),
-                                        ( Measurements, 'measurements', True ),
-                                       ],
-                          'scoring': [ ( DeepScoreSet, 'deepscore_set' ),
-                                       ( Deepscores, 'deepscores', True ) ],
-                          'alerting': []
-                         }
-
-    _provless = { 'bg', 'psf', 'wapred_ref_bg', 'warped_ref_psf' }
-    _product_upstreams = { 'exposure': [],
-                           'raw_image': [ ( 'exposure', 'exposure_id' ) ],
-                           'image': [ ( 'raw_image', 'parent_image_id' ) ],
-                           'sources': [ ( 'image', 'image_id' ) ],
-                           'bg': [ ( 'sources', 'sources_id' ) ],
-                           'psf': [ ( 'sources', 'sources_id' ) ],
-                           'wcs': [ ( 'sources', 'sources_id' ) ],
-                           'zp': [ ( 'wcs', 'wcs_id' ) ],
-                           'ref': [],
-                           'warped_ref_image': [ ( 'ref.zp', 'unwarped_zp_id' ),
-                                                 ( 'wcs', 'target_wcs_id' ) ],
-                           'warped_ref_sources': [ ( 'warped_ref_image', 'image_id' ) ],
-                           'warped_ref_bg': [ ( 'warped_ref_sources', 'sources_id' ) ],
-                           'warped_ref_psf': [ ( 'warped_ref_sources', 'sources_id' ) ],
-                           'warped_ref_wcs': [ ( 'wapred_ref_sources', 'sources_id' ) ],
-                           'warped_ref_zp': [ ( 'warped_ref_wcs', 'wcs_id' ) ],
-                           'sub_image': [ ( 'ref', 'ref_id' ),
-                                          ( 'warped_ref_sources', 'warped_ref_sources_id' ),
-                                          ( 'zp', 'new_zp_id' ) ],
-                           'detections': [ ( 'sub_image', 'image_id' ) ],
-                           'cutouts': [ ( 'detections', 'sources_id' ) ],
-                           'measurementset': [ ( 'cutouts', 'cutouts_id' ) ],
-                           'measurements': [ ( 'measurementset', 'measurementset_id' ) ],
-                           'deepscoreset': [ ( 'measurementset', 'measurementset_id' ) ],
-                           'deepscores': [ ( 'deepscoreset', 'deepscoreset_id' ) ]
-                          }
-
-
-    def make_prov_tree( self, starting_prov, starting_point=Exposure,
-                        save_raw_image=False, image_already_preprocessed=False,
-                        **kwargs ):
-        """See Pipeline::make_prov_tree.
-
-        starting_point must be either Exposure or Image
-
-        If starting_point is Exposure, then the pipeline will start at
-        split_exposure.  Otherwise, starting_point must be Image.  In
-        that case, if the process of starting_prov is 'preprocessing',
-        then the pipeline will start at 'secure_calibrators' followed by
-        'preprocessing'.  Otherwise, the pipeline will start at
-        'extraction'.
-
-        """
-
-        if starting_point not in ( Exposure, Image, 'Exposure', 'Image' ):
-            raise TypeError( f"starting_point must be Exposure or Image, not {starting_point}" )
-
-        starting_prov = Provenance.get( starting_prov )
-        if starting_prov is None:
-            raise ValueError( f"Failed to find provenance {starting_prov}" )
-
-        if image_already_preprocessed and save_raw_image:
-            SCLogger.warning( f"save_raw_image ignored,image_already_preprocessed is set" )
-
-        upstreams = copy.deepcopy( self._tree_upstreams )
-        if starting_point in ( Image, 'Image' ):
-            del upstreams[ 'split_exposure' ]
-            if image_already_preprocessed:
-                del upstreams[ 'preprocessing' ]
-                # TODO THINK : is secure_calibrators only for preprocessing?
-                del upstreams[ 'secure_calibrators' ]
-                upstreams['extraction'] = [ 'starting_point' ]
-            else:
-                upstreams['preprocessing'] = [ 'starting_point', 'secure_calibrators' ]
-
-        else:
-            if image_already_preprocessed:
-                del upstreams['preprocessing']
-                # TODO THINK : is secure_calibrators only for preprocessing?
-                del upstreams[ 'secure_calibrators' ]
-                upstreams['extraction'] = [ 'split_exposure' ]
-            elif not save_raw_image:
-                del upstreams['split_exposure']
-                upstreams['preprocessing'] = [ 'starting_point', 'secure_calibrators' ]
-
-        return super().make_prov_tree( starting_prov, _tree_upstreams=upstreams, **kwargs )
+        raise NotImplementedError( "OMG" )

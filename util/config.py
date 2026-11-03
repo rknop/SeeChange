@@ -5,13 +5,7 @@ import copy
 import yaml
 
 from util.logger import SCLogger
-
-
-class NoValue:
-    pass
-
-
-NotDefined = NoValue()
+from util.util import NoValue
 
 
 class Config:

@@ -8,7 +8,7 @@ from sqlalchemy.dialects.postgresql import UUID as sqlUUID
 from sqlalchemy.schema import UniqueConstraint
 from sqlalchemy.ext.declarative import declared_attr
 
-from models.base import Base, UUIDMixin, HasBitFlagBadness, SeeChangeBase, PGDB
+from models.base import Base, UUIDMixin, HasProvenance, HasBitFlagBadness, SeeChangeBase, PGDB
 from models.enums_and_bitflags import catalog_match_badness_inverse
 
 # many-to-many link of the zeropoints of coadded images to images that went into the coadd
@@ -28,7 +28,7 @@ image_coadd_component_table = sa.Table(
 )
 
 
-class ZeroPoint(Base, UUIDMixin, HasBitFlagBadness):
+class ZeroPoint(Base, UUIDMixin, HasProvenance, HasBitFlagBadness):
     __tablename__ = 'zero_points'
 
     @declared_attr

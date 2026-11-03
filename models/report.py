@@ -1,19 +1,16 @@
 import datetime
-import time
 import inspect
 import textwrap
-import re
 
 from psycopg import sql
 import sqlalchemy as sa
-from sqlalchemy import orm
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as sqlUUID
 
-from models.base import Base, SeeChangeBase, UUIDMixin, PGDB
+from models.base import Base, UUIDMixin, PGDB
 from models.provenance import Provenance
+from models.exposure import Exposure
 
-from util.logger import SCLogger
 from util.util import parse_dateobs, asUUID
 
 
@@ -38,7 +35,7 @@ class Report(Base, UUIDMixin):
     starting_point = sa.Column(
         sqlUUID,
         nullable = False,
-        index = True
+        index = True,
         doc = "ID of the object that is the starting point for the pipeline."
     )
 
@@ -54,10 +51,10 @@ class Report(Base, UUIDMixin):
         sa.ARRAY( sa.Text ),
         nulalble = False,
         index = False,
-        server_default = "[]::text[]"
-        doc = "Steps of the pipeline.",
+        server_default = "[]::text[]",
+        doc = "Steps of the pipeline."
     )
-    
+
     process_provid = sa.Column(
         JSONB,
         nullable = True,
@@ -75,7 +72,7 @@ class Report(Base, UUIDMixin):
     )
 
     end_time = sa.Column(
-        sa.DateTime
+        sa.DateTime,
         nullable = True,
         index = False,
         doc = "When the pipeline ended, if it told us it ended."
@@ -175,7 +172,7 @@ class Report(Base, UUIDMixin):
         if inspect.isclass( starting_class ):
             starting_class = starting_class.__name__
         elif not isinstance( starting_class, str ):
-            raise TypeError( f"starting_class must either be a class or the name of a class" )
+            raise TypeError( "starting_class must either be a class or the name of a class" )
 
         super().__init__( pipeline_name=pipeline_name, starting_class=starting_class,
                           starting_point=starting_point, final_prov_id=final_prov_id,
@@ -223,7 +220,7 @@ class Report(Base, UUIDMixin):
             bit = self.process_steps.index( step )
         except ValueError:
             raise ValueError( f"Unknown process step {step}" )
-        
+
         now = datetime.datetime.now( datetime.UTC )
         dt = ( now - self.last_update ).total_seconds()
         self.last_update = now
@@ -233,13 +230,13 @@ class Report(Base, UUIDMixin):
             #  I think that's overdoing it.  Each instance of a running pipeline is going
             #  to get a new Report object with a new id, so in general there should not
             #  be collisions.
-            me = Report.get_by_id( me.id, pgdb=pgdb )
+            me = Report.get_by_id( self.id, pgdb=pgdb )
             if ( me is None ):
                 raise RuntimeError( "Error completing step, report not saved to database!" )
             self.process_memory = me.process_memory
             self.process_runtime = me.process_runtime
             self.process_steps_bitflag = me.progress_steps_bitflag
-            
+
             self.process_runtime[step] = dt
             self.progress_steps_bitflag |= 1 << bit
             if memory is not None:
@@ -262,10 +259,10 @@ class Report(Base, UUIDMixin):
         with PGDB( pgdb ) as pgdb:
             pgdb.execute( sql.SQL(
                 "UPDATE reports SET warnings=array_append(warnings, {newwarning}) WHERE _id={selfid}"
-            ).format( selfid=self.id, newwarning=newwarining ) )
+            ).format( selfid=self.id, newwarning=newwarning ) )
             pgdb.commit()
-            
-        
+
+
     @classmethod
     def get_reports( cls, pipeline_name, starting_class, starting_point, final_prov_id=None, pgdb=None ):
         with PGDB( pgdb, dictcursor=True ) as pgdb:
@@ -315,4 +312,3 @@ class Report(Base, UUIDMixin):
             reports['section_id'].append( cls.create( **row ) )
 
         return reports
-                         

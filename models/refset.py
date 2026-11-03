@@ -2,11 +2,11 @@ import sqlalchemy as sa
 from sqlalchemy import orm
 from psycopg import sql
 
-from models.base import Base, SeeChangeBase, UUIDMixin, PGDB
+from models.base import Base, SeeChangeBase, UUIDMixin, HasProvenance, PGDB
 from models.provenance import Provenance
 
 
-class RefSet(Base, UUIDMixin):
+class RefSet(Base, UUIDMixin, HasProvenance):
     __tablename__ = 'refsets'
 
     name = sa.Column(

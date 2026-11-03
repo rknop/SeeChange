@@ -16,7 +16,7 @@ from sqlalchemy.schema import UniqueConstraint
 from astropy.coordinates import SkyCoord
 import astropy.units
 
-from models.base import Base, PGDB, SeeChangeBase, PsycopgConnection, UUIDMixin, SpatiallyIndexed
+from models.base import Base, PGDB, SeeChangeBase, PsycopgConnection, UUIDMixin, HasProvenance, SpatiallyIndexed
 from models.image import Image
 from models.zero_point import ZeroPoint
 from models.measurements import Measurements, MeasurementSet
@@ -34,7 +34,7 @@ object_name_max_used = sa.Table(
 )
 
 
-class Object(Base, UUIDMixin, SpatiallyIndexed):
+class Object(Base, UUIDMixin, HasProvenance, SpatiallyIndexed):
     __tablename__ = 'objects'
 
     @declared_attr

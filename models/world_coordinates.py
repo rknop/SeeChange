@@ -14,7 +14,7 @@ from astropy.wcs import WCS
 from astropy.io import fits
 from astropy.wcs import utils
 
-from models.base import ( Base, SeeChangeBase, SmartSession, PGDB,
+from models.base import ( Base, SeeChangeBase, SmartSession, PGDB, HasProvenance,
                           UUIDMixin, HasBitFlagBadness, FileOnDiskMixin, SpatiallyIndexed, FourCornersWithGood )
 from models.enums_and_bitflags import catalog_match_badness_inverse
 from models.image import Image
@@ -23,7 +23,8 @@ from improc.tools import strip_wcs_keywords
 from util.logger import SCLogger
 
 
-class WorldCoordinates(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness, SpatiallyIndexed, FourCornersWithGood ):
+class WorldCoordinates(Base, UUIDMixin, HasProvenance, FileOnDiskMixin, HasBitFlagBadness,
+                       SpatiallyIndexed, FourCornersWithGood ):
     __tablename__ = 'world_coordinates'
 
     @declared_attr

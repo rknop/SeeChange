@@ -20,12 +20,13 @@ from models.base import (
     Base,
     SeeChangeBase,
     UUIDMixin,
+    HasProvenance,
     FileOnDiskMixin,
     PGDB
 )
 
 
-class FakeSet(Base, UUIDMixin, FileOnDiskMixin):
+class FakeSet(Base, UUIDMixin, HasProvenance, FileOnDiskMixin):
     """A FakeSet encapsulates a list of fakes that can be injected on to an image.
 
     A FakeSet is defined by the image (really, the zeropoint, which

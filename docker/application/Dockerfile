@@ -69,7 +69,7 @@
 # The base target defines the base system that all other images
 #   will be built on top of.
 
-FROM debian:trixie-20260518 AS base
+FROM debian:trixie-20261027 AS base
 
 LABEL maintainer="Rob Knop <raknop@lbl.gov>"
 

@@ -5,7 +5,7 @@ import io
 import re
 import pathlib
 import time
-from datetime import datetime, date
+import datetime
 import dateutil.parser
 import uuid
 import json
@@ -17,6 +17,21 @@ from astropy.time import Time
 from util.logger import SCLogger
 
 
+# **********************************************************************
+# Use NotDefined (or an instance of NoValue) to flag that an option or
+#   property isn't set, in case None isn't adequate.  (E.g. if setting
+#   it to None is a decision vs. a default.)
+
+class NoValue:
+    pass
+
+
+NotDefined = NoValue()
+
+
+# **********************************************************************
+# Converts a UUID or string to a UUID, with error checking
+
 def asUUID( id ):
     """Pass either a UUID or a string representation of one, get a UUID back."""
     if isinstance( id, uuid.UUID ):
@@ -24,6 +39,12 @@ def asUUID( id ):
     if not isinstance( id, str ):
         raise TypeError( f"asUUID requires a UUID or a str, not a {type(id)}" )
     return uuid.UUID( id )
+
+# **********************************************************************
+# A json.JSONEncodcer that convertes numpy types to regular python types,
+#    that stringifies datetimes via iso
+#
+# DO NOT USE, INSTEAD USE <rob figure it out>
 
 
 class NumpyAndUUIDJsonEncoder(json.JSONEncoder):
@@ -40,12 +61,14 @@ class NumpyAndUUIDJsonEncoder(json.JSONEncoder):
             return obj.tolist()
         if isinstance(obj, uuid.UUID):
             return str(obj)
-        if isinstance(obj, datetime ):
+        if isinstance(obj, datetime.datetime ):
             return obj.isoformat()
-        if isinstance(obj, date ):
+        if isinstance(obj, datetime.date ):
             return obj.isoformat()
         return json.JSONEncoder.default(self, obj)
 
+
+# **********************************************************************
 
 def ensure_file_does_not_exist( filepath, delete=False ):
     """Check if a file exists.  Delete it, or raise an exception, if it does.
@@ -70,6 +93,13 @@ def ensure_file_does_not_exist( filepath, delete=False ):
         else:
             filepath.unlink()
 
+
+# **********************************************************************
+# Pass any sequence other than a string or buytes, get back a list
+#
+# Pass any scalar, or a list, or bytes, get back [ val ]
+#
+# Optionally, can require that all elements of the returned list are strings.
 
 def listify( val, require_string=False ):
     """Return a list version of val.
@@ -108,16 +138,23 @@ def listify( val, require_string=False ):
         return [ val ]
 
 
-def remove_empty_folders(path, remove_root=True):
-    """Recursively remove any empty folders in the given path.
+# **********************************************************************
+# Pass a path, all empty directories underneath it are rmdired.
+
+
+def remove_empty_directories(path, remove_root=True):
+    """Recursively remove any empty directories in the given path.
 
     Parameters
     ----------
     path: str or pathlib.Path
-        The path to remove empty folders from.
+        The directory to remove empty folders from.  If not
+        a directory, nothing happens.
+
     remove_root: bool
-        If True, remove the root folder as well if it is empty.
+        If True, remove path as well if it is empty.
     """
+
     path = pathlib.Path(path)
     if path.is_dir():
         for subpath in path.iterdir():
@@ -126,7 +163,15 @@ def remove_empty_folders(path, remove_root=True):
             path.rmdir()
 
 
-def parse_dateobs(dateobs=None, output='datetime'):
+def remove_empty_folders( *args, **kwargs ):
+    """Backwards compatibility; use remove_empty_directories.  That's the Unix terminology.  Hell with GUIs."""
+    remove_empty_directories( *args, **kwargs )
+
+
+# **********************************************************************
+# Convert string, JD, or JD to other things
+
+def parse_dateobs( dateobs=None, output='datetime' ):
     """Parse the dateobs, that can be a float, string, datetime or Time object.
 
     The output is datetime by default, but can be any of the above types.
@@ -135,19 +180,52 @@ def parse_dateobs(dateobs=None, output='datetime'):
 
     Parameters
     ----------
-    dateobs: float, str, datetime, Time or None
-        The dateobs to parse.
-    output: str
+    dateobs: None, astropy.time.Time,  datetime.date, datetime.datetime, float, or str
+        The dateobs to parse.  If None, uses astropy.time.Time.now().
+        If a date, uses UTC 00:00 on that date.  If a float, if it's
+        >2,400,000 assumes it's a JD, otherwise assumes it's a MJD.  If
+        the string "now", uses astropy.time.Time.now().  Any other
+        string is fed to dateutil.parser.parse().  If you pass a string
+        or datetime.datetime that is not timezone aware, this function
+        assumes it's UTC.  (Does not think about TAI or the loss of leap
+        seconds, so if that becomes important, a lot more thought is
+        going to be required.  https://xkcd.com/2867/ )
+
+    output: str, default 'datetime'
         Choose one of the output formats:
-        'datetime', 'Time', 'float', 'mjd', 'str'.
+        'datetime' — returns a datetime.datetime object (tz aware in time zone UTC)
+        'Time' — returns an astropy.time.Timeobject
+        'float' — returns an mjd (as a float)
+        'mjd' — returns an mjd (as a float)
+        'str' — Returns an almost-ISO-6801 formatted string, NO time zone, space instead of T
+        'strict' — Returns an actual ISO-6801 formatted string with time zone ("+00:00" at end)
 
     Returns
     -------
-    datetime, Time, float or str
+      datetime.datetime, astropy.time.Time, float or str
+
+      QUIRK: if you pass an astropy.time.Time and output is 'Time', you
+      get back exactly the same object you passed (not a copy).  This is
+      probably what you wanted anyway.  Or probably it doesn't matter.
+      Or maybe it's a disaster.  Whatever.  Be aware.
+
     """
+
+    # Python *can* handle dates and times properly, but it's awkward.
+    # Timezone-unaware datetimes are a nightmare, and that's often what
+    # you get if you aren't careful.  astropy.time.Time does a bit
+    # better, but still has flaws.  astropy.time.Time is always timezone
+    # aware, and if you feed it a timezone-unaware datetime.datetime
+    # object, it just assumes UTC.  Since this is what we want, use
+    # astropy.time.Time as the lingua franca.  Convert everything to
+    # that and back.  However, astropy.time.Time fails to parse some
+    # perfectly legal ISO-8601 strings, and its isot property does not
+    # include any time zone information.  So, sometimes we have to push
+    # stuff through datetime.datetime.
+
     if dateobs is None:
         dateobs = Time.now()
-    elif isinstance(dateobs, (int, float)):
+    elif isinstance( dateobs, numbers.Real ):
         if dateobs > 2400000:
             dateobs = Time(dateobs, format='jd')
         else:
@@ -156,27 +234,32 @@ def parse_dateobs(dateobs=None, output='datetime'):
         if dateobs == 'now':
             dateobs = Time.now()
         else:
-            # Not using astropy to parse the string here because it can't parse
-            #   '2025-03-10T00:00:00-08:00', which is a legal
-            #   ISO time!
+            # Use dateutil.parser.parse() instead of the astropy.time.Time() constructor,
+            #   because it handles more things.  E.g., "2026-11-03 07:40:00PST" is handled
+            #   properly by dateutil.parser.parse(), whereas astropy.time.Time() chokes.
+            #   Worse, astropy.time.Time can't handle "2026-11-03T07:40:00-08:00"
+            #   which is straight-up ISO-8601.
+            # astropy.time.Time will take non-timezone-aware datetimes and make them UTC.
+            #   It will convert all others to UTC.
             dateobs = Time( dateutil.parser.parse( dateobs ) )
-    elif isinstance(dateobs, datetime):
-        dateobs = Time(dateobs)
-    elif isinstance(dateobs, date):
-        dateobs = Time( datetime.combine( dateobs, datetime.min.time() ) )
-    elif not isinstance(dateobs, Time):
-        raise ValueError(f'Cannot parse dateobs of type {type(dateobs)}')
+    elif isinstance( dateobs, datetime.datetime ):
+        dateobs = Time( dateobs )
+    elif isinstance( dateobs, datetime.date ):
+        dateobs = Time( datetime.datetime.combine( dateobs, datetime.datetime.min.time() ) )
+    elif not isinstance( dateobs, Time ):
+        raise ValueError( f'Cannot parse dateobs of type {type(dateobs)}' )
 
     if output == 'datetime':
-        return dateobs.datetime
+        return dateobs.to_datetime( timezone=datetime.UTC )
     elif output == 'Time':
         return dateobs
-    elif output in ['float', 'mjd']:
+    elif output in ( 'float', 'mjd' ):
         return dateobs.mjd
     elif output == 'str':
-        return dateobs.isot
+        # Sadly, t.isot does not include a time zone in the string, so be more convoluted.
+        return dateobs.to_datetime( timezone=datetime.UTC ).isoformat()
     else:
-        raise ValueError(f'Unknown output type {output}')
+        raise ValueError( f'Unknown output type {output}' )
 
 
 def parse_bool(text):
@@ -247,10 +330,11 @@ def as_datetime( string ):
 
     if string is None:
         return None
-    if isinstance( string, datetime ):
+    if isinstance( string, datetime.datetime ):
         return string
     if not isinstance( string, str ):
-        raise TypeError( f'Error, must pass either a datetime or a string to asDateTime, not a {type(string)}' )
+        raise TypeError( f'Error, must pass either a datetime.datetime or a string to asDateTime, '
+                         f'not a {type(string)}' )
     string = string.strip()
     if len(string) == 0:
         return None
