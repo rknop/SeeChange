@@ -162,17 +162,15 @@ def key_sorted_dict( d ):
 # **********************************************************************
 # Pass a path, all empty directories underneath it are rmdired.
 
-
 def remove_empty_directories(path, remove_root=True):
     """Recursively remove any empty directories in the given path.
 
-def remove_empty_folders(path, remove_root=True):
-    """Recursively remove any empty folders in the given path.
+    Does nothing if given a path that's not a directory.
 
     Parameters
     ----------
     path: str or pathlib.Path
-        The directory to remove empty folders from.  If not
+        The directory to remove subdirectories from.  If not
         a directory, nothing happens.
 
     remove_root: bool
