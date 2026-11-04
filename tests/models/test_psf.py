@@ -718,6 +718,70 @@ def test_get_centered_psf_offset():
                             assert cy == pytest.approx( yctr + offy, abs=0.01 )
 
 
+def test_trim( psf_palette ):
+    x0 = 7
+    x1 = 150
+    y0 = 821
+    y1 = 975
+
+    # Extract the oversampled PSF data array before trimming so we can
+    #   verify that the original PSF object in psf_palette.psf isn't
+    #   munged by calling it's trim() method
+    pre_trim_resampled = psf_palette.psf.get_resampled_psf( ( x0 + x1 ) / 2., ( y0 + y1 ) / 2. )
+
+    trimmed = psf_palette.image.trim( x0, x1, y0, y1, sources=psf_palette.sources,
+                                      bg=psf_palette.bg, psf=psf_palette.psf )
+    im = trimmed['image']
+    src = trimmed['sources']
+    bg = trimmed['bg']
+    psf = trimmed['psf']
+    assert trimmed['wcs'] is None
+    assert trimmed['zp'] is None
+    # TODO : test with provenances!
+    assert all( v is None for v in trimmed['provenances'].values() )
+    assert trimmed['limits'] == ( x0, x1, y0, y1 )
+    assert im.id != psf_palette.image.id
+    assert im.data.shape == ( y1 - y0, x1 - x0 )
+    assert im.width == x1 - x0
+    assert im.height == y1 - y0
+    assert src.id != psf_palette.sources.id
+    assert src.image_id == im.id
+    assert src.x.min() >= 0
+    assert src.x.max() <= x1 - x0
+    assert src.y.min() >= 0
+    assert src.y.max() <= y1 - y0
+    assert src.num_sources == len( src.x ) == len( src.y ) == len( src.good ) == len( src.is_star )
+    # TODO : poke into the data array for src and make sure the right ones got here
+    assert bg.id != psf_palette.bg.id
+    assert bg.sources_id == src.id
+    assert bg.format == 'scalar'
+    # Testing value abs because the fixture sets background to 0.
+    assert bg.value == pytest.approx( psf_palette.bg.value, abs=1e-7 )
+    assert bg.noise == pytest.approx( psf_palette.bg.noise, rel=1e-7 )
+    assert psf.id != psf_palette.psf.id
+    assert psf.sources_id == src.id
+    assert psf.format == 'psfex'
+    assert psf.raw_clip_shape == psf_palette.psf.raw_clip_shape
+    assert psf.oversampling_factor == pytest.approx( psf_palette.psf.oversampling_factor, rel=1e-7 )
+    # This next one is sad, but true
+    assert psf.fwhm_pixels == pytest.approx( psf_palette.psf.fwhm_pixels, rel=1e-7 )
+
+    # Actually test that the psf trimming was done right by looking at images
+    orig_resampled = psf_palette.psf.get_resampled_psf( ( x0 + x1 ) / 2., ( y0 + y1 ) / 2. )
+    trim_resampled = psf.get_resampled_psf( ( x1 - x0 ) / 2., ( y1 - y0 ) / 2. )
+
+    # The pre-trim and orig should be identical, since identical calculations on identical
+    #   inputs were run; even floating point roundoff should have been the same.
+    assert pre_trim_resampled.shape == orig_resampled.shape
+    assert np.all( pre_trim_resampled == orig_resampled )
+
+    # The trimmed and original PSFs should also be identical, because effectively identical
+    #   calculations have been done.  The only difference is that a different POLZERO[12] was
+    #   subtracted in the calculations, but because those were offset by integer values,
+    #   the differences *should* be the same... floating point roundoff is hard to think about.
+    assert np.all( orig_resampled == trim_resampled )
+
+
 # This test writes out some fits files for looking at actual rendered PSFs,
 #   so one can understand where it's centering them.  It doesn't test anything,
 #   so it should only be run if somebody wants to run interactive tests.

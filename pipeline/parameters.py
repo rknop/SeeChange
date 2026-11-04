@@ -9,6 +9,7 @@ import healpy
 import util.config
 from util.logger import SCLogger
 from util.radec import ra_cross_zero_avgra
+import util.util
 
 # parameters that are propagated from one Parameters object
 # to the next when adding embedded objects.
@@ -882,10 +883,10 @@ class Parameters:
         dict
             The dictionary of critical parameters.
         """
-        return self.to_dict(critical=True, hidden=True)
+        return self.to_dict(critical=True, hidden=True, sort=True)
 
 
-    def to_dict(self, critical=False, hidden=False):
+    def to_dict(self, critical=False, hidden=False, sort=True):
         """Convert parameters to a dictionary.
 
         Only get the parameters that were defined
@@ -904,6 +905,10 @@ class Parameters:
         hidden: bool
             If True, include hidden parameters.
             By default, does not include hidden parameters.
+        sort: bool, default True
+            If True, make the dictionary insertion order
+            sorted by key (recursively).  If False, just
+            keep all dictionaries the way they are right now.
 
         Returns
         -------
@@ -916,6 +921,9 @@ class Parameters:
             if hidden or not k.startswith("_"):
                 if not critical or self.__critical__[k]:
                     output[k] = self[k]
+
+        if sort:
+            output = util.util.key_sorted_dict( output )
 
         return output
 

@@ -16,7 +16,7 @@ from models.base import Base, SeeChangeBase, PGDB, UUIDMixin, FileOnDiskMixin, H
 from models.image import Image
 from models.source_list import SourceList
 from models.enums_and_bitflags import BackgroundFormatConverter, BackgroundMethodConverter, bg_badness_inverse
-from util.util import asUUID
+from util.util import asUUID, validate_integers
 
 # from util.logger import SCLogger
 
@@ -462,6 +462,8 @@ class Background(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness):
 
     def trim( self, x0, x1, y0, y1, trimmed_sources=None, value=None, noise=None ):
         """Make a new Background that is for an image that's trimmed from the image the current Background is for."""
+
+        x0, x1, y0, y1 = validate_integers( [ x0, x1, y0, y1 ], return_list=True )
 
         newbg = Background( image_shape=(y1-y0, x1-x0),
                             _format = self._format,

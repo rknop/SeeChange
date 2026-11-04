@@ -26,7 +26,7 @@ SeeChange consists of a main pipeline that takes raw images and produces a few d
 
 * Alerts: AVRO alerts generated as the pipeline disocvers transients, and which are sent to external kafka servers.
 
-Additional pipelines for making bias frames, flat frames, and to produce deep coadded references are described separately.
+Additional pipelines for making bias and flat frames, producing deep coadded references, and performing forced photometry on difference images are described separately.
 
 To get set up with an instance of SeeChange, either to run the pipeline, or to use it to find and examine the data produced preivously by the pipeline, see :doc:`setup`.
 

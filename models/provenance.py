@@ -88,11 +88,11 @@ class CodeVersion(Base, UUIDMixin):
         'coaddition' : (0,9,0),
         'positioning': (0,2,0),
         'flat_bias_builder': (0,5,0),
-        'Image.trim': (0,1,0),
-        'Image.trim.sources': (0,1,0),
+        'Image.trim': (0,2,0),
+        'Image.trim.sources': (0,2,0),
         'Image.trim.wcs': (0,1,0),
         'Image.trim.zp': (0,1,0),
-        'diaforcedphot': (0,2,0),
+        'diaforcedphot': (0,3,0),
 
         # The next couple are processes whose direct data products
         #   are not saved to the database.  If their versions change,
@@ -728,6 +728,16 @@ class Provenance(Base):
             synonyms; if both are given, pgdb is used.
 
         """
+
+        # ****
+        # Added this to try to diagnose database deadlocks
+        # import io
+        # import traceback
+        # strio = io.StringIO()
+        # strio.write( f"Provenance insert called here with _exists_ok {_exists_ok} and nocommit {nocommit}:\n" )
+        # traceback.print_stack( file=strio )
+        # SCLogger.debug( strio.getvalue() )
+        # ****
 
         pgdb = pgdb if pgdb is not None else session
 

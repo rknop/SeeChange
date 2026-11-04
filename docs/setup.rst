@@ -1,5 +1,52 @@
 .. toctree::
 
+.. _nersc-setup:
+   
+*************************************************************
+Getting set up on NERSC to access the production LS4 database
+*************************************************************
+
+There are a number of steps you must perform to make this work.
+
+############################
+Create necessary directories
+############################
+
+You only have to do this once.
+
+**Pick a place where you were run.**  You can make yourself a directory underneath ``$SCATCH``, or you can make yourself a directory underneath ``/global/cfs/cdirs/m4616/users``.  From now on, that directory you made I shall refer to as ``$RUNDIR``.
+
+**Make scratch data directories.**  Run:
+
+.. code-block:: console
+   mkdir $SCRATCH/seechange-data-ls4-production
+   mkdir $SCRATCH/seechange-temp-ls4-poroduction
+
+Both of these directories are, effectively, caches, and you can delete and remake them at any time.
+
+#################
+Run the Container
+#################
+
+cd into ``$RUNDIR`` and run:
+
+.. code-block:: console
+
+   bash /global/cfs/cdirs/m4616/seechange-deployment/production/interactive-podman.sh
+
+This will put you inside a podman container.  You can tell you're inside the container because your prompt will change to something like ``root@3c669f22600f:~#`` (where the hex barf will be different every time).  Inside the container you do not have access to all the filesystems you're used to on NERSC.  The filesystems that are there are mounted at the following locations:
+
+* ``/home`` : your ``$RUNDIR`` can be found here
+* ``/m4616`` : The directory ``/global/cfs/cdirs/m4616`` is mounted here
+* ``/data`` : Your ``$SCRATCH/seechange-data-ls4-production`` directory is mounted here
+* ``/temp`` : Your ``$SCRATCH/seechange-temp-ls4-production`` directory is mounted here
+* ...and there are some others you probably don't care about, but look at the ``interactive-podman.sh`` script to see more.
+
+And you're done.  Go back to :ref:`usage` to see how to actually use it.   You can igore the rest of this page.
+
+
+.. _general-setup:
+
 *******************************
 Setting up a SeeChange instance
 *******************************
@@ -8,8 +55,9 @@ While it is probably possible to set up an environment on any machine to run See
 
 Most of these instructions assume you're setting up a SeeChange instance to hook into an existing installation.  If you want to start a local isolated environment for development and testing, see :doc:`development`.  If, however, you're setting up an all new installation of SeeChange that's going to run on a survey that somebody hasn't already set up for you, see :ref:`full-server-setup` below.
 
+#####################
 Checking out the code
-=====================
+#####################
 
 You can pull the code with::
 
@@ -19,8 +67,10 @@ You can pull the code with::
 (The second command is needed to pull embedded git archives within SeeChange.)  If you're developing the code, you may want to pull it differently; see (TODO reference).
 
 .. _docker-image:
+
+######################################
 Acquiring or Building the Docker Image
-======================================
+######################################
 
 A "current" docker image for SeeChange can be pulled (with ``docker pull``) from the following locations (where YYYMMDD are used for different releases; sometimes there may be an "a", "b", etc. after YYYYMMDD if we uploaded multiple versions in one day).  It should usually be safe to use the "latest" version, but you might want to pull a specific dated version for reproducibility.  The ``_nocode`` docker images do *not* actually include the SeeChange code, just the necessary environment.  To use this image, you will need to bind-mount an installation of SeeChange (see below).  This is what you want to use for development (and, right now, SeeChange is under heavy development).
 
@@ -36,12 +86,12 @@ A "current" docker image for SeeChange can be pulled (with ``docker pull``) from
 **NOTE**: Currently, these images are only for the ``x86_64`` architecture.  If you are on an ARM machine (which is the case for all recent Macs), you may be able to use these images, but they could be very inefficient.
 
 Pulling the docker image on NERSC
----------------------------------
+=================================
 
 On NERSC, use ``podman-hpc`` instead of ``docker``.  You pull the image with ``podman-hpc pull <imagename>``.  (Do **not** do ``podman-hpc image pull ...``, as that will seem to work, but not pull the images in such a way that they will work on any node other than the one you pulled it on.  If you do ``podman-hpc pull <imagename>``, the image will be available on all nodes.)
 
 Building the Docker Image
--------------------------
+=========================
 
 If you need to build the docker image yourself, you should be able to accomplish this by running the following in the top level of the SeeChange checkout::
 
@@ -50,8 +100,10 @@ If you need to build the docker image yourself, you should be able to accomplish
 Replace ``<tag>`` with whatever you want (this is just part of the name of the docker image you are building); if you omit ``:<tag>``, then the "latest" image will be build.  This command will build a docker image that has the version of the code in the checkout included in the image.  If you want to build an image that doesn't include the code, and plan to bind-mount the code yourself, then replace ``included_code`` with ``bindmount_code``.  If you want to be able to run all of the tests, instead use ``--target test_included`` or ``--target test_bindmount`` in place of ``--target included_code``.  (The reason to have a separate image for tests is that they require several additional things that bloats the docker image.  The non-test versions of the image are slightly smaller, though still distressingly large.)
 
 .. _dirs:
+
+################################
 Setting up necessary directories
-================================
+################################
 
 For an installation of SeeChange that is hooking into a pre-existing database, you need to identify the following directories:
 
@@ -65,8 +117,10 @@ If you're setting up a whole new installation of SeeChange, there are additional
 
 
 .. _installing-code:
+
+###################
 Installing the code
-===================
+###################
 
 **Note**: This step is unnecessary if you're using a docker image with the SeeChange code included (see :ref:`docker-image`).
 
@@ -89,8 +143,10 @@ You will then need to add ``<installdir>`` to your ``PYTHONPATH``.  (Instruction
 Instead of installing the code, it is *probably* possible to just run the code in place, and just add the top level of your SeeChange checkout to your ``PYTHONPATH``.  (This is how our tests usually work.)
 
 .. _config:
+
+#############################
 Creating a configuration file
-=============================
+#############################
 
 SeeChange depends on a configuration file to tell it where the database is, where necessary external servers are, where it can read and write images and other data products, and, last but not least, the parameters to use when running the various steps of the pipeline.  You can find a default configuration file in ``default_config.yaml`` in the top level of the git checkout.
 
@@ -115,8 +171,9 @@ The directories in this code snippit are exactly what you'll use if you follow t
 
 Ideally, again assuming you were given a configuration file for the survey you are hooking into, this is everything you need to do.  However, you may wish to make other changes.  You might want to be trying actual different things in the pipeline, in which case hopefully you know what you're doing.  You may also want to enable or disable things relative to what's the survey config (e.g. the sending of alerts).
 
+############################
 Running the Docker Container
-============================
+############################
 
 Assuming you're using the included-code version, cd into your ``workdir`` and run the docker container with::
 
@@ -145,7 +202,7 @@ You can verify that things are working by running a python interactive session a
 If all is well, you won't get any error messages doing this.
 
 Bind-mounting the code
-----------------------
+======================
 
 If you're developing, and you're going to be editing the code, you probably don't want to have to rebuild the docker image every time you change the code.  In this case, you should either bind mount the place where you [installed the code](#installing-code), or the top level of your SeeChange checkout.  Do this by two more arguments to the ``docker`` command::
 
@@ -162,15 +219,17 @@ where `<install_dir>` is where the seechange code is located-- either the place 
 
 
 .. _full-server-setup:
+
+#################
 Full Server Setup
-=================
+#################
 
 In addition to the running SeeChange code, there are a few servers that need to be set up and run.  This includes at the very least PostgreSQL database server.  You probably also want to set up a web application server, and an archive server.
 
 TODO DOCUMENT THIS
 
 Setting up a database
----------------------
+=====================
 
 TODO: give more information.
 

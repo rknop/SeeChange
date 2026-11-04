@@ -172,6 +172,15 @@ class ParsLightcurve(Parameters):
             critical = False
         )
 
+        self.ignore_missing_refs = self.add_par(
+            name = "ignore_missing_refs",
+            default = True,
+            par_types = bool,
+            docstring = ( "If doing multiple filters, and there aren't references for all of the filters, "
+                          "when this is True then those filters will just be skipped.  If this is False and "
+                          "there are missing references, an exception will be raised." )
+        )
+
         self.object_id = self.add_par(
             name = "object_id",
             default = None,
@@ -194,6 +203,14 @@ class ParsLightcurve(Parameters):
             par_types = bool,
             docstring = ( "Set True to save newly created photometry to the database.  In *any* event, "
                           "subtractions and trimmed images and so forth are going to get saved.  I think." ),
+            critical = False
+        )
+
+        self.provtag = self.add_par(
+            name = "provtag",
+            default = None,
+            par_types = ( str, None ),
+            docstring = "Save created provenancs to to this provenance tag.",
             critical = False
         )
 
@@ -358,7 +375,7 @@ class Lightcurve:
                 self.ra = self.object.ra
                 self.dec = self.object.dec
 
-            return self.make_prov_tree( pgdb=pgdb, **kwargs )
+            return self.make_prov_tree( pgdb=pgdb, provtag=self.pars.provtag )
 
 
     def _generate_provenances( self, provtree, pgdb=None ):
@@ -664,8 +681,10 @@ class Lightcurve:
                                                              'Image.trim.wcs', 'Image.trim.zp' ] )
                     provs.extend( [ provtree['subtraction'], provtree['diaforcedphot'] ] )
                     for prov in provs:
-                        prov.insert_if_needed( pgdb=pgdb, nocommit=True )
-                    pgdb.commit()
+                        # prov.insert_if_needed( pgdb=pgdb, nocommit=True )
+                        # ...I was getting database deadlocks, thought required
+                        prov.insert_if_needed( pgdb=pgdb )
+                    # pgdb.commit()
                     if provtag is not None:
                         ProvenanceTag.addtag( provtag, provs, pgdb=pgdb )
 
@@ -791,6 +810,7 @@ class Lightcurve:
             )
 
             if self.pars.save_to_db:
+                SCLogger.debug( "Saving dia_forced_photometry row to database" )
                 diaforcedphot.insert()
 
         # For convenience for tests, stick the aperture corrections in
@@ -866,21 +886,31 @@ class Lightcurve:
             for filt in self.filters:
                 ref = ds.get_reference( filter=filt, pgdb=pgdb, **kwargs )
                 if ref is None:
-                    raise RuntimeError( f"Cannot find a reference at ({ra:.4f}, {dec:.4f}) for instrument "
-                                        f"{self.pars.instrument}, filter {filt}, and parameters {kwargs}" )
-                refs[filt] = ref
+                    errmsg = ( f"Cannot find a reference at ({ra:.4f}, {dec:.4f}) for instrument "
+                               f"{self.pars.instrument}, filter {filt}, and parameters {kwargs}" )
+                    SCLogger.warning( errmsg )
+                else:
+                    refs[filt] = ref
 
-        oks = [ f for f, r in self.refs.items() if r is not None ]
-        missings = [ f for f, r in self.refs.items() if r is None ]
-        if len(missings) > 0:
-            SCLogger.error( f"Failed to find refs for filters {missings}; did find refs for {oks}" )
-            raise RuntimeError( "Some refs missing filters." )
+        oks = set( refs.keys() )
+        missings = set( self.filters ) - oks
+        if len(oks) == 0:
+            SCLogger.error( f"Could not find references for any of the filters {self.filters}" )
+            raise RuntimeError( "No references" )
+        elif len(missings) > 0:
+            errmsg = f"Failed to find refs for filters {missings}; did find refs for {oks}"
+            if self.pars.ignore_missing_refs:
+                SCLogger.warning( errmsg )
+            else:
+                SCLogger.error( errmsg )
+                raise RuntimeError( "Some refs missing filters." )
         else:
             SCLogger.info( f"Found refs for all filters: {oks}" )
 
         self.refs = refs
 
     def load( self, *args, **kwargs ):
+        # TODO : right now, this may save provenances to the database!  Fix!
         self.provtree = self.setup( *args, save=False, **kwargs )
         self.find_images()
         self.find_refs()
@@ -964,8 +994,10 @@ class Lightcurve:
         SCLogger.info( f"Lightcurve finding refs for {len(self.filters)} filters." )
         self.find_refs()
 
-        SCLogger.info( f"Lightcurve doing dia forced photometry on "
-                       f"{len([ i for i in self.imgs if i.filter in self.refs ])} images." )
+        SCLogger.info( f"Found refs for filters {', '.join(self.refs.keys())}" )
+        self.imgs = [ i for i in self.imgs if i.filter in self.refs ]
+
+        SCLogger.info( f"Lightcurve doing dia forced photometry on {len(self.imgs)} images." )
         for i in range( len(self.imgs) ):
             try:
                 self.dia_forced_phots[i] = self.process_one_image(i)
