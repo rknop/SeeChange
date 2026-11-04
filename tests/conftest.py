@@ -556,7 +556,7 @@ def catexp(data_dir, cache_dir, download_url):
 #   for purposes of testing PSF extraction and the like
 
 class PSFPaletteMaker:
-    def __init__( self, round=False ):
+    def __init__( self, round=False, psfvar_degrees=2. ):
         tempname = ''.join( random.choices( 'abcdefghijklmnopqrstuvwxyz', k=10 ) )
         self.imagename = pathlib.Path( FileOnDiskMixin.temp_path ) / f'{tempname}.fits'
         self.weightname = pathlib.Path( FileOnDiskMixin.temp_path ) / f'{tempname}.weight.fits'
@@ -572,6 +572,7 @@ class PSFPaletteMaker:
 
         self.flux = 200000.
         self.noiselevel = 5.
+        self.psfvar_degrees = psfvar_degrees
 
         self.x0 = self.nx/2.
         self.sigx0 = 1.25
@@ -704,6 +705,7 @@ class PSFPaletteMaker:
                     '-PSF_SIZE', '31',
                     '-SAMPLE_FWHMRANGE', '1.0,10.0',
                     '-SAMPLE_VARIABILITY', '0.5',
+                    '-PSFVAR_DEGREES', str( self.psfvar_degrees ),
                     '-CHECKPLOT_DEV', 'NULL',
                     '-CHECKPLOT_TYPE', 'NONE',
                     '-CHECKIMAGE_TYPE', 'NONE',
@@ -740,7 +742,10 @@ class PSFPaletteMaker:
 
 @pytest.fixture(scope="module")
 def round_psf_palette():
-    palette = PSFPaletteMaker( round=True )
+    # Giving it the default psfvar_degrees of 2 even though 0
+    #   ought to work here, soas to give it a chance to
+    #   shoot itself in the foot.
+    palette = PSFPaletteMaker( round=True, psfvar_degrees=2. )
     palette.make_psf_palette()
     palette.extract_and_psfex()
 
@@ -751,7 +756,10 @@ def round_psf_palette():
 
 @pytest.fixture(scope="module")
 def psf_palette():
-    palette = PSFPaletteMaker( round=False )
+    # NOTE : using a very high order in PSFVAR_DEGREES here
+    #   because there are pretty extreme variations in the PSF
+    #   in this test image.
+    palette = PSFPaletteMaker( round=False, psfvar_degrees=5. )
     palette.make_psf_palette()
     palette.extract_and_psfex()
 
