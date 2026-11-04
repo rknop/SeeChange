@@ -60,9 +60,10 @@ def delete_exposure( exposure_name ):
 
 
         for expid in expids:
-            exposure = Exposure.get_by_id( expid )
-            if exposure is not None:
-                exposure.delete_from_disk_and_database( remove_folders=True, remove_downstreams=True, archive=True )
+            if expid is not None:
+                exposure = Exposure.get_by_id( expid )
+                if exposure is not None:
+                    exposure.delete_from_disk_and_database( remove_folders=True, remove_downstreams=True, archive=True )
 
 
 def verify_exposure_image_etc( numimages=2, numsourcelists=2, numzps=2, numsubs=2 ):
