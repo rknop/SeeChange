@@ -127,6 +127,22 @@ def key_sorted_dict( d ):
     return { k: key_sorted_dict(d[k]) if isinstance(d[k], dict) else d[k] for k in keys }
 
 
+def scorch_the_earth( path, remove_root=True ):
+    """Recursively remove everything inside and underneath path.  Use with care!"""
+
+    path = pathlib.Path( path )
+    if path.is_dir():
+        for subpath in path.iterdir():
+            if subpath.is_dir():
+                scorch_the_earth( subpath, remove_root=True )
+            else:
+                subpath.unlink()
+        if remove_root:
+            path.rmdir()
+    elif remove_root:
+        path.unlink()
+
+
 def remove_empty_folders(path, remove_root=True):
     """Recursively remove any empty folders in the given path.
 
