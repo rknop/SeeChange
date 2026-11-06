@@ -1,6 +1,7 @@
 import io
 import copy
 import collections
+import traceback
 
 from psycopg import sql
 
@@ -71,6 +72,10 @@ class Pipeline( ProcessObject ):
     # in the order they will normally be run.
     _all_steps = []
 
+    # A list of processes that do not have provenances associated with them.#
+    #   This will be for pipeline steps that do things like download the
+    #   calibrators 
+    
     # A dict of str: class.  The keys are the names of properties that
     #   the pipeline needs to get started.  The values are the
     #   classes of those starting products.  Many pipelines will
@@ -306,12 +311,14 @@ class Pipeline( ProcessObject ):
             else:
                 setattr( self, prop, copy.deepcopy( getattr( self, f"_{prop}" ) ) )
 
+        self.provtag = provtag
         self._do_reports = reports
         self.track_runtimes = track_runtimes
         self.track_memory = track_memory
         self.runtimes = {}
         self.memory_usages = {}
         self.exceptions = []
+        self.warnings = []
         
         # Make a dictionary of product classes.  The keys of
         #   self.product_classes will have every product we might try to
@@ -321,6 +328,9 @@ class Pipeline( ProcessObject ):
         #   of the dictionary will *usually* be a class, but it might be
         #   a tuple of (list, class).
         #
+        # Also, at the same time, make a dictioary of the processes
+        #  (steps) that produce each product.
+        #
         # Also, at the same time, make sure that
         #   self.product_provenance_processes is complete (has an entry
         #   for everything in self.product_classes).  It will be
@@ -328,6 +338,7 @@ class Pipeline( ProcessObject ):
         #   for classes that aren't subclasses of HasProvenance.  for
         #   products that don't have provenances.
         self.product_classes = self.starting_products.copy()
+        self.product_processes = { c: NotDefined for c in product_classes.keys() }
         self.product_provenance_processes.extend( { c: NotDefined for c in self.product_classes.keys() } )
         for process, mess in self.process_products.items():
             for tup in mess:
@@ -338,6 +349,7 @@ class Pipeline( ProcessObject ):
                 if product in self.product_classes:
                     raise RuntimeError( f"{self.__class__.__name__} is ill-defined, {product} shows up "
                                         f"more than once either in _starting_products or _process_products" )
+                self.product_processes[ product ] = process
                 if islist:
                     self.product_classes[ product ] = ( list, cls )
                 else:
@@ -350,23 +362,19 @@ class Pipeline( ProcessObject ):
                         self.product_provenance_processes[product] = None
 
         # Make sure all our dicts of products to stuff all have the same keys
-        produpkeys = set( self.product_upstreams.keys() )
+        prodprockeys = set( self.product_processes.keys() )
         prodclskeys= set( self.product_classes.keys() )
+        produpkeys = set( self.product_upstreams.keys() )
         prodprovprockeys =set( self.product_provenance_processes.keys() )
-        if ( produpkeys != prodclskeys ) or ( produpkeys != prodprovprockeys ):
+        if any( prodprockeys != x for x in ( prdclskeys, prodprovprockeys, prodclskeys ) ):
             strio = io.StringIO()
-            strio.write( f"{self.__class__.__name__} is ill-defined. The keys of _product_upstreams "
-                         f"don't match both the keys of product_classes and product_provenance_processes." )
-            if len( produpkeys - prodclskeys ) != 0:
-                strio.write( f"  In product_upstreams but not product_classes: {produpkeys-prodclskeys}" )
-            if len( prodclskeys - produpkeys ) != 0:
-                strio.write( f"  In product_classes but not product_upstreams: {prodclskeys-produpkeys}" )
-            if len( produpkeys - prodprovprockeys ) != 0:
-                strio.write( f"  In product_upstreams but not product_provenance_processes: "
-                             f"{produpkeys-prodprovprockeys}" )
-            if len( prodprovprockeys - produpkeys ) != 0:
-                strio.write( f"  In product_provenance_processes but not product_upstreams: "
-                             f"{prodprovprockeys-produpkeys}" )
+            strio.write( f"{self.__class__.__name__} is ill-defined." )
+            for other, otherset in zip( [ 'product_classes', 'product_upstreams', 'product_provenance_processes' ],
+                                        [ prodclskeys,       produpkeys,          prodprovprockeys ] ):
+                if len( prodprockeys - otherset ) > 0:
+                    strio.write( f"\n In product_processes but not {other}: {prodprockeys-otherset}" )
+                if len( otherset - prodprockeys ) > 0:
+                    strio.write( f"\n In {other} but not product_processes: {otherset-prodprockeys}" )
             SCLogger.exception( strio.getvalue())
             raise RuntimeError( strio.getvalue() )
 
@@ -482,6 +490,64 @@ class Pipeline( ProcessObject ):
         for product in self.product_classes.keys():
             if product not in self.products:
                 self.products[ product ] = None
+
+
+        # Create provenances, make sure they're consistent with anything we already have
+        for proc, mess in self.process_products():
+            if proc in 
+            
+
+
+    # ======================================================================
+    
+    def copy( self, deep=True, keep_status=True, keep_products=True, deep_copy_products=False,
+              _additional_simple_props=[], _additional_deep_props=[], _additional_status_props=[],
+              **kwargs ):
+        """Return a copy of this pipeline.
+
+        Subclasses may need to override this, but they probably should
+        explicitly call their super's copy method, potentially passing
+        arguments _additional_simple_props, _additional_deep_props, and
+        _additional_status_props.
+
+        """
+
+        simple_props = [ "_do_reports", "track_runtimes", "track_memory" ]
+        simple_props.extend( _additional_simple_props )
+
+        deep_props = [ "all_steps", "starting_products", "process_products", "product_processes",
+                       "product_provenance_processes", "product_upstreams", "process_classes",
+                       "provenances", "starting_prov" ]
+        deep_props.extend( _additional_deep_props )
+
+        status_props = ( 'runtimes', 'memory_usages', 'exceptions', 'warnings' )
+        status_props.extend( _additional_status_props )
+
+        if keep_status:
+            deep_props.extend( status_props )
+        
+        pip = self.__class__( provtag=self.provtag, pars=self.pars.to_dict( critical=False, hidden=True ),
+                              _ok_to_instantiate=True, **kwargs )
+
+        for prop in simple_props:
+            setattr( pip, prop, getattr( self, prop ) )
+
+        if deep:
+            for prop in deep_props:
+                setattr( pip, prop, copy.deepcopy( getattr( self, prop ) ) )
+        else:
+            for prop in deep_props:
+                setattr( pip, prop, getattr( self, prop ) )
+
+        if keep_products
+            if deep_copy_products:
+                raise NotImplementedError( "We need to evaluate all of our code and make sure we really "
+                                           "know how to make deep copies of all our classes." )
+                pip.products = copy.deepcopy( self.products )
+            else:
+                pip.products = copy.copy( self.products )
+
+        return pip
 
 
     # ======================================================================
@@ -633,10 +699,26 @@ class Pipeline( ProcessObject ):
 
     # ======================================================================
 
-    def run( self, *args, save=NotDefined, save_after_each_step=NotDefined, save_after_steps=NotDefined, **kwargs ):
-        """The default run method is probably not good enough; subclasses should override."""
+    def run( self, *args, save=NotDefined, save_after_each_step=NotDefined, save_after_steps=NotDefined,
+             run_even_if_exceptions=False, reset_exceptions=False,
+             continue_on_exception=False, save_on_exception=False,
+             _step_kwargs={}, **kwargs
+            ):
+        """The default run method is probably not good enough; subclasses should override.
 
-        self.exceptions = []
+        Returns True if the pipeline ran without (new) exceptions, False otherwise.
+        
+        """
+
+        if len( self.exceptions ) > 0:
+            nl = "\n   "
+            if run_even_if_exceptions:
+                raise RuntimeError( f"Pipeline can't run, it has exceptions!{nl}{nl.join(self.exceptions)}" )
+            else:
+                SCLogger.warning( f"Pipeline continuing even though it has exceptions:{nl}{nl.join(self.exceptions)}" )
+
+        if reset_exceptions:
+            self.exceptions = []
         
         if save == NotDefined:
             if hasattr( self.pars, "save" ):
@@ -655,17 +737,43 @@ class Pipeline( ProcessObject ):
                 save_after_steps = []
 
         just_saved = False
+        had_exception = False
         for step, procobj in self.process_objects.items():
             just_saved = False
-            SCLogger.info( f"Running step {step}" )
-            procobj( self )
-            if save and ( save_after_each_step or ( step in save_after_steps ) ):
-                SCLogger.info( f"Saving data products after step {step}" )
-                self.save_and_commit()
-                just_saved = True
+            try:
+                SCLogger.info( f"Running step {step}" )
+                stepkwargs = _step_kwargs[step] if step in _step_kwargs else {}
+                procobj( self, **stepkwargs )
+                if save and ( save_after_each_step or ( step in save_after_steps ) ):
+                    SCLogger.info( f"Saving data products after step {step}" )
+                    self.save_and_commit()
+                    just_saved = True
+            except Exception as ex:
+                had_exception = True
+                strio = io.StringiO()
+                strio.write( f"Exception on step {step}\n" )
+                traceback.print_exception( ex, file=strio )
+                SCLogger.error( strio.getvalue() )
+                self.exceptions.append( f"Exception on step {step}: {ex}" )
+                if continue_on_exception:
+                    SCLogger.warning( "Continuing even though there was an exception!  This is foolish!" )
+                else:
+                    break
 
         if save and ( not just_saved ):
-            self.save_and_commit()
+            do_save = True
+            if had_exception:
+                if not save_on_exceptions:
+                    SClogger.warning( f"Not saving at end of pipeline run due to exceptions." )
+                    do_save = False
+                else:
+                    SCLogger.warning( f"Saving at end of pipeline run even though there were exceptions." )
+
+            if do_save:
+                self.save_and_commit()
+
+        return not had_exception
+
 
     # ======================================================================
 

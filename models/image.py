@@ -162,6 +162,13 @@ class Image(Base, UUIDMixin, HasProvenance, FileOnDiskMixin, SpatiallyIndexed, F
         )
     )
 
+    calibrator_set_id = sa.Column(
+        sa.ForeignKey( 'calibrator_sets._id', ondelete='RESTRICT', name='images_calibrator_set_id_fkey' ),
+        nullable = True,
+        index = True,
+        doc = "Set of calibrator files used in preprocessing for this image if appropriate"
+    )
+    
     parent_image_id = sa.Column(
         sa.ForeignKey( 'images._id', ondelete='SET NULL', name='images_parent_image_id_fkey' ),
         nullabel = True,
@@ -677,6 +684,7 @@ class Image(Base, UUIDMixin, HasProvenance, FileOnDiskMixin, SpatiallyIndexed, F
 
     def __init__(self, *args, **kwargs):
         FileOnDiskMixin.__init__(self, *args, **kwargs)
+        HasProvenance.__init__(self)
         HasBitFlagBadness.__init__(self)
         SeeChangeBase.__init__(self)  # don't pass kwargs as they could contain non-column key-values
 

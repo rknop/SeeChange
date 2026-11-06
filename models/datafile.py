@@ -30,6 +30,7 @@ class DataFile( Base, UUIDMixin, HasProvenance, FileOnDiskMixin ):
 
     def __init__( self, *args, **kwargs ):
         FileOnDiskMixin.__init__(self, *args, **kwargs)
+        HasProvenance.__init__(self)
         SeeChangeBase.__init__(self)  # don't pass kwargs as they could contain non-column key-values
 
         # manually set all properties (columns or not)

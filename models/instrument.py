@@ -1568,7 +1568,7 @@ class Instrument:
         return None
 
     def preprocessing_calibrator_files( self, calibset, flattype, section, filter, mjd,
-                                        zero_provtag=None, flat_provtag=None, fringe_provtag=None,
+                                        zero_provid=None, flat_provid=None, linearity_provid=None, fringe_provid=None,
                                         nofetch=False ):
         """Get a dictionary of calibrator images/datafiles for a given mjd and sensor section.
 
@@ -1592,23 +1592,34 @@ class Instrument:
         ----------
         calibset: str
           The calibrator set, one of the values in the CalibratorSetConverter enum
+
         flattype: str
           The flatfield type, one of the values in the FlatTypeConverter
           enum; if and only if calibset is externally_supplied, then
           flattype must be externally_supplied.
+
         section: str
           The name of the SensorSection
+
         filter: str
           The filter (can be None for some types, e.g. zero, linearity). Should
           be the short filter name, not the long filter name.
+
         mjd: float
           The mjd where the calibrator params are valid
-        zero_provtag: str or None
-          If given, the provenance tag of the bias image to get.
-        flat_provtag: str or None
-          If given, the provenance tag of the flat image to get.
-        fringe_provtag: str or None
-          If given, the provenance tag of the fringe image to get.
+
+        zero_provid: str or None
+          If given, the provenance id of the bias image to get.
+
+        flat_provid: str or None
+          If given, the provenance id of the flat image to get.
+
+        linearity_provid: str or None
+          If given, the provenance id of linearity file to get.
+        
+        fringe_provid: str or None
+          If given, the provenance id of the fringe image to get.
+        
         nofetch: bool
           If True, will only search the database for an
           externally_supplied calibrator.  If False (default), will call
@@ -1643,13 +1654,14 @@ class Instrument:
             if calibtype in self.preprocessing_nofile_steps:
                 continue
 
-            provtag = ( zero_provtag if calibtype=='zero'
-                        else flat_provtag if calibtype=='flat'
-                        else fringe_provtag if calibtype=='fringe'
-                        else None )
+            provid = ( zero_provid if calibtype=='zero'
+                       else flat_provid if calibtype=='flat'
+                       else linearity_provid if calibtype=='linearity'
+                       else fringe_provid if calibtype=='fringe'
+                       else None )
 
             SCLogger.debug( f'Looking for calibrators for {section} type {calibtype}'
-                            f'{f" provtag {provtag}" if provtag is not None else ""}' )
+                            f'{f" provenance id {provid}" if provid is not None else ""}' )
 
             calib = None
             with PsycopgConnection() as conn:
@@ -1658,9 +1670,6 @@ class Instrument:
                              "LEFT JOIN images i ON c.image_id=i._id\n"
                              "LEFT JOIN data_files d ON c.datafile_id=d._id\n"
                             )
-                if provtag is not None:
-                    q += sql.SQL( "LEFT JOIN provenance_tags it ON i.provenance_id=it.provenance_id\n"
-                                  "LEFT JOIN provenance_tags dt ON d.provenance_id=dt.provenance_id\n" )
                 q += sql.SQL( "WHERE c._calibrator_set={calibset}\n"
                               "  AND c._type={calibtype}\n"
                               "  AND c.instrument={instr}\n"
@@ -1677,8 +1686,9 @@ class Instrument:
                            .format( flat_type=FlatTypeConverter.to_int(flattype) ) )
                 if ( calibtype in [ 'flat', 'fringe', 'illumination' ] ) and ( filter is not None ):
                     q += sql.SQL( "  AND i.filter={filter}\n" ).format( filter=filter )
-                if provtag is not None:
-                    q += sql.SQL( "  AND ( it.tag={provtag} OR dt.tag={provtag} )\n" ).format( provtag=provtag )
+                if provid is not None:
+                    q += sql.SQL( "  AND ( it.provenance_id={provid} or dt.provenance_id={provid} )\n"
+                                 ).format( provid=provid )
 
                 # Select thing with most recent validity start; if there are more than one with the same
                 #   validity_start, choose the one made most recently.

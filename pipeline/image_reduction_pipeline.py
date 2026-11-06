@@ -1,4 +1,5 @@
 from models.exposure import Exposure
+from models.CalibratorSet import CalibratorSet
 from models.image import Image
 from models.source_list import SourceList
 from models.background import Background
@@ -23,12 +24,10 @@ class ImageReductionPipeline( Pipeline ):
 
     _all_steps = [ 'split_exposure', 'secure_calibrators', 'preprocessing', 'extraction', 'astrocal', 'photocal' ]
 
-    _external_pipeline_processes = { 'secure_calibrators', 'referencing' }
-
     _starting_products = { 'exposure': Exposure }
 
     _process_products = { 'split_exposure': [ (Image, 'raw_image') ],
-                          'secure_calibrators': [],
+                          'secure_calibrators': [ (CalibratorSet, 'calibrator_set') ],
                           'preprocessing': [ (Image, 'image') ],
                           'extraction': [ (SourceList, 'sources'),
                                           (Background, 'bg'),
@@ -45,7 +44,8 @@ class ImageReductionPipeline( Pipeline ):
                                      }
 
     _product_upstreams = { 'raw_image': [ 'exposure' ],
-                           'image': [ 'raw_image' ],
+                           'calibrator_set': [],
+                           'image': [ 'raw_image', 'calibrator_set' ],
                            'sources': [ 'image' ],
                            'bg': [ 'sources' ],
                            'psf': [ 'sources' ],

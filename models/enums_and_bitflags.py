@@ -1,6 +1,9 @@
 """Here we put all the dictionaries and conversion functions for getting/setting enums and bitflags."""
 
+import numbers
+
 from util.classproperty import classproperty
+import util.util
 
 
 class EnumConverter:
@@ -170,6 +173,79 @@ class SourceListFormatConverter( EnumConverter ):
     _dict_inverse = None
 
 
+class BitFieldConverter():
+    """Base class for converting bitfields."""
+
+    # Max number of bits.  To avoid issues with signed integers, always make this
+    #   one smaller than the total number of bits in the data type (so this value
+    #   should be one of 7, 15, 31, or 63).
+    _nbits = 31
+    # mapping of bit → string
+    _dict = {}
+    # mapping of string → bit
+    _dict_inverse = None
+
+    @classproperty
+    def dict( cls ):  # noqa: N805
+        return cls._dict
+    
+    @classproperty
+    def dict_inverse( cls ):  # noqa: N805
+        if cls._dict_inverse is None:
+            cls._dict_inverse = { v: k for k, v in cls._dict.items }
+        return cls._dict_inverse
+
+    @classmethod
+    def to_bitmask( cls, val ):
+        if isinstance( val, numbers.Integral ):
+            if val >= cls._nbits:
+                raise ValueError( f"{dls.__name__} can only handle {cls._nbits} bits" )
+            bitmask = 1 << val
+        
+        elif isinstance( val, str ):
+            bitmask = 0
+            unknown = []
+            for keyword in [ x.strip().lower() for x in val.split(",") ]:
+                if keyword not in cls.dict_inverse:
+                    unknown.append( keyword )
+                else:
+                    bitmask |= 1 << cls.dict_inverse[ keyword ]
+            if len(unknown) > 0:
+                raise ValueError( f"Unknown bit names: {unknown}" )
+
+        elif util.is_actual_iterable( val ):
+            bitmask = 0
+            for item in val:
+                if not isinstance( item, ( numbers.Integral, str ) ):
+                    raise TypeError( f"to_bitmask list must be all int or str, not {type(item)}" )
+                bitmask |= cls.to_bitmask( item )
+
+        else:
+            raise TypeError( f"to_bitmask requires int, str, or list of int or str, not {type(val)}" )
+                
+        return bitmask
+
+    @classmethod
+    def to_bit( cls, val ):
+        return self.dict_inverse[ val ]
+    
+    @classmethod
+    def bit_to_string( cls, val ):
+        return self._dict[ val ]
+
+    @classmethod
+    def bitmask_to_strings( cls, val, as_list=False ):
+        if not isinstance( val, numbers.Integral ):
+            raise TypeError( "bitmask must be an integer" )
+        if val >= 1 << cls._nbits:
+            raise ValueError( f"{cls.__name__} can only handle {cls._nbits} bits" )
+        
+        strs = [ text for bit, text in self._dict.items() if val | ( 1 << bit ) ]
+        if as_list:
+            return strs
+        else:
+            return ",".join( strs )
+
 class ImageTypeConverter( EnumConverter ):
     _dict = {
         0: 'Unknown',
@@ -323,9 +399,23 @@ class KnownExposureStateConverter( EnumConverter ):
     _dict_inverse = None
 
 
+class CalibratorSetIsImageBits( BitFieldConverter ):
+    _nbits = 16
+    _dict = { 0: 'zero',
+              1: 'dark',
+              2: 'flat',
+              3: 'linearity',
+              4: 'fringe',
+              5: 'illumination'
+             }
+    
+
+
 def bitflag_to_string(value, dictionary):
     """Convert 64-bit bitflag into a comma separated string.
 
+    DEPRECATE THIS in favroof BitFieldConverter
+    
     Takes a 64-bit integer bit-flag and converts it to a comma separated
     string, using the given dictionary.  If any of the bits are not
     recognized, will raise a ValueError.
@@ -593,13 +683,11 @@ flag_image_bits = {
 }
 flag_image_bits_inverse = { EnumConverter.c(v):k for k, v in flag_image_bits.items() }
 
-
 class BitFlagConverter( EnumConverter ):
     _dict = flag_image_bits
     _allowed_values = flag_image_bits
     _dict_filtered = None
     _dict_inverse = None
-
 
 # the list of possible processing steps from a section of an exposure up to measurements, r/b scores, and report
 # Used by reports

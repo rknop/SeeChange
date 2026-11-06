@@ -95,6 +95,22 @@ def ensure_file_does_not_exist( filepath, delete=False ):
 
 
 # **********************************************************************
+# *sort of* check if something's a sequence
+#
+# strings and bytes are technically sequences in python, but this
+# function treats them as not.
+
+def is_actual_iterable( val ):
+    if isinstance( val, collections.abc.Iterable ):
+        if isinstance( val, (str, bytes )):
+            return False
+        else:
+            return True
+    else:
+        return False
+
+
+# **********************************************************************
 # Pass any sequence other than a string or buytes, get back a list
 #
 # Pass any scalar, or a list, or bytes, get back [ val ]
