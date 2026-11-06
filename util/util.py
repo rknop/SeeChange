@@ -40,12 +40,12 @@ def asUUID( id ):
         raise TypeError( f"asUUID requires a UUID or a str, not a {type(id)}" )
     return uuid.UUID( id )
 
+
 # **********************************************************************
 # A json.JSONEncodcer that convertes numpy types to regular python types,
 #    that stringifies datetimes via iso
 #
 # DO NOT USE, INSTEAD USE <rob figure it out>
-
 
 class NumpyAndUUIDJsonEncoder(json.JSONEncoder):
     """Encodes UUID to strings, also encodes numpy stuff to python things, and datetime to a string."""
@@ -139,8 +139,45 @@ def listify( val, require_string=False ):
 
 
 # **********************************************************************
-# Pass a path, all empty directories underneath it are rmdired.
 
+
+def key_sorted_dict( d ):
+    """Return a new dictionary with keys sorted.
+
+    Any values that are themselves dictionaries will also have
+    their keys sorted, recursively.
+
+    Copies are made of any dictionary values, but not of anything else,
+    so this is somewhere between a shallow and a deep copy.  (It's
+    shallow, except where it can't be.)
+
+    """
+
+    if not isinstance( d, dict ):
+        raise TypeError( "Must pass a dict, not a {type(d)}, to key_sorted_dict." )
+    keys = list( d.keys() )
+    keys.sort()
+    return { k: key_sorted_dict(d[k]) if isinstance(d[k], dict) else d[k] for k in keys }
+
+
+def scorch_the_earth( path, remove_root=True ):
+    """Recursively remove everything inside and underneath path.  Use with care!"""
+
+    path = pathlib.Path( path )
+    if path.is_dir():
+        for subpath in path.iterdir():
+            if subpath.is_dir():
+                scorch_the_earth( subpath, remove_root=True )
+            else:
+                subpath.unlink()
+        if remove_root:
+            path.rmdir()
+    elif remove_root:
+        path.unlink()
+
+
+# **********************************************************************
+# Pass a path, all empty directories underneath it are rmdired.
 
 def remove_empty_directories(path, remove_root=True):
     """Recursively remove any empty directories in the given path.
@@ -347,6 +384,34 @@ def as_datetime( string ):
         else:
             SCLogger.error( f'Exception in asDateTime: {e}\n' )
         raise ValueError( f'Error, {string} is not a valid date and time.' )
+
+
+def validate_integers( seq, return_list=False, strict=False ):
+    if strict:
+        if not all( isinstance( x, numbers.Integral ) for x in seq ):
+            raise TypeError( f"Not all are integers: {seq}" )
+        if return_list:
+            return listify( seq )
+        else:
+            return np.array( seq, dtype=np.int32 )
+
+    else:
+        origarray = np.array( seq )
+        intarray = np.array( np.floor( origarray + 0.5 ), dtype=np.int32 )
+        # What is close enough?  Where this function is used is in looking
+        # at image coordinates, making sure they are integers.  If we assume
+        # images will never be bigger than 16384×16384, given that 32-bit
+        # floats store 6-7 bits of precision, we can't be better than a
+        # tenth of a pixel... but let's push it.  Really, though, the user
+        # should have passed integers, so the comparison should be perfect,
+        # but if they passed a floatified integer, those can be perfectly
+        # represented up to 2²⁴=16,777,216.
+        if not np.all( np.isclose( origarray, intarray, rtol=0., atol=0.01 ) ):
+            raise TypeError( f"Not all of {seq} are integers" )
+        if return_list:
+            return [ int(x) for x in intarray ]
+        else:
+            return intarray
 
 
 def env_as_bool(varname):

@@ -148,6 +148,10 @@ class LS4Cam(Instrument):
         raise NotImplementedError( "Need to implement get_section_offsets for LS4." )
 
 
+    def get_section_radec_offset( self, section_id ):
+        return self._chip_offsets[ section_id ]
+
+
     def get_section_filter_array_index( self, section_id ):
         """Get the index in the filter array for this section.
 

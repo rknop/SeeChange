@@ -157,6 +157,7 @@ ENV PYTHONPATH=""
 
 # Some final setups for sanity
 ENV LESS=-XLRi
+ENV PAGER="less -XLRi"
 
 # ======================================================================
 # Use a multistage Docker file so that we can install the packages

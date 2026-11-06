@@ -3,7 +3,7 @@ preloads:
 
 pipeline:
   through_step: preprocessing
-  provenance_tag: justzero_20260901
+  provenance_tag: justzero_20261105a
 
 preprocessing:
   steps_required: [ 'overscan', 'zero' ]

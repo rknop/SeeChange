@@ -122,7 +122,7 @@ def test_find_objects_with_diaforcedphot( sim_lightcurve_lightcurves ):
         assert len(dex) == 1
         objdexen.append( dex[0] )
     # The fixture had no object positions, so was just using the positions from the object
-    assert all ( r == pytest.approx( objs[objdexen[i]].ra, abs=0.01/3600. / np.cos( rval['dec'][i] ) )
+    assert all ( r == pytest.approx( objs[objdexen[i]].ra, abs=0.01/3600. / np.cos( rval['dec'][i] * np.pi/180. ) )
                  for i, r in enumerate( rval['ra'] ) )
     assert all ( d == pytest.approx( objs[objdexen[i]].dec, abs=0.01/3600. )
                  for i, d in enumerate( rval['dec'] ) )

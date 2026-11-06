@@ -21,7 +21,7 @@ from models.enums_and_bitflags import (
     SourceListFormatConverter,
     source_list_badness_inverse,
 )
-from util.util import ensure_file_does_not_exist, asUUID
+from util.util import ensure_file_does_not_exist, asUUID, validate_integers
 from util.logger import SCLogger
 import util.ldac
 
@@ -671,6 +671,8 @@ class SourceList(Base, UUIDMixin, HasProvenance, FileOnDiskMixin, HasBitFlagBadn
         if any( i is None for i in (x0, x1, y0, y1) ):
             raise ValueError( "x0, x1, y0, y1 must all be given" )
 
+        x0, x1, y0, y1 = validate_integers( [ x0, x1, y0, y1 ], return_list=True )
+
         if self._format == 0:
             # Null format
             return
@@ -1120,3 +1122,33 @@ class SourceList(Base, UUIDMixin, HasProvenance, FileOnDiskMixin, HasBitFlagBadn
                 output.extend( [ ( model, row[0] ) for row in rows ] )
 
         return output
+
+
+    def get_psf( self, pgdb=None ):
+        """Returns the PSF assoucated with this source list, or None if not found."""
+
+        with PGDB( pgdb, dictcursor=True ) as pgdb:
+            rows = pgdb.execute( sql.SQL( "SELECT * FROM psfs WHERE sources_id={sid}" ).format( sid=self.id ) )
+            if len(rows) == 0:
+                return None
+            elif len(rows) > 1:
+                raise RuntimeError( f"Database corruption: more than one PSF for source list {self.id}; "
+                                    f"this should never happen." )
+            else:
+                from models.psf import PSF
+                return PSF.create( **(rows[0]) )
+
+
+    def get_bg( self, pgdb=None ):
+        """Returns the Background associated with this source list, or None if not found."""
+
+        with PGDB( pgdb, dictcursor=True ) as pgdb:
+            rows = pgdb.execute( sql.SQL( "SELECT * FROM backgrounds WHERE sources_id={sid}" ).format( sid=self.id ) )
+            if len(rows) == 0:
+                return None
+            elif len(rows) > 1:
+                raise RuntimeError( f"Database corruption: more than one Background for source list {self.id}; "
+                                    f"this should never happen." )
+            else:
+                from models.Background import Background
+                return Background.create( **(rows[0]) )
