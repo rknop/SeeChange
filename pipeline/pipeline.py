@@ -281,7 +281,8 @@ class Pipeline( ProcessObject ):
     def __init__( self, starting_prov=None, provtag=None, pars=None, read_pars_from_prov=False,
                   match_code_version=True, match_full_code_version=False,
                   handle_unexpected_processes='ignore', ok_processes_missing=True, validate_upstream_steps=True,
-                  reports=False, pgdb=None, _preset_provenances={}, _ok_to_instantiate=False, **kwargs
+                  reports=False, pgdb=None, track_runtimes=True, track_memory=True,
+                  _preset_provenances={}, _ok_to_instantiate=False, **kwargs
                  ):
         """Do not ever directly instantiate a Pipeline or subclass.  Use Pipeline.get()."""
 
@@ -306,7 +307,12 @@ class Pipeline( ProcessObject ):
                 setattr( self, prop, copy.deepcopy( getattr( self, f"_{prop}" ) ) )
 
         self._do_reports = reports
-
+        self.track_runtimes = track_runtimes
+        self.track_memory = track_memory
+        self.runtimes = {}
+        self.memory_usages = {}
+        self.exceptions = []
+        
         # Make a dictionary of product classes.  The keys of
         #   self.product_classes will have every product we might try to
         #   access inside the pipeline itself (so process objects called
@@ -630,6 +636,8 @@ class Pipeline( ProcessObject ):
     def run( self, *args, save=NotDefined, save_after_each_step=NotDefined, save_after_steps=NotDefined, **kwargs ):
         """The default run method is probably not good enough; subclasses should override."""
 
+        self.exceptions = []
+        
         if save == NotDefined:
             if hasattr( self.pars, "save" ):
                 save = self.pars.save

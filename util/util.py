@@ -139,7 +139,7 @@ def listify( val, require_string=False ):
 
 
 # **********************************************************************
-    
+
 def key_sorted_dict( d ):
     """Return a new dictionary with keys sorted.
 
