@@ -1124,6 +1124,8 @@ class Image(Base, UUIDMixin, HasProvenance, FileOnDiskMixin, SpatiallyIndexed, F
              weight or flags field...) filled with a copy of image.data.
              If this is True, leave that field as None.
 
+             ...ACTUALLY, I think that's wrong.  I think .data is always None.
+
         Returns
         -------
           Image
@@ -1146,6 +1148,7 @@ class Image(Base, UUIDMixin, HasProvenance, FileOnDiskMixin, SpatiallyIndexed, F
             'instrument',
             'telescope',
             'filter',
+            'exposure_id',
             'section_id',
             'width',
             'height',

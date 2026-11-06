@@ -8,6 +8,7 @@ from models.zero_point import ZeroPoint
 
 from pipeline.pipeline import Pipeline
 from pipeline.exposure_splitter import ExposureSplitter
+from pipeline.secure_calibrator import CalibratorSecurer
 from pipeline.preprocessing import Preprocessor
 from pipeline.detection import Detector
 from pipeline.astrocal import AstroCalibrator
@@ -53,7 +54,7 @@ class ImageReductionPipeline( Pipeline ):
                           }
 
     _process_classes = { 'split_exposure': ExposureSplitter,
-                         'secure_calibrators': "OMG ROB WRITE CalibratorSecurer",
+                         'secure_calibrators': CalibratorSecurer,
                          'preprocessing': Preprocessor,
                          'extraction': Detector,
                          'astrocal': AstroCalibrator,

@@ -140,7 +140,6 @@ def listify( val, require_string=False ):
 
 # **********************************************************************
 
-
 def key_sorted_dict( d ):
     """Return a new dictionary with keys sorted.
 
@@ -185,7 +184,7 @@ def remove_empty_directories(path, remove_root=True):
     Parameters
     ----------
     path: str or pathlib.Path
-        The directory to remove empty folders from.  If not
+        The directory to remove subdirectories from.  If not
         a directory, nothing happens.
 
     remove_root: bool

@@ -16,12 +16,13 @@ from models.enums_and_bitflags import (
 
 
 from pipeline.parameters import Parameters
-from pipeline.data_store import DataStore
+from pipeline.processobject import ProcessObject
+from pipeline.pipeline import Pipeline
 
 from util.logger import SCLogger
 
 
-class ParsPreprocessor(Parameters):
+class ParsPreprocessor( Parameters ):
     def __init__(self, **kwargs):
         super().__init__()
 
@@ -88,39 +89,6 @@ class ParsPreprocessor(Parameters):
                       critical=True
                      )
 
-        self.add_par( 'calibset', 'externally_supplied', str,
-                      "The calibrator set to use.  Choose one of the CalibratorSetConverter enum. ",
-                      critical=True )
-        self.add_alias( 'calibrator_set', 'calibset' )
-
-        self.add_par( 'zero_provtag',
-                      None,
-                      ( str, type(None) ),
-                      ( "If given, then when searching for a zero for bias subtraction, only accept "
-                        "zero images that have a provenance tagged with this provenance tag.  "
-                        "Do not use with externally_supplied, or you will probably regret it." ),
-                      critical=True )
-
-        self.add_par( 'flattype', 'externally_supplied', str,
-                      "One of the FlatTypeConverter enum. ",
-                      critical=True )
-
-        self.add_par( 'flat_provtag',
-                      None,
-                      ( str, type(None) ),
-                      ( "If given, when searching for a flat for flatfielding, only accept "
-                        "flat images that have a provenance tagged with this provenance tag.  "
-                        "Do not use with externally_supplied, or will will probably regret it." ),
-                      critical=True )
-
-        self.add_par( 'fringe_provtag',
-                      None,
-                      ( str, type(None) ),
-                      ( "If given, when searching for a fringe image for fringe correction, only accept "
-                        "fringe images that have a provenance tagged with this provenance tag.  "
-                        "Do not use with externally_supplied, or will will probably regret it." ),
-                      critical=True )
-
         self.add_par( 'purge_raw_data',
                       True,
                       bool,
@@ -135,7 +103,10 @@ class ParsPreprocessor(Parameters):
         return 'preprocessing'
 
 
-class Preprocessor:
+class Preprocessor( ProcessObject ):
+    _pars_class = ParsPreprocessor
+    _process_name = 'preprocessing'
+    
     def __init__(self, **kwargs):
         """Create a preprocessor.
 
@@ -148,117 +119,99 @@ class Preprocessor:
           * fringe correction
           * illumination correction
 
-        After initialization, just call run() to perform the
-        preprocessing.  This will return a DataStore with the
-        preprocessed image.
+        The pipeline that uses this must have properties raw_image and
+        preprocparam.  A call to run() will set the image property of
+        the passed pipeline, and return the corresponding Image object.
 
-        Parameters are parsed by ParsPreprocessor
+        See ProcessObject for parameters that can be passed to the
+        constructor.
 
         """
 
-        self.pars = ParsPreprocessor( **kwargs )
+        super().__init__( **kwargs )
 
-        # Things that get cached
-        self.instrument = None
-        self.stepfilesids = {}
+        # Cached calibrator files
+        self.setpfileids = {}
         self.stepfiles = {}
-
-        # this is useful for tests, where we can know if
-        # the object did any work or just loaded from DB or datastore
-        self.has_recalculated = False
-
+        
 
     def preprocessing_done_bitfield( self ):
         strng = ','.join( self.pars.steps_required )
         return string_to_bitflag( strng, image_preprocessing_inverse )
 
 
-    def run( self, *args, do_not_load=False, **kwargs ):
-        """Run preprocessing for a given exposure and section_identifier.
+    def run( self, pipeline ):
+        """Run preprocessing.
 
-        Parameters are passed to the data_store constructor (see
-        DataStore.parse_args).  For preprocessing, an exposure and a
-        sensorsection is required, so args must be one of:
-          - DataStore (which has an exposure and a section)
-          - exposure_id, section_identifier
-          - Exposure, section_identifier
-        Passing just an image won't work.
-
-        Returns
-        -------
-        DataStore
-          contains the products of the processing.
+        Updates the image property of pipeline, and returns the IMage it set there.
 
         """
+
+        if not isinstance( pipeline, Pipeline ):
+            raise TypeError( f"pipeline needs to be a Pipeline, not a {type(pipeline)}" )
+        
         self.has_recalculated = False
 
         made_image = False
         made_flags = False
-        ds = None
         try:
-            ds = DataStore.from_args( *args, **kwargs )
             t_start = time.perf_counter()
-            if ds.update_memory_usages:
+            if pipeline.track_memory:
                 import tracemalloc
-                tracemalloc.reset_peak()  # start accounting for the peak memory usage from here
+                tracemalloc.reset_peak()
 
-            self.pars.do_warning_exception_hangup_injection_here()
+            if not ( hasattr( pipeline, "preprocparam" ) and hasattr( pipeline, "raw_image" ) ):
+                raise ValueError( "Preprocessor can't run, the passed pipeline needs to have both "
+                                  "preprocparam and raw_image." )
 
-            if ds.image is not None:
-                baseobj = ds.image
-                ds.section_id = ds.image.section_id
-            elif ( ds.exposure is None ) or ( ds.section_id is None ):
-                raise RuntimeError( "Preprocessing requires either an image, or an exposure and a sensor section" )
-            else:
-                baseobj = ds.exposure
-
-            if ( self.instrument is None ) or ( self.instrument.name != baseobj.instrument ):
-                self.instrument = baseobj.instrument_object
+            self.instrument = pipeline.raw_image.instrument_object
 
             # check that all required steps can be done (or have been done) by the instrument:
-            known_steps = self.instrument.preprocessing_steps_available
-            known_steps += self.instrument.preprocessing_steps_done
+            known_steps = instrument.preprocessing_steps_available
+            known_steps += instrument.preprocessing_steps_done
             known_steps = set(known_steps)
             steps_to_do = set(self.pars.steps_required)
-            needed_steps = steps_to_do - set( self.instrument.preprocessing_steps_done )
+            needed_steps = steps_to_do - set( instrument.preprocessing_steps_done )
             if not steps_to_do.issubset(known_steps):
                 raise ValueError(
                     f'Missing some preprocessing steps {steps_to_do - known_steps} '
-                    f'for instrument {self.instrument.name}'
+                    f'for instrument {instrument.name}'
                 )
 
-            # Get the calibrator files
-            if not all( step in self.instrument.preprocessing_nofile_steps for step in needed_steps ):
-                SCLogger.debug("preprocessing: getting calibrator files")
-                preprocparam = self.instrument.preprocessing_calibrator_files( self.pars.calibset,
-                                                                               self.pars.flattype,
-                                                                               ds.section_id,
-                                                                               baseobj.filter,
-                                                                               baseobj.mjd,
-                                                                               zero_provtag=self.pars.zero_provtag,
-                                                                               flat_provtag=self.pars.flat_provtag,
-                                                                               fringe_provtag=self.pars.fringe_provtag
-                                                                              )
-                SCLogger.debug("preprocessing: got calibrator files")
-            else:
-                preprocparam = {}
-
+            preprocparam = pipeline.preprocparam
+            
             # get the provenance for this step, using the current parameters:
-            prov = ds.get_provenance('preprocessing', self.pars.get_critical_pars())
+            prov = pipeline.provenances[ self.process_name ]
 
             # check if the image already exists in memory or in the database:
-            image = None if do_not_load else ds.get_image( prov )
+            image = pipeline.get_product( 'image' )
+            if image is not None:
+                if not isinstance( image, Image ):
+                    raise TypeError( f"pipeline.image needs to be an Image, not a {type(image)}" )
+                return image
 
-            image_was_from_exposure = False
-            if image is None:  # need to make new image
-                # get the single-chip image from the exposure
-                image = Image.from_exposure( ds.exposure, ds.section_id )
-                image_was_from_exposure = True
-                made_image = True
+            # We didn't find an image, so we have to make it
+            raw_image = pipeline.get_product( 'raw_image' )
+            if not isinstance( image, Image ):
+                raise TypeError( f"pipeline.raw_image needs to be an Image, not a {type(raw_image)}" )
 
-            if image is None:
-                raise ValueError('Image cannot be None at this point!')
+            image = Image.copy_image( raw_image, no_copy_data=True )
+            image.provenance_id = prov.id
+            if any( getattr( image, prop ) for prop in ( 'is_coadd', 'is_sub', 'is_trim' ) ):
+                raise RuntimeError( "Preprocessor got a raw_image with one of is_coadd, is_sub, or "
+                                    "is_trim set... that should not happen." )
+            for prop in ( 'fwhm_estimate', 'zero_point_estimate', 'lim_mag_estiamte',
+                          'bkg_mean_estimate', 'bkg_rms_estimate', 'coadd_alignment_target' ):
+                # ...or should we verify that these are None?  They should be for raw images.
+                # But what if it's not really raw.  Hurm.
+                setattr( image, prop, None )
+            image._bitflag = 0
+            image._upstream_bitflag = 0
 
+            image.data = raw_image.data.copy()
+            image.weight = raw_image.weight.copy() if raw_image.weight is not None else None
+            image.flags = raw_image.flags.copy() if raw_image.flags is not None else None
+            
             if image.preproc_bitflag is None:
                 image.preproc_bitflag = 0
 
@@ -272,13 +225,6 @@ class Preprocessor:
                 raise ValueError(f'Filter skips parameter for {baseobj.filter} must be a list')
             filter_skips = set(filter_skips)
             needed_steps -= filter_skips
-
-            if image._data is None:
-                # in case we skip all preprocessing steps
-                image.data = image.raw_data
-                # Make sure the Exposure won't cache data we aren't using any more.
-                if image_was_from_exposure:
-                    ds.exposure.clear_cache()
 
             # The image keeps track of the steps already done to it in
             #   image.preproc_bitflag, which is translated into a string
@@ -303,6 +249,8 @@ class Preprocessor:
 
             if len( stilltodo ) == 0:
                 SCLogger.debug( "Image has already been preprocessed." )
+                if ( image.weight is None ) or ( image.flags is None ):
+                    raise RuntimeError( "Image was already preprocessed, but we're missing weight and/or flags!" )
 
             else:
                 # Still stuff to do!
@@ -324,16 +272,10 @@ class Preprocessor:
                     image.preproc_bitflag |= string_to_bitflag( 'overscan', image_preprocessing_inverse )
                     image.header['HISTORY'] = 'overscan corrected and trimmed by SeeChange'
 
-                # If, for some reason, we don't yet have a  flags array, make sure we now do
+                # If, for some reason, we don't yet have a flags array, make sure we now do
                 if image.flags is None:
                     image.flags = np.zeros( image.data.shape, dtype=np.int16 )
                     made_flags = True
-
-                # At this point, we won't use image.raw_data again.  Set it
-                #   to None so the memory will be freed if it's not also
-                #   referred somewhere else.
-                if self.pars.purge_raw_data:
-                    image.raw_data = None
 
                 # Apply steps in the order expected by the instrument
                 for step in self.pars.steps_required:
@@ -357,17 +299,16 @@ class Preprocessor:
 
                     # Use the cached calibrator file for this step if it's the right one; otherwise, grab it
                     if ( stepfileid in self.stepfilesids ) and ( self.stepfilesids[step] == stepfileid ):
-                        calibfile = self.stepfiles[ stepfileid ]
+                        calibfile = self.stepfiles[ step ]
                     else:
-
-                        with SmartSession() as session:
+                        with PGDB() as pgdb:
                             if step in [ 'zero', 'dark', 'flat', 'illumination', 'fringe' ]:
-                                calibfile = session.get( Image, stepfileid )
+                                calibfile = Image.get_by_id( stepfileid, pgdb=pgdb )
                                 if calibfile is None:
                                     raise RuntimeError( f"Unable to load image id {stepfileid} "
                                                         f"for preproc step {step}" )
                             elif step == 'linearity':
-                                calibfile = session.get( DataFile, stepfileid )
+                                calibfile = DataFile.get_by_id( stepfileid, pgdb=pgdb )
                                 if calibfile is None:
                                     raise RuntimeError( f"Unable to load datafile id {stepfileid} "
                                                         f"for preproc step {step}" )
@@ -429,7 +370,7 @@ class Preprocessor:
 
             # OR in the standard instrument mask if we're supposed to
             if made_flags and self.pars.use_base_mask:
-                basemask = self.instrument.get_standard_flags_image( ds.section_id )
+                basemask = self.instrument.get_standard_flags_image( image.section_id )
                 image.flags |= basemask
 
             # Build the weight images (if necessary)
@@ -494,33 +435,27 @@ class Preprocessor:
                         raise RuntimeError( "Currently only support floats for masked_pixel_replacmeent" )
                     didmask |= bitmask
 
-            if image.provenance_id is None:
-                image.provenance_id = prov.id
-            else:
-                if image.provenance_id != prov.id:
-                    # Logically, this should never happen
-                    raise ValueError('Provenance mismatch for image and provenance!')
-
             image.filepath = image.invent_filepath()
-            SCLogger.debug( f"Done with {pathlib.Path(image.filepath).name}" )
+            SCLogger.debug( f"Done preprocessing {pathlib.Path(image.filepath).name}" )
 
+
+            # TODO : upstream bitflag from raw_image !!!!!
             if image._upstream_bitflag is None:
                 image._upstream_bitflag = 0
             if image_was_from_exposure:
                 image._upstream_bitflag |= ds.exposure.bitflag
 
-            ds.image = image
+            pipeline.image = image
 
-            if ds.update_runtimes:
-                ds.runtimes['preprocessing'] = time.perf_counter() - t_start
-            if ds.update_memory_usages:
+            if pipeline.trac_runtimes:
+                pipeline.runtimes['preprocessing'] = time.perf_counter() - t_start
+            if pipeline.track_memory:
                 import tracemalloc
-                ds.memory_usages['preprocessing'] = tracemalloc.get_traced_memory()[1] / 1024 ** 2  # in MB
+                pipeline.memory_usages['preprocessing'] = tracemalloc.get_traced_memory()[1] / 1024 ** 2  # in MB
 
-            return ds
+            return image
 
         except Exception as e:
             SCLogger.exception( f"Exception in Preprocessor.run: {e}" )
-            if ds is not None:
-                ds.exceptions.append( e )
+            pipeline.exceptions.append( e )
             raise

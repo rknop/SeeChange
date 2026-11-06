@@ -11,7 +11,27 @@ class ProcessObject:
         and understanding required to know what the right time is.)
 
         They must define static variables _pars_class and _process_name,
-        and isntance method run().
+        and instance method run().
+
+        Parameters
+        ----------
+          pipeline : Pipeline, default None
+             The pipeline class that this process object will run as a part of.  If not None,
+             it will look inside the config for that pipeline class to override base config
+             for this process.
+
+          process_name : str, default None
+             The process name used for constructing provenances (and
+             other things?).  Defaults to self._process_name, which is
+             defined in the subclass definition.
+
+          ignore_missing_config_values : bool, default True
+             TODO
+
+          **kwargs :
+             Further parameters are passed on to the Paramters object
+             for this process object.  They should all correspond to one
+             of the defined paramters for the specific process object.
 
         """
 

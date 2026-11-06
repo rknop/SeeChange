@@ -69,52 +69,53 @@ class CodeVersion(Base, UUIDMixin):
     #     (Technically, you're allowed to violate this as long as MAJOR is 0.)
     CODE_VERSION_DICT = {
         # The core processes of the pipeline
-        'acquire_exposure': (0,2,0),
-        'split_exposure': (0,1,0),
-        'preprocessing': (0,11,0),
-        'extraction': (0,9,0),
-        'astrocal' : (0,6,0),
-        'photocal' : (0,3,0),
-        'subtraction': (0,5,0),
-        'detection': (0,4,0),
-        'cutting': (0,2,0),
-        'measuring': (0,4,0),
-        'scoring': (0,2,0),
-        'alerting': (0,1,0),
-        'fakeinjection' : (0,2,0),
+        'acquire_exposure': (0, 2, 0),
+        'split_exposure': (0, 1, 0),
+        'secure_calbirators': (0, 1, 0),
+        'preprocessing': (0, 11, 0),
+        'extraction': (0, 9, 0),
+        'astrocal' : (0, 6, 0),
+        'photocal' : (0, 3, 0),
+        'subtraction': (0, 5, 0),
+        'detection': (0, 4, 0),
+        'cutting': (0, 2, 0),
+        'measuring': (0, 4, 0),
+        'scoring': (0, 2, 0),
+        'alerting': (0, 1, 0),
+        'fakeinjection' : (0, 2, 0),
 
         # Other processes of associated pipelines
-        'referencing' : (0,9,0),
-        'coaddition' : (0,9,0),
-        'positioning': (0,2,0),
-        'flat_bias_builder': (0,5,0),
-        'Image.trim': (0,2,0),
-        'Image.trim.sources': (0,2,0),
-        'Image.trim.wcs': (0,1,0),
-        'Image.trim.zp': (0,1,0),
-        'diaforcedphot': (0,3,0),
+        'referencing' : (0, 9, 0),
+        'coaddition' : (0, 9, 0),
+        'positioning': (0, 2, 0),
+        'flat_bias_builder': (0, 5, 0),
+        'Image.trim': (0, 2, 0),
+        'Image.trim.sources': (0, 2, 0),
+        'Image.trim.wcs': (0, 1, 0),
+        'Image.trim.zp': (0, 1, 0),
+        'diaforcedphot': (0, 3, 0),
 
         # The next couple are processes whose direct data products
         #   are not saved to the database.  If their versions change,
         #   then probably the subtraction, and maybe the coadd,
         #   version should change too, as changes in these processes
         #   will affect both subtraction and coadd.
-        'alignment' : (0,5,0),
-        'inpainting' : (0,2,0),
+        'alignment' : (0, 5, 0),
+        'inpainting' : (0, 2, 0),
 
         # These are processes for downloading stuff
         #   that we need either to do specific surveys,
         #   or for specific instruments.,
-        'DECam Default Calibrator' : (0,1,0),
-        'manual_reference' : (0,1,0),
+        'DECam Default Calibrator' : (0, 1, 0),
+        'manual_reference' : (0, 1, 0),
         'LS4Cam Default Calibrator': (0, 1, 0),
 
         # The remaining processes are just used in tests (I think)
-        'no_process' : (0,1,0),
-        'test_image' : (0,1,0),
-        'test_process' : (0,1,0),
-        'test_downstream_process': (0,1,0),
-        'test_extra_process': (0,1,0),
+        'no_process' : (0, 1, 0),
+        'test_image' : (0, 1, 0),
+        'test_process' : (0, 1, 0),
+        'test_downstream_process': (0, 1, 0),
+        'test_extra_process': (0, 1, 0),
     }
 
     _code_version_cache = None
