@@ -1136,18 +1136,20 @@ class LS4Cam(Instrument):
                 if filepath is not None:
                     break
                 searchdate = filedate + datetime.timedelta( days=delta )
-                masterdirec = pathlib.Path( "/m4616/tmp" )
-                direcs = masterdirec.glob( f'{searchdate.year:04d}{searchdate.month:02d}{searchdate.day:02d}*' )
-                direcs = [ d for d in direcs if d.is_dir() ]
-                direcs.sort()
-                for direc in direcs:
-                    for f in [ direc / f'{filedatetime}{filesd}_{filenum}.fits',
-                               direc / f'{filedatetime}{filesd}_{filenum}.fits.fz',
-                               direc / f'{filedatetime}{filesd}C0_{filenum}_00.fits',
-                               direc / f'{filedatetime}{filesd}C0_{filenum}_00.fits.fz' ]:
-                        if f.is_file():
-                            filepath = f
-                            break
+                for masterdirec in ( pathlib.Path("/m4616/tmp"), pathlib.Path("/m4616/ls4-raw" ) ):
+                    if filepath is not None:
+                        break
+                    direcs = masterdirec.glob( f'{searchdate.year:04d}{searchdate.month:02d}{searchdate.day:02d}*' )
+                    direcs = [ d for d in direcs if d.is_dir() ]
+                    direcs.sort()
+                    for direc in direcs:
+                        for f in [ direc / f'{filedatetime}{filesd}_{filenum}.fits',
+                                   direc / f'{filedatetime}{filesd}_{filenum}.fits.fz',
+                                   direc / f'{filedatetime}{filesd}C0_{filenum}_00.fits',
+                                   direc / f'{filedatetime}{filesd}C0_{filenum}_00.fits.fz' ]:
+                            if f.is_file():
+                                filepath = f
+                                break
 
             if filepath is None:
                 raise FileNotFoundError( f"Failed to find file for identifier {identifier}" )

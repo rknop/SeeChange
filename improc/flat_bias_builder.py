@@ -48,6 +48,14 @@ class ParsFlatBuilder(Parameters):
     def __init__( self, **kwargs ):
         super().__init__()
 
+        self.provtag = self.add_par(
+            'provtag',
+            None,
+            ( str, None ),
+            "Tag created biases/flats with this provenance tag; ignored if save_to_db is False.",
+            critical=False
+        )
+
         self.exposure_mode = self.add_par(
             'exposure_mode',
             False,
@@ -176,14 +184,13 @@ class ParsFlatBuilder(Parameters):
               "images or image_list_file" )
         )
 
-        self.provenance_id = self.add_par(
+        self.find_provenance_id = self.add_par(
             'find_provenance_id',
             None,
             ( str, type(None) ),
             ( "If find_images is true, find images with this provenance id.  If find_images is true, must "
               "specify exactly one of this or find_provenance_tag" )
         )
-        self.add_alias( 'prov_id', 'find_provenance_id' )
 
         self.find_provenance_tag = self.add_par(
             'find_provenance_tag',
@@ -192,7 +199,6 @@ class ParsFlatBuilder(Parameters):
             ( "If find_images is true, find iamges with this provenance tag.  If find_images is true, must "
               "specify exactly one of this or find_provenance_id" )
         )
-        self.add_alias( 'prov_tag', 'find_provenance_tag' )
 
         self.mjd = self.add_par(
             "mjd",
@@ -305,7 +311,7 @@ class ParsFlatBuilder(Parameters):
             'save_to_db',
             False,
             bool,
-            "Should we save an Image and CalbiratorFile to the database?",
+            "Should we save an Image and CalibratorFile to the database?",
             critical=False
         )
 
@@ -1088,15 +1094,20 @@ class FlatBuilder:
             return results['section_id'], False
 
 
+    def make_provenance( self ):
+        self.provenance = Provenance( process='flat_bias_builder', parameters=self.pars.get_critical_pars() )
+        # ... shouldn't the image provenance we combined be an upstream??? TODO
+        self.provenance.insert_if_needed()
+        if self.pars.provtag is not None:
+            Provenance.addtag( self.pars.provtag, [ self.provenance ] )
+
     # NOTE.  We're saving the nmad as the weight, because, well, it's there.  But,
     #   this is scary, because nmad is *not* weight.
     # TODO: refactor Image so that it can have a variable number of
     def save_to_db( self ):
-        prov = Provenance( process='flat_bias_builder', parameters=self.pars.get_critical_pars() )
-        prov.insert_if_needed()
+        self.make_provenance()
 
-
-        imkwargs = { 'provenance_id': prov.id,
+        imkwargs = { 'provenance_id': self.provenance.id,
                      'exp_time': -999.,
                      'instrument': self.instrument.name,
                      'telescope': self.instrument.telescope,
@@ -1211,6 +1222,9 @@ class FlatBuilder:
         self.memdump( "Starting traced memory" )
         exitval = 0
 
+        if self.pars.save_to_db:
+            self.make_provenance()
+
         if self.pars.find_images:
             self.find_input_files( i_know_what_im_doing=i_know_what_im_doing )
         else:
@@ -1313,6 +1327,7 @@ class FlatBuilder:
                              'comb': self.combined,
                              'comb_mask': self.combined_mask,
                              'nmad': self.nmad,
+                             'nmad_median': self.nmad_median,
                              'min_mjd': min_mjd,
                              'max_mjd': max_mjd }
 
@@ -1351,9 +1366,9 @@ def main():
 
     parser.add_argument( "-f", "--find-images", default=argparse.SUPPRESS, action='store_true',
                          help=( "Instead of specifying files, search the database for images and/or exposures." ) )
-    parser.add_argument( "--prov-id", default=argparse.SUPPRESS,
+    parser.add_argument( "--find-provenance-id", default=argparse.SUPPRESS,
                          help="Find images/exposures with this provenance id" )
-    parser.add_argument( "--prov-tag", default=argparse.SUPPRESS,
+    parser.add_argument( "--find-provenance-tag", default=argparse.SUPPRESS,
                          help="Find images/exposures with this provenance tag" )
     parser.add_argument( "--section-id", default=argparse.SUPPRESS,
                          help=( "When finding images, find images of this secton id.  Do not use when in "
@@ -1362,9 +1377,6 @@ def main():
                          help="Search for images of this type (usu. one of Bias, TwiFlat, DomeFlat, SkyFlat)" )
     parser.add_argument( "--filter", default=argparse.SUPPRESS,
                          help=( "When finding images/exposures, find ones with this filter.  None=any filter." ) )
-    parser.add_argument( "--find-sec-id", default=argparse.SUPPRESS,
-                         help=( "Section ID to search for.  Required if not in exposure mode, forbidden in in "
-                                "exposure mode." ) )
     parser.add_argument( "--mjd", default=argparse.SUPPRESS, type=float,
                          help=( "The MJD of the center of the window to search.  If None, there is no limit, and "
                                 "you will get the latest images known." ) )
@@ -1429,6 +1441,8 @@ def main():
     parser.add_argument( "--save-to-db", default=argparse.SUPPRESS, action='store_true',
                          help=( "Save the image(s) created to the database as Images and create a CalibratorFile "
                                 "to go with it." ) )
+    parser.add_argument( "--provtag", default=argparse.SUPPRESS,
+                         help="Save combined images to this provenance tag; irrelevant without --save-to-db." )
     parser.add_argument( "--savetype", default=argparse.SUPPRESS,
                          help="Save the combined image as this type (usually ComBias, ComTwiFlat, etc.)" )
     parser.add_argument( "-a", "--image-list-annotation", default=argparse.SUPPRESS,

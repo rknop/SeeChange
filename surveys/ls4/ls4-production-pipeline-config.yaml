@@ -35,7 +35,22 @@ flat_bias_builder:
     find_images: true
     exposure_mode_use_images: true
     ok_if_num_files_per_section_mismatch: true
-    find_provenance_tag: justzero_20260901
+    find_provenance_tag: justzero_20261109a
+    # ***
+    # Configuration for twilight flat
+    # searchtype: TwiFlat
+    # flat_type: twilight
+    # timewindow: 2.
+    # minexptime: 1.
+    # maxexptime: 600.
+    # bad_threshold: 2.0
+    # use_instrument_mask: true
+    # # I don't know if this is enough, but trying it for now
+    # nmin: 7
+    # nmax: 121
+    # savetype: ComTwiFlat
+    # ***
+    # Configuration for night-sky flat
     searchtype: Sci
     flat_type: sky
     timewindow: 7.
@@ -46,21 +61,25 @@ flat_bias_builder:
     # Need lots of flats for a night-sky flat to look good, but too many is slow and will run out of memory
     nmin: 71
     nmax: 121
+    dup_reject: 0.003
     savetype: ComSkyFlat
   bias:
     find_images: true
     exposure_mode_use_image: false
     ok_if_num_files_per_section_mismatch: false
-    find_provenance_tag: justov_20260901
+    find_provenance_tag: justov_20261109a
     searchtype: Bias
     timewindow: 2.
-    nmin: 7
+    # ...would like to make this 7, but currently only have 3 bias
+    # frames in Nov 2026
+    nmin: 3
+    # nmin: 7
     nmax: 21
     savetype: ComBias
 
 pipeline:
   through_step: photocal
-  provenance_tag: proc20260903
+  provenance_tag: proc20261109a
 
 preprocessing:
   # TODO: this may change later!  We may have linearity, and we may have illumination
@@ -69,8 +88,8 @@ preprocessing:
   overscan_method: polymedrej
   overscan_kwargs: { 'order': 3, 'sigcut': 3. }
   flattype: sky
-  zero_provtag: proc20260901
-  flat_provtag: flat20260903
+  zero_provtag: zero20261109
+  flat_provtag: flat20261109
   use_base_mask: true
   use_zero_mask: true
   use_flat_mask: true
@@ -131,7 +150,7 @@ photocal:
 
 referencing:
   maker:
-    name: UNKNOWN
+    name: null
     ignore_config_use_config_from_refset: false
     refset_must_already_exist: false
     description: "FILL THIS IN"
@@ -174,7 +193,7 @@ coaddition:
     noise_estimator: sep
 
 subtraction:
-  refset: FILL THIS IN
+  refset: null
   method: zogy
   # method: hotpants
   alignment:
