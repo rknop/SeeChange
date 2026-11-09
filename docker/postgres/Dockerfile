@@ -12,7 +12,7 @@
 #   when the database is initialized.
 #
 
-FROM debian:trixie-20251229 AS base
+FROM debian:trixie-20261104 AS base
 LABEL maintainer="Rob Knop <raknop@lbl.gov>"
 
 ENV DEBIAN_FRONTEND=noninteractive
