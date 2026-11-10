@@ -19,7 +19,7 @@ from astropy.io import fits
 import astropy.time
 
 from models.base import PGDB
-from models.provenance import Provenance
+from models.provenance import Provenance, ProvenanceTag
 from models.instrument import Instrument
 from models.calibratorfile import CalibratorFile
 from models.enums_and_bitflags import ImageTypeConverter
@@ -1099,7 +1099,7 @@ class FlatBuilder:
         # ... shouldn't the image provenance we combined be an upstream??? TODO
         self.provenance.insert_if_needed()
         if self.pars.provtag is not None:
-            Provenance.addtag( self.pars.provtag, [ self.provenance ] )
+            ProvenanceTag.addtag( self.pars.provtag, [ self.provenance ] )
 
     # NOTE.  We're saving the nmad as the weight, because, well, it's there.  But,
     #   this is scary, because nmad is *not* weight.

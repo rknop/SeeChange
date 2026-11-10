@@ -61,10 +61,6 @@ class LS4Cam(Instrument):
     #
     #     Has 33 HDUs if in single-amp mode, so 1 per chip plus dataless HDU 0 (fpack)
 
-    _file_re = re.compile( r'^(?P<filebase>(?P<datetime>\d{14})(?P<sd>[sdem])(?P<C>C(?P<ctrlr>\d))?)'
-                           r'_(?P<num>\d+)(?P<chipthing>_(?P<chip>\d\d))?\.fits(?P<fz>\.fz)?$' )
-
-
     def __init__( self, _save_to_call=False, **kwargs ):
         self.name = 'LS4Cam'
         self.telescope = 'ESO 1.0-m Schmidt'
@@ -875,10 +871,15 @@ class LS4Cam(Instrument):
         raise NotImplementedError( "Do." )
 
 
+    _file_re = re.compile( r'^(?P<filebase>(?P<datetime>\d{14})(?P<sd>[sdem])(?P<C>C(?P<ctrlr>\d))?)'
+                           r'_(?P<num>\d+)(?P<chipthing>_(?P<chip>\d\d))?\.fits(?P<fz>\.fz)?$' )
+
+
     def _figure_out_exposure_many_files_or_single( self, filepath, origin_identifier=None,
-                                                   ok_no_pattern_match=False ):
+                                                   ok_no_pattern_match=False, many_ok=True ):
 
         expinfo = types.SimpleNamespace()
+        expinfo.filepath = pathlib.Path( filepath )
 
         # Try to identify if it's a whole bunch of files, or if it's a single file.
         # If it's a whole bunch of files, then the convention is to pass any one
@@ -939,9 +940,6 @@ class LS4Cam(Instrument):
                         expinfo.files.append( p )
                     else:
                         expinfo.missing.append( p.name )
-        else:
-            with fits.open( filepath ) as hdul:
-                expinfo.nhdus = len( hdul )
 
         return expinfo
 
@@ -1054,6 +1052,9 @@ class LS4Cam(Instrument):
             else:  # not expinfo.manyfiles
                 if isdualamp:
                     raise NotImplementedError( "Single file and dual amp not working yet." )
+
+                with fits.open( filepath ) as hdul:
+                    expinfo.nhdus = len( hdul )
                 if expinfo.nhdus != 33:
                     raise ValueError( f"Opened a packed FITS file, saw {len(hdul)} HDUs, expected 33." )
                 # Note : the LS4 .fz files weren't produced with fpack, and

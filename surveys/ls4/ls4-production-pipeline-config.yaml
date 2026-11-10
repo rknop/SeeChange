@@ -10,10 +10,10 @@ storage:
   images:
     format: fitsfz
     single_file: false
-    name_convention: "{inst_name}/{date}/{time}/{inst_name}_{date}_{time}_{section_id}_{filter}_{im_type}_{prov_hash:.6s}"
+    name_convention: "{inst_name}/{prov_hash}/{date}/{time}/{inst_name}_{date}_{time}_{section_id}_{filter}_{im_type}_{prov_hash:.6s}"
 
   exposures:
-    name_convention: "{inst_name}/exposures/{date}/{inst_name}_{date}_{time}_{prov_hash:.6s}"
+    name_convention: "{inst_name}/exposures/{prov_hash}/{date}/{inst_name}_{date}_{time}_{prov_hash:.6s}"
 
 conductor:
   conductor_url: https://ls4-pipeline.lbl.gov/
@@ -40,6 +40,7 @@ flat_bias_builder:
     # Configuration for twilight flat
     # searchtype: TwiFlat
     # flat_type: twilight
+    # provtag: twilflat20261109
     # timewindow: 2.
     # minexptime: 1.
     # maxexptime: 600.
@@ -53,7 +54,10 @@ flat_bias_builder:
     # Configuration for night-sky flat
     searchtype: Sci
     flat_type: sky
+    provtag: skyflat20261109
     timewindow: 7.
+    validity_start_offset: 10.
+    validity_end_offset: 10.
     minexptime: 30.
     maxexptime: null
     bad_threshold: 2.0
@@ -79,7 +83,7 @@ flat_bias_builder:
 
 pipeline:
   through_step: photocal
-  provenance_tag: proc20261109a
+  provenance_tag: proc20261109
 
 preprocessing:
   # TODO: this may change later!  We may have linearity, and we may have illumination
@@ -89,7 +93,7 @@ preprocessing:
   overscan_kwargs: { 'order': 3, 'sigcut': 3. }
   flattype: sky
   zero_provtag: zero20261109
-  flat_provtag: flat20261109
+  flat_provtag: skyflat20261109
   use_base_mask: true
   use_zero_mask: true
   use_flat_mask: true
