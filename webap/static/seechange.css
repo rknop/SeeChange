@@ -120,6 +120,8 @@ a { color: var(--link-color); text-decoration: var(--link-decoration); cursor: p
 div.tabdiv { flex-grow: 1;
              display: flex;
              flex-direction: column;
+             height: 100%;
+             position: relative;
            }
 div.buttonboxdiv { flex-grow: 0 }
 div.tabcontentdiv { border: 2px solid var(--mostlyfull-color-border);
@@ -127,6 +129,9 @@ div.tabcontentdiv { border: 2px solid var(--mostlyfull-color-border);
                     flex-grow: 1;
                     display: flex;
                     flex-direction: column;
+                    height: 100%;
+                    position: relative;
+                    overflow-y: scroll;
                   }
 
 table { border: 2px solid var(--full-color-border); border-spacing: 2px }
@@ -241,13 +246,17 @@ div.conductorconfig { border: 4px inset var(--main-color);
                       font-size: 75%;
                       padding: 1ex;
                       margin: 1em;
-                      width: fit-content; }
+                      width: fit-content;
+                      overflow-y: scroll;
+                    }
 
 div.conductorworkers { border: 4px inset var(--main-color);
                        font-size: 75%;
                        padding: 1ex;
                        margin: 1em;
-                       width: fit-content; }
+                       width: fit-content;
+                       overflow-y: scroll;
+                     }
 
 
 div.svgplottopdiv { position: relative;
