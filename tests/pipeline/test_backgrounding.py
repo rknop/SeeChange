@@ -43,7 +43,14 @@ def test_measuring_background( decam_datastore_through_preprocessing ):
     # is the background subtracted image a good representation?
     nanbgsub = ds.image.nandata - bg.counts
     mu, sig = sigma_clipping( nanbgsub )
-    assert mu == pytest.approx(0, abs=sig)
+    # OK, prepare yourself for a rant.
+    # When sigma_clipping returns a float, it returns a np.float32().
+    # Which is reasonable.  (At least it's not a 0-dimensional array,
+    # which numpy does sometimes, and OMG is that annoying.)  But, then,
+    # pytest yells, saying that absolute tolerance must be an int,
+    # float, or Decimal.  Could they not have just used numbers.Real, of
+    # which np.float32(x) is an instance???  Sigh.
+    assert mu == pytest.approx( 0, abs=float(sig) )
     assert sig < 25
 
     # most of the pixels are inside a 3 sigma range

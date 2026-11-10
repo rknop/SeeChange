@@ -104,7 +104,7 @@ seechange.ExposureList = class
         let target = this.parent.emptiabledivs["exposuredetail"];
 
         if ( this.exposure_displays.hasOwnProperty( id ) ) {
-            taget.reset( { 'body': this.exposure_displays[id].div } );
+            target.reset( { 'body': this.exposure_displays[id].div } );
         }
         else {
             target.reset( { "text": "Loading...", "classes": [ "warning", "bold", "italic" ] } );

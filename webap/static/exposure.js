@@ -288,7 +288,7 @@ seechange.Exposure = class
                                                                                  "value": imgrow.section_id
                                                                              } } );
         }
-        this.image_view_div = rkWebUtil.elemaker( "div", div );
+        this.image_view_div = rkWebUtil.elemaker( "div", div, { "classes": [ "height100p" ] } );
 
 
         // Selection dropdown in the fakes div

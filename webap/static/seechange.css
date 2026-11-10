@@ -195,6 +195,7 @@ div.shrink1 { flex-shrink: 1; }
 .minwid40p { min-width: 40%; }
 .width100p { width: 100%; }
 .height100p { height: 100%; }
+.maxheight20em { max-height: 20em }
 .scrolly { overflow-y: scroll }
 .flexfitcontent { flex-basis: fit-content }
 

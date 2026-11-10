@@ -172,6 +172,104 @@ seechange.Context = class
 
 }
 
+// **********************************************************************
+
+seechange.prov_tag_wids = {};
+
+seechange.ProvTagWid = class
+{
+    constructor( idtag=null, inprops={} )
+    {
+        let self = this;
+        let props = { 'introtext': 'Use provenance tag: ',
+                      'container': null,
+                      'parent': null };
+        rkWebUtil.paramParser( props, inprops, this );
+
+        if ( idtag == null ) idtag = seechange.prov_tag_wids.length.toString();
+        if ( seechange.prov_tag_wids.hasOwnProperty( idtag ) ) {
+            window.alert( "Internal error making provenance tag widget.  Rob needs to fix this." );
+            return;
+        }
+        this.idtag = idtag;
+        seechange.prov_tag_wids[ idtag ] = this;
+
+        if ( this.container == null ) {
+            if ( parent == null ) {
+                window.alert( "Error, seechange.ProvTagWid parent can't be null" );
+                return;
+            }
+            this.container = rkWebUtil.elemaker( "p", parent, { "text": this.introtext } );
+        } else {
+            if ( this.container.parentNode == null ) {
+                window.alert( "Error, seechange.ProvTagWid container parentNode can't be null" );
+                return;
+            }
+            rkWebUtil.wipeDiv( this.container );
+        }
+
+        this.provtag_select = rkWebUtil.elemaker( "select", this.container, { 'id': 'provtag_select_' + idtag } );
+        button = rkWebUtil.button( this.container, "Refresh Tags",
+                                   (e) => { self.refresh_all_provtag_selects(); },
+                                   [ "marginleftem" ] )
+        this.loading_provtags = rkWebUtil.elemaker( "span", this.container, { "classes": [ "warning", "bold" ] } );
+        this.loading_provtags.innerHTML = "Loading provtags...";
+
+        this.observer = MutationObserver( (mutlist, obs) => { self.check_mutation(mutlist, obs); } );
+        this.observer.observe( this.container );
+
+        this.conductor.sendHttpRequest( "provtag", {}, (data) => { self.update_provtag_select(data) } );
+    }
+
+    get value()
+    {
+        return this.provtag_select.value;
+    }
+    
+    refresh_all_provtag_selects()
+    {
+        let self = this;
+        for ( let idtag of Object.keys( seechange.prov_tag_wids ) {
+            seechange.prov_tag_wids[ idtag ].loading_provtags.innerHTML = "Loading provtags...";
+        }
+        this.conductor.sendHttpRequest( "provtag", {}, (data) => { self.update_all_provtag_selects(data) } );
+    }
+
+    update_all_provtag_selects( data )
+    {
+        for ( let idtag of Object.keys( seechange.prov_tag_wids ) {
+            seechange.prov_tag_wids[ idtag ].update_provtag_select( data );
+        }
+    }
+
+    update_provtag_select( data )
+    {
+        this.loading_provtags.innerHTML = "";
+        let cursel = this.provtag_select.value;
+        rkWebUtil.wipeDiv( this.provtag_select );
+        for ( let provtag of data.provenance_tags) {
+            let option = rkWebUtil.elemaker( "option", this.provtag_select,
+                                             { "text": provtag,
+                                               "attributes": { "values": provtag } } );
+            if ( provtag == cursel )
+                option.setAttribute( "selected": "1" );
+        }
+    }
+
+    check_mutation( mutlist, obs )
+    {
+        if ( mutlist.removedNodes.length > 0 ) {
+            if ( ! this.container.parentNode ) {
+                rkWebUtil.wipeDiv( this.container );
+                this.observer.disconnect();
+                delete seechange.prov_tag_wids( this.idtag );
+            }
+        }
+    }
+                                                                 
+}
+
+
 
 // **********************************************************************
 // Make this into a module

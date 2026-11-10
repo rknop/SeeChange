@@ -26,8 +26,6 @@ seechange.Conductor = class
         rkWebUtil.wipeDiv( this.div );
         this.frontpagediv = rkWebUtil.elemaker( "div", this.div );
 
-        this.pipelineworkers = new seechange.PipelineWorkers( this.context, this );
-
         hbox = rkWebUtil.elemaker( "div", this.frontpagediv, { "classes": [ "hbox" ] } );
         this.pollingdiv = rkWebUtil.elemaker( "div", hbox, { "classes": [ "conductorconfig" ] } );
 
@@ -46,14 +44,16 @@ seechange.Conductor = class
                                                   "name": "throughstep_select",
                                                   "selected": ( step=='alerting' ) ? 1 : 0 } } );
         }
+        this.show_config_status();
 
+        this.pipelineworkers = new seechange.PipelineWorkers( this.context, this );
         hbox.appendChild( this.pipelineworkers.div );
+        this.pipelineworkers.render();
 
-        this.contentdiv = rkWebUtil.elemaker( "div", this.frontpagediv );
+        this.searchdiv = rkWebUtil.elemaker( "div", hbox, { "classes": [ "vbox", "grow1" ] } )
+        this.provtagwid = new seechange.ProvTagWid( "conductor", { "parent": this.searchdiv } );
 
-        rkWebUtil.elemaker( "hr", this.contentdiv );
-
-        p = rkWebUtil.elemaker( "p", this.contentdiv );
+        p = rkWebUtil.elemaker( "p", this.searchdiv );
         rkWebUtil.button( p, "Search", () => { self.update_known_exposures(); } );
         p.appendChild( document.createTextNode( " known exposures taken from " ) );
         this.knownexp_mintwid = rkWebUtil.elemaker( "input", p, { "attributes": { "size": 20 } } );
@@ -67,7 +67,7 @@ seechange.Conductor = class
         } );
         p.appendChild( document.createTextNode( " UTC (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)" ) );
 
-        p = rkWebUtil.elemaker( "p", this.contentdiv );
+        p = rkWebUtil.elemaker( "p", this.searchdiv );
         this.search_criteria_shown = false;
         this.show_hide_search_criteria = rkWebUtil.button( p, "Show Additional Search Criteria",
                                                            (e) => {
@@ -112,7 +112,7 @@ seechange.Conductor = class
         this.search_dec = rkWebUtil.elemaker( "input", td, { "attributes": { "size": 8 } } )
         rkWebUtil.elemaker( "text", td, { "text": " Radius: " } )
         this.search_radius = rkWebUtil.elemaker( "input", td, { "attributes": { "size": 6 } } );
-        rkWebUtil.elemaker( "text", { "text": "°" } )
+        rkWebUtil.elemaker( "text", td, { "text": "°" } )
         tr = rkWebUtil.elemaker( "tr", table );
         td = rkWebUtil.elemaker( "td", tr, { "classes": [ "right" ], "text": "filter:" } );
         td = rkWebUtil.elemaker( "td", tr );
@@ -158,11 +158,12 @@ seechange.Conductor = class
                               );
         }
 
+        this.contentdiv = rkWebUtil.elemaker( "div", this.frontpagediv );
+
+        rkWebUtil.elemaker( "hr", this.contentdiv );
+
         this.knownexp_notification_div = rkWebUtil.elemaker( "div", this.contentdiv );
         this.knownexpdiv = rkWebUtil.elemaker( "div", this.contentdiv );
-
-        this.show_config_status();
-        this.pipelineworkers.render();
     }
 
     // **********************************************************************
@@ -425,7 +426,7 @@ seechange.Conductor = class
                                     { "text": "Loading known exposures...",
                                       "classes": [ "warning", "bold", "italic" ] } );
         let url = "conductor/getknownexposures/provtag=";
-        url += encodeURIComponent( this.context.provtag_wid.value );
+        url += encodeURIComponent( this.provtagwid.value );
 
         if ( this.knownexp_mintwid.value.trim().length > 0 ) {
             let minmjd = rkWebUtil.mjdOfDate( rkWebUtil.parseDateAsUTC( this.knownexp_mintwid.value ) );
@@ -441,12 +442,12 @@ seechange.Conductor = class
                            'filter': 'search_filter',
                            'project': 'search_project',
                            'minexptime': 'min_exp_time',
-                           'maxclaimtime': 'max_claim"time',
+                           'maxclaimtime': 'max_claim_time',
                            'ra': 'search_ra',
                            'dec': 'search_dec',
                            'radius': 'search_radius'
                          }
-        for ( let cond in conditions ): {
+        for ( let cond in conditions ) {
             let wid = conditions[ cond ];
             if ( this[wid].value.trim().length > 0 ) {
                 url += "/" + cond + "=" + encodeURIComponent( this[wid].value.trim() )
@@ -599,7 +600,7 @@ seechange.Conductor = class
                                                   self.context.frontpagetabs.selectTab("exposuresearch");
                                                   let el = self.context.exposuresearch.exposurelist;
                                                   el.show_exposure( ke.exposure_id,
-                                                                    self.context.provtag_wid.value );
+                                                                    self.provtagwid.value );
                                               }
                                             } );
             }
@@ -778,7 +779,7 @@ seechange.PipelineWorkers = class
 
         rkWebUtil.wipeDiv( this.div );
         let hbox = rkWebUtil.elemaker( "div", this.div, { "classes": [ "hbox" ] } );
-        this.workersdiv = rkWebUtil.elemaker( "div", hbox, {} );
+        this.workersdiv = rkWebUtil.elemaker( "div", hbox, { "classes": [ "maxheight20em", "scrolly" ] } );
         this.update_workers();
     };
 

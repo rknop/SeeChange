@@ -124,9 +124,9 @@ seechange.Image = class extends( rkWebUtil.listener )
 
         if ( ( this._imagediv !== null ) && ( ! remake ) ) return;
 
-        this._imagediv = rkWebUtil.elemaker( "div", null, { "id": "_image_div_" + Image.n_images,
-                                                            "classes": [ "vbox", "grow1" ] } );
-        Image.n_images += 1;
+        this._imagediv = rkWebUtil.elemaker( "div", null, { "id": "_image_div_" + Image._n_images,
+                                                            "classes": [ "vbox", "grow1", "height100p" ] } );
+        Image._n_images += 1;
 
         this.filename_h2 = rkWebUtil.elemaker( "h2", this._imagediv,
                                                { "text": "Image: " + this.filename + "( " + this.info._id + " )" } );
