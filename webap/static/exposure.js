@@ -8,6 +8,15 @@ import "./image.js";
 
 seechange.Exposure = class
 {
+    // Has properties:
+    //    div : the div of the thing
+    //
+    // CONSTRUCTOR
+    // context is the seechange.Context
+    //
+    // parenttabs is a rkWebUtil.Tabbed object.  It will use tabes named
+    //   "imagedetail", "sources", "fakes", and "reports".
+    //
     // data is what is filled by the exposure_images/ api endpoint
     //   (ExposureImages in seechange_webap.py.)  It is a dictionary
     //   with contents:
@@ -39,14 +48,20 @@ seechange.Exposure = class
     //      process_runtime: dictionary of process: sections runtime for pipeline segments
     //      process_setps_bitflag: bitflag of which pipeline steps completed
     //      products_exist_bitflag: bitflag of which data products were saved to database/archive
+    //
+    // params has optional arguments:
+    //      imagedetailstab : use this name instead of "imagedetail" for the image display/info tab
+    //      detectionstab : use this name instead of "sources" for the detections tab
+    //      reportstab : use this name instead of "reports" for the reports tab
+    //      fakestab : use this name instead of "fakes" for the fakes tab
 
     constructor( context, parenttabs, data, params )
     {
         // Things in params
-        let default_params = { 'imagedetailsdiv': null,
-                               'reportsdiv': null,
-                               'detectionsdiv': null,
-                               'fakesdiv': null
+        let default_params = { 'imagedetailstab': "imagedetail",
+                               'detectionstab': "sources",
+                               'reportstab': "reports",
+                               'fakestab': "fakes"
                              }
         Object.assign( this, default_params );
         Object.assign( this, params );
@@ -74,7 +89,7 @@ seechange.Exposure = class
         this.reports = null;
         this.reports_subdiv = null;
 
-        this.div = rkWebUtil.elemaker( "div", null );
+        this.div = rkWebUtil.elemaker( "div", null, { "classes": [ "vbox", "grow1" ] } );
     };
 
 
@@ -116,7 +131,90 @@ seechange.Exposure = class
     {
         let self = this;
 
-        var div, h2, h3, ul, li, but, table, tr, td, th, hbox, p, span, tiptext, ttspan;
+        var div, h2, h3, ul, li, but, tab, tr, td, th, hbox, p, span, tiptext, ttspan;
+
+        // First, put in the stuff at the top of some other tabs
+
+        // Selection dropdown in the image details div
+        if ( this.parenttabs.hasTab( this.imagedetailstab ) ) {
+            div = this.parenttabs.divs[ this.imagedetailstab ];
+            rkWebUtil.wipeDiv( div );
+            rkWebUtil.elemaker( "h3", div, { "text": "Images for exposure " + this.exposurename } );
+            hbox = rkWebUtil.elemaker( "div", div, { "classes": [ "hbox" ] } );
+            rkWebUtil.elemaker( "text", hbox, "Show image for section: " );
+            this.sectionfordetails_dropdown = rkWebUtil.elemaker( "select", hbox,
+                                                                  { "change": () => { self.select_image_details() } } );
+            rkWebUtil.elemaker( "option", this.sectionfordetails_dropdown, { "text": "<Choose Section For Details>",
+                                                                             "attributes": {
+                                                                                 "value": "_select_section",
+                                                                                 "selected": 1 } } );
+            for ( let imgrow of this.data.images ) {
+                rkWebUtil.elemaker( "option", this.sectionfordetails_dropdown, { "text": imgrow.section_id,
+                                                                                 "attributes": {
+                                                                                     "value": imgrow.section_id
+                                                                                 } } );
+            }
+            // ROB : you had height100p as the class here before
+            this.image_view_div = rkWebUtil.elemaker( "div", div, { "classes": [ "vbox", "grow1" ] } );
+        }
+
+
+        // Selection dropdown in the fakes div
+        this.fakesdiv = null;
+        if ( this.parenttabs.hasTab( this.fakestab ) ) {
+            div = this.parenttabs.divs[ this.fakestab ];
+            rkWebUtil.wipeDiv( div );
+            this.sectionforfakes_dropdown = rkWebUtil.elemaker( "select", div,
+                                                                { "change": () => self.select_section_fakes() } );
+            rkWebUtil.elemaker( "option", this.sectionforfakes_dropdown, { "text": "<Choose Section For Fakes>",
+                                                                           "attributes": {
+                                                                               "value": "_select_section",
+                                                                               "selected": 1 } } );
+            for ( let imgrow of this.data.images) {
+                rkWebUtil.elemaker( "option", this.sectionforfakes_dropdown, { "text": imgrow.section_id,
+                                                                               "attributes": {
+                                                                                   "value": imgrow.section_id
+                                                                               } } );
+            }
+            this.fakesdiv = rkWebUtil.elemaker( "div", div, { "classes": [ "grow1" ] } );
+        }
+
+        // Selection dropdowns in the detections div
+        this.cutoutsdiv = null;
+        if ( this.parenttabs.hasTab( this.detectionstab ) ) {
+            div = this.parenttabs.tabs[ this.detectionstab ];
+            rkWebUtil.wipeDiv( div );
+            p = rkWebUtil.elemaker( "p", div );
+            this.cutoutsimage_dropdown = rkWebUtil.elemaker( "select", p,
+                                                             { "change": () => self.select_cutouts() } );
+            rkWebUtil.elemaker( "option", this.cutoutsimage_dropdown, { "text": "<Choose Image For Cutouts>",
+                                                                        "attributes": {
+                                                                            "value": "_select_image",
+                                                                            "selected": 1 } } );
+            // Currently don't have code to support showing cutouts from all images at once...
+            // rkWebUtil.elemaker( "option", this.cutoutsimage_dropdown, { "text": "All Successful Images",
+            //                                                             "attributes": { "value": "_all_images" } } );
+            for ( let imgrow of this.data.images ) {
+                rkWebUtil.elemaker( "option", this.cutoutsimage_dropdown, { "text": imgrow.section_id,
+                                                                            "attributes": {
+                                                                                "value": imgrow.section_id } }  );
+            }
+            this.cutoutssansmeasurements_checkbox =
+                rkWebUtil.elemaker( "input", p, { "change": () => { self.select_cutouts() },
+                                                  "attributes":
+                                                  { "type": "checkbox",
+                                                    "id": "cutouts_sans_measurements",
+                                                    "name": "cutouts_sans_measurements_checkbox" } } );
+            rkWebUtil.elemaker( "label", p, { "text": ( "Show detections that failed the preliminary cuts " +
+                                                        "(i.e. aren't sources)" ),
+                                              // + " (Ignored for \"All Successful Images\")" ),
+                                              "attributes": { "for": "cutouts_sans_measurements_checkbox" } } );
+            this.cutoutsdiv = rkWebUtil.elemaker( "div", div, { "classes": [ "grow1" ] } );
+        }
+
+        // TODO : reports
+
+        // On to actually rendering this tab
 
         h2 = rkWebUtil.elemaker( "h2", this.div, { "text": "Exposure " + this.data.exposure.filepath } );
 
@@ -165,66 +263,49 @@ seechange.Exposure = class
         }
 
         p = rkWebUtil.elemaker( "p", this.div,
-                                { "text": ( "Exposure has " + this.data.images.length + " images and " +
-                                            nsubs + " completed subtractions" ) } )
-        p = rkWebUtil.elemaker( "p", this.div,
-                                { "text": ( totnmeas.toString() + " (" + totngoodmeas.toString() + " good) out of " +
+                                { "text": ( this.data.images.length.toString() + " images, " +
+                                            nsubs + " completed subtractions; " +
+                                            totnmeas.toString() + " (" + totngoodmeas.toString() + " good) out of " +
                                             totncutouts.toString() + " detections pass preliminary cuts " +
                                             "(i.e. are \"sources\")." ) } );
 
-        table = rkWebUtil.elemaker( "table", this.div, { "classes": [ "exposurelist" ] } );
-        tr = rkWebUtil.elemaker( "tr", table );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "image name" } );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "section" } );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "α" } );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "δ" } );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "b" } );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "fwhm" } );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "zp" } );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "mag_lim" } );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "detections" } );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "sources" } );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "compl. step" } );
-        th = rkWebUtil.elemaker( "th", tr, {} ); // products exist
-        th = rkWebUtil.elemaker( "th", tr, {} ); // error
-        th = rkWebUtil.elemaker( "th", tr, {} ); // warnings
-
-        let fade = 1;
-        let countdown = 4;
-        for ( let dex in this.data.images ) {
-            let imgrow = this.data.images[dex]
-            countdown -= 1;
-            if ( countdown <= 0 ) {
-                countdown = 3;
-                fade = 1 - fade;
+        let rowrenderer = ( data, fields, image ) => {
+            let tr, td;
+            tr = rkWebUtil.elemaker( "tr", null );
+            if ( self.image_view_div != null ) {
+                td = rkWebUtil.elemaker( "td", tr, { "text": image.filename,
+                                                     "classes": [ "link" ],
+                                                     "click": () => { self.update_image_details(image.section_id); }
+                                                   } );
+            } else {
+                td = rkWebUtil.elemaker( "td", tr, { "text": image.filename } );
             }
-            tr = rkWebUtil.elemaker( "tr", table, { "classes": [ fade ? "bgfade" : "bgwhite" ] } );
-            td = rkWebUtil.elemaker( "td", tr, { "text": imgrow.filename,
-                                                 "classes": [ "link" ],
-                                                 "click": () => { self.update_image_details(imgrow.section_id); }
-                                                 }
-                                               );
-            td = rkWebUtil.elemaker( "td", tr, { "text": imgrow.section_id } );
-            td = rkWebUtil.elemaker( "td", tr, { "text": seechange.nullorfixed( imgrow.ra, 4 ) } );
-            td = rkWebUtil.elemaker( "td", tr, { "text": seechange.nullorfixed( imgrow.dec, 4 ) } );
-            td = rkWebUtil.elemaker( "td", tr, { "text": seechange.nullorfixed( imgrow.gallat, 1 ) } );
-            td = rkWebUtil.elemaker( "td", tr, { "text": seechange.nullorfixed( imgrow.fwhm_estimate, 2 ) } );
-            td = rkWebUtil.elemaker( "td", tr, { "text": seechange.nullorfixed( imgrow.zero_point_estimate, 2 ) } );
-            td = rkWebUtil.elemaker( "td", tr, { "text": seechange.nullorfixed( imgrow.lim_mag_estimate, 1 ) } );
-            td = rkWebUtil.elemaker( "td", tr, { "text": imgrow.ncutout,
-                                                 "classes": [ "link" ],
-                                                 "click": () => { self.update_cutouts(imgrow.subid, true); }
-                                               } );
-            td = rkWebUtil.elemaker( "td", tr, { "text": imgrow.nmeas,
-                                                 "classes": [ "link" ],
-                                                 "click": () => { self.update_cutouts(imgrow.subid, false); }
-                                               } );
+            td = rkWebUtil.elemaker( "td", tr, { "text": image.section_id } );
+            td = rkWebUtil.elemaker( "td", tr, { "text": seechange.nullorfixed( image.ra, 4 ) } );
+            td = rkWebUtil.elemaker( "td", tr, { "text": seechange.nullorfixed( image.dec, 4 ) } );
+            td = rkWebUtil.elemaker( "td", tr, { "text": seechange.nullorfixed( image.gallat, 1 ) } );
+            td = rkWebUtil.elemaker( "td", tr, { "text": seechange.nullorfixed( image.fwhm_estimate, 2 ) } );
+            td = rkWebUtil.elemaker( "td", tr, { "text": seechange.nullorfixed( image.zero_point_estimate, 2 ) } );
+            td = rkWebUtil.elemaker( "td", tr, { "text": seechange.nullorfixed( image.lim_mag_estimate, 1 ) } );
+            if ( self.cutouts_div ) {
+                td = rkWebUtil.elemaker( "td", tr, { "text": image.ncutout,
+                                                     "classes": [ "link" ],
+                                                     "click": () => { self.update_cutouts(image.subid, true); }
+                                                   } );
+                td = rkWebUtil.elemaker( "td", tr, { "text": image.nmeas,
+                                                     "classes": [ "link" ],
+                                                     "click": () => { self.update_cutouts(image.subid, false); }
+                                                   } );
+            } else {
+                td = rkWebUtil.elemaker( "td", tr, { "text": image.ncutout } );
+                td = rkWebUtil.elemaker( "td", tr, { "text": image.nmeas } );
+            }
 
             td = rkWebUtil.elemaker( "td", tr );
-            tiptext = "";
+            let tiptext = "";
             let laststep = "(none)";
             for ( let j of Object.keys( seechange.Exposure.process_steps ) ) {
-                if ( imgrow.report.progress_steps_bitflag & ( 2**j ) ) {
+                if ( image.report.progress_steps_bitflag & ( 2**j ) ) {
                     tiptext += seechange.Exposure.process_steps[j] + " done<br>";
                     if ( seechange.Exposure.process_steps[j] != 'finalize' )
                         laststep = seechange.Exposure.process_steps[j];
@@ -240,7 +321,7 @@ seechange.Exposure = class
             td = rkWebUtil.elemaker( "td", tr );
             tiptext = "Products created:";
             for ( let j of Object.keys( seechange.Exposure.pipeline_products ) ) {
-                if ( imgrow.report.products_exist_bitflag & ( 2**j ) )
+                if ( image.report.products_exist_bitflag & ( 2**j ) )
                     tiptext += "<br>" + seechange.Exposure.pipeline_products[j];
             }
             span = rkWebUtil.elemaker( "span", td, { "classes": [ "tooltipsource" ],
@@ -251,307 +332,276 @@ seechange.Exposure = class
             // // Really I should be doing some HTML sanitization here on error message and, below, warnings....
 
             td = rkWebUtil.elemaker( "td", tr );
-            if ( imgrow.report.error_step != null ) {
+            if ( image.report.error_step != null ) {
                 span = rkWebUtil.elemaker( "span", td, { "classes": [ "tooltipsource" ],
                                                          "text": "error" } );
-                tiptext = ( imgrow.report.error_type + " error in step " +
-                            seechange.Exposure.process_steps[imgrow.report.error_step] +
-                            " (" + imgrow.report.error_message.replaceAll( "\n", "<br>") + ")" );
+                tiptext = ( image.report.error_type + " error in step " +
+                            seechange.Exposure.process_steps[image.report.error_step] +
+                            " (" + image.report.error_message.replaceAll( "\n", "<br>") + ")" );
                 ttspan = rkWebUtil.elemaker( "span", span, { "classes": [ "tooltiptext" ] } );
                 ttspan.innerHTML = tiptext;
             }
 
             td = rkWebUtil.elemaker( "td", tr );
-            if ( ( imgrow.report.warnings != null ) && ( imgrow.report.warnings > 0 ) ) {
+            if ( ( image.report.warnings != null ) && ( image.report.warnings > 0 ) ) {
                 span = rkWebUtil.elemaker( "span", td, { "classes": [ "tooltipsource" ],
                                                          "text": "warnings" } );
                 ttspan = rkWebUtil.elemaker( "span", span, { "classes": [ "tooltiptext" ] } );
-                ttspan.innerHTML = imgrow.report.warnings.replaceAll( "\n", "<br>" );
+                ttspan.innerHTML = image.report.warnings.replaceAll( "\n", "<br>" );
             }
-        }
 
-        // Selection dropdown in the image details div
-        div = this.imagedetailsdiv;
-        rkWebUtil.wipeDiv( div );
-        rkWebUtil.elemaker( "h3", div, { "text": "Images for exposure " + this.exposurename } );
-        hbox = rkWebUtil.elemaker( "div", div, { "classes": [ "hbox" ] } );
-        rkWebUtil.elemaker( "text", hbox, "Show image for section: " );
-        this.sectionfordetails_dropdown = rkWebUtil.elemaker( "select", hbox,
-                                                              { "change": () => { self.select_image_details() } } );
-        rkWebUtil.elemaker( "option", this.sectionfordetails_dropdown, { "text": "<Choose Section For Details>",
-                                                                         "attributes": {
-                                                                             "value": "_select_section",
-                                                                             "selected": 1 } } );
-        for ( let imgrow of this.data.images ) {
-            rkWebUtil.elemaker( "option", this.sectionfordetails_dropdown, { "text": imgrow.section_id,
-                                                                             "attributes": {
-                                                                                 "value": imgrow.section_id
-                                                                             } } );
-        }
-        this.image_view_div = rkWebUtil.elemaker( "div", div, { "classes": [ "height100p" ] } );
+            return tr;
+        };
+
+        let fields = [ 'filename', 'section_id', 'ra', 'dec', 'gallat', 'fwhm_estimate',
+                       'zero_point_estimate', 'lim_mag_estimate', 'ncutout', 'nmeas',
+                       'completed_step', 'products_exist', 'error', 'warnings' ];
+        // TODO : perhaps fill in data with stuff so we can sort on these?
+        let nosortfields = [ 'completed_step', 'products_exist', 'error', 'warnings' ];
+        let fieldmap = { 'filename': 'image name',
+                         'section_id': 'sec',
+                         'ra': 'α',
+                         'dec': 'δ',
+                         'gallat': 'b',
+                         'fwhm_estimate': 'seeing(")',
+                         'zero_point_estimate': 'zp',
+                         'lim_mag_estimate': 'mag_lim',
+                         'ncutout': 'detections',
+                         'nmeas': 'sources',
+                         'completed_step': 'compl._step',
+                         'products_exist': '',
+                         'error': '',
+                         'warnings': ''
+                       }
 
 
-        // Selection dropdown in the fakes div
-        div = this.fakesdiv;
-        this.sectionforfakes_dropdown = rkWebUtil.elemaker( "select", div,
-                                                            { "change": () => self.select_section_fakes() } );
-        rkWebUtil.elemaker( "option", this.sectionforfakes_dropdown, { "text": "<Choose Section For Fakes>",
-                                                                       "attributes": {
-                                                                           "value": "_select_section",
-                                                                           "selected": 1 } } );
-        for ( let imgrow of this.data.images) {
-            rkWebUtil.elemaker( "option", this.sectionforfakes_dropdown, { "text": imgrow.section_id,
-                                                                           "attributes": {
-                                                                               "value": imgrow.section_id
-                                                                           } } );
-        }
-        this.fakesdiv = rkWebUtil.elemaker( "div", div );
-
-        // Selection dropdowns in the detections div
-        p = rkWebUtil.elemaker( "p", this.detectionsdiv );
-        this.cutoutsimage_dropdown = rkWebUtil.elemaker( "select", p,
-                                                         { "change": () => self.select_cutouts() } );
-        rkWebUtil.elemaker( "option", this.cutoutsimage_dropdown, { "text": "<Choose Image For Cutouts>",
-                                                                    "attributes": {
-                                                                        "value": "_select_image",
-                                                                        "selected": 1 } } );
-        // Currently don't have code to support showing cutouts from all images at once...
-        // rkWebUtil.elemaker( "option", this.cutoutsimage_dropdown, { "text": "All Successful Images",
-        //                                                             "attributes": { "value": "_all_images" } } );
-        for ( let imgrow of this.data.images ) {
-            rkWebUtil.elemaker( "option", this.cutoutsimage_dropdown, { "text": imgrow.section_id,
-                                                                        "attributes": {
-                                                                            "value": imgrow.section_id } }  );
-        }
-        this.cutoutssansmeasurements_checkbox =
-            rkWebUtil.elemaker( "input", p, { "change": () => { self.select_cutouts() },
-                                              "attributes":
-                                              { "type": "checkbox",
-                                                "id": "cutouts_sans_measurements",
-                                                "name": "cutouts_sans_measurements_checkbox" } } );
-        rkWebUtil.elemaker( "label", p, { "text": ( "Show detections that failed the preliminary cuts " +
-                                                    "(i.e. aren't sources)" ),
-                                                    // + " (Ignored for \"All Successful Images\")" ),
-                                          "attributes": { "for": "cutouts_sans_measurements_checkbox" } } );
-        this.cutoutsdiv = rkWebUtil.elemaker( "div", this.detectionsdiv );
-
-        // // TODO : buttons for next, prev, etc.
+        div = rkWebUtil.elemaker( "div", this.div, { "classes": [ "scrolltablewrapper" ] } );
+        tab = new rkWebUtil.SortableTable( this.data.images, fields, rowrenderer,
+                                           { 'hdrs': fieldmap,
+                                             'dictoflists': false,
+                                             'nosortfields': nosortfields,
+                                             'initsort': [ '+section_id' ],
+                                             'colorclasses': [ 'bgfade', 'bgwhite' ],
+                                             'headerrowclasses': [ 'scrolltableheader' ],
+                                             'colorlength': 3 } );
+        div.appendChild( tab.table );
 
     };
 
     // ****************************************
 
-    show_reports() {
-        let self = this;
-        let p, button;
+    // show_reports() {
+    //     let self = this;
+    //     let p, button;
 
-        rkWebUtil.wipeDiv( this.reportsdiv );
-        p = rkWebUtil.elemaker( "p", this.reportsdiv );
-        rkWebUtil.button( p, "Refresh", () => { self.update_reports() } );
+    //     rkWebUtil.wipeDiv( this.reportsdiv );
+    //     p = rkWebUtil.elemaker( "p", this.reportsdiv );
+    //     rkWebUtil.button( p, "Refresh", () => { self.update_reports() } );
 
-        if ( this.reports_subdiv != null ) {
-            this.reportsdiv.appendChild( this.reports_subdiv );
-        }
-        else {
-            this.reports_subdiv = rkWebUtil.elemaker( "div", this.reportsdiv );
-            this.update_reports();
-        }
-    }
+    //     if ( this.reports_subdiv != null ) {
+    //         this.reportsdiv.appendChild( this.reports_subdiv );
+    //     }
+    //     else {
+    //         this.reports_subdiv = rkWebUtil.elemaker( "div", this.reportsdiv );
+    //         this.update_reports();
+    //     }
+    // }
 
-    // ****************************************
+    // // ****************************************
 
-    update_reports() {
-        let self = this;
+    // update_reports() {
+    //     let self = this;
 
-        rkWebUtil.wipeDiv( this.reports_subdiv );
-        rkWebUtil.elemaker( "p", this.reports_subdiv, { "text": "Loading reports...",
-                                                        "classes": [ "bold", "italic", "warning" ] } );
-        this.context.connector.sendHttpRequest( "exposure_reports/" + this.id + "/" + this.data.provenancetag,
-                                                {}, (data) => { self.render_reports(data) } );
-    }
+    //     rkWebUtil.wipeDiv( this.reports_subdiv );
+    //     rkWebUtil.elemaker( "p", this.reports_subdiv, { "text": "Loading reports...",
+    //                                                     "classes": [ "bold", "italic", "warning" ] } );
+    //     this.context.connector.sendHttpRequest( "exposure_reports/" + this.id + "/" + this.data.provenancetag,
+    //                                             {}, (data) => { self.render_reports(data) } );
+    // }
 
-    // ****************************************
+    // // ****************************************
 
-    render_reports( data ) {
-        let self = this;
-        let h3, p, a, comma, text, table, tr, th, td, span, ttspan;
+    // render_reports( data ) {
+    //     let self = this;
+    //     let h3, p, a, comma, text, table, tr, th, td, span, ttspan;
 
-        this.reports = data.reports;
+    //     this.reports = data.reports;
 
-        rkWebUtil.wipeDiv( this.reports_subdiv );
+    //     rkWebUtil.wipeDiv( this.reports_subdiv );
 
-        // Sort the sections
-        let secs = Object.getOwnPropertyNames( this.reports );
-        secs.sort()
+    //     // Sort the sections
+    //     let secs = Object.getOwnPropertyNames( this.reports );
+    //     secs.sort()
 
-        let innerhtml = "Jump to section: ";
-        comma = false;
-        for ( let secid of secs ) {
-            if ( comma ) innerhtml += ", ";
-            comma = true;
-            innerhtml += '<a href="#exposure-report-section-' + secid + '">' + secid + '</a>';
-        }
-        p = rkWebUtil.elemaker( "p", this.reports_subdiv );
-        p.innerHTML = innerhtml;
+    //     let innerhtml = "Jump to section: ";
+    //     comma = false;
+    //     for ( let secid of secs ) {
+    //         if ( comma ) innerhtml += ", ";
+    //         comma = true;
+    //         innerhtml += '<a href="#exposure-report-section-' + secid + '">' + secid + '</a>';
+    //     }
+    //     p = rkWebUtil.elemaker( "p", this.reports_subdiv );
+    //     p.innerHTML = innerhtml;
 
-        let fields = { 'image_id': "Image ID",
-                       'start_time': "Start Time",
-                       'finish_time': "Finish Time",
-                       'success': "Successful?",
-                       'cluster_id': "Cluster ID",
-                       'node_id': "Node ID",
-                       'progress_steps_bitflag': "Steps Completed",
-                       'products_exist_bitflag': "Existing Data Products",
-                       'products_committed_bitflag': "Committed Data Products",
-                       'process_provid': "Provenances",
-                       'process_memory': "Memory Usage",
-                       'process_runtime': "Runtimes",
-                       'warnings': "Warnings",
-                       'error': "Error",
-                     }
-        let steporder = { 'preprocessing': 0,
-                          'extraction': 1,
-                          'backgrounding': 2,
-                          'astrocal': 3,
-                          'photocal': 4,
-                          'save_intermediate': 5,
-                          'subtraction': 6,
-                          'detection': 7,
-                          'cutting': 8,
-                          'measuring': 9,
-                          'scoring': 10,
-                          'save_final': 11,
-                          'fakeanalysis': 12 };
+    //     let fields = { 'image_id': "Image ID",
+    //                    'start_time': "Start Time",
+    //                    'finish_time': "Finish Time",
+    //                    'success': "Successful?",
+    //                    'cluster_id': "Cluster ID",
+    //                    'node_id': "Node ID",
+    //                    'progress_steps_bitflag': "Steps Completed",
+    //                    'products_exist_bitflag': "Existing Data Products",
+    //                    'products_committed_bitflag': "Committed Data Products",
+    //                    'process_provid': "Provenances",
+    //                    'process_memory': "Memory Usage",
+    //                    'process_runtime': "Runtimes",
+    //                    'warnings': "Warnings",
+    //                    'error': "Error",
+    //                  }
+    //     let steporder = { 'preprocessing': 0,
+    //                       'extraction': 1,
+    //                       'backgrounding': 2,
+    //                       'astrocal': 3,
+    //                       'photocal': 4,
+    //                       'save_intermediate': 5,
+    //                       'subtraction': 6,
+    //                       'detection': 7,
+    //                       'cutting': 8,
+    //                       'measuring': 9,
+    //                       'scoring': 10,
+    //                       'save_final': 11,
+    //                       'fakeanalysis': 12 };
 
-        for ( let secid of secs ) {
-            h3 = rkWebUtil.elemaker( "h3", this.reports_subdiv, { "text": "Section " + secid,
-                                                                  "attributes": {
-                                                                      "id": "exposure-report-section-" + secid,
-                                                                      "name": "exposure-report-section-" + secid
-                                                                  } } );
-            table = rkWebUtil.elemaker( "table", this.reports_subdiv );
+    //     for ( let secid of secs ) {
+    //         h3 = rkWebUtil.elemaker( "h3", this.reports_subdiv, { "text": "Section " + secid,
+    //                                                               "attributes": {
+    //                                                                   "id": "exposure-report-section-" + secid,
+    //                                                                   "name": "exposure-report-section-" + secid
+    //                                                               } } );
+    //         table = rkWebUtil.elemaker( "table", this.reports_subdiv );
 
-            for ( let field in fields ) {
+    //         for ( let field in fields ) {
 
-                if ( ( field == "warnings" ) && ( ( this.reports[secid][field] == null ) ||
-                                                  ( this.reports[secid][field].length == 0 ) ) )
-                    continue;
+    //             if ( ( field == "warnings" ) && ( ( this.reports[secid][field] == null ) ||
+    //                                               ( this.reports[secid][field].length == 0 ) ) )
+    //                 continue;
 
-                if ( ( field == "error" ) && ( this.reports[secid]['error_step'] == null  ) )
-                    continue;
+    //             if ( ( field == "error" ) && ( this.reports[secid]['error_step'] == null  ) )
+    //                 continue;
 
-                tr = rkWebUtil.elemaker( "tr", table );
-                th = rkWebUtil.elemaker( "th", tr, { "text": fields[field] } );
-                if ( field == "error" ) th.classList.add( "bad" );
-                if ( field == "warnings" ) th.classList.add( "warning" );
+    //             tr = rkWebUtil.elemaker( "tr", table );
+    //             th = rkWebUtil.elemaker( "th", tr, { "text": fields[field] } );
+    //             if ( field == "error" ) th.classList.add( "bad" );
+    //             if ( field == "warnings" ) th.classList.add( "warning" );
 
-                if ( field == "progress_steps_bitflag" ) {
-                    comma = false;
-                    text = "";
-                    for ( let i in seechange.Exposure.process_steps ) {
-                        if ( this.reports[secid][field] & ( 2**i ) ) {
-                            if ( comma ) text += ", ";
-                            comma = true;
-                            text += seechange.Exposure.process_steps[i]
-                        }
-                    }
-                    td = rkWebUtil.elemaker( "td", tr, { "text": text } );
-                }
-                else if ( ( field == "products_exist_bitflag" ) || ( field == "products_committed_bitflag" ) ) {
-                    comma = false;
-                    text = "";
-                    for ( let i in seechange.Exposure.pipeline_products ) {
-                        if ( this.reports[secid][field] & ( 2**i ) ) {
-                            if ( comma ) text += ", ";
-                            comma = true;
-                            text += seechange.Exposure.pipeline_products[i];
-                        }
-                    }
-                    td = rkWebUtil.elemaker( "td", tr, { "text": text } );
-                }
-                else if ( field == "process_provid" ) {
-                }
-                else if ( ( field == "process_memory" ) || ( field == "process_runtime" ) ) {
-                    // We want the processes to show up in a certain order,
-                    //  so sort them using steporder (above) to define that order.
-                    let procs = Object.getOwnPropertyNames( this.reports[secid][field] );
-                    procs.sort( (a, b) => {
-                        if ( steporder.hasOwnProperty(a) && steporder.hasOwnProperty(b) ) {
-                            if ( steporder[a] < steporder[b] )
-                                return -1
-                            else if ( steporder[b] < steporder[a] )
-                                return 1
-                            else
-                                return 0;
-                        }
-                        else if ( steporder.hasOwnProperty(a) ) {
-                            return -1;
-                        }
-                        else if ( steporder.hasOwnProperty(b) ) {
-                            return 1;
-                        }
-                        else {
-                            return 0;
-                        }
-                    } );
-                    td = rkWebUtil.elemaker( "td", tr );
-                    let subtab = rkWebUtil.elemaker( "table", td, { "classes": [ "borderless" ] } );
-                    for ( let proc of procs ) {
-                        let subtr = rkWebUtil.elemaker( "tr", subtab );
-                        rkWebUtil.elemaker( "th", subtr, { "text": proc,
-                                                           "attributes": {
-                                                               "style": "text-align: right; padding-right: 1em"
-                                                           }
-                                                         } );
-                        if ( field == "process_memory" ) {
-                            rkWebUtil.elemaker( "td", subtr, {
-                                "text": seechange.nullorfixed( this.reports[secid][field][proc], 1 ) + " MiB"
-                            } );
-                        }
-                        else {
-                            rkWebUtil.elemaker( "td", subtr, {
-                                "text": seechange.nullorfixed( this.reports[secid][field][proc], 2 ) + " s"
-                            } );
-                        }
-                    }
-                }
-                else if ( field == "warnings" ) {
-                    td = rkWebUtil.elemaker( "td", tr );
-                    span = rkWebUtil.elemaker( "span", td, { "classes": [ "tooltipsource" ],
-                                                             "text": "(hover to see)" } );
-                    ttspan = rkWebUtil.elemaker( "span", span, { "classes": [ "tooltiptext" ] } );
-                    ttspan.innerHTML = this.reports[secid][field].replaceAll( "\n", "<br>" );
-                }
-                else if ( field == "error" ) {
-                    td = rkWebUtil.elemaker( "td", tr );
-                    span = rkWebUtil.elemaker( "span", td, { "classes": [ "tooltipsource" ],
-                                                             "text": ( this.reports[secid]['error_type']
-                                                                       + " in step "
-                                                                       + this.reports[secid]['error_step'] )
-                                                           } );
-                    ttspan = rkWebUtil.elemaker( "span", span, { "classes": [ "tooltiptext" ] } );
-                    ttspan.innerHTML = this.reports[secid]['error_message'].replaceAll( "\n", "<br>" );
-                }
-                else {
-                    td = rkWebUtil.elemaker( "td", tr, { "text": this.reports[secid][field] } )
-                }
-            }
-        }
-    }
+    //             if ( field == "progress_steps_bitflag" ) {
+    //                 comma = false;
+    //                 text = "";
+    //                 for ( let i in seechange.Exposure.process_steps ) {
+    //                     if ( this.reports[secid][field] & ( 2**i ) ) {
+    //                         if ( comma ) text += ", ";
+    //                         comma = true;
+    //                         text += seechange.Exposure.process_steps[i]
+    //                     }
+    //                 }
+    //                 td = rkWebUtil.elemaker( "td", tr, { "text": text } );
+    //             }
+    //             else if ( ( field == "products_exist_bitflag" ) || ( field == "products_committed_bitflag" ) ) {
+    //                 comma = false;
+    //                 text = "";
+    //                 for ( let i in seechange.Exposure.pipeline_products ) {
+    //                     if ( this.reports[secid][field] & ( 2**i ) ) {
+    //                         if ( comma ) text += ", ";
+    //                         comma = true;
+    //                         text += seechange.Exposure.pipeline_products[i];
+    //                     }
+    //                 }
+    //                 td = rkWebUtil.elemaker( "td", tr, { "text": text } );
+    //             }
+    //             else if ( field == "process_provid" ) {
+    //             }
+    //             else if ( ( field == "process_memory" ) || ( field == "process_runtime" ) ) {
+    //                 // We want the processes to show up in a certain order,
+    //                 //  so sort them using steporder (above) to define that order.
+    //                 let procs = Object.getOwnPropertyNames( this.reports[secid][field] );
+    //                 procs.sort( (a, b) => {
+    //                     if ( steporder.hasOwnProperty(a) && steporder.hasOwnProperty(b) ) {
+    //                         if ( steporder[a] < steporder[b] )
+    //                             return -1
+    //                         else if ( steporder[b] < steporder[a] )
+    //                             return 1
+    //                         else
+    //                             return 0;
+    //                     }
+    //                     else if ( steporder.hasOwnProperty(a) ) {
+    //                         return -1;
+    //                     }
+    //                     else if ( steporder.hasOwnProperty(b) ) {
+    //                         return 1;
+    //                     }
+    //                     else {
+    //                         return 0;
+    //                     }
+    //                 } );
+    //                 td = rkWebUtil.elemaker( "td", tr );
+    //                 let subtab = rkWebUtil.elemaker( "table", td, { "classes": [ "borderless" ] } );
+    //                 for ( let proc of procs ) {
+    //                     let subtr = rkWebUtil.elemaker( "tr", subtab );
+    //                     rkWebUtil.elemaker( "th", subtr, { "text": proc,
+    //                                                        "attributes": {
+    //                                                            "style": "text-align: right; padding-right: 1em"
+    //                                                        }
+    //                                                      } );
+    //                     if ( field == "process_memory" ) {
+    //                         rkWebUtil.elemaker( "td", subtr, {
+    //                             "text": seechange.nullorfixed( this.reports[secid][field][proc], 1 ) + " MiB"
+    //                         } );
+    //                     }
+    //                     else {
+    //                         rkWebUtil.elemaker( "td", subtr, {
+    //                             "text": seechange.nullorfixed( this.reports[secid][field][proc], 2 ) + " s"
+    //                         } );
+    //                     }
+    //                 }
+    //             }
+    //             else if ( field == "warnings" ) {
+    //                 td = rkWebUtil.elemaker( "td", tr );
+    //                 span = rkWebUtil.elemaker( "span", td, { "classes": [ "tooltipsource" ],
+    //                                                          "text": "(hover to see)" } );
+    //                 ttspan = rkWebUtil.elemaker( "span", span, { "classes": [ "tooltiptext" ] } );
+    //                 ttspan.innerHTML = this.reports[secid][field].replaceAll( "\n", "<br>" );
+    //             }
+    //             else if ( field == "error" ) {
+    //                 td = rkWebUtil.elemaker( "td", tr );
+    //                 span = rkWebUtil.elemaker( "span", td, { "classes": [ "tooltipsource" ],
+    //                                                          "text": ( this.reports[secid]['error_type']
+    //                                                                    + " in step "
+    //                                                                    + this.reports[secid]['error_step'] )
+    //                                                        } );
+    //                 ttspan = rkWebUtil.elemaker( "span", span, { "classes": [ "tooltiptext" ] } );
+    //                 ttspan.innerHTML = this.reports[secid]['error_message'].replaceAll( "\n", "<br>" );
+    //             }
+    //             else {
+    //                 td = rkWebUtil.elemaker( "td", tr, { "text": this.reports[secid][field] } )
+    //             }
+    //         }
+    //     }
+    // }
 
 
     // ****************************************
 
     update_image_details( secid=null, nosel=false ) {
+        if ( this.image_view_div == null ) {
+            console.log( "WARNING : Exposure called update_image_details with no image_view_div" );
+            return;
+        }
+
         if ( secid != null ) {
-            // I don't think all of this is necessary.  Javascript doesn't
-            //    issue events when you change the value of a widget
+            // Note: according to documentation, Javascript doesn't
+            //    issue events when you cahnge the value of a widget
             //    programmatically, only when it's done by the UI>
-            //     let oldevent = this.sectionfordetails_dropdown.onchange;
-            //     this.sectionfordetails_dropdown.onchange = null;
-            //     this.sectionfordetails_dropdown.value = secid;
-            //     this.sectionfordetails_dropdown.onchange = oldevent;
-            // }
+            // I hope that's really true.
             this.sectionfordetails_dropdown.value = secid;
         }
 
@@ -573,6 +623,11 @@ seechange.Exposure = class
 
     select_image_details()
     {
+        if ( this.image_view_div == null ) {
+            console.log( "WARNING: Exposure called select_image_details with no image_view_div" );
+            return;
+        }
+
         let self = this;
         let p;
 
@@ -582,7 +637,7 @@ seechange.Exposure = class
         if ( sec == "_select_section" )
             return;
 
-        if ( this.image_objects.hasOwnProperty( sec ) ) {
+        if ( this.image_objects.hasOwnProperty( sec ) && ( this.cutoust_div != null ) ) {
             this.image_objects[ sec ].show_imagediv();
             rkWebUtil.wipeDiv( this.cutoutsdiv );
             // TODO : sans/avec
@@ -590,15 +645,10 @@ seechange.Exposure = class
             return;
         }
 
-        this.parenttabs.selectTab( "imagedetail" );
+        this.parenttabs.selectTab( this.imagedetailstab );
         rkWebUtil.elemaker( "p", this.image_view_div, { "text": "Loading image info...",
                                                         "classes": [ "warning", "bold", "italic" ] } );
         let promise = this.get_image_promise( sec );
-        // OK, I really don't understand javascript callbacks.  Could I
-        //   just stick self.make_image_details here instead of the
-        //   arrow function?  I don't think so, but I'm not sure why, I
-        //   only know that when I contemplate it I start to feel
-        //   anxiety.
         promise.then( (info) => { self.make_image_details(info);
                                   self.image_objects[sec].show_imagediv();
                                 } );
@@ -606,6 +656,11 @@ seechange.Exposure = class
 
     make_image_details( info )
     {
+        if ( this.image_view_div == null ) {
+            console.log( "WARNING: Exposure called make_image_Details with no image_view_div" );
+            return;
+        }
+
         let self = this;
         let sec = info.section_id;
 
@@ -616,7 +671,7 @@ seechange.Exposure = class
                                                              } );
             this.image_objects[ sec ].listen( 'image',
                                               (signal, stuff) => {
-                                                  self.parenttabs.selectTab( "imagedetail" );
+                                                  self.parenttabs.selectTab( this.imagedetailstab );
                                                   rkWebUtil.wipeDiv( self.image_view_div );
                                                   self.image_view_div.appendChild( stuff.imagediv );
                                               },
@@ -627,7 +682,13 @@ seechange.Exposure = class
 
     // ****************************************
 
-    update_cutouts( dex, sansmeasurements ) {
+    update_cutouts( dex, sansmeasurements )
+    {
+        if ( this.cutoutsdiv == null ) {
+            console.log( "WARNING: Exposure called update_cutouts with no cutoutsdiv" );
+            return;
+        }
+
         if ( dex != null ) {
             // See comment in update_image_details
             // let oldevent = this.cutoutsimage_dropdown.onchange;
@@ -653,12 +714,16 @@ seechange.Exposure = class
 
     select_cutouts()
     {
+        if ( this.cutoutsdiv == null ) {
+            console.log( "WARNING: Exposure called select_cutouts with no cutoutsdiv" );
+            return;
+        }
+
         let self = this;
         let p;
 
         rkWebUtil.wipeDiv( this.cutoutsdiv );
-        this.parenttabs.selectTab( "sources" );
-
+        this.parenttabs.selectTab( detectionstab );
 
         let sec = this.cutoutsimage_dropdown.value.toString();
         let sans = this.cutoutssansmeasurements_checkbox.checked;
@@ -704,9 +769,9 @@ seechange.Exposure = class
     //              ( y <= data.cutouts.y[dex] + this.box_width / 2. ) &&
     //              ( y >= data.cutouts.y[dex] - this.box_width / 2. ) )
     //         {
-    //             rkWebUtil.wipeDiv( this.cutouts_div );
+    //             rkWebUtil.wipeDiv( this.cutoutsdiv );
 
-    //             let table = rkWebUtil.elemaker( "table", this.cutouts_div );
+    //             let table = rkWebUtil.elemaker( "table", this.cutoutsdiv );
     //             let tr = rkWebUtil.elemaker( "tr", table );
     //             rkWebUtil.elemaker( "th", tr, { "text": "new" } );
     //             rkWebUtil.elemaker( "th", tr, { "text": "ref" } );
@@ -726,7 +791,7 @@ seechange.Exposure = class
     //             // A bunch of the rest of this code is very similar to show_cutouts_for_image;
     //             //   should efficientize
 
-    //             ul = rkWebUtil.elemaker( "ul", this.cutouts_div );
+    //             ul = rkWebUtil.elemaker( "ul", this.cutoutsdiv );
     //             // row: source index, with good/bad
     //             li = rkWebUtil.elemaker( "li", ul );
     //             rkWebUtil.elemaker( "b", li, "source index:" );
@@ -811,6 +876,11 @@ seechange.Exposure = class
     // ****************************************
 
     update_image_fakes( secid ) {
+        if ( this.fakesdiv == null ) {
+            console.log( "WARNING: Exposure called update_image_fakes with no fakesdiv" );
+            return;
+        }
+
         if ( secid != null ) {
             let oldevent = this.sectionforfakes_dropdown.onchange;
             this.sectionforfakes_dropdown.onchange = null;
@@ -825,6 +895,11 @@ seechange.Exposure = class
 
     select_image_fakes()
     {
+        if ( this.fakesdiv == null ) {
+            console.log( "WARNING: Exposure called select_image_fakes with no fakesdiv" );
+            return;
+        }
+
         let self = this;
         let p;
 
@@ -854,6 +929,11 @@ seechange.Exposure = class
 
     show_fakes_for_section( div, sec, indata )
     {
+        if ( this.fakesdiv == null ) {
+            console.log( "WARNING: Exposure called show_fakes_for_section with no fakesdiv" );
+            return;
+        }
+
         let p, table, tr, th, td;
 
         rkWebUtil.wipeDiv( div );

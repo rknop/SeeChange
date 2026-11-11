@@ -28,7 +28,8 @@ seechange.Conductor = class
 
         rkWebUtil.wipeDiv( this.div );
 
-        hbox = rkWebUtil.elemaker( "div", this.div, { "classes": [ "hbox", "grow0" ], "id": "conductortop" } );
+        hbox = rkWebUtil.elemaker( "div", this.div, { "classes": [ "hbox", "grow0", "shrink0" ],
+                                                      "id": "conductortop" } );
 
         this.searchdiv = rkWebUtil.elemaker( "div", hbox, { "classes": [ "vbox", "grow1" ] } )
         this.provtagwid = new seechange.ProvTagWid( this.context, "conductor", { "parent": this.searchdiv } );
@@ -140,8 +141,8 @@ seechange.Conductor = class
                               );
         }
 
-        this.pollingdiv = rkWebUtil.elemaker( "div", hbox, { "classes": [ "conductorconfig" ] } );
-        vbox = rkWebUtil.elemaker( "div", hbox, { "classes": [ "vbox", "conductorconfig" ] } );
+        this.pollingdiv = rkWebUtil.elemaker( "div", hbox, { "classes": [ "conductorconfig", "shrink0" ] } );
+        vbox = rkWebUtil.elemaker( "div", hbox, { "classes": [ "vbox", "conductorconfig", "shrink0" ] } );
         h3 = rkWebUtil.elemaker( "h3", vbox, { "text": "Pipeline Config  " } );
         rkWebUtil.button( h3, "Refresh", () => { self.show_config_status() } );
         p = rkWebUtil.elemaker( "p", vbox, { "text": "Run through step " } )
@@ -172,20 +173,20 @@ seechange.Conductor = class
         this.contenttabs.addTab( "conductor", "Conductor", this.conductordiv );
         this.contenttabs.selectTab( "conductor" )
 
-        this.exposurediv = rkWebUtil.elemaker( "div" );
+        this.exposurediv = rkWebUtil.elemaker( "div", null, { "classes": [ "vbox", "grow1" ] } );
         this.contenttabs.addTab( "exposure", "Exposure Info", this.exposurediv );
 
-        this.imagediv = rkWebUtil.elemaker( "div" );
-        this.contenttabs.addTab( "imagedetail", "Image Details", this.imagediv );
+        this.contenttabs.addTab( "imagedetail", "Image Details",
+                                 rkWebUtil.elemaker( "div", null, { "classes": [ "vbox", "grow1" ] } ) );
 
-        this.sourcesdiv = rkWebUtil.elemaker( "div" );
-        this.contenttabs.addTab( "sources", "Detections", this.sourcesdiv );
+        this.contenttabs.addTab( "sources", "Detections",
+                                 rkWebUtil.elemaker( "div", null, { "classes": [ "vbox", "grow1" ] } ) );
 
-        this.reportsdiv = rkWebUtil.elemaker( "div" );
-        this.contenttabs.addTab( "reports", "Reports", this.reportsdiv );
+        this.contenttabs.addTab( "reports", "Reports",
+                                 rkWebUtil.elemaker( "div", null, { "classes": [ "vbox", "grow1" ] } ) );
 
-        this.fakesdiv = rkWebUtil.elemaker( "div" );
-        this.contenttabs.addTab( "fakes", "Fakes", this.fakesdiv );
+        this.contenttabs.addTab( "fakes", "Fakes",
+                                 rkWebUtil.elemaker( "div", null, { "classes": [ "vbox", "grow1" ] } ) );
     }
 
     // **********************************************************************
@@ -662,6 +663,7 @@ seechange.Conductor = class
                                                  'nosortfields': nosortfields,
                                                  'initsort': [ '+mjd' ],
                                                  'colorclasses': [ 'bgfade', 'bgwhite' ],
+                                                 'headerrowclasses': [ 'scrolltableheader' ],
                                                  'colorlength': 3 } );
         div.appendChild( tab.table );
     }
@@ -806,17 +808,17 @@ seechange.Conductor = class
     actually_show_exposure( data )
     {
         let exp = new seechange.Exposure( this.context, this.contenttabs, data,
-                                          { 'imagedetailsdiv': this.imagediv,
-                                            'reportsdiv': this.reportsdiv,
-                                            'detectionsdiv': this.sourcesdiv,
-                                            'fakesdiv': this.fakesdiv } );
+                                          { 'imagedetailstab': 'imagedetail',
+                                            'detectionstab': 'sources',
+                                            'reportstab': 'reports',
+                                            'fakestab': 'fakes' } );
         rkWebUtil.wipeDiv( this.exposurediv );
         this.exposurediv.appendChild( exp.div );
-        exp.render_page();
         this.contenttabs.selectTab( "exposure" );
+        exp.render_page();
 
         this.exposure_displays.push( exp );
-        // Cache a finite amount of exposure displays.  Memory use vs. network traffic.
+        // Only cache a finite amount of exposure displays.  Memory use vs. network traffic.
         if ( this.exposure_displays.length > this.n_cache_exposure_displays )
             this.exposure_displays.shift;
     }
@@ -835,7 +837,7 @@ seechange.PipelineWorkers = class
         this.conductor = conductor;
         this.connector = this.context.connector;
         this.div = rkWebUtil.elemaker( "div", null, { 'id': 'conductorworkers-div',
-                                                      'classes': [ 'conductorworkers' ] } )
+                                                      'classes': [ 'conductorconfig', 'shrink1', 'scrolly' ] } )
     };
 
     // **********************************************************************
@@ -870,7 +872,7 @@ seechange.PipelineWorkers = class
         h3 = rkWebUtil.elemaker( "h3", this.workersdiv, { "text": "Known Pipeline Workers  " } );
         rkWebUtil.button( h3, "Refresh", () => { self.update_workers(); } );
 
-        table = rkWebUtil.elemaker( "table", this.workersdiv, { "classes": [ "borderedcells" ] } );
+        table = rkWebUtil.elemaker( "table", this.workersdiv );
         tr = rkWebUtil.elemaker( "tr", table );
         th = rkWebUtil.elemaker( "th", tr, { "text": "cluster_id" } );
         th = rkWebUtil.elemaker( "th", tr, { "text": "node_id" } );
@@ -885,7 +887,7 @@ seechange.PipelineWorkers = class
             }
             coln -= 1;
             tr = rkWebUtil.elemaker( "tr", table );
-            if ( grey ) tr.classList.add( "greybg" );
+            if ( grey ) tr.classList.add( "bgfade" );
             td = rkWebUtil.elemaker( "td", tr, { "text": worker.cluster_id } );
             td = rkWebUtil.elemaker( "td", tr, { "text": worker.node_id } );
             td = rkWebUtil.elemaker( "td", tr, { "text": rkWebUtil.dateFormat( worker.lastheartbeat, true, true ) } );

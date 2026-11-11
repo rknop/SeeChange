@@ -13,7 +13,7 @@ seechange.Image = class extends( rkWebUtil.listener )
         super();
         let default_params = { 'nomeas_cutouts': false,
                                'provtag': null,
-                               'oversample': 5,
+                               'oversample': 3,
                                'show_detections': false,
                                'detections_box_size': 10,
                                'detections_box_color': '#008000'
@@ -40,7 +40,7 @@ seechange.Image = class extends( rkWebUtil.listener )
         this.infopromises = {};
         this.image_promises = {};
 
-        this.detections_wrapper = rkWebUtil.elemaker( 'div', null );
+        this.detections_wrapper = rkWebUtil.elemaker( 'div', null, { "classes": [ "vbox", "grow1" ] } );
         this.detections_shown = 'neither';
         this.detectionsdiv_sans = null;
         this.detectionsdiv_avec = null;
@@ -124,18 +124,19 @@ seechange.Image = class extends( rkWebUtil.listener )
 
         if ( ( this._imagediv !== null ) && ( ! remake ) ) return;
 
-        this._imagediv = rkWebUtil.elemaker( "div", null, { "id": "_image_div_" + Image._n_images,
+        this._imagediv = rkWebUtil.elemaker( "div", null, { "id": "_image_div_" + seechange.Image._n_images,
                                                             "classes": [ "vbox", "grow1", "height100p" ] } );
-        Image._n_images += 1;
+        seechange.Image._n_images += 1;
 
         this.filename_h2 = rkWebUtil.elemaker( "h2", this._imagediv,
                                                { "text": "Image: " + this.filename + "( " + this.info._id + " )" } );
 
-        let hbox = rkWebUtil.elemaker( "div", this._imagediv, { "classes": [ "hbox", "width100p", "grow1" ] } );
+        let hbox = rkWebUtil.elemaker( "div", this._imagediv, { "classes": [ "hbox", "grow1" ] } );
 
         this.imview_div = rkWebUtil.elemaker( "div", hbox, { "classes": [ "vbox", "marginrightem",
                                                                           "grow1", "selfstretch" ] } );
-        this.info_div = rkWebUtil.elemaker( "div", hbox, { "classes": [ "imageinfodiv" ] } );
+        this.info_div = rkWebUtil.elemaker( "div", hbox, { "classes": [ "grow0", "shrink0",
+                                                                        "marginleftem", "marginrightem" ] } );
         this.thumbnails_div = rkWebUtil.elemaker( "div", hbox );
 
         this.shown_imview = null;
@@ -242,12 +243,19 @@ seechange.Image = class extends( rkWebUtil.listener )
             let td = rkWebUtil.elemaker( "td", tr, { "text": prop, "classes": [ "bold", "alignright" ] } );
             if ( prop == 'filename' ) {
                 td = rkWebUtil.elemaker( "td", tr, { "text": propvalues[prop], "classes": [ "alignleft",
-                                                                                            "tooltipsource" ] } );
+                                                                                            "tooltipsource",
+                                                                                            "font75" ] } );
                 rkWebUtil.elemaker( "span", td, { "text": this.info.filepath, "classes": [ "tooltiptext" ] } );
             } else {
                 td = rkWebUtil.elemaker( "td", tr, { "text": propvalues[prop], "classes": [ "alignleft" ] } );
+                if ( prop == 'id' ) td.classList.add( "font75" );
             }
         }
+        // HACK ALERT
+        // Work around a bug in imview I can't find where the resize observer callback
+        //   isn't called by the size changes that happen from the rendering
+        //   in load_info_view and here
+        window.dispatchEvent( new Event( 'resize' ) );
     }
 
     load_cutouts( callback=null )

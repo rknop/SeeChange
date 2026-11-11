@@ -21,7 +21,7 @@ seechange.DiaForcedPhotSearch = class
         let hbox, box, vbox, p;
 
         hbox = rkWebUtil.elemaker( "div", this.div, { "classes": [ "hbox", "padex", "xmargin", "mostlyborder",
-                                                                   "nogrow" ] } );
+                                                                   "grow0" ] } );
 
         vbox = rkWebUtil.elemaker( "div", hbox, { "classes": [ "vbox", "padex", "xmargin", "mostlyborder" ] } );
         rkWebUtil.elemaker( "p", vbox, { "text": "Show lightcurve for object:" } );
@@ -51,7 +51,7 @@ seechange.DiaForcedPhotSearch = class
         rkWebUtil.wipeDiv( this.ltcv_parent_div );
         rkWebUtil.elemaker( "h3", this.ltcv_parent_div, ( "All objects in provtag " + provtag
                                                           + " with dia_forced_photometry" ) );
-        let tab = rkWebUtil.elemaker( "table", this.ltcv_parent_div, { "classes": [ "borderedcells", "selfstart" ] } );
+        let tab = rkWebUtil.elemaker( "table", this.ltcv_parent_div, { "classes": [ "selfstart" ] } );
         let tr = rkWebUtil.elemaker( "tr", tab );
         rkWebUtil.elemaker( "th", tr, "Name" );
         rkWebUtil.elemaker( "th", tr, "RA" );

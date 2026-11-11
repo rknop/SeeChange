@@ -25,10 +25,18 @@
     --done-color: #006000;
 }
 
-div { margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
+/**********************************************************************/
+/* Default configuration for page layout elements                     */
+/**********************************************************************/
+
+html { height: 100vh;
+       width: 100vw;
+       margin: 0;
+       border: 0;
+       padding: 0;
+       box-sizing: border-box;
+     }
+
 
 body { color: var(--main-color);
        background: var(--background-color);
@@ -38,25 +46,219 @@ body { color: var(--main-color);
        width: 100vw;
        padding: 1ex;
        margin: 0;
+       border: 0;
        box-sizing: border-box;
      }
 
+div { margin: 0;
+      padding: 0;
+      border: 0;
+      box-sizing: border-box;
+    }
+
 div.maindiv { display: flex;
               flex-direction: column;
+              min-width: 0;
+              min-height: 0;
               flex-grow: 1;
             }
+
+div.subdiv { border: 2px solid var(--mostlyfull-color-border );
+             padding: 0.5ex;
+             margin: 0.5ex;
+             min-width: 0;
+             min-height: 0;
+             flex-shrink: 1;
+           }
+
+div.hbox { display: flex;
+           flex-direction: row;
+           min-width: 0;
+           min-height: 0;
+         }
+
+div.vbox { display: flex;
+           flex-direction: column;
+           min-width: 0;
+           min-height: 0;
+         }
+
+div.vbox100p  { display: flex;
+                flex-direction: column;
+                height: 100%;
+              }
 
 div.scrolltablewrapper { flex-grow: 1;
                          min-height: 0;
                          overflow-y: scroll;
-                         border: 2px solid var(--full-color-border);
-                         height: 0;      /* CSS is incredibly mysterious */
+                         border: 2px solid var(--half-faded-color);
+                         /* height: 0; */      /* CSS is incredibly mysterious */
                        }
-div.scrolltablewrapper th { position: sticky;
-                            top: 0;
-                            background-color: var(--most-faded-color);
-                            z-index: 1;
-                          }
+div.scrolltablewrapper table { border-collapse: separate;
+                               border-spacing: 0;
+                               border: 0;
+                             }
+div.scrolltablewrapper table tr td { border: 1px solid var(--most-faded-color); }
+div.scrolltablewrapper table tr th { border-bottom: 1px solid var(--half-faded-color);
+                                     border-top: 1px solid var(--half-faded-color);
+                                   }
+th.scrolltableheader { position: sticky;
+                       top: 0;
+                       background-color: var(--most-faded-color);
+                       z-index: 1;
+                     }
+
+/* For rkWebUtil.tabbed, in addition to div.hbox */
+
+.tabunsel { background: var(--most-faded-color);
+            border: 2px outset var(--full-color-border);
+            margin-left: 0.5ex;
+            margin-right: 0.5ex;
+          }
+
+.tabsel { background: var(--half-faded-color);
+          border: 2px inset var(--full-color-border);
+          margin-left: 0.5ex;
+          margin-right: 0.5ex;
+        }
+
+div.tabdiv { flex-grow: 1;
+             display: flex;
+             flex-direction: column;
+             min-width: 0;
+             min-height: 0;
+           }
+
+div.buttonboxdiv { flex-grow: 0 }
+
+div.tabcontentdiv { border: 2px solid var(--mostlyfull-color-border);
+                    padding: 0.5ex;
+                    flex-grow: 1;
+                    display: flex;
+                    flex-direction: column;
+                    min-width: 0;
+                    min-height: 0;
+                  }
+
+/**********************************************************************/
+/* Default element config                                             */
+/**********************************************************************/
+
+a { color: var(--link-color); text-decoration: var(--link-decoration); cursor: pointer; }
+
+/* Primary use of images is image preview.  Not sure this should be global img, but whatevs. */
+img { image-rendering: pixelated }
+
+table { border-collapse: collapse;
+        border: 2px solid var(--half-faded-color);
+      }
+table th { border-top: 2px groove var(--half-faded-color);
+           border-bottom: 2px groove var(--half-faded-color);
+           font-weight: bold
+         }
+table td { border: 2px groove var( --most-faded-color);
+           padding-left: 1ex;
+           padding-right: 1ex;
+           padding-top: 2px;
+           padding-bottom: 2px;
+         }
+
+table.borderless { border: none }
+table.borderless th { border: none; font-weight: bold }
+table.borderless td { border: none; padding: 0px }
+
+/**********************************************************************/
+/* flex container addons                                              */
+/**********************************************************************/
+
+.alignflexstart { align-items: flex-start; }
+
+.flexeven { justify-content: space-evenly }
+.justifyleft { justify-content: flex-start }
+.justifycenter { justify-content: center }
+
+
+/**********************************************************************/
+/* flex element addons                                                */
+/**********************************************************************/
+
+div.grow0 { flex-grow: 0; }
+div.grow1 { flex-grow: 1; }
+div.shrink0 { flex-shrink: 0; }
+div.shrink1 { flex-shrink: 1; }
+
+.flexfitcontent { flex-basis: fit-content }
+.selfstretch { align-self: stretch; }
+.selfstart { align-self: start; }
+
+
+/**********************************************************************/
+/* Addons for configuring div layout / style                          */
+/**********************************************************************/
+
+.nopadding { padding: 0 }
+.noborder { border: 0 }
+.padhalfex { padding: 0.5ex }
+.padex { padding: 1ex }
+
+.hmargin { margin-left: 0.5ex; margin-right: 0.5ex }
+.xmargin { margin-left: 1ex; margin-right: 1ex }
+.mmargin { margin-left: 1em; margin-right: 1em }
+.mmarginright { margin-right: 1em }
+.marginleftex { margin-left: 1ex }
+.marginleftem { margin-left: 1em }
+.marginrightex { margin-right: 1ex }
+.marginrightem { margin-right: 1em }
+.marginbotex { margin-bottom: 1ex }
+.margintopem { margin-top: 1em }
+.margintopex { margin-top: 1em }
+
+.fullborder { border: 2px solid var(--full-color-border); }
+.mostlyborder { border: 2px solid var(--mostlyfull-color-border); }
+.midborder { border: 2px solid var(--mid-color-border); }
+.insetborder { border-width: 4px;
+               border-style: inset;
+               border-color: var(--mostlyfull-color-border);
+             }
+.outsetborder { border-width: 4px;
+                border-style: outset;
+                border-color: var(--mostlyfull-color-border);
+              }
+
+.minwid25p { min-width: 25%; }
+.minwid40p { min-width: 40%; }
+.width100p { width: 100%; }
+.height100p { height: 100%; }
+.maxheight20em { max-height: 20em }
+.scrolly { overflow-y: scroll }
+
+.right { text-align: right }
+.center { text-align: center }
+.vcenter { vertical-align: middle }
+
+.font75 { font-size: 75% }
+.font50 { font-size: 50% }
+
+/* Used for hideable divs */
+
+div.dispnone { display : none; }
+div.dispflex { display : flex; }
+div.dispblock { display : block; }
+
+
+/**********************************************************************/
+/* Text style addons                                                  */
+/**********************************************************************/
+
+.italic { font-style: italic }
+.bold { font-weight: bold }
+.monospace { font-family: monospace }
+
+.bgwhite { background: var(--background-color) }
+.bgfade { background: var(--lots-faded-color) }
+
+.link { background: none; border: none; padding: 0;
+        color: var(--link-color); text-decoration: var(--link-decoration); cursor: pointer; }
 
 .good { color: var(--good-color) }
 .bad { color: var(--bad-color) }
@@ -67,45 +269,6 @@ div.scrolltablewrapper th { position: sticky;
 .stateclaimed { color: var(--claimed-color) }
 .staterunning { color: var(--running-color) }
 .statedone { color: var(--done-color) }
-
-.italic { font-style: italic }
-.bold { font-weight: bold }
-.monospace { font-family: monospace }
-
-.bgwhite { background: var(--background-color) }
-.bgfade { background: var(--lots-faded-color) }
-.link { background: none; border: none; padding: 0;
-        color: var(--link-color); text-decoration: var(--link-decoration); cursor: pointer; }
-
-.font75 { font-size: 75% }
-.font50 { font-size: 50% }
-
-.nopadding { padding: 0 }
-.noborder { border: 0 }
-.padhalfex { padding: 0.5ex }
-.padex { padding: 1ex }
-.hmargin { margin-left: 0.5ex; margin-right: 0.5ex }
-.xmargin { margin-left: 1ex; margin-right: 1ex }
-.mmargin { margin-left: 1em; margin-right: 1em }
-.mmarginright { margin-right: 1em }
-.marginleftex { margin-left: 1ex }
-.marginleftem { margin-left: 1em }
-.marginbotex { margin-bottom: 1ex }
-.margintopem { margin-top: 1em }
-.margintopex { margin-top: 1em }
-.fullborder { border: 2px solid var(--full-color-border); }
-.mostlyborder { border: 2px solid var(--mostlyfull-color-border); }
-.midborder { border: 2px solid var(--mid-color-border); }
-.insetborder { border-style: inset;
-               border-color: var(--mostlyfull-color-border);
-             }
-.outsetborder { border-style: outset;
-                border-color: var(--mostlyfull-color-border);
-              }
-
-.right { text-align: right }
-.center { text-align: center }
-.vcenter { vertical-align: middle }
 
 .tooltipcolorlesssource { text-decoration: var(--link-decorate);
                           cursor: pointer; }
@@ -122,105 +285,9 @@ div.scrolltablewrapper th { position: sticky;
 }
 .tooltipsource:hover .tooltiptext, .tooltipcolorlesssource:hover .tooltiptext { visibility: visible; }
 
-img { image-rendering: pixelated }
-a { color: var(--link-color); text-decoration: var(--link-decoration); cursor: pointer; }
-
-
-
-.tabunsel { background: var(--most-faded-color);
-            border: 2px outset var(--full-color-border);
-            margin-left: 0.5ex;
-            margin-right: 0.5ex; }
-.tabsel { background: var(--half-faded-color);
-          border: 2px inset var(--full-color-border);
-          margin-left: 0.5ex;
-          margin-right: 0.5ex; }
-div.tabdiv { flex-grow: 1;
-             display: flex;
-             flex-direction: column;
-             position: relative;
-           }
-div.buttonboxdiv { flex-grow: 0 }
-div.tabcontentdiv { border: 2px solid var(--mostlyfull-color-border);
-                    padding: 0.5ex;
-                    flex-grow: 1;
-                    display: flex;
-                    flex-direction: column;
-                    position: relative;
-                  }
-
-table { border-spacing: 2px;
-        border-collapse: collapse
-      }
-table th { border-bottom: 2px groove var(--half-faded-color); font-weight: bold }
-table td { border-bottom: 2px groove var(--most-faded-color);
-           border-left: 2px groove var( --most-faded-color);
-           padding-left: 1ex;
-           padding-right: 1ex;
-           padding-top: 2px;
-           padding-bottom: 2px;
-         }
-table th.borderleft { border-left: 2px groove var(--half-faded-color); }
-
-table.borderedcells tr td { padding-left: 1ex;
-                            padding-right: 1ex;
-                            border-left: 1px solid var(--half-faded-color); }
-
-tr.greybg { background: var(--lots-faded-color); }
-
-table.borderless { border: none }
-table.borderless th { border: none; font-weight: bold }
-table.borderless td { border: none; padding: 0px }
-
-table.exposurelist td { border: 2px solid var(--half-faded-color); }
-tr.heldexposure { font-style: italic; color: var(--some-faded-color); }
-tr.readyexposure {}
-
-div.dispnone { display : none; }
-div.dispflex { display : flex; }
-div.dispblock { display : block; }
-
-div.dispnone { display : none; }
-div.dispflex { display : flex; }
-div.dispblock { display : block; }
-
-.alignflexstart { align-items: flex-start; }
-.selfstretch { align-self: stretch; }
-.selfstart { align-self: start; }
-
-div.hbox { display: flex;
-           flex-direction: row;
-           min-width: 0;
-           min-height: 0; }
-
-div.vbox { display: flex;
-           flex-direction: column;
-           min-width: 0;
-           min-height: 0; }
-div.vbox100p  { display: flex;
-                flex-direction: column;
-                height: 100%;
-              }
-div.nogrow { flex-grow: 0; }
-div.grow0 { flex-grow: 0; }
-div.grow1 { flex-grow: 1; }
-div.noshrink { flex-shrink: 0; }
-div.shrink0 { flex-shrink: 0; }
-div.shrink1 { flex-shrink: 1; }
-
-.justifyleft { justify-content: flex-start }
-.justifycenter { justify-content: center }
-
-.fillpage { position: fixed; top: 0; bottom: 0; left: 0; right: 0 }
-.flexeven { justify-content: space-evenly }
-.minwid25p { min-width: 25%; }
-.minwid40p { min-width: 40%; }
-.width100p { width: 100%; }
-.height100p { height: 100%; }
-.maxheight20em { max-height: 20em }
-.scrolly { overflow-y: scroll }
-.flexfitcontent { flex-basis: fit-content }
-
+/**********************************************************************/
+/* Styles for specific elements                                       */
+/**********************************************************************/
 
 div.header { display: flex;
              flex-direction: row;
@@ -237,10 +304,6 @@ div.header { display: flex;
 div.header h1 { margin: 0;
                 padding: 0 }
 
-div.subdiv { border: 2px solid var(--mostlyfull-color-border);
-             padding: 0.5ex;
-             margin: 1ex; }
-
 div.authdiv { color: var(--some-faded-color);
               font-size: 75%;
               flex-grow: 0;
@@ -252,29 +315,27 @@ div.footer { color: var(--some-faded-color);
              font-style: italic }
 
 
-div.imageinfodiv { margin-left: 1em;
-                   width: 64em;
-                   flex-grow: 0;
-                 }
-
-canvas.clipcanvas { margin: 0; padding: 0; border: 0; z-index: 1; image-rendering: pixelated }
+table.exposurelist td { border: 2px solid var(--half-faded-color); }
+tr.heldexposure { font-style: italic; color: var(--some-faded-color); }
+tr.readyexposure {}
 
 div.conductorconfig { border: 4px inset var(--main-color);
                       font-size: 75%;
                       padding: 1ex;
                       margin: 1em;
                       width: fit-content;
-                      overflow-y: scroll;
                     }
 
-div.conductorworkers { border: 4px inset var(--main-color);
-                       font-size: 75%;
-                       padding: 1ex;
-                       margin: 1em;
-                       width: fit-content;
-                       overflow-y: scroll;
-                     }
+canvas.clipcanvas { margin: 0;
+                    padding: 0;
+                    border: 0;
+                    z-index: 1;
+                    image-rendering: pixelated
+                  }
 
+/**********************************************************************/
+/* SVGPlot                                                            */
+/**********************************************************************/
 
 div.svgplottopdiv { position: relative;
                     display: flex;
@@ -334,6 +395,10 @@ div.svgplotvbox { display: flex;
                   min-width: 0;
                   min-height: 0; }
 
+/**********************************************************************/
+/* imview                                                             */
+/**********************************************************************/
+
 div.imview_topdiv { display: flex;
                     flex-direction: column;
                     justify-content: flex-start;
@@ -356,3 +421,8 @@ canvas.imview_canvas { position: absolute; left: 0; top: 0; margin: 0; padding: 
                        image-rendering: pixelated }
 svg.imview_svg { position: absolute; left: 0; top: 0; margin: 0; padding: 0; border: 0;
                  pointer-events: none; z-index: 2 }
+
+
+/**********************************************************************/
+/* Miscellaneous                                                      */
+/**********************************************************************/

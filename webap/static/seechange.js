@@ -40,12 +40,26 @@ import "./conductor.js";
 // **********************************************************************
 // **********************************************************************
 // **********************************************************************
-// The global context
+// The global context.  Supposed to be a singleton.
 
 seechange.Context = class
 {
+    static _instance = null;
+
+    static context()
+    {
+        return seechange.Context._instance;
+    }
+
     constructor()
     {
+        if ( seechange.Context._instance != null ) {
+            window.alert( "More than one SeeChange instance; I am surprised." );
+            // Error out?
+        }
+
+        seechange.Context._instance = this;
+
         this.authdiv = document.getElementById( "authdiv" );
         this.maindiv = document.getElementById( "pagebody" );
         this.rendered = false;
@@ -192,7 +206,7 @@ seechange.ProvTagWid = class
     {
         return this.provtag_select.value;
     }
-    
+
     refresh_all_provtag_selects()
     {
         let self = this;
@@ -237,7 +251,7 @@ seechange.ProvTagWid = class
             }
         }
     }
-                                                                 
+
 }
 
 
