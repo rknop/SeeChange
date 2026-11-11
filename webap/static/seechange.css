@@ -25,6 +25,11 @@
     --done-color: #006000;
 }
 
+div { margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
 body { color: var(--main-color);
        background: var(--background-color);
        display: flex;
@@ -40,6 +45,18 @@ div.maindiv { display: flex;
               flex-direction: column;
               flex-grow: 1;
             }
+
+div.scrolltablewrapper { flex-grow: 1;
+                         min-height: 0;
+                         overflow-y: scroll;
+                         border: 2px solid var(--full-color-border);
+                         height: 0;      /* CSS is incredibly mysterious */
+                       }
+div.scrolltablewrapper th { position: sticky;
+                            top: 0;
+                            background-color: var(--most-faded-color);
+                            z-index: 1;
+                          }
 
 .good { color: var(--good-color) }
 .bad { color: var(--bad-color) }
@@ -76,6 +93,7 @@ div.maindiv { display: flex;
 .marginbotex { margin-bottom: 1ex }
 .margintopem { margin-top: 1em }
 .margintopex { margin-top: 1em }
+.fullborder { border: 2px solid var(--full-color-border); }
 .mostlyborder { border: 2px solid var(--mostlyfull-color-border); }
 .midborder { border: 2px solid var(--mid-color-border); }
 .insetborder { border-style: inset;
@@ -120,7 +138,6 @@ a { color: var(--link-color); text-decoration: var(--link-decoration); cursor: p
 div.tabdiv { flex-grow: 1;
              display: flex;
              flex-direction: column;
-             height: 100%;
              position: relative;
            }
 div.buttonboxdiv { flex-grow: 0 }
@@ -129,21 +146,21 @@ div.tabcontentdiv { border: 2px solid var(--mostlyfull-color-border);
                     flex-grow: 1;
                     display: flex;
                     flex-direction: column;
-                    height: 100%;
                     position: relative;
-                    overflow-y: scroll;
                   }
 
-table { border: 2px solid var(--full-color-border); border-spacing: 2px }
-table th { border-bottom: 2px solid var(--full-color-border); font-weight: bold }
-table td { border-bottom: 2px solid var(--half-faded-color);
-           border-spacing: 2px;
+table { border-spacing: 2px;
+        border-collapse: collapse
+      }
+table th { border-bottom: 2px groove var(--half-faded-color); font-weight: bold }
+table td { border-bottom: 2px groove var(--most-faded-color);
+           border-left: 2px groove var( --most-faded-color);
            padding-left: 1ex;
            padding-right: 1ex;
            padding-top: 2px;
            padding-bottom: 2px;
          }
-table th.borderleft { border-left: 2px solid var(--half-faded-color); }
+table th.borderleft { border-left: 2px groove var(--half-faded-color); }
 
 table.borderedcells tr td { padding-left: 1ex;
                             padding-right: 1ex;

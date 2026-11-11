@@ -28,7 +28,7 @@ seechange.Conductor = class
 
         rkWebUtil.wipeDiv( this.div );
 
-        hbox = rkWebUtil.elemaker( "div", this.div, { "classes": [ "hbox" ] } );
+        hbox = rkWebUtil.elemaker( "div", this.div, { "classes": [ "hbox", "grow0" ], "id": "conductortop" } );
 
         this.searchdiv = rkWebUtil.elemaker( "div", hbox, { "classes": [ "vbox", "grow1" ] } )
         this.provtagwid = new seechange.ProvTagWid( this.context, "conductor", { "parent": this.searchdiv } );
@@ -163,10 +163,12 @@ seechange.Conductor = class
         this.pipelineworkers.render();
 
         this.contenttabs = new rkWebUtil.Tabbed( this.div );
+        this.contenttabs.id = "conductor_tabbed";
 
-        this.conductordiv = rkWebUtil.elemaker( "div" );
-        this.knownexp_notification_div = rkWebUtil.elemaker( "div", this.conductordiv );
-        this.knownexpdiv = rkWebUtil.elemaker( "div", this.conductordiv );
+        this.conductordiv = rkWebUtil.elemaker( "div", null, { "id": "conductor_tab",
+                                                               "classes": [ "vbox", "grow1" ] } );
+        this.knownexp_notification_div = rkWebUtil.elemaker( "div", this.conductordiv, { "classes": [ "grow0" ] } );
+        this.knownexpdiv = rkWebUtil.elemaker( "div", this.conductordiv, { "classes": [ "vbox", "grow1" ] } );
         this.contenttabs.addTab( "conductor", "Conductor", this.conductordiv );
         this.contenttabs.selectTab( "conductor" )
 
@@ -514,7 +516,7 @@ seechange.Conductor = class
 
         rkWebUtil.wipeDiv( this.knownexpdiv );
 
-        p = rkWebUtil.elemaker( "p", this.knownexpdiv );
+        p = rkWebUtil.elemaker( "p", this.knownexpdiv, { "classes": [ "vbox", "grow1" ] } );
 
         // Uncomment this (...or move it somewhere) when it's actually properly implemented
         // if ( this.hide_exposure_details_checkbox == null ) {
@@ -653,6 +655,7 @@ seechange.Conductor = class
                          'nsub': 'nsub',
                          'ndets': 'ndet'
                        };
+        let div = rkWebUtil.elemaker( "div", this.knownexpdiv, { 'classes': [ "scrolltablewrapper" ] } );
         let tab = new rkWebUtil.SortableTable( this.known_exposures, fields, rowrenderer,
                                                { 'hdrs': fieldmap,
                                                  'dictoflists': false,
@@ -660,7 +663,7 @@ seechange.Conductor = class
                                                  'initsort': [ '+mjd' ],
                                                  'colorclasses': [ 'bgfade', 'bgwhite' ],
                                                  'colorlength': 3 } );
-        this.knownexpdiv.appendChild( tab.table );
+        div.appendChild( tab.table );
     }
 
     // **********************************************************************
