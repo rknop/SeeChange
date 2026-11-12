@@ -20,15 +20,19 @@ seechange.DiaForcedPhotSearch = class
         let self = this;
         let hbox, box, vbox, p;
 
-        hbox = rkWebUtil.elemaker( "div", this.div, { "classes": [ "hbox", "padex", "xmargin", "mostlyborder",
-                                                                   "grow0" ] } );
+        vbox = rkWebUtil.elemaker( "div", this.div, { "classes": [ "vbox", "padex", "xmargin",
+                                                                   "mostlyborder", "grow0" ] } );
+
+        this.provtagwid = new seechange.ProvTagWid( this.context, "diaforcedphot", { "parent": vbox } );
+
+        hbox = rkWebUtil.elemaker( "div", vbox, { "classes": [ "hbox", "grow0" ] } );
 
         vbox = rkWebUtil.elemaker( "div", hbox, { "classes": [ "vbox", "padex", "xmargin", "mostlyborder" ] } );
-        rkWebUtil.elemaker( "p", vbox, { "text": "Show lightcurve for object:" } );
-        p = rkWebUtil.elemaker( "p", vbox )
+        p = rkWebUtil.elemaker( "p", vbox, { "text": "Show lightcurve for object:" } );
+        rkWebUtil.elemaker( "br", p );
         this.ltcvid = rkWebUtil.elemaker( "input", p, { "id": "diaforcedphot_ltcvid",
                                                         "attributes": { "type": "text", "size": 36} } );
-        p = rkWebUtil.elemaker( "p", vbox )
+        rkWebUtil.elemaker( "br", p );
         rkWebUtil.button( p, "Show Object", () => { self.show_lightcurve_for_widget_object(); } );
 
         vbox = rkWebUtil.elemaker( "div", hbox, { "classes": [ "vbox", "padex", "xmargin", "mostlyborder" ] } );
@@ -40,7 +44,7 @@ seechange.DiaForcedPhotSearch = class
 
     list_all_objs() {
         let self = this;
-        let provtag = this.context.provtag_wid.value;
+        let provtag = this.provtagwid.value;
         let promise = this.context.connector.httpPromise( "objswithdiaforcedphot/" + provtag );
         promise.then( (data) => { self.list_objects(data, provtag) } );
     }
@@ -78,10 +82,10 @@ seechange.DiaForcedPhotSearch = class
     {
         // TODO checkif we already have this in ltcv_divs
         let self = this;
-        let provtag = this.context.provtag_wid.value;
+        let provtag = this.provtagwid.value;
         rkWebUtil.wipeDiv( this.ltcv_parent_div );
         rkWebUtil.elemaker( "h3", this.ltcv_parent_div, { "text": "Loading...",
-                                                          "classes": [ "warning", "italic" ] } );
+                                                          "classes": [ "loading" ] } );
         this.context.connector.sendHttpRequest( "diaforcedphotforobj/" + objid + "/" + provtag, {},
                                                 (data) => { self.actually_show_lightcurve( data ); } );
     }
@@ -266,7 +270,8 @@ seechange.DiaForcedPhot = class
             let tr = rkWebUtil.elemaker( "tr", tab, { "classes": [ "vcenter" ] } );
             rkWebUtil.elemaker( "th", tr, { "text": which } );
             let td = rkWebUtil.elemaker( "td", tr );
-            this.clipboxes[which] = rkWebUtil.elemaker( "div", td, { "classes": [ "mostlyborder", "padex" ] } );
+            this.clipboxes[which] = rkWebUtil.elemaker( "div", td, { "classes": [ "mostlyborder", "padex",
+                                                                                  "content-box" ] } );
             this.clipboxes[which].style.poition = "relative";
             this.clipboxes[which].style.width = dispsize.toString() + "px";
             this.clipboxes[which].style.height = dispsize.toString() + "px";

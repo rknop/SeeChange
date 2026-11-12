@@ -120,7 +120,7 @@ seechange.ImageList = class
 
         this.parenttabs.selectTab( "imagedetail" );
         rkWebUtil.elemaker( "p", this.imagediv, { "text": "Loading image info...",
-                                                  "classes": [ "warning", "bold", "italic" ] } );
+                                                  "classes": [ "loading" ] } );
         if ( ! this.image_promises.hasOwnProperty( imgid ) ) {
             this.image_promises[imgid] = this.context.connector.httpPromise( 'image_info/' + imgid );
         }

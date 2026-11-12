@@ -88,7 +88,7 @@ div.vbox100p  { display: flex;
                 height: 100%;
               }
 
-div.scrolltablewrapper { flex-grow: 1;
+div.scrolltablewrapper { align-self: start;
                          min-height: 0;
                          overflow-y: scroll;
                          border: 2px solid var(--half-faded-color);
@@ -232,6 +232,8 @@ div.shrink1 { flex-shrink: 1; }
 .maxheight20em { max-height: 20em }
 .scrolly { overflow-y: scroll }
 
+.content-box { box-sizing: content-box; }
+
 .right { text-align: right }
 .center { text-align: center }
 .vcenter { vertical-align: middle }
@@ -263,6 +265,11 @@ div.dispblock { display : block; }
 .good { color: var(--good-color) }
 .bad { color: var(--bad-color) }
 .warning { color: var(--warning-color) }
+
+.loading { font-style: italic;
+           font-weight: bold;
+           color: var(--warning-color);
+         }
 
 .stateheld { color: var(--held-color) }
 .stateready { color: var(--ready-color) }

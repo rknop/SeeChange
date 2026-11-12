@@ -107,7 +107,7 @@ seechange.ExposureList = class
             target.reset( { 'body': this.exposure_displays[id].div } );
         }
         else {
-            target.reset( { "text": "Loading...", "classes": [ "warning", "bold", "italic" ] } );
+            target.reset( { "text": "Loading...", "classes": [ "loading" ] } );
             this.context.connector.sendHttpRequest( "exposure_images/" + id + "/" + provtag,
                                                     null,
                                                     (data) => { self.actually_show_exposure( data ); }

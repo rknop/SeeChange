@@ -164,7 +164,7 @@ seechange.Conductor = class
         this.pipelineworkers.render();
 
         this.contenttabs = new rkWebUtil.Tabbed( this.div );
-        this.contenttabs.id = "conductor_tabbed";
+        this.contenttabs.div.id = "conductor_tabbed";
 
         this.conductordiv = rkWebUtil.elemaker( "div", null, { "id": "conductor_tab",
                                                                "classes": [ "vbox", "grow1" ] } );
@@ -173,20 +173,25 @@ seechange.Conductor = class
         this.contenttabs.addTab( "conductor", "Conductor", this.conductordiv );
         this.contenttabs.selectTab( "conductor" )
 
-        this.exposurediv = rkWebUtil.elemaker( "div", null, { "classes": [ "vbox", "grow1" ] } );
-        this.contenttabs.addTab( "exposure", "Exposure Info", this.exposurediv );
-
-        this.contenttabs.addTab( "imagedetail", "Image Details",
-                                 rkWebUtil.elemaker( "div", null, { "classes": [ "vbox", "grow1" ] } ) );
-
-        this.contenttabs.addTab( "sources", "Detections",
-                                 rkWebUtil.elemaker( "div", null, { "classes": [ "vbox", "grow1" ] } ) );
-
-        this.contenttabs.addTab( "reports", "Reports",
-                                 rkWebUtil.elemaker( "div", null, { "classes": [ "vbox", "grow1" ] } ) );
-
-        this.contenttabs.addTab( "fakes", "Fakes",
-                                 rkWebUtil.elemaker( "div", null, { "classes": [ "vbox", "grow1" ] } ) );
+        // Dictionary of tabname : title
+        //   tabname will be referred to elsewhere in the code
+        //   so is painful to change.  Title only shows up here
+        //   so should be painless to change.
+        let tabstoadd = { "exposure": "Exposure Info",
+                          "imagedetail": "Image Details",
+                          "sources": "Detections",
+                          "reports": "Reports",
+                          "fakes": "Fakes"
+                        };
+        this.emptiabledivs = {};
+        for ( let tab in tabstoadd ) {
+            this.emptiabledivs[ tab ] = new rkWebUtil.EmptiableDiv( "div", null,
+                                                                    { "id": "conductor_tab_" + tab,
+                                                                      "classes": [ "vbox", "grow1" ],
+                                                                      "text": "(Nothing loaded)",
+                                                                      "textclasses": [ "loading" ] } );
+            this.contenttabs.addTab( tab, tabstoadd[tab], this.emptiabledivs[tab].div );
+        }
     }
 
     // **********************************************************************
@@ -198,9 +203,7 @@ seechange.Conductor = class
         let p;
 
         rkWebUtil.wipeDiv( this.pollingdiv )
-        rkWebUtil.elemaker( "p", this.pollingdiv,
-                            { "text": "Loading status...",
-                              "classes": [ "warning", "bold", "italic" ] } )
+        rkWebUtil.elemaker( "p", this.pollingdiv, { "text": "Loading status...", "classes": [ "loading" ] } );
 
         if ( edit )
             this.connector.sendHttpRequest( "conductor/status", {}, (data) => { self.edit_config_status(data) } );
@@ -421,7 +424,7 @@ seechange.Conductor = class
         rkWebUtil.wipeDiv( this.forceconductorpoll_p );
         rkWebUtil.elemaker( "span", this.forceconductorpoll_p,
                             { "text": "...forcng poll...",
-                              "classes": [ "warning", "bold", "italic" ] } );
+                              "classes": [ "loading" ] } );
         this.connector.sendHttpRequest( "conductor/forceupdate", {}, () => self.did_force_conductor_poll() );
     }
 
@@ -445,7 +448,7 @@ seechange.Conductor = class
         rkWebUtil.wipeDiv( this.knownexpdiv );
         let p = rkWebUtil.elemaker( "p", this.knownexpdiv,
                                     { "text": "Loading known exposures...",
-                                      "classes": [ "warning", "bold", "italic" ] } );
+                                      "classes": [ "loading" ] } );
         let url = "conductor/getknownexposures/provtag=";
         url += encodeURIComponent( this.provtagwid.value );
 
@@ -682,7 +685,7 @@ seechange.Conductor = class
         rkWebUtil.wipeDiv( this.knownexp_notification_div );
         rkWebUtil.elemaker( "span", this.knownexp_notification_div,
                             { "text": "Updating state of some known exposures...",
-                              "classes": [ "bold", "italic", "warning" ] } );
+                              "classes": [ "loading" ] } );
         if ( kexps.length > 0 ) {
             this.connector.sendHttpRequest( "conductor/setknownexposurestate",
                                             { "state": state, "knownexposure_ids": kexps },
@@ -765,7 +768,7 @@ seechange.Conductor = class
                 rkWebUtil.wipeDiv( this.knownexposidv );
                 rkWebUtil.elemaker( "p", this.knownexpdiv,
                                     { "text": "Loading known exposures...",
-                                      "classes": [ "warning", "bold", "italic" ] } );
+                                      "classes": [ "loading" ] } );
                 this.connector.sendHttpRequest( "/conductor/fullyclearclusterclaim",
                                                 { 'knownexposure_ids': toclear },
                                                 (data) => { self.update_known_exposures() } );
@@ -779,14 +782,15 @@ seechange.Conductor = class
     {
         let self = this;
         let provtag = this.provtagwid.value;
-        let div = this.contenttabs.divs[ 'exposure' ];
-        rkWebUtil.wipeDiv( div );
+        let mtdiv = this.emptiabledivs[ 'exposure' ];
+        mtdiv.reset( { "text": "Loading...", "classes": [ "loading" ] } );
 
         // See if we already have a display for this exposure
         for ( let i in this.exposure_displasy ) {
             let exp = this.exposure_displays[i];
             if ( exp.id == exposure_id ) {
-                div.appendChild( exp.div );
+                mtdiv.reset( { "empty": true } );
+                mtdiv.div.appendChild( exp.div );
                 // Push this exposure to the back of the list since
                 //   it's the most recently accessed one
                 this.exposure_displays.splice( i, 1 );
@@ -798,7 +802,6 @@ seechange.Conductor = class
 
         // Didn't have a cached seechange.Exposure, so make a new one by
         //   asking the web server for info.
-        rkWebUtil.elemaker( "span", div, { "text": "Loading...", "classes": [ "warning", "bold", "italic" ] } );
         this.connector.sendHttpRequest( "exposure_images/" + exposure_id + "/" + provtag, null,
                                         (data) => { self.actually_show_exposure(data); } );
     }
@@ -812,8 +815,8 @@ seechange.Conductor = class
                                             'detectionstab': 'sources',
                                             'reportstab': 'reports',
                                             'fakestab': 'fakes' } );
-        rkWebUtil.wipeDiv( this.exposurediv );
-        this.exposurediv.appendChild( exp.div );
+        this.emptiabledivs.exposure.reset( { 'empty': true } )
+        this.emptiabledivs.exposure.div.appendChild( exp.div );
         this.contenttabs.selectTab( "exposure" );
         exp.render_page();
 

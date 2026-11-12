@@ -186,7 +186,6 @@ seechange.ProvTagWid = class
                 window.alert( "Error, seechange.ProvTagWid container parentNode can't be null" );
                 return;
             }
-            rkWebUtil.wipeDiv( this.container );
         }
 
         this.provtag_select = rkWebUtil.elemaker( "select", this.container, { 'id': 'provtag_select_' + idtag } );

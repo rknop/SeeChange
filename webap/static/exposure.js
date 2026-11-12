@@ -414,7 +414,7 @@ seechange.Exposure = class
 
     //     rkWebUtil.wipeDiv( this.reports_subdiv );
     //     rkWebUtil.elemaker( "p", this.reports_subdiv, { "text": "Loading reports...",
-    //                                                     "classes": [ "bold", "italic", "warning" ] } );
+    //                                                     "classes": [ "loading" ] } );
     //     this.context.connector.sendHttpRequest( "exposure_reports/" + this.id + "/" + this.data.provenancetag,
     //                                             {}, (data) => { self.render_reports(data) } );
     // }
@@ -647,7 +647,7 @@ seechange.Exposure = class
 
         this.parenttabs.selectTab( this.imagedetailstab );
         rkWebUtil.elemaker( "p", this.image_view_div, { "text": "Loading image info...",
-                                                        "classes": [ "warning", "bold", "italic" ] } );
+                                                        "classes": [ "loading" ] } );
         let promise = this.get_image_promise( sec );
         promise.then( (info) => { self.make_image_details(info);
                                   self.image_objects[sec].show_imagediv();
@@ -731,7 +731,7 @@ seechange.Exposure = class
             return;
 
         rkWebUtil.elemaker( "p", this.cutoutsdiv, { "text": "Loading cutouts...",
-                                                    "classes": [ "warning", "bold", "italic" ] });
+                                                    "classes": [ "loading" ] });
 
         let detections_callback = (signal, stuff) => { self.parenttabs.selectTab( "sources" );
                                                        rkWebUtil.wipeDiv( self.cutoutsdiv );

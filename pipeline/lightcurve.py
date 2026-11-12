@@ -672,7 +672,6 @@ class Lightcurve:
                     raise RuntimeError( f"Failure trawling the database for provenances, unexpected processes.  "
                                         f"missing: {missing_procs} ; unknown: {unknown_procs}" )
 
-
                 # Save them if necessary.  Do this in the right order so upstreams exist.
                 if save_prov:
                     provs = []

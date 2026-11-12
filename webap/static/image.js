@@ -135,8 +135,14 @@ seechange.Image = class extends( rkWebUtil.listener )
 
         this.imview_div = rkWebUtil.elemaker( "div", hbox, { "classes": [ "vbox", "marginrightem",
                                                                           "grow1", "selfstretch" ] } );
+
         this.info_div = rkWebUtil.elemaker( "div", hbox, { "classes": [ "grow0", "shrink0",
                                                                         "marginleftem", "marginrightem" ] } );
+        // THIS IS TERRIBLE.
+        // But.  If the info div size changes when you flip between new/ref/sub, it's very annoying.
+        // So, going to hardcode a width, and just let the filename wrap.
+        this.info_div.style.width = "48ex";
+
         this.thumbnails_div = rkWebUtil.elemaker( "div", hbox );
 
         this.shown_imview = null;
@@ -199,7 +205,7 @@ seechange.Image = class extends( rkWebUtil.listener )
             }
             rkWebUtil.wipeDiv( this.info_div );
             rkWebUtil.elemaker( "p", this.info_div, { "text": "Loading image info...",
-                                                      "classes": [ "warning", "bold", "italic" ] } );
+                                                      "classes": [ "loading" ] } );
             this.infopromises[which].then( (info) => { self.show_info_view( info, which ); } );
         }
     }
@@ -220,6 +226,9 @@ seechange.Image = class extends( rkWebUtil.listener )
             rkWebUtil.elemaker( "h3", this.info_div, { "text": "Something has gone wrong." } );
         }
 
+        let fncomps = info.filepath.match( /\/?([^\/]+)$/ );
+        let filename = (fncomps === null) ? "????" : fncomps[1];
+
         let propvalues = { 'mjd': seechange.nullorfixed( info['mjd'], 5),
                            'ra': seechange.nullorfixed( info['ra'], 5 ),
                            'dec': seechange.nullorfixed( info['dec'], 5 ),
@@ -234,7 +243,7 @@ seechange.Image = class extends( rkWebUtil.listener )
                            'bkg': seechange.nullorexpo( info['bkg_mean_estimate'], 4 ),
                            'σ_bkg': seechange.nullorexpo( info['bkg_rms_esitmate'], 4 ),
                            'provid': info['provenance_id'],
-                           'filename': this.filename,
+                           'filename': filename,
                            'id': info['_id'],
                          }
         let table = rkWebUtil.elemaker( "table", this.info_div );
@@ -412,7 +421,7 @@ seechange.Image = class extends( rkWebUtil.listener )
 
         rkWebUtil.wipeDiv( this.detections_wrapper );
         rkWebUtil.elemaker( 'h3', this.detections_wrapper, { "text": "Loading detections...",
-                                                             "classes": [ "warning", "bold", "italic" ] } );
+                                                             "classes": [ "loading" ] } );
 
         let self = this;
 

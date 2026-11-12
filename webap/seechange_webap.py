@@ -83,17 +83,31 @@ class ProvTagInfo( BaseView ):
             columns = { cursor.description[i][0]: i for i in range(len(cursor.description)) }
             rows = cursor.fetchall()
 
-            provorder = { 'acquire_exposure': 0,
-                          'manual_reference': 0,
-                          'referencing': 1,
-                          'preprocessing': 2,
-                          'extraction': 3,
-                          'subtraction': 4,
-                          'detection': 5,
-                          'cutting': 6,
-                          'measuring': 7,
-                          'scoring': 8,
-                          'report': 9 }
+            provorder = { p: i for i, p in
+                          enumerate( [ 'positioning',
+                                       'acquire_exposure',
+                                       'flat_bias_builder',
+                                       'preprocessing',
+                                       'extraction',
+                                       'astrocal',
+                                       'photocal',
+                                       'Image.trim',
+                                       'Image.trim.sources',
+                                       'Image.trim.wcs',
+                                       'Image.trim.zp',
+                                       'manual_reference',
+                                       'coaddition',
+                                       'referencing',
+                                       'alignment',
+                                       'subtraction',
+                                       'detection',
+                                       'cutting',
+                                       'measuring',
+                                       'scoring',
+                                       'diaforcedphot',
+                                       'fakeinjection',
+                                       'report'
+                                      ] ) }
 
         def sorter( row ):
             if row[columns['process']] in provorder.keys():
