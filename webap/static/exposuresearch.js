@@ -22,12 +22,10 @@ seechange.ExposureSearch = class
 
         rkWebUtil.wipeDiv( this.div );
 
-        hbox = rkWebUtil.elemaker( "div", this.div, { "classes": [ "hbox" ] } );
+        hbox = rkWebUtil.elemaker( "div", this.div, { "classes": [ "hbox", "grow0", "shrink0" ] } );
 
         vbox = rkWebUtil.elemaker( "div", hbox, { "classes": [ "vbox", "hmargin" ] } );
-
         this.provtagwid = new seechange.ProvTagWid( this.context, "exposuresearch", { "parent": vbox } );
-
         p = rkWebUtil.elemaker( "p", vbox );
         button = rkWebUtil.button( p, "Show", function() { self.parse_widgets_and_show_exposures(); } );
         p.appendChild( document.createTextNode( " " ) );
@@ -42,7 +40,7 @@ seechange.ExposureSearch = class
                                                   "attributes": { "type": "text",
                                                                   "size": 20 } } );
         this.startdatewid.addEventListener( "blur", function(e) {
-            rkWebUtil.validateWidgetDateUTC( self.startdatewid );
+            rkWebUtil.validateWidgetDate( self.startdatewid );
         } );
         p.appendChild( document.createTextNode( " to " ) );
         this.enddatewid = rkWebUtil.elemaker( "input", p,
@@ -50,7 +48,7 @@ seechange.ExposureSearch = class
                                                 "attributes": { "type": "text",
                                                                 "size": 20 } } );
         this.enddatewid.addEventListener( "blur", function(e) {
-            rkWebUtil.validateWidgetDateUTC( self.enddatewid );
+            rkWebUtil.validateWidgetDate( self.enddatewid );
         } );
         rkWebUtil.elemaker( "br", p );
         p.appendChild( document.createTextNode( "    (YYYY-MM-DD [HH:MM] — leave blank for no limit)" ) );
@@ -185,7 +183,7 @@ seechange.ExposureSearch = class
             return
         }
         this.exposurelist = new seechange.ExposureList( this.context, this, this.tabbed,
-                                                        this.tabbed.divs["exposurelist"],
+                                                        this.emptiabledivs["exposurelist"].div,
                                                         data["exposures"], data["startdate"], data["enddate"],
                                                         data["provenance_tag"], data["projects"] );
         this.exposurelist.render_page();
