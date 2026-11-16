@@ -18,32 +18,10 @@ class Pipeline( ProcessObject ):
 
     Instantiate a Pipeline of subclass <Pipeline> with:
 
-      pipeline_object = <Pipeline>( starting_prov, starting_point=<class>,
-                                    <process>=<dict>, <process>=<dict>, ... )
+      pipeline_object = Pipeline.get( name, ... )
 
-    starting_prov is either the Provenance, or the id of a Provenance,
-    of the object that the pipline would start working on.
-    starting_point is the class of the starting object.  For instance,
-    for DifferenceImagingTransientDiscoveryPipeline, starting_point must
-    be either Exposure or Image, and defaults to Exposure.
-
-    IMPORTANT : most subclasses do not verify that starting_point is
-    consistent with starting_prov; they trust that you've passed
-    consistent things!  Stuff may break, or, worse, stuff may run but
-    not do the right thing, if you mess this up.
-
-    The remaining arguments are dictionaries of configuration parameters
-    for the processes that correspond to the keys of the provenance tree
-    that get_prov_tree will produce.  Any or all may be omitted.  Each
-    process worker object is configured with:
-
-      1. the defaults for that process
-      2. <process> at the top level of the config
-      3. <pipeline_name>.<process> in the config
-      4. The value of the <process> kwarg passed to the Pipeline
-         constructor.
-
-    where a later thing in the list above overrides an earlier thing.
+    where name is the name of the pipeline.  See the docstring on
+    Pipeline.get for more information.
 
     """
 
@@ -74,8 +52,8 @@ class Pipeline( ProcessObject ):
 
     # A list of processes that do not have provenances associated with them.#
     #   This will be for pipeline steps that do things like download the
-    #   calibrators 
-    
+    #   calibrators
+
     # A dict of str: class.  The keys are the names of properties that
     #   the pipeline needs to get started.  The values are the
     #   classes of those starting products.  Many pipelines will
@@ -91,6 +69,9 @@ class Pipeline( ProcessObject ):
     #    list, not a list.  In that case, the property# str points to a
     #    list of objects whose class is defined by the third element of
     #    the tuple.
+    # This dictionary must be ordered so that any process that depends
+    #    on the result of an earlier process is later in the dictionary
+    #    than the earlier process.
     _process_products = {}
 
     # A dict of str: str.  The key is a process product (which is either
@@ -110,10 +91,13 @@ class Pipeline( ProcessObject ):
     # from _process_products where this data product appeared.  (So, in principle,
     # this could be a nearly empty dictionary.)
     #
-    # This dictionary does *not* need to be complete.  It will be automatically
-    # populated from _starting_products and _process_products.  Only
-    # put in here entries where a product has a provenance, but the
-    # process of that provenances doesn't match the step name of the process.
+    # This dictionary does *not* need to be complete.  It will be
+    #   automatically populated from _starting_products and
+    #   _process_products.  Only put in here entries where a product has
+    #   a provenance, but the process of that provenances doesn't match
+    #   the step name of the process.  (For example, for extraction, it
+    #   produces bg and psf in addition to sources, so you'd want 'bg':
+    #   None and 'psf' None in this dictionary.)
     _product_provenance_processes = {}
 
     # A dict of str: list of str.  The key is a data product, the value
@@ -128,6 +112,13 @@ class Pipeline( ProcessObject ):
     # it), the value should be NotDefined instead of a list of str.
     _product_upstreams = {}
 
+    # A dict of dicts.  Keys are exactly the same as the keys in _product_upstreams.
+    # The values are a dict of upstream: upstream_key, where upstream_key is the
+    # property of the key object that points to the upstream object.  Can
+    # often be left empty; will assume f"{product}_id" for the upstream key,
+    # which is almost always what we've defined.
+    _product_upstream_keys = {}
+
     # A dict of str: class.  For each process (step) that is part of
     # this pipeline's running, the class is the class that performs that
     # process.
@@ -139,7 +130,9 @@ class Pipeline( ProcessObject ):
 
     # A dictionary of product: function, special code for validating
     # that a data product is consistent with other data products
-    # already stored.  Should raise an exception if it's not.
+    # already stored.  Subclasses do not have to check the upstream
+    # products (things in the class variable _product_upsteams), as
+    # those will be done by the Pipeline class.
     _product_validators = {}
 
 
@@ -147,48 +140,25 @@ class Pipeline( ProcessObject ):
     def name( self ):
         return self._name
 
-
     @classmethod
-    def get( cls, pipeline, pars=None, provtag=None, read_pars_from_prov=False, never_execute=NotDefined,
-             match_code_version=True, match_full_code_version=False,
-             validate_upstream_steps=True, ok_processes_missing=True, handle_unexpected_processes='ignore',
-             pgdb=None, **kwargs ):
-        """Get a Pipeline subclass.
+    def get( cls, pipeline, **kwargs ):
+        """Get an instance of a Pipeline subclass.
 
-        Different subclasses may have different additional requirements,
-        but you must supply one of the following sets of kwargs.  (You
-        may well want to provide others as well!)
+        Different subclasses may have additional requirements, but in
+        addition to the pipeline name as the one positional argument,
+        you must also pass at least one keyword argument that provides a
+        data product (or the id of a dataproduct) for the pipeline to
+        work with.  For example. for the image reduction pipeline, you
+        can pass exposure=expobj, where expobj is an Exposure object.
+        (But, you could also pass an Image (or an image's uuid) in
+        image, a WorldCoordinates in wcs, a ZeroPoint in zp, or a
+        SourceList in sources; the pipeline will try to figure
+        everything out from what you pass.)
 
-          * <product>=<object, uuid, or str> [, <product>=<object>, ...]
-              The starting points for the pipeline.  For example, for
-              the image reduction pipeline, you could do:
+        You probably also want to pass provtag, and you *might* want to
+        set read_pars_from_prov=True.
 
-                 pip = Pipeline.get( exposure=exp )
-
-              where exposure_obj is either the instance of an Exposure,
-              or the id of an exposure.
-
-          * provtag=str, <product>=<object, uuid, or str>
-              Pass any data product that's anywhere in the pipeline.
-              You can pass the appropriate object, or the id of the
-              object.  For instance, for the image reduction pipeline,
-              you could do
-                 pip = Pipeline.get( provatag='mytag', wcs=my_wcs )
-              The pipeline will complain if it cannot find all the
-              provenances it needs given what you gave it.
-
-              You *probably* want to set read_pars_from_prov=True when
-              using this version.
-
-          * starting_prov : either a str, Provenance, or a dict of str: (str or Provenance)
-              For pipelines that have a single starting point
-              (e.g. ImageReductionPipeline starts with 'exposure"), this
-              is the provenance (or provenance id ) of we'd
-              start with.  For a pipeline with multiple starting points,
-              the dictionary gives all of them.
-
-          * provtag=str, read_pars_from_prov=True
-              In this case, read all of the Provenances from the given provenance tag.
+        As for the rest, read on:
 
         Parameters
         ----------
@@ -196,6 +166,15 @@ class Pipeline( ProcessObject ):
              The name of the pipeline, e.g. 'image_reduction',
              'dia_transientsearch', etc.  Controls the class of the
              object that will be returned.
+
+          <data_product>: str, UUID, or <object>
+             Legal <data_product> values will be different for each
+             pipeline.  Provide either the id of a data product of the
+             right class, or the object itself (an instance of that
+             class).
+
+          starting_prov: Provenance
+             ROB WRITE DOCS
 
           pars : dictionary, default None
              OMG complicated, Rob write docs.
@@ -212,18 +191,19 @@ class Pipeline( ProcessObject ):
              the pipeline will create Provenances and save them to the
              database, tagged with this tag (if it's not None).
 
-          read_pars_from_prov: str, default False
+          read_pars_from_prov: str, default True
              If True, then pars must not be given.  The config will be
              ignored (...sort of...), and all process object parameters
              will be set by what's read from the provenances tagged with
-             this provenance.  Use this when you just want to get existing
+             this provtag.  Use this when you just want to get existing
              data products that may not be from the current configuration.
 
           never_execute : bool, default NotDefined
              If this is not given, then it defaults to True if
-             read_pars_from_prov is given, otherwise it defaults to
+             read_pars_from_prov is True, otherwise it defaults to
              False.  When this is True, the pipeline will not create any
-             new Provenances, nor will it do anything.
+             new Provenances, nor will it do anything.  It's still
+             useful for reading data products from the database.
 
           match_code_version : bool, default True
              Ignored if provtag is not given.  If any found Provenances have
@@ -253,6 +233,18 @@ class Pipeline( ProcessObject ):
              raise an exception.  That can easily happen, so you probably
              just want to leave this at ignore.
 
+          reports: bool, default False
+             TODO
+
+          track_runtimes: bool, default True
+             TODO
+
+          track_memory: bool, default True
+             TODO
+
+          pgdb: PGDB, default None
+             Database connection; may open and close one if this is not given.
+
         Returns
         -------
           An object of the appropriate subclass of Pipeline
@@ -268,7 +260,7 @@ class Pipeline( ProcessObject ):
         if pipeline not in subclasses:
             raise ValueError( f"Unknown pipeline {pipeline}" )
         else:
-            return subclasses[ pipeline ]( **kwargs)
+            return subclasses[ pipeline ]( _ok_to_instantiate=True, **kwargs )
 
 
     def _is_product_upstream( self, downstream, upstream ):
@@ -284,7 +276,7 @@ class Pipeline( ProcessObject ):
 
 
     def __init__( self, starting_prov=None, provtag=None, pars=None, read_pars_from_prov=False,
-                  match_code_version=True, match_full_code_version=False,
+                  never_execute=NotDefined, match_code_version=True, match_full_code_version=False,
                   handle_unexpected_processes='ignore', ok_processes_missing=True, validate_upstream_steps=True,
                   reports=False, pgdb=None, track_runtimes=True, track_memory=True,
                   _preset_provenances={}, _ok_to_instantiate=False, **kwargs
@@ -303,9 +295,14 @@ class Pipeline( ProcessObject ):
         if not isinstance( pars, dict ):
             raise TypeError( f"pars must be a dict, not a {type(pars)}")
 
+        self.never_execute = never_execute if never_execute != NotDefined else read_pars_from_prov
+
+        if read_pars_from_prov and ( provtag is None ):
+            raise ValueError( "read_pars_from_prov=True requires a provtag" )
+
         # Make copies of the pipeline definition so we can modify it for this instance
-        for prop in [ 'all_steps', 'starting_products', 'process_products',
-                      'product_provenance_processes', 'product_upstreams', 'process_classes' ]:
+        for prop in [ 'all_steps', 'starting_products', 'process_products', 'process_classes',
+                      'product_provenance_processes', 'product_upstreams', 'product_upstream_keys' ]:
             if prop in kwargs:
                 setattr( self, prop, copy.deepcopy( kwargs[prop] ) )
             else:
@@ -319,7 +316,7 @@ class Pipeline( ProcessObject ):
         self.memory_usages = {}
         self.exceptions = []
         self.warnings = []
-        
+
         # Make a dictionary of product classes.  The keys of
         #   self.product_classes will have every product we might try to
         #   access inside the pipeline itself (so process objects called
@@ -328,18 +325,19 @@ class Pipeline( ProcessObject ):
         #   of the dictionary will *usually* be a class, but it might be
         #   a tuple of (list, class).
         #
-        # Also, at the same time, make a dictioary of the processes
-        #  (steps) that produce each product.
+        # Also, at the same time, make a dictionary of the processes
+        #  (steps) that produce each product, and a dictionary of the
+        #  keys in each product that point to its upstream products.
         #
         # Also, at the same time, make sure that
         #   self.product_provenance_processes is complete (has an entry
         #   for everything in self.product_classes).  It will be
         #   NotDefined for products that are starting points, and None
-        #   for classes that aren't subclasses of HasProvenance.  for
-        #   products that don't have provenances.
+        #   for classes that aren't subclasses of HasProvenance.
         self.product_classes = self.starting_products.copy()
-        self.product_processes = { c: NotDefined for c in product_classes.keys() }
-        self.product_provenance_processes.extend( { c: NotDefined for c in self.product_classes.keys() } )
+        self.product_processes = { c: NotDefined for c in self.product_classes.keys() }
+        self.product_provenance_processes = ( { c: NotDefined for c in self.product_classes.keys() }
+                                              | self.product_provenance_processes )
         for process, mess in self.process_products.items():
             for tup in mess:
                 islist = tup[0] is list
@@ -361,12 +359,21 @@ class Pipeline( ProcessObject ):
                     else:
                         self.product_provenance_processes[product] = None
 
+        # Fill out product_upstream_keys with defaults
+        for prod, upprods in self.product_upstreams.items():
+            if prod not in self.product_upstream_keys:
+                self.product_upstream_keys[prod] = {}
+            for upprod in upprods:
+                if upprod not in self.product_upstream_keys[prod]:
+                    self.product_upstream_keys[prod][upprod] = f'{upprod}_id'
+
         # Make sure all our dicts of products to stuff all have the same keys
         prodprockeys = set( self.product_processes.keys() )
         prodclskeys= set( self.product_classes.keys() )
         produpkeys = set( self.product_upstreams.keys() )
+        produpkeykeys = set( self.product_upstream_keys.keys() )
         prodprovprockeys =set( self.product_provenance_processes.keys() )
-        if any( prodprockeys != x for x in ( prdclskeys, prodprovprockeys, prodclskeys ) ):
+        if any( prodprockeys != x for x in ( prodclskeys, prodprovprockeys, prodclskeys, produpkeykeys ) ):
             strio = io.StringIO()
             strio.write( f"{self.__class__.__name__} is ill-defined." )
             for other, otherset in zip( [ 'product_classes', 'product_upstreams', 'product_provenance_processes' ],
@@ -378,13 +385,24 @@ class Pipeline( ProcessObject ):
             SCLogger.exception( strio.getvalue())
             raise RuntimeError( strio.getvalue() )
 
+        def _get_recursed_upstreams( k ):
+            recur_upstrs = []
+            if k in self.starting_products.keys():
+                return recur_upstrs
+            for upstr in self.product_upstreams[ k ]:
+                recur_upstrs.extend( _get_recursed_upstreams( upstr ) )
+                recur_upstrs.append( upstr )
+            return recur_upstrs
+
+        self.recursed_upstreams = { k: _get_recursed_upstreams(k) for k in self.product_upstreams.keys() }
+
         # Initialize our internal tracking of provenaces (values are all Provenance)
         # This is preliminary... we're later going to validate this against the provtag
         # and/or the provenances of all the process objects.
         self.provenances = { k: Provenance.get(v, pgdb=_pgdb) for k, v in _preset_provenances }
 
         # Populate any passed data products (and update self.provenances with them)
-        self.products = {}
+        self.products = { k: NotDefined for k in self.product_classes.keys() }
         for k, cls in self.product_classes.items():
             if k in kwargs:
                 obj = UUIDMixin.get_object( kwargs[k], cls, no_none=True, pgdb=_pgdb )
@@ -426,21 +444,25 @@ class Pipeline( ProcessObject ):
                         starting_prov = Provenance.get( starting_prov, must_exist=True, pgdb=_pgdb )
                     self.starting_prov = { self.starting_products[0] : starting_prov }
                 else:
-                    given = set( starting_prov.keys() )
-                    needed = set( self.starting_products.keys() )
-                    if given != needed:
-                        strio = io.StringIO()
-                        strio.write( "Didn't give the right set of starting provenances." )
-                        if len( needed - given ) > 0:
-                            strio.write( f"  Missing: {needed-given}" )
-                        if len( given - needed ) > 0:
-                            strio.write( f"  Unknown: {given-needed}" )
-                        raise ValueError( strio.getvalue() )
-                    self.starting_prov = { k: v if isinstance( v, Provenance )
-                                           else Provenance.get(v, must_exist=True, pgdb=_pgdb)
-                                           for k, v in starting_prov.items() }
+                    raise TypeError( f"Must a Provenance, Provenance id, or a dict of starting product: "
+                                     f"Provenance or Provenance id, not a {type(starting_prov)}" )
+            else:
+                given = set( starting_prov.keys() )
+                needed = set( self.starting_products.keys() )
+                if given != needed:
+                    strio = io.StringIO()
+                    strio.write( "Didn't give the right set of starting provenances." )
+                    if len( needed - given ) > 0:
+                        strio.write( f"  Missing: {needed-given}" )
+                    if len( given - needed ) > 0:
+                        strio.write( f"  Unknown: {given-needed}" )
+                    raise ValueError( strio.getvalue() )
+                self.starting_prov = { k: v if isinstance( v, Provenance )
+                                       else Provenance.get(v, must_exist=True, pgdb=_pgdb)
+                                       for k, v in starting_prov.items() }
 
         # Read existing provenancs and do a consistency check.
+        existingprovs = None
         if provtag is not None:
             existingprovs = self.read_existing_provenances( provtag,
                                                             match_code_version=match_code_version,
@@ -486,20 +508,46 @@ class Pipeline( ProcessObject ):
         self.process_objects = { process: cls( pipeline=self, process_name=process )
                                  for process, cls in self.process_classes }
 
-        # Fill out the products array
-        for product in self.product_classes.keys():
-            if product not in self.products:
-                self.products[ product ] = None
-
-
         # Create provenances, make sure they're consistent with anything we already have
-        for proc, mess in self.process_products():
-            if proc in 
-            
+        mismatches = []
+        failedcreations = []
+        for process, procobj in self.process_objects.items():
+            try:
+                pars = procobj.get_critical_parameters()
+                upstreams = [ self.provenances[k] for k in self.product_upstreams[process] ]
+                cvid = None
+                if ( read_pars_from_prov and ( process in self.provenances ) ):
+                    # Special case: if we read parameters from existing provenances,
+                    #   then we should set the existing code_version_id.  (Handling
+                    #   of match_code_version=True will have already happened above.)
+                    cvid = self.provenances[ process ].code_version_id
+                prov = Provenance( process=process, upstreams=upstreams, parameters=pars, cvid=cvid )
+                if process in self.provenances:
+                    if prov.id != self.provenances[process].id:
+                        mismatches.append( ( process, prov.id ) )
+                    else:
+                        self.provenances[ process ] = prov
+            except Exception as ex:
+                SCLogger.exception( f"Exception creating provenance for {process}" )
+                failedcreations.append( ( process, ex ) )
+
+        if ( len(mismatches) > 0 ) or ( len(failedcreations) > 0 ):
+            nlsp = "\n    "
+            strio = io.StringIO()
+            strio.write( f"Error creating provenances for pipeline {self._name}:\n" )
+            if len(failedcreations) > 0:
+                strio.write( f"  Exceptions creating provenances for {','.join(x[0] for x in failedcreations)}\n" )
+            if len( mismatches ) > 0:
+                mess = [ f'For {x[0]}, determined {x[1]}, already had {self.provenances[x[0]].id}' for x in mismatches ]
+                strio.write( f"  Mismatches:{nlsp}{nlsp.join(mess)}\n" )
+            SCLogger.error( strio.getvalue() )
+            raise RuntimeError( strio.getvalue() )
+
+        # ... are we done?  I think we're done.  That was brobdingnagian.
 
 
     # ======================================================================
-    
+
     def copy( self, deep=True, keep_status=True, keep_products=True, deep_copy_products=False,
               _additional_simple_props=[], _additional_deep_props=[], _additional_status_props=[],
               **kwargs ):
@@ -525,7 +573,7 @@ class Pipeline( ProcessObject ):
 
         if keep_status:
             deep_props.extend( status_props )
-        
+
         pip = self.__class__( provtag=self.provtag, pars=self.pars.to_dict( critical=False, hidden=True ),
                               _ok_to_instantiate=True, **kwargs )
 
@@ -539,7 +587,7 @@ class Pipeline( ProcessObject ):
             for prop in deep_props:
                 setattr( pip, prop, getattr( self, prop ) )
 
-        if keep_products
+        if keep_products:
             if deep_copy_products:
                 raise NotImplementedError( "We need to evaluate all of our code and make sure we really "
                                            "know how to make deep copies of all our classes." )
@@ -552,8 +600,33 @@ class Pipeline( ProcessObject ):
 
     # ======================================================================
 
-    def get_product( self, product, do_not_load=False, always_load=False, pgdb=None ):
-        if ( not always_load ) and ( self.products[ product ] is not None ):
+    def validate_product_upstreams( self ):
+        errors = []
+        for prod, obj in self.products:
+            if ( obj == NotDefined ) or ( obj is None ):
+                continue
+            for upstrprod in self.product_upstreams( prod ):
+                if self.products[ upstrprod ] is None:
+                    errors.append( f"{prod} has upstream {upstrprod}, but {upstrprod} is None" )
+                if self.products[ upstrprod ] != NotDefined:
+                    upstrattr = ( self.product_upstream_keys[prod][upstrprod]
+                                  if ( ( prod in self.product_upstream_keys ) and
+                                       ( upstrprod in self.product_upstream_keys[prod] ) )
+                                  else f"{upstrprod}_id" )
+                    upstrid = getattr( self.products[ prod ], upstrattr )
+                    if self.products[ upstrprod ].id != upstrid:
+                        errors.append( f"{prod} has {upstrattr} {upstrid}, but {upstrprod} "
+                                       f"has id {self.products[upstrprod].id}" )
+
+        if len( errors ) > 0:
+            nlss = "\nss"
+            raise RuntimeError( f"Inconsistent data products:"
+                                f"{nlss}{nlss.join(errors)}" )
+
+    # ======================================================================
+
+    def get_product( self, product, do_not_load=False, always_load=False, validate=True, pgdb=None ):
+        if ( not always_load ) and ( self.products[ product ] != NotDefined ):
             return self.products[ product ]
 
         if do_not_load:
@@ -570,7 +643,7 @@ class Pipeline( ProcessObject ):
             else:
                 upstrs = {}
                 for produp in self.product_upstreams[ product ]:
-                    upstrs[produp] = self.get_product( produp, do_not_load=do_not_load,
+                    upstrs[produp] = self.get_product( produp, do_not_load=do_not_load, validate=False,
                                                        always_load=always_load, pgdb=pgdb )
                 if any( v is None for v in upstrs.values() ):
                     self.products[ product ] = None
@@ -593,12 +666,19 @@ class Pipeline( ProcessObject ):
                         else:
                             self.products[ product ] = self.product_clases[product].create( **(rows[0]))
 
+        if validate:
+            try:
+                self.validate_product_upstreams()
+            except Exception:
+                self.products[ product ] = None
+                raise
+
         return self.products[ product ]
 
 
     # ======================================================================
 
-    def set_product( self, product, value ):
+    def set_product( self, product, value, get_upstreams=False, replace=True, pgdb=None ):
         if not isinstance( value, self.product_classes[ product ] ):
             raise TypeError( f"{product} must be a {self.product_classes[product].__name__}, not a {type(value)}" )
 
@@ -610,8 +690,16 @@ class Pipeline( ProcessObject ):
         if product in self._product_validators():
             self._product_validators[product]( value )
 
+        if get_upstreams:
+            raise NotImplementedError( "OMG rob do this")
+
+
+
+
         else:
-            if self.product_upstreams[ product ] != NotDefined:
+            if ( ( product not in self.starting_products.keys() ) and
+                 ( self.product_upstreams[ product ] != NotDefined )
+                ):
                 for upstr in self.product_upstrems[ product ]:
                     if self.products[ upstr ] is None:
                         raise RuntimeError( f"Can't set {product}, need {upstr} to be set first." )
@@ -699,6 +787,25 @@ class Pipeline( ProcessObject ):
 
     # ======================================================================
 
+    def warning( self, warning ):
+        """Print a warning and append to the pipeline's list of warnings.
+
+        Process objects should call this method of their pipeline if
+        they want warnings to be recorded in the pipeline.  (If they
+        don't, they can use SCLogger.warning as usual.)
+
+        """
+        SCLogger.warning( warning )
+        self.warnings.append( warning )
+
+    def warn( self, warning ):
+        self.warn( warning )
+
+    # ======================================================================
+
+    def __call__( self, *args, **kwargs):
+        self.run( *args, **kwargs )
+
     def run( self, *args, save=NotDefined, save_after_each_step=NotDefined, save_after_steps=NotDefined,
              run_even_if_exceptions=False, reset_exceptions=False,
              continue_on_exception=False, save_on_exception=False,
@@ -707,7 +814,7 @@ class Pipeline( ProcessObject ):
         """The default run method is probably not good enough; subclasses should override.
 
         Returns True if the pipeline ran without (new) exceptions, False otherwise.
-        
+
         """
 
         if len( self.exceptions ) > 0:
@@ -719,7 +826,7 @@ class Pipeline( ProcessObject ):
 
         if reset_exceptions:
             self.exceptions = []
-        
+
         if save == NotDefined:
             if hasattr( self.pars, "save" ):
                 save = self.pars.save
@@ -763,11 +870,11 @@ class Pipeline( ProcessObject ):
         if save and ( not just_saved ):
             do_save = True
             if had_exception:
-                if not save_on_exceptions:
-                    SClogger.warning( f"Not saving at end of pipeline run due to exceptions." )
+                if not save_on_exception:
+                    SCLogger.warning( "Not saving at end of pipeline run due to exceptions." )
                     do_save = False
                 else:
-                    SCLogger.warning( f"Saving at end of pipeline run even though there were exceptions." )
+                    SCLogger.warning( "Saving at end of pipeline run even though there were exceptions." )
 
             if do_save:
                 self.save_and_commit()

@@ -173,7 +173,7 @@ class SourceListFormatConverter( EnumConverter ):
     _dict_inverse = None
 
 
-class BitFieldConverter():
+class BitFieldConverter:
     """Base class for converting bitfields."""
 
     # Max number of bits.  To avoid issues with signed integers, always make this
@@ -188,7 +188,7 @@ class BitFieldConverter():
     @classproperty
     def dict( cls ):  # noqa: N805
         return cls._dict
-    
+
     @classproperty
     def dict_inverse( cls ):  # noqa: N805
         if cls._dict_inverse is None:
@@ -199,9 +199,9 @@ class BitFieldConverter():
     def to_bitmask( cls, val ):
         if isinstance( val, numbers.Integral ):
             if val >= cls._nbits:
-                raise ValueError( f"{dls.__name__} can only handle {cls._nbits} bits" )
+                raise ValueError( f"{cls.__name__} can only handle {cls._nbits} bits" )
             bitmask = 1 << val
-        
+
         elif isinstance( val, str ):
             bitmask = 0
             unknown = []
@@ -222,16 +222,16 @@ class BitFieldConverter():
 
         else:
             raise TypeError( f"to_bitmask requires int, str, or list of int or str, not {type(val)}" )
-                
+
         return bitmask
 
     @classmethod
     def to_bit( cls, val ):
-        return self.dict_inverse[ val ]
-    
+        return cls.dict_inverse[ val ]
+
     @classmethod
     def bit_to_string( cls, val ):
-        return self._dict[ val ]
+        return cls._dict[ val ]
 
     @classmethod
     def bitmask_to_strings( cls, val, as_list=False ):
@@ -239,12 +239,13 @@ class BitFieldConverter():
             raise TypeError( "bitmask must be an integer" )
         if val >= 1 << cls._nbits:
             raise ValueError( f"{cls.__name__} can only handle {cls._nbits} bits" )
-        
-        strs = [ text for bit, text in self._dict.items() if val | ( 1 << bit ) ]
+
+        strs = [ text for bit, text in cls._dict.items() if val | ( 1 << bit ) ]
         if as_list:
             return strs
         else:
             return ",".join( strs )
+
 
 class ImageTypeConverter( EnumConverter ):
     _dict = {
@@ -408,14 +409,14 @@ class CalibratorSetIsImageBits( BitFieldConverter ):
               4: 'fringe',
               5: 'illumination'
              }
-    
+
 
 
 def bitflag_to_string(value, dictionary):
     """Convert 64-bit bitflag into a comma separated string.
 
     DEPRECATE THIS in favroof BitFieldConverter
-    
+
     Takes a 64-bit integer bit-flag and converts it to a comma separated
     string, using the given dictionary.  If any of the bits are not
     recognized, will raise a ValueError.
@@ -683,11 +684,13 @@ flag_image_bits = {
 }
 flag_image_bits_inverse = { EnumConverter.c(v):k for k, v in flag_image_bits.items() }
 
+
 class BitFlagConverter( EnumConverter ):
     _dict = flag_image_bits
     _allowed_values = flag_image_bits
     _dict_filtered = None
     _dict_inverse = None
+
 
 # the list of possible processing steps from a section of an exposure up to measurements, r/b scores, and report
 # Used by reports

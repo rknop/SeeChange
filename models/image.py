@@ -168,7 +168,7 @@ class Image(Base, UUIDMixin, HasProvenance, FileOnDiskMixin, SpatiallyIndexed, F
         index = True,
         doc = "Set of calibrator files used in preprocessing for this image if appropriate"
     )
-    
+
     parent_image_id = sa.Column(
         sa.ForeignKey( 'images._id', ondelete='SET NULL', name='images_parent_image_id_fkey' ),
         nullabel = True,

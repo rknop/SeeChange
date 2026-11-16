@@ -15,6 +15,13 @@ conductor:
 webap:
   webap_url: https://webap:8081/
 
+pipeline_for_tests:
+  extraction:
+    subconfigs:
+      extracgalactic:
+        poly_order: 2
+
+  
 pipeline:
   # Leave this at false until we update
   #   the datastore_factory.py fixture

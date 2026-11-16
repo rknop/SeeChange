@@ -71,7 +71,7 @@ class CodeVersion(Base, UUIDMixin):
         # The core processes of the pipeline
         'acquire_exposure': (0, 2, 0),
         'split_exposure': (0, 1, 0),
-        'secure_calbirators': (0, 1, 0),
+        'secure_calibrators': (0, 1, 0),
         'preprocessing': (0, 11, 0),
         'extraction': (0, 9, 0),
         'astrocal' : (0, 6, 0),

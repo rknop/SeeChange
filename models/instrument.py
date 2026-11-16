@@ -1616,10 +1616,10 @@ class Instrument:
 
         linearity_provid: str or None
           If given, the provenance id of linearity file to get.
-        
+
         fringe_provid: str or None
           If given, the provenance id of the fringe image to get.
-        
+
         nofetch: bool
           If True, will only search the database for an
           externally_supplied calibrator.  If False (default), will call

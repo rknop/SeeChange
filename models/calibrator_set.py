@@ -1,8 +1,15 @@
 import uuid
+import textwrap
 
 from psycopg import sql
 
-from models.base import PGDB, Base, UUIDMixin, HasProvenance
+import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import UUID as sqlUUID
+from sqlalchemy.ext.declarative import declared_attr
+
+from models.base import PGDB, Base, UUIDMixin, HasProvenance, SeeChangeBase
+from models.enums_and_bitflags import CalibratorSetIsImageBits
+from sqlalchemy.ext.hybrid import hybrid_property
 
 
 datafile_or_image_id = sa.Table(
@@ -34,7 +41,7 @@ class CalibratorSet( Base, UUIDMixin, HasProvenance ):
     things will break, horribly.
 
     """
-    
+
     __tablename__ = 'calibrator_sets'
 
     @declared_attr
@@ -44,7 +51,7 @@ class CalibratorSet( Base, UUIDMixin, HasProvenance ):
                                  'linearity_id', 'fringe_id', 'illumination_id', '_is_image' ),
         )
 
-    calibitmes = ( 'zero', 'dark', 'flat', 'linearity', 'fringe', 'illumination' )
+    calibitems = ( 'zero', 'dark', 'flat', 'linearity', 'fringe', 'illumination' )
 
     @property
     def id( self ):
@@ -54,46 +61,46 @@ class CalibratorSet( Base, UUIDMixin, HasProvenance ):
     @id.setter
     def id( self, val ):
         raise RuntimeError( "You cannot set the id of a CalibratorSet" )
-    
+
 
     zero_id = sa.Column(
         sqlUUID,
-        sa.ForeignKey( 'datafile_or_image_id', ondelete='RESTRICT', name='calibrator_set_zero_fkey' )
+        sa.ForeignKey( 'datafile_or_image_id', ondelete='RESTRICT', name='calibrator_set_zero_fkey' ),
         nullable=True,
         index=True
     )
 
     dark_id = sa.Column(
         sqlUUID,
-        sa.ForeignKey( 'datafile_or_image_id', ondelete='RESTRICT', name='calibrator_set_dark_fkey' )
+        sa.ForeignKey( 'datafile_or_image_id', ondelete='RESTRICT', name='calibrator_set_dark_fkey' ),
         nullable=True,
         index=True
     )
 
     flat_id = sa.Column(
         sqlUUID,
-        sa.ForeignKey( 'datafile_or_image_id', ondelete='RESTRICT', name='calibrator_set_flat_fkey' )
+        sa.ForeignKey( 'datafile_or_image_id', ondelete='RESTRICT', name='calibrator_set_flat_fkey' ),
         nullable=True,
         index=True
     )
 
     linearity_id = sa.Column(
         sqlUUID,
-        sa.ForeignKey( 'datafile_or_image_id', ondelete='RESTRICT', name='calibrator_set_linearity_fkey' )
+        sa.ForeignKey( 'datafile_or_image_id', ondelete='RESTRICT', name='calibrator_set_linearity_fkey' ),
         nullable=True,
         index=True
     )
 
     fringe_id = sa.Column(
         sqlUUID,
-        sa.ForeignKey( 'datafile_or_image_id', ondelete='RESTRICT', name='calibrator_set_fringe_fkey' )
+        sa.ForeignKey( 'datafile_or_image_id', ondelete='RESTRICT', name='calibrator_set_fringe_fkey' ),
         nullable=True,
         index=True
     )
 
     illumination_id = sa.Column(
         sqlUUID,
-        sa.ForeignKey( 'datafile_or_image_id', ondelete='RESTRICT', name='calibrator_set_illumination_fkey' )
+        sa.ForeignKey( 'datafile_or_image_id', ondelete='RESTRICT', name='calibrator_set_illumination_fkey' ),
         nullable=True,
         index=True
     )
@@ -110,12 +117,11 @@ class CalibratorSet( Base, UUIDMixin, HasProvenance ):
         if dfid is None:
             return None
 
-        isimage = CalibratorSetIsImageBits.to_bitmask( field )  self._is_image
+        isimage = CalibratorSetIsImageBits.to_bitmask( field ) & self._is_image
 
         with PGDB( dictcursor=True ) as pgdb:
             rows = pgdb.execute( sql.SQL( textwrap.dedent(
-
-    """\
+                """\
                 SELECT datafile_id, image_id
                 FROM datafile_or_image_id
                 WHERE _id={dfid}
@@ -123,11 +129,11 @@ class CalibratorSet( Base, UUIDMixin, HasProvenance ):
             ) ).format( dfid=dfid ) )
             if len(rows) > 1:
                 raise RuntimeError( "Database corruption in datafile_or_image_id, this should not happen." )
-            elif len(rows) = 0:
+            elif len(rows) == 0:
                 raise RuntimeError( "Failed to get datafile_or_image_id from database" )
             else:
-                if ( ( ( rows[0][1] is None ) and ( not isimage ) or
-                     ( ( rows[0][0] is None ) and isimage ) )
+                if ( ( ( rows[0][1] is None ) and ( not isimage ) ) or
+                     ( ( rows[0][0] is None ) and isimage )
                     ):
                     raise ValueError( f"Iconsistency error; {field} is{'' if isimage else ' not'} "
                                       f"supposed to be an image but is{' not' if isimage else ''}" )
@@ -326,14 +332,14 @@ class CalibratorSet( Base, UUIDMixin, HasProvenance ):
     def get_or_insert( self, pgdb=None ):
         """Either load the object id, or create all the necessary database tables.
 
-        With allof x_image_id and x_datafile_id set (where for any par
+        With all of x_image_id and x_datafile_id set (where for any par
         of x, at least one is None), and with self._is_image consistent
         with all that, put query the database to see if this is all
         already defined.  If so, set our _id field to the right thing.
         If not, insert all the necessary rows.
 
         """
-        
+
         with PGDB( pgdb ) as pgdb:
             try:
                 pgdb.execute( "LOCK TABLE datafile_or_image_id" )
@@ -342,26 +348,24 @@ class CalibratorSet( Base, UUIDMixin, HasProvenance ):
                 for calibitem in self.calibitems:
                     if CalibratorSetIsImageBits.to_bitmask( calibitem ) & self._is_image:
                         col = 'image_id'
-                        fileid = gettatr( self, "_{calibitem}_image_id" )
+                        fileid = getattr( self, "_{calibitem}_image_id" )
                     else:
                         col = 'datafile_id'
-                        fileid = gettatr( self, "_{calibitem}_datafile_id" )
+                        fileid = getattr( self, "_{calibitem}_datafile_id" )
 
-                    if fielid is not None:
+                    if fileid is not None:
                         q = sql.SQL( "SELECT _id, datafile_id, image_id FROM datafile_or_image_id "
                                      "WHERE {col}={itemid}"
-                                    ).format( col=col, itemid=itemid ) )
+                                    ).format( col=col, itemid=fileid )
                         rows = pgdb.execute( q )
                         if len(rows) > 1:
                             raise RuntimeError( "Database corruption in datafile_or_image_id, this should not happen." )
                         elif len(rows) == 1:
                             setattr( self, f"{calibitem}_id", rows[0][0] )
                         else:
-                            fileid = uuid.uuid4()
-                            insq = sql.SQL( "INSERT INTO datafile_id(_id,{field}) VALUES({myid},{itemid})"
-                                           ).format( field=field,
-                                                     myid=fileids[calibitem],
-                                                     itemid=itemid )
+                            myid = uuid.uuid4()
+                            insq = sql.SQL( "INSERT INTO datafile_id(_id,{col}) VALUES({myid},{fileid})"
+                                           ).format( col=col, myid=myid, fileid=fileid )
                             pgdb.execute( insq )
                             setattr( self, f"{calibitem}_id", fileid )
 
@@ -374,7 +378,7 @@ class CalibratorSet( Base, UUIDMixin, HasProvenance ):
                                                                         col=sql.Identifier(f'{calibitem}_id') )
                     else:
                         q += sql.SQL( "{where} {col}={val}"
-                                     ).format( where.sql.SQL(where), col=sql.Identifier(f'{calibitem}_id')
+                                     ).format( where.sql.SQL(where), col=sql.Identifier(f'{calibitem}_id'),
                                                val=itemid )
                     where = " AND"
 

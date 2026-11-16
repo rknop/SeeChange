@@ -15,8 +15,6 @@ from pipeline.detection import Detector
 from pipeline.astrocal import AstroCalibrator
 from pipeline.photocal import PhotCalibrator
 
-from util.util import NotDefined
-
 
 class ImageReductionPipeline( Pipeline ):
     _name = "image_reduction"
@@ -38,8 +36,7 @@ class ImageReductionPipeline( Pipeline ):
 
     # For processes that don't show up in the list, Pipeline will use
     #   the key from _process_products.
-    _product_provenance_processes = { 'exposure': NotDefined,
-                                      'bg': None,
+    _product_provenance_processes = { 'bg': None,
                                       'psf': None,
                                      }
 

@@ -5,7 +5,7 @@ import numpy as np
 
 import sep
 
-from models.base import SmartSession
+from models.base import PGDB
 from models.image import Image
 from models.datafile import DataFile
 from models.enums_and_bitflags import (
@@ -106,7 +106,7 @@ class ParsPreprocessor( Parameters ):
 class Preprocessor( ProcessObject ):
     _pars_class = ParsPreprocessor
     _process_name = 'preprocessing'
-    
+
     def __init__(self, **kwargs):
         """Create a preprocessor.
 
@@ -133,7 +133,7 @@ class Preprocessor( ProcessObject ):
         # Cached calibrator files
         self.setpfileids = {}
         self.stepfiles = {}
-        
+
 
     def preprocessing_done_bitfield( self ):
         strng = ','.join( self.pars.steps_required )
@@ -143,13 +143,13 @@ class Preprocessor( ProcessObject ):
     def run( self, pipeline ):
         """Run preprocessing.
 
-        Updates the image property of pipeline, and returns the IMage it set there.
+        Sets pipeline.products['image'] and also returns the value it set.
 
         """
 
         if not isinstance( pipeline, Pipeline ):
             raise TypeError( f"pipeline needs to be a Pipeline, not a {type(pipeline)}" )
-        
+
         self.has_recalculated = False
 
         made_image = False
@@ -167,19 +167,17 @@ class Preprocessor( ProcessObject ):
             self.instrument = pipeline.raw_image.instrument_object
 
             # check that all required steps can be done (or have been done) by the instrument:
-            known_steps = instrument.preprocessing_steps_available
-            known_steps += instrument.preprocessing_steps_done
+            known_steps = self.instrument.preprocessing_steps_available
+            known_steps += self.instrument.preprocessing_steps_done
             known_steps = set(known_steps)
             steps_to_do = set(self.pars.steps_required)
-            needed_steps = steps_to_do - set( instrument.preprocessing_steps_done )
+            needed_steps = steps_to_do - set( self.instrument.preprocessing_steps_done )
             if not steps_to_do.issubset(known_steps):
                 raise ValueError(
                     f'Missing some preprocessing steps {steps_to_do - known_steps} '
-                    f'for instrument {instrument.name}'
+                    f'for instrument {self.instrument.name}'
                 )
 
-            preprocparam = pipeline.preprocparam
-            
             # get the provenance for this step, using the current parameters:
             prov = pipeline.provenances[ self.process_name ]
 
@@ -211,7 +209,7 @@ class Preprocessor( ProcessObject ):
             image.data = raw_image.data.copy()
             image.weight = raw_image.weight.copy() if raw_image.weight is not None else None
             image.flags = raw_image.flags.copy() if raw_image.flags is not None else None
-            
+
             if image.preproc_bitflag is None:
                 image.preproc_bitflag = 0
 
@@ -220,9 +218,9 @@ class Preprocessor( ProcessObject ):
                 needed_steps = needed_steps.intersection( self.instrument.preprocessing_steps_by_type[ image.type ] )
 
             # Figure out if we skip any steps based on filter
-            filter_skips = self.instrument.preprocessing_step_skip_by_filter.get(baseobj.filter, [])
+            filter_skips = self.instrument.preprocessing_step_skip_by_filter.get(raw_image.filter, [])
             if not isinstance(filter_skips, list):
-                raise ValueError(f'Filter skips parameter for {baseobj.filter} must be a list')
+                raise ValueError(f'Filter skips parameter for {raw_image.filter} must be a list')
             filter_skips = set(filter_skips)
             needed_steps -= filter_skips
 
@@ -286,16 +284,18 @@ class Preprocessor( ProcessObject ):
                     SCLogger.debug(f"preprocessing: {step}")
                     stepfileid = None
                     # Acquire the calibration file
-                    if f'{step}_fileid' in kwargs:
-                        stepfileid = kwargs[ f'{step}_fileid' ]
-                    elif f'{step}_fileid' in preprocparam:
-                        stepfileid = preprocparam[ f'{step}_fileid' ]
-                    else:
-                        raise RuntimeError( f"Can't find calibration file for preprocessing step {step}" )
+                    if True:
+                        raise RuntimeError( "Rob fix this for calibratorset" )
+                    # if f'{step}_fileid' in kwargs:
+                    #     stepfileid = kwargs[ f'{step}_fileid' ]
+                    # elif f'{step}_fileid' in preprocparam:
+                    #     stepfileid = preprocparam[ f'{step}_fileid' ]
+                    # else:
+                    #     raise RuntimeError( f"Can't find calibration file for preprocessing step {step}" )
 
-                    if stepfileid is None:
-                        raise FileNotFoundError( f"Failed to find a {step} calibrator for filter "
-                                                 f"section {image.section_id}, filter {baseobj.filter}" )
+                    # if stepfileid is None:
+                    #     raise FileNotFoundError( f"Failed to find a {step} calibrator for filter "
+                    #                              f"section {image.section_id}, filter {raw_image.filter}" )
 
                     # Use the cached calibrator file for this step if it's the right one; otherwise, grab it
                     if ( stepfileid in self.stepfilesids ) and ( self.stepfilesids[step] == stepfileid ):
@@ -438,14 +438,10 @@ class Preprocessor( ProcessObject ):
             image.filepath = image.invent_filepath()
             SCLogger.debug( f"Done preprocessing {pathlib.Path(image.filepath).name}" )
 
-
-            # TODO : upstream bitflag from raw_image !!!!!
             if image._upstream_bitflag is None:
-                image._upstream_bitflag = 0
-            if image_was_from_exposure:
-                image._upstream_bitflag |= ds.exposure.bitflag
+                image._upstream_bitflag = pipeline.products['raw_image'].bitflag
 
-            pipeline.image = image
+            pipeline.set_product( 'image', image )
 
             if pipeline.trac_runtimes:
                 pipeline.runtimes['preprocessing'] = time.perf_counter() - t_start

@@ -1,11 +1,12 @@
-from models.instrument import Instrument
 from models.exposure import Exposure
 from models.image import Image
 
 from pipeline.processobject import ProcessObject
+from pipeline.parameters import Parameters
 from pipeline.pipeline import Pipeline
 
 import util.util
+from util.logger import SCLogger
 
 
 class ParsExposureSplitter( Parameters ):
@@ -49,7 +50,7 @@ class ParsExposureSplitter( Parameters ):
                           "True currently errors out." ),
             critical = True
         )
-        
+
         self._enforce_new_new_attrs = True
         self.override( kwargs )
 
@@ -63,7 +64,7 @@ class ExposureSplitter( ProcessObject ):
     Can either add to the image property of the passed pipeline, or
     return a whole bunch of new pipelines that each have a different
     image property for a different sensor section.
-    
+
     """
 
     def __init__( self, **kwargs ):
@@ -102,15 +103,15 @@ class ExposureSplitter( ProcessObject ):
            copied).
 
         """
-        
+
         if not isinstance( pipeline, Pipeline ):
             raise TypeError( f"pipeline needs to be a Pipeline, not a {type(pipeline)}")
 
-        if ( not hasattr( pipeline, exposure ) ) or ( not isinstance( pipeline.exposure, Exposure ) ):
-            raise RuntimeError( "pipeline must have an exposure property that's an Exposure" )
+        if ( 'exposure' not in pipeline.products ) or ( not isinstance( pipeline.products['exposure'], Exposure ) ):
+            raise RuntimeError( "pipeline must have Exposure in products['exposure']" )
 
         improp = 'raw_image' if raw else 'image'
-        
+
         if util.util.is_actual_iterable( section_id ):
             SCLogger.info( f"Exposure splitter exctrating {len(section_id)} images." )
             pips = [ pipeline.copy( deep=self.pars.deep_copy,
@@ -119,9 +120,7 @@ class ExposureSplitter( ProcessObject ):
                                     deep_copy_products=self.pars.deep_copy_procuts )
                      for i in section_id ]
             for secid, pip in zip( section_id, pips ):
-                try:
-                    pip.products[improp] = Image.from_exposure( pipeline.exposure, secid )
-                except:
+                pip.products[improp] = Image.from_exposure( pipeline.exposure, secid )
 
             return pips
 

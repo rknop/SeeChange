@@ -1,7 +1,9 @@
 from models.instrument import Instrument
 from models.provenance import Provenance
+from models.calibrator_set import CalibratorSet
 
 from pipeline.processobject import ProcessObject
+from pipeline.parameters import Parameters
 
 
 class ParsCalibratorSecurer( Parameters ):
@@ -14,7 +16,7 @@ class ParsCalibratorSecurer( Parameters ):
                       docstring='The name of the instrument.',
                       critical=True
                      )
-        
+
         self.add_par( name='calibset',
                       default='externally_supplied',
                       par_types=str,
@@ -29,7 +31,7 @@ class ParsCalibratorSecurer( Parameters ):
                           docstring=( f"The provenance id of valid {calibitem} images.  Should be None for "
                                       f"calibset{' or flattype' if calibitem=='flat' else ''} "
                                       f"externally_supplied.  Maybe None if you don't care which provenance "
-                                      f"of {calibitem} is found, as long as it's in the right calibset." )
+                                      f"of {calibitem} is found, as long as it's in the right calibset." ),
                           critical=True
                          )
 
@@ -37,12 +39,12 @@ class ParsCalibratorSecurer( Parameters ):
                           default=None,
                           par_types=(str, None ),
                           docstring=( f"Upon process object creation, if the {calibitem}_provenance_id parameter is "
-                                      f"None and this is not None, then use this (with {calibitem}_process} "
+                                      f"None and this is not None, then use this (with {calibitem}_process) "
                                       f"to fill in the {calibitem}_provenance_id parameter.  Should be None for "
                                       f"calibset{' or flattype' if calibitem=='flat' else ''} "
                                       f"externally_supplied.  May be None if you don't care which provenance "
                                       f"of {calibitem} is found, as long as it's in the right set. "
-                                      f"Ignored if {calibitem}_provenance_id is not None" )
+                                      f"Ignored if {calibitem}_provenance_id is not None" ),
                           critical=False
                          )
 
@@ -51,7 +53,7 @@ class ParsCalibratorSecurer( Parameters ):
                           par_types=(str, None),
                           docstring=(  f"process to use with {calibitem}_provtag.  Ignored if "
                                        f"{calibitem}_provenance_id is not None or if "
-                                       f"{calibitem}_provtag is None" )
+                                       f"{calibitem}_provtag is None" ),
                          )
 
 
@@ -71,9 +73,9 @@ class CalibratorSecurer( ProcessObject ):
     Most of the work is actually done inside Instrument and CalibratorSet.
 
     Will always insert rows into the database unless do_not_insert is passed to run().
-    
+
     """
-    
+
     _pars_class = ParsCalibratorSecurer
     _process_name = 'secure_calibrators'
 
@@ -91,7 +93,7 @@ class CalibratorSecurer( ProcessObject ):
                 if prov is None:
                     raise RuntimeError( f"Failed to find provenance with provtag {provtag} process {process}" )
                 setattr( self.pars, f'{calibitem}_provenance_id', prov.id )
-                
+
 
     def run( self, pipeline, do_not_insert=False ):
         if self.pars.instrument is None:
@@ -108,7 +110,7 @@ class CalibratorSecurer( ProcessObject ):
             pipeline.filter,
             pipeline.mjd,
             **provkwargs
-        )            
+        )
 
         calibset = CalibratorSet()
         for calibtype in ( 'zero', 'dark', 'linearity', 'flat', 'fringe', 'illumination' ):
@@ -121,4 +123,3 @@ class CalibratorSecurer( ProcessObject ):
 
         if not do_not_insert:
             calibset.get_or_insert()
-                    
