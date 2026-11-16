@@ -1039,9 +1039,7 @@ class Lightcurve:
 
         # Crop down the image list to only include images in filters we have refs for.
         self.imgs = [ i for i in self.imgs if i.filter in self.refs ]
-
         infomsg = ( f"Lightcurve doing dia forced photometry on {len(self.imgs)} images" )
-
         if self.pars.numprocs <= 1:
             SCLogger.info( f"{infomsg} sequentially in one process" )
             for i in range( len(self.imgs) ):
