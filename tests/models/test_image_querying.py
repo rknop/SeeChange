@@ -372,14 +372,14 @@ def test_find_images(ptf_reference_image_datastores, ptf_ref,
     with PGDB( dictcursor=True ) as pgdb:
         # ...right now taking advantage of the fact that there's
         #   only a single provenance of anything in the test db
-        rows =pgdb.execute( "SELECT i._id AS imgid, i.provenance_id AS improvid, i._type AS imgtyp,\n"
-                            "       i.lim_mag_estimate, i.zero_point_estimate,\n"
-                            "       w._id AS wcsid, w.provenance_id AS wcsprovid,\n"
-                            "       z._id AS zpid, z.provenance_id AS zpprovid\n"
-                            "FROM images i\n"
-                            "LEFT JOIN source_lists s ON s.image_id=i._id\n"
-                            "LEFT JOIN world_coordinates w ON w.sources_id=s._id\n"
-                            "LEFT JOIN zero_points z ON z.wcs_id=w._id" )
+        rows = pgdb.execute( "SELECT i._id AS imgid, i.provenance_id AS improvid, i._type AS imgtyp,\n"
+                             "       i.lim_mag_estimate, i.zero_point_estimate,\n"
+                             "       w._id AS wcsid, w.provenance_id AS wcsprovid,\n"
+                             "       z._id AS zpid, z.provenance_id AS zpprovid\n"
+                             "FROM images i\n"
+                             "LEFT JOIN source_lists s ON s.image_id=i._id\n"
+                             "LEFT JOIN world_coordinates w ON w.sources_id=s._id\n"
+                             "LEFT JOIN zero_points z ON z.wcs_id=w._id" )
         allimgs = { r['imgid']: r for r in rows }
         all_prov_ids = list( set( v['improvid'] for v in allimgs.values() ) )
         all_wcs_prov_ids = list( set( v['wcsprovid'] for v in allimgs.values() if v['wcsprovid'] is not None ) )
@@ -389,8 +389,8 @@ def test_find_images(ptf_reference_image_datastores, ptf_ref,
         total = len( sciimages )
         subsciimages = { k: v for k, v in allimgs.items() if v['improvid'] in provids }
         subtotal = len( subsciimages )
-        haszpesttotal = sum( 1 for v in allimgs.values() if v['zero_point_estimate'] is not None )
-        haslimmagtotal = sum( 1 for v in allimgs.values() if v['lim_mag_estimate'] is not None )
+        haszpesttotal = sum( 1 for v in sciimages.values() if v['zero_point_estimate'] is not None )
+        haslimmagtotal = sum( 1 for v in sciimages.values() if v['lim_mag_estimate'] is not None )
 
     # try finding them all
     all_images_w_calibs = Image.find_images( type=None, provenance_ids=all_prov_ids )

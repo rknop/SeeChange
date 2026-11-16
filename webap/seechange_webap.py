@@ -53,11 +53,14 @@ class MainPage( BaseView ):
 
 class ProvTags( BaseView ):
     def do_the_things( self ):
-        with PsycopgConnection() as conn:
-            cursor = conn.cursor()
-            cursor.execute( 'SELECT DISTINCT ON(tag) tag FROM provenance_tags ORDER BY tag' )
-            tags = [ row[0] for row in cursor.fetchall() ]
-            tags.sort( key=lambda x: ( '0' if x=='default' else 1 if x=='current' else 2, x ) )
+        with PGDB() as pgdb:
+            rows, _cols = pgdb.execute( 'SELECT DISTINCT ON(tag) tag FROM provenance_tags ORDER BY tag' )
+            tags = [ row[0] for row in rows ]
+            tags.sort( key=lambda x: ( ( 0 if x=='default'
+                                         else 1 if x=='current'
+                                         else 2 if x=='default_diaforcedphot'
+                                         else 3 )
+                                       , x ) )
             return { 'status': 'ok',
                      'provenance_tags': tags
                     }
@@ -80,17 +83,31 @@ class ProvTagInfo( BaseView ):
             columns = { cursor.description[i][0]: i for i in range(len(cursor.description)) }
             rows = cursor.fetchall()
 
-            provorder = { 'acquire_exposure': 0,
-                          'manual_reference': 0,
-                          'referencing': 1,
-                          'preprocessing': 2,
-                          'extraction': 3,
-                          'subtraction': 4,
-                          'detection': 5,
-                          'cutting': 6,
-                          'measuring': 7,
-                          'scoring': 8,
-                          'report': 9 }
+            provorder = { p: i for i, p in
+                          enumerate( [ 'positioning',
+                                       'acquire_exposure',
+                                       'flat_bias_builder',
+                                       'preprocessing',
+                                       'extraction',
+                                       'astrocal',
+                                       'photocal',
+                                       'Image.trim',
+                                       'Image.trim.sources',
+                                       'Image.trim.wcs',
+                                       'Image.trim.zp',
+                                       'manual_reference',
+                                       'coaddition',
+                                       'referencing',
+                                       'alignment',
+                                       'subtraction',
+                                       'detection',
+                                       'cutting',
+                                       'measuring',
+                                       'scoring',
+                                       'diaforcedphot',
+                                       'fakeinjection',
+                                       'report'
+                                      ] ) }
 
         def sorter( row ):
             if row[columns['process']] in provorder.keys():
@@ -1293,6 +1310,7 @@ class DiaForcedPhotClips( BaseView ):
 
         return bytes(barf)
 
+
 # ======================================================================
 
 class AllObjsWithDiaForcedPhot( BaseView ):
@@ -1311,7 +1329,7 @@ class AllObjsWithDiaForcedPhot( BaseView ):
             rows, cols = pgdb.execute( q )
 
         return { c: [ r[i] for r in rows ] for i, c in enumerate(cols) }
-    
+
 
 # =====================================================================
 # =====================================================================

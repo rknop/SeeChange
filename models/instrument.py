@@ -754,6 +754,10 @@ class Instrument:
         offset_y = 0
         return offset_x, offset_y
 
+
+    def get_section_radec_offset( self, section_id ):
+        raise NotImplementedError( f"{self.__class__.__name__} needs to implement get_section_racec_offset" )
+
     def get_section_filter_array_index(self, section_id):
         """Get the index in the filter array under which this section is placed.
 

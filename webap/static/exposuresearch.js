@@ -22,10 +22,10 @@ seechange.ExposureSearch = class
 
         rkWebUtil.wipeDiv( this.div );
 
-        hbox = rkWebUtil.elemaker( "div", this.div, { "classes": [ "hbox" ] } );
+        hbox = rkWebUtil.elemaker( "div", this.div, { "classes": [ "hbox", "grow0", "shrink0" ] } );
 
         vbox = rkWebUtil.elemaker( "div", hbox, { "classes": [ "vbox", "hmargin" ] } );
-
+        this.provtagwid = new seechange.ProvTagWid( this.context, "exposuresearch", { "parent": vbox } );
         p = rkWebUtil.elemaker( "p", vbox );
         button = rkWebUtil.button( p, "Show", function() { self.parse_widgets_and_show_exposures(); } );
         p.appendChild( document.createTextNode( " " ) );
@@ -40,7 +40,7 @@ seechange.ExposureSearch = class
                                                   "attributes": { "type": "text",
                                                                   "size": 20 } } );
         this.startdatewid.addEventListener( "blur", function(e) {
-            rkWebUtil.validateWidgetDateUTC( self.startdatewid );
+            rkWebUtil.validateWidgetDate( self.startdatewid );
         } );
         p.appendChild( document.createTextNode( " to " ) );
         this.enddatewid = rkWebUtil.elemaker( "input", p,
@@ -48,7 +48,7 @@ seechange.ExposureSearch = class
                                                 "attributes": { "type": "text",
                                                                 "size": 20 } } );
         this.enddatewid.addEventListener( "blur", function(e) {
-            rkWebUtil.validateWidgetDateUTC( self.enddatewid );
+            rkWebUtil.validateWidgetDate( self.enddatewid );
         } );
         rkWebUtil.elemaker( "br", p );
         p.appendChild( document.createTextNode( "    (YYYY-MM-DD [HH:MM] — leave blank for no limit)" ) );
@@ -69,8 +69,8 @@ seechange.ExposureSearch = class
         this.subdiv = rkWebUtil.elemaker( "div", this.div, { "id": "exposuresearchsubdiv",
                                                              "classes": [ "vbox", "grow1" ] } );
 
-        this.emptiabledivs = {};
         this.tabbed = new rkWebUtil.Tabbed( this.subdiv );
+        this.tabbed.div.id = 'exposuresearch_tabbed';
         // Supposedly javascript objects (treated as dictionaries) are
         //   ordered with integer keys first in numerical order,
         //   then string keys in insertion order, then symbol
@@ -88,11 +88,14 @@ seechange.ExposureSearch = class
                           "sources": "Detections",
                           "fakes": "Fakes"
                         };
+        this.emptiabledivs = {};
         for ( let tab in tabstoadd ) {
             let focused = ( tab=="exposurelist" ? true : false );
             this.emptiabledivs[tab] = new rkWebUtil.EmptiableDiv( "div", null,
                                                                   { "id": "exposuresearch_tab_" + tab,
-                                                                    "classes": [ "vbox", "grow1" ] } );
+                                                                    "classes": [ "vbox", "grow1" ],
+                                                                    "text": "(Nothing loaded)",
+                                                                    "textclasses": [ "loading" ] } );
             this.tabbed.addTab( tab, tabstoadd[tab], this.emptiabledivs[tab].div, focused );
         }
     }
@@ -126,7 +129,7 @@ seechange.ExposureSearch = class
             console.log( "Exception parsing dates: " + ex.toString() );
             return;
         }
-        provtag = this.context.provtag_wid.value;
+        provtag = this.provtagwid.value;
         if ( provtag == '<all>' ) provtag = null;
         projects = Array.from(this.project_wid.selectedOptions).map( ({ value }) => value );
         if ( projects.includes( '<all>' ) ) projects = null;
@@ -163,7 +166,7 @@ seechange.ExposureSearch = class
             }
         }
         this.tabbed.selectTab( whichtab );
-        
+
         this.context.connector.sendHttpRequest( endpoint + provtag,
                                                 { "startdate": startdate,
                                                   "enddate": enddate,
@@ -180,7 +183,7 @@ seechange.ExposureSearch = class
             return
         }
         this.exposurelist = new seechange.ExposureList( this.context, this, this.tabbed,
-                                                        this.tabbed.divs["exposurelist"],
+                                                        this.emptiabledivs["exposurelist"].div,
                                                         data["exposures"], data["startdate"], data["enddate"],
                                                         data["provenance_tag"], data["projects"] );
         this.exposurelist.render_page();

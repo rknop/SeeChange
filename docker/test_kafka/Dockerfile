@@ -1,4 +1,4 @@
-FROM apache/kafka:4.2.0
+FROM apache/kafka:4.4.0
 
 USER root
 

@@ -1329,7 +1329,8 @@ class CoaddPipeline:
             parses['astrocal'] = { 'solution_method': 'manually_specified' }
             upstream_steps['photocal'].append( 'extraction' )
 
-        self.datastore.make_prov_tree( parses, steps, upstream_steps=upstream_steps, starting_point=coadd_prov )
+        self.datastore.make_prov_tree( parses, steps, upstream_steps=upstream_steps, starting_point=coadd_prov,
+                                       pgdb=pgdb )
 
         return self.datastore.prov_tree
 

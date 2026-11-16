@@ -33,80 +33,58 @@ Database
 
 We use ``postgres`` as the database backend, which allows us to use the ``q3c`` extension for fast spatial queries, as well as types like JSONB for storing dictionaries.  A SeeChange instance must have a database server associated with it, and any running SeeChange code needs to be able to connect to the PostgreSQL port (5432) of that server.  If you're doing this for local development, see :doc:`development` for a self-contained docker environment that creates a throw-away database.  Alternatively, you can run PostgreSQL on your local system, or you can set up a server somewehre else you have access.
 
-Database models are defined using SQLAlchemy, and database migrations are tracked with Alembic.  Database communication is done using a combination of SQLALchmey and direct SQL using ``psycopg``.  The database communications is defined in ``models/base.py``, where we define a ``Base`` class for all database mapped objects.  Each class that inherits from ``Base`` can have columns mapped to object attributes.
+Database models are (currently, though this will hopefully change soon) defined using SQLAlchemy, and database migrations are tracked with Alembic.  Database communication is done using a combination of SQLALchmey and direct SQL using ``psycopg``.  The database communications is defined in ``models/base.py``, where we define a ``Base`` class for all database mapped objects.  Each class that inherits from ``Base`` can have columns mapped to object attributes.
 
 Unless you're writing one-off code that you expect to run by itself (i.e. not as part of a pipline that is mass-processing data), do not hold database connections open for a long time.  Sometimes you do want to have a connection open for several operations, either because they're linked, or because they're happening fast enough that the inefficiency of opening a new connection between the operations isn't worth it.  However, if code that runs in a pipeline designed to run many times concurrently hold open database connections for extended periods of time, we run the risk of exhausting database connection resources.  See :ref:`sqla-sessions` and :ref:`psycopg` below.
 
-Database communcation should usually be done inside ``with SmartSession(...) as session:`` or ``with PsycopgConnection(...) as conn:`` blocks, where these two functions are defined in ``models/base.py``.  See :ref:`sqla-sessions` and :ref:`psycopg` below.
+Database communcation should usually be done inside ``with SmartSession(...) as session:`` or ``with PGDB(...) as pgdb:`` blocks, where these two functions are defined in ``models/base.py``.  See :ref:`sqla-sessions` and :ref:`psycopg` below.
 
-Many of our basic database functions take either a SQLAlchemy ``Session`` object, or a psycopg ``connection`` object, as an optional argument.  If you are inside a ``with`` block that holds a database connection, pass that connection to the function, and the function will use the same session or connection that you're already using.  (Otherwise, the function will open a new connection.)  For example, see ``test.py::SeeChangeBase.insert()``.  (``SeeChangeBase`` is a class that most (all?) of our database model objects inherit from, so ``insert`` (and others) are defined for all models.)  Often, however, you will not want to open your own session, but just let these functions open sessions themselves.  This is usually the case when you are doing any non-trivial computation between database calls, as the overhead of establishing a new database connection will become small compared to the computation you're doing.
+Many of our basic database functions take either a SQLAlchemy ``Session`` object, a psycopg ``connection`` object, or a ``PGDB`` object as an optional argument.  If you are inside a ``with`` block that holds a database connection, pass that connection to the function, and the function will use the same session or connection that you're already using.  (Otherwise, the function will open a new connection.)  For example, see ``test.py::SeeChangeBase.insert()``.  (``SeeChangeBase`` is a class that most (all?) of our database model objects inherit from, so ``insert`` (and others) are defined for all models.)  Often, however, you will not want to open your own session, but just let these functions open sessions themselves.  This is usually the case when you are doing any non-trivial computation between database calls, as the overhead of establishing a new database connection will become small compared to the computation you're doing.
 
 .. _sqla-sessions:
 SQLAlchemy sessions
 -------------------
 
-While the SQLAlchemy syntactic sugar can, in simple cases, simplify the mapping of database rows to object properties, we aren't using the full infrastructure of SQLAlchemy.  The reason is that SQLAlchemy implicitly assumes you're going to keep a database connection open as long as an object that might want to communicate with the database exists.  This is fine for web applications whose total runtime is less than a second.  It's a total disaster for a pipeline that might run for a couple of minutes, and for which there may more than a hundred copies of that pipeline all running at once.  (And, no, connection pools does not solve the issue, but in fact makes it worse because each parallel process ends up keeping its own pool, so connections don't even get closed when you close them!)  Previously, use used SQLAlchemy relations, but those caused *constant* development nightmares and debugging tangles when we didn't hold open database connections; eventually, we refactored the code to get rid of those, and it was the cause of much relief.  However, we find that there are things you want to do in PostgreSQL that the SQLAlchemy intermediary makes very difficult, and for all but the simplest queries, the SQLAlchmy syntax is just as byzantine as SQL (and frustratingly different for somebody who already knows SQL).  What's more, whereas you might have some idea what you're doing with SQL, you can't really be sure what an SQLAlchmey construction is actually going to do with the database.  Sometimes, it's very frustrating to figure out how to get SQAlchemy to *actually close* conections on the backend in a reproducible manner, meaning we were stuck with lingering locks (which only appeared intermittently, to make debugging as hard as possible) that would have been trivial to deal with if we hadn't foolishly wedded ourselves to SQLAlchemy.  As such, at some point we may refactor the code to remove SQLAlchemy entirely (to more great relief)— see `Issue #516 <https://github.com/c3-time-domain/SeeChange/issues/516>`_.  For the most part, except for simplest things, when we write new code we use direct connections with `psycopg` (see :ref:`psycopg` below).
+While the SQLAlchemy syntactic sugar can, in simple cases, simplify the mapping of database rows to object properties, we aren't using the full infrastructure of SQLAlchemy.  The reason is that SQLAlchemy implicitly assumes you're going to keep a database connection open as long as an object that might want to communicate with the database exists.  This is fine for web applications whose total runtime is less than a second.  It's a total disaster for a pipeline that might run for a couple of minutes, and for which there may more than a hundred copies of that pipeline all running at once.  (And, no, connection pools does not solve the issue, but in fact makes it worse because each parallel process ends up keeping its own pool, so connections don't even get closed when you close them!)  Previously, use used SQLAlchemy relations, but those caused *constant* development nightmares and debugging tangles when we didn't hold open database connections; eventually, we refactored the code to get rid of those, and it was the cause of much relief.  However, we find that there are things you want to do in PostgreSQL that the SQLAlchemy intermediary makes very difficult, and for all but the simplest queries, the SQLAlchmy syntax is just as byzantine as SQL (and frustratingly different for somebody who already knows SQL).  What's more, whereas you might have some idea what you're doing with SQL, you can't really be sure what an SQLAlchmey construction is actually going to do with the database.  Even worse, it's very frustrating to figure out how to get SQAlchemy to *actually close* conections on the backend in a reproducible manner, meaning we were stuck with lingering locks (which only appeared intermittently, to make debugging as hard as possible) that would have been trivial to deal with if we hadn't foolishly wedded ourselves to SQLAlchemy.  As such, at some point we may refactor the code to remove SQLAlchemy entirely (to more great relief)— see `Issue #516 <https://github.com/c3-time-domain/SeeChange/issues/516>`_.  For the most part, except for simplest things, when we write new code we use direct connections with `psycopg` (see :ref:`psycopg` below).
 
-If you want to communicate with the databse using SQLAlchemy constructions, this section describes how to get a connection.
-
-The file ``models/base.py`` defines two SQLAlchemy session starting functions, ``Session()`` and ``SmartSession()``.  If you're using SQLAlchemy, we strongly urge developers to use ``SmartSession()``; see below.  To open a regular session, use the ``Session()`` function, and make sure to close it when you are done.  This is useful mainly for interactive use, and highly discouraged for using in the code base.  The session is a ``sqlalchemy.orm.session.Session`` object::
-
-  from models.base import Session
-  session = Session()
-  # do stuff with the session
-  obj = MappedObject()  # can be any of the models
-  session.add(obj)
-  session.commit()
-
-  # make sure to close at the end
-  session.close()
-
-The ``Session()`` function can also be used in a context manager, which will automatically close the session at the end of the block::
-
-  from models.base import Session
-  with Session() as session:
-      # do stuff with the session
-      obj = MappedObject()  # can be any of the models
-      session.add(obj)
-      session.commit()
-
-However, we encourage developers to use the ``SmartSession()`` function for such uses. The main difference is that a ``SmartSession`` accepts inputs that can be either another session object or None.  If the input is None, it will open a new session, which will close at the end of the context.  If the input given to it is a session object, it will not close it at the end of the context, rather it will depend on the external context that made the session to close it when done.
-
-This is particularly useful in nested functions::
-
-  from models.base import SmartSession
-
-  def my_function(session=None):
-      with SmartSession(session) as session:
-          # do stuff with the session
-          obj = MappedObject()  # can be any of the models
-          session.add(obj)
-          session.commit()
-
-  # call the function with a self-contained session
-  my_function()  # session opens and closes inside the function scope
-
-  # call the function with an externally created session
-  with SmartSession() as session:
-      my_function(session)
-      # session will be closed here, not in the function
-
-**Make sure not to hold open connections for a long time.**  In normal operation of the pipeline, many processes are running in parallel.  If they all hold connections open at once, they may exhaust database resources.  There is some overhead in creating a databse connection, so if you're going to do several fast operations in a row, do them within one connection.  But, if you're going to do substantial computations between two calls to the database, make sure to close the database connection in between.  This usually means exiting the ``with`` block that started the connection.  Additionally, be careful about passing a session nested functions that do substantial computation, as that will hold the database connection open throughout the running of the nested function.
+If you want to communicate with the databse using SQLAlchemy constructions... don't.  But if you do, **make sure not to hold open connections for a long time.**  In normal operation of the pipeline, many processes are running in parallel.  If they all hold connections open at once, they may exhaust database resources.  There is some overhead in creating a databse connection, so if you're going to do several fast operations in a row, do them within one connection.  But, if you're going to do substantial computations between two calls to the database, make sure to close the database connection in between.  This usually means exiting the ``with`` block that started the connection.  Additionally, be careful about passing a session nested functions that do substantial computation, as that will hold the database connection open throughout the running of the nested function.
 
 .. _psycopg:
 Psycopg connections
 -------------------
 
-While it's possible to do direct SQL with SQLAlchemy sessions, either with the session itself, or by (painfully) extracting the underlying database connection, if what you really need to do is direct SQL, you're probably better off with a simple psycopg connection.  If you are going to do anything that locks tables, you must do it this way.  Empirically, SQLAlchemy does not seem to actually close the underlying databse connection when you call the ``close`` method of a session, but rather markes it for closing sometime later during garbage collection.  The result is that if you lock a table using SQL passed to an SQLAlchemy session, most of the time it will work, but rarely the table will not unlock when you close the session (or exist the relevantg ``with`` block).  If you really need control over your database, use an actual database connection and save yourself the complication of another opininated layer between you and the database.
+For many reasons, we are moving away from SQLAlchemy.  Eventually we hope to refactor the pipeline to eliminate it altogether.  All future query code should be written using the ``PGDB`` class defined in ``models/base.py``.  A object of this class has a method ``execute``, which will send an SQL query to the database and return the rows in one of two formats.
 
-``models/base.py`` provides a function ``PsycopgConnection()`` that must be used as a context manager (i.e. in a ``with`` block).  It takes one optional argument, and returns a standard ``psycopg.connection`` object.  If that argument is ``None``, it opens a new connection to the databse, and then calls ``rollback`` and closes that connection when the context exits.  (This means that if you want any changes you made to presist, you must make sure to call ``commit`` on the connection.)  If that argument is an existing psycopg connection, it just immediately returns that, and does not automatically rollback or close it.  (In that case, whatever created the connection in the first place is responsible for doing that.)  This latter use is analgous to passing an existing SQLAlchemy session to ``SmartSession``, as described above.
+You should use ``PGDB`` objects in ``with`` blocks, as that will make sure to close the connection.  **Do not hold open connections.**  If you're going to send a bunch of queries all in a row, yes, it's more efficient to do them inside a single ``with`` block with a single connection to the database.  However, database connections are a finite resource, so code written that holds them open can cuase other parallel processes to crash.  (You *can* directly instantiate a ``PGDB`` object, but if you do, *make sure* to call it's ``close`` method as soon as you can.  It's much safer just to always use them in ``with`` blocks.)
 
-As a trivial example::
+For example::
 
-  with PsycopgConnection() as conn:
-      cursor = conn.cursor()
-      cursor.execute( "SELECT _id FROM images WHERE mjd>60000. AND Mjd<60001." )
-      foundids = [ row[0] for row in cursor.fetchall() ]
+   with PGDB() as pgdb:
+      rows, cols = pgdb.execute( "SELECT _id, process FROM provenances LIMIT 2' )
+      print( cols )
+      print( rows )
+
+You will see output something like::
+
+  ['_id', 'process']
+  [('4K5UWL7RHIRKMG52O7SI', 'acquire_exposure'), ('3QY5DWQGIV6OWR4PS4OQ', 'preprocessing')]
+
+You can give an optional argument ``dictcursor`` to ``PGDB`` to get a different output::
+
+   with PGDB( dictcursor=True ) as pgdb:
+      rows = pgdb.execute( "SELECT _id, process FROM provenances LIMIT 2' )
+      print( rows )
+
+You will see output something like::
+
+  [{'_id': '4K5UWL7RHIRKMG52O7SI', 'process': 'acquire_exposure'},
+  {'_id': '3QY5DWQGIV6OWR4PS4OQ', 'process': 'preprocessing'}]
+
+This list of dictionaries is ususally easier to use.  It's somewhat less efficient, because the column names are repeated for every row in the list, but unless queries are returning many rows, that's not significant.
+
+The ``PGDB`` constructor also takes an optional positional argument.  If you pass an existing ``PGDB`` object here, the database connection of that object will be reused for your new ``PGDB`` object.  If you make function calls that take a ``pgdb=`` argument inside your ``with`` block, pass your ``pgdb`` object to it!  Otherwise, a second connection to the database is likely to be opened inside the function.  (As always, remember not to hold database connections open for a long time.)
+
+Of course, when directly composing SQL queries in code, it's easy to open yourself to `SQL injection attacks <https://xkcd.com/327/>`_.  Be careful!  Anything that isn't hard coded— any variables you interpolate that you didn't hard-code elsewhere— should be processed through something in the ``psycopg`` library to ensure they're safe.  There are a couple of ways to do this.  If you're familiar with the ``cursor.execute`` function in ``psycopg``, then you know about putting in substitutions with ``%(name)s``.  You can pass a second argument to ``PGDB.execute()`` that has a dictionary of substitutions for interpolating these; it's just passed directly on to ``cursor.execute``.  More flexible is the `psycopg.sql <https://www.psycopg.org/psycopg3/docs/api/sql.html>`_ module.  (You can combine queries built with ``psycopg.sql.SQL`` and ``%(name)s`` parameters by just passing the ``psycopg.sql.SQL`` object as the first argument to ``PGDB.execute()``, and the substitution dictionary as the second.  However, if you use it right, it's possible to do complete safe query constructing just using ``psycopg.sql``.
 
 For a less trivial example, see ``models/provenance.py::ProvenanceTag.addtag()`` (which locks a table).
 
@@ -114,6 +92,8 @@ Defining mapped classes
 -----------------------
 
 (Users working with the code to analyze existing data can probably skip this section; this is necessary for developers who are adding to the pipeline code itself.)
+
+**We plan to move away from SQL Alchemy.**  Right now, if you want to define a new database table, this is how you have to do it, but this will change.
 
 The ``models`` folder contains a module for each database table, which defines a mapped class for that table.  Each mapped class inherits from the ``Base`` class defined in ``models/base.py``, and has a ``__tablename__`` attribute that defines the table name.
 

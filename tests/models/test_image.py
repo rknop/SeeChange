@@ -1,12 +1,12 @@
-import os
 import pytest
-import re
-import psutil
 import gc
 import hashlib
+import os
 import pathlib
-import uuid
+import psutil
+import re
 import time
+import uuid
 import warnings
 
 from psycopg import sql
@@ -1220,10 +1220,10 @@ def test_image_products_are_deleted(ptf_datastore, data_dir, archive):
     archive_files = []
     for obj in [ds.image, ds.psf, ds.sources, ds.wcs]:
         for file in obj.get_fullpath(as_list=True):
-            archive_file = file[len(obj.local_path)+1:]  # grap the end of the path only
-            archive_file = os.path.join(archive.test_folder_path, archive_file)  # prepend the archive path
-            assert os.path.isfile(file)
-            assert os.path.isfile(archive_file)
+            file = pathlib.Path( file )
+            archive_file = archive.test_folder_path / file.relative_to( obj.local_path )
+            assert file.is_file()
+            assert archive_file.is_file()
             local_files.append(file)
             archive_files.append(archive_file)
 
@@ -1232,10 +1232,10 @@ def test_image_products_are_deleted(ptf_datastore, data_dir, archive):
 
     # make sure the files are gone (including cascading down to things dependent on the image)
     for file in local_files:
-        assert not os.path.isfile(file)
+        assert not file.exists()
 
     for file in archive_files:
-        assert not os.path.isfile(file)
+        assert not file.exists()
 
 
 @pytest.mark.skip(reason="This test regularly fails, even when flaky is used. See Issue #263")
@@ -1386,6 +1386,51 @@ def test_badness_basic( sim_image_uncommitted, provenance_base ):
     #  will clean up all its downstreams.
 
 
+def test_get_sources( sim_lightcurve_reference ):
+    _ref, ds = sim_lightcurve_reference
+
+    src = ds.image.get_sources( provtag='sim_lightcurve' )
+    assert isinstance( src, SourceList )
+    assert src.id == ds.sources.id
+
+    src = ds.image.get_sources( provenance=ds.sources.provenance_id )
+    assert isinstance( src, SourceList )
+    assert src.id == ds.sources.id
+
+    src = ds.image.get_sources( provenance=Provenance.get( ds.sources.provenance_id ) )
+    assert isinstance( src, SourceList )
+    assert src.id == ds.sources.id
+
+    src = ds.image.get_sources( provenance=uuid.uuid4() )
+    assert src is None
+
+    # TODO : more test cases that return None (where the provenance exists but the SourceList does not)
+
+    with pytest.raises( RuntimeError, match="Could not find provenance for provtag sim_lightcurve process foo" ):
+        src = ds.image.get_sources( provtag='sim_lightcurve', process='foo' )
+
+    with pytest.raises( RuntimeError, match="Could not find provenance for provtag foo process extraction" ):
+        src = ds.image.get_sources( provtag='foo' )
+
+
+def test_get_sources_wcs_zp( sim_lightcurve_reference ):
+    _ref, ds = sim_lightcurve_reference
+
+    products = ds.image.get_sources_wcs_zp( provtag='sim_lightcurve' )
+    assert isinstance( products['sources'], SourceList )
+    assert products['sources'].id == ds.sources.id
+    assert isinstance( products['bg'], Background )
+    assert products['bg'].id == ds.bg.id
+    assert isinstance( products['psf'], PSF )
+    assert products['psf'].id == ds.psf.id
+    assert isinstance( products['wcs'], WorldCoordinates )
+    assert products['wcs'].id == ds.wcs.id
+    assert isinstance( products['zp'], ZeroPoint )
+    assert products['zp'].id == ds.zp.id
+
+    # TODO MORE CASES
+
+
+# Image.trim is tested in test_psf.py::test_trim
 # def test_image_trim( sim_image1 ):
-#     import pdb; pdb.set_trace()
-#     pass
+#     assert False

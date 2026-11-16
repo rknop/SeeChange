@@ -23,7 +23,7 @@ from pipeline.top_level import Pipeline
 
 class ExposureProcessor:
     def __init__( self, instrument, identifier, numprocs, cluster_id,
-                  node_id, machine_name=None, onlychips=None,
+                  node_id, machine_name=None, onlychips=None, defective_chips=False,
                   through_step=None, ignore_known_exposures=False,
                   nosave=False, do_not_load=False, start_step=None,
                   provtag=False, worker_log_level=logging.WARNING ):
@@ -101,6 +101,7 @@ class ExposureProcessor:
         self.machine_name = machine_name
         self.numprocs = numprocs
         self.onlychips = onlychips
+        self.defective_chips = defective_chips
         self.through_step = through_step
         self.ignore_known_exposures = ignore_known_exposures
         self.nosave = nosave
@@ -402,11 +403,13 @@ class ExposureProcessor:
                                       't': datetime.datetime.now( tz=datetime.UTC ) } )
                     conn.commit()
 
-            chips = [ c.identifier for c in self.instrument.fetch_sections().values() if not c.defective ]
+            chips = [ c.identifier for c in self.instrument.fetch_sections().values()
+                      if ( ( not c.defective ) or self.defective_chips ) ]
             if self.onlychips is not None:
                 chips = [ c for c in chips if c in self.onlychips ]
                 if set(chips) != set(self.onlychips):
-                    SCLogger.warning( f"Asked for some chips that are not non-defective known chips; "
+                    SCLogger.warning( f"Asked for some chips that are not "
+                                      f"{'non-defective ' if not self.defective_chips else ''}known chips; "
                                       f"will not be doing: {set(self.onlychips)-set(chips)}" )
             self.results = {}
 
@@ -519,6 +522,8 @@ to start it.
                          help=( "Just secure the exposure and load it into the database, don't process it. "
                                 "Many other options, e.g. --through-step, are ignored if this is set." ) )
     parser.add_argument( '--chips', default=None, nargs='+', help="Only do these sensor sections (defaults to all)" )
+    parser.add_argument( '--defective-chips', action='store_true',
+                         help="Run defective chips too.  This may fail horribly." )
     parser.add_argument( '--cont', '--continue', default=False, action='store_true',
                          help="If exposure already exists, try continuing it." )
     parser.add_argument( '-d', '--delete', default=False, action='store_true',
@@ -567,6 +572,7 @@ to start it.
     posargs = [ args.instrument, args.identifier, numprocs, args.cluster_id, args.node ]
     kwargs = { 'machine_name': args.machine,
                'onlychips': args.chips,
+               'defective_chips': args.defective_chips,
                'through_step': args.through_step,
                'ignore_known_exposures': args.ignore_known_exposures,
                'nosave': args.do_not_save,

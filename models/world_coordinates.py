@@ -21,6 +21,7 @@ from models.image import Image
 from models.source_list import SourceList
 from improc.tools import strip_wcs_keywords
 from util.logger import SCLogger
+from util.util import validate_integers
 
 
 class WorldCoordinates(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness, SpatiallyIndexed, FourCornersWithGood ):
@@ -188,6 +189,7 @@ class WorldCoordinates(Base, UUIDMixin, FileOnDiskMixin, HasBitFlagBadness, Spat
 
 
     def trim( self, x0, x1, y0, y1 ):
+        x0, x1, y0, y1 = validate_integers( [ x0, x1, y0, y1 ] , return_list=True )
         newwcs = WorldCoordinates()
         newwcs.wcs = self.wcs[ y0:y1, x0:x1 ]
         return newwcs

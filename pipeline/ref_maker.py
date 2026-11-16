@@ -1086,10 +1086,13 @@ class RefMaker:
 
         """
 
+        SCLogger.debug( "Making refset if necessary" )
         self.make_refset()
+        SCLogger.debug( "Parsing runtime arguments" )
         self.parse_arguments( *args, **kwargs )
 
         # look for the reference at the given location in the sky (via ra/dec or target/section_id)
+        SCLogger.debug( "Looking for existing refrences..." )
         refs, _ = Reference.get_references(
             minra=self.minra,
             maxra=self.maxra,
@@ -1107,18 +1110,22 @@ class RefMaker:
 
         # if found a reference, can skip the next part of the code!
         if len(refs) == 1:
+            SCLogger.debug( "...found existing reference, returning it." )
             return refs[0]
         elif len(refs) > 1:
             raise RuntimeError( f'Found multiple references with the same provenance '
                                 f'{self.ref_prov.id} and location!' )
 
         if do_not_build and ( not identify_even_if_not_building ):
+            SCLogger.debug( "...no refernce found, returning None." )
             return None
 
         ############### no reference found, need to build one! ################
 
+        SCLogger.debug( "No reference found, identifying images to build from." )
         images, match_pos, match_count = self.choose_reference_images_to_coadd( _do_not_parse_arguments=True )
         if images is None:
+            SCLogger.debug( "Could not find images to build a reference from returning None." )
             return None
 
         # Sort the images and create data stores for all of them
@@ -1142,6 +1149,7 @@ class RefMaker:
                                                     srcprov.process: [ improv.process ],
                                                     wcsprov.process: [ srcprov.process ],
                                                     zpprov.process: [ wcsprov.process ] } )
+        SCLogger.debug( "Loading images, sources, backgrounds, psfs, wcses, and zps for component images." )
         for im in images:
             inst = im.instrument
             if inst != self.pars.instrument:
@@ -1179,6 +1187,7 @@ class RefMaker:
             SCLogger.debug( f"Combining images to make ref:{nlsp}"
                             f"{nlsp.join( d.image.filepath for d in dses )}" )
 
+        SCLogger.debug( "Coadding." )
         alignment_target_datastore = None
         alignment_wcs = None
         if self._coadd_pipeline.coadder.pars.alignment_index == 'other':
@@ -1279,9 +1288,11 @@ class RefMaker:
         )
 
         if self.pars.save_new_refs:
+            SCLogger.debug( "Saving new reference to database." )
             coadd_ds.save_and_commit()
             ref.insert()
 
+        SCLogger.debug( "Returning reference." )
         return ref
 
 

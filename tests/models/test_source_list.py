@@ -411,3 +411,7 @@ def test_free( decam_datastore ):
     #   release any memory.  Further thought required.
     # assert ( origmem.rss - freemem.rss ) > ( 64 * 1024 * 1024 )
     # assert ( origmem.rss - freemem.rss ) > ( 30 * 1024 * 1024 )
+
+# SourceList.trim is tested in test_psf.py::test-trim
+# def test_sources_trim( sim_image1 ):
+#     assert False

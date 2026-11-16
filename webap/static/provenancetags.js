@@ -20,9 +20,9 @@ seechange.ProvenanceTags = class
         rkWebUtil.wipeDiv( this.div );
         p = rkWebUtil.elemaker( "p", this.div, );
         rkWebUtil.button( p, "Show", () => { self.show_provtag(); } );
-        p.appendChild( document.createTextNode( " Provenance Tag: " ) );
-        this.provtags = rkWebUtil.elemaker( "select", p, { 'id': 'provtaglistwid'  } );
-        this.context.connector.sendHttpRequest( "provtags", {}, (data) => { self.populate_provtag_list(data) } );
+        rkWebUtil.text( p, " provenance tag: " );
+        this.provtagwid = new seechange.ProvTagWid( this.context, 'provenancetags_provtagwid',
+                                                    { 'container': p } );
 
         hbox = rkWebUtil.elemaker( "div", this.div, { "classes": [ "hbox" ] } )
         this.provtagdiv = rkWebUtil.elemaker( "div", hbox, { "id": "provenancetaginfodiv",
@@ -31,23 +31,13 @@ seechange.ProvenanceTags = class
                                                               "classes": [ "mmargin"] } );
     };
 
-
-    populate_provtag_list( data )
-    {
-        rkWebUtil.wipeDiv( self.provtags );
-        for ( let provtag of data.provenance_tags ) {
-            rkWebUtil.elemaker( "option", this.provtags, { "text": provtag, "attributes": { "value": provtag } } );
-        }
-    };
-
-
     show_provtag()
     {
         let self = this;
-        let provtag = this.provtags.value;
+        let provtag = this.provtagwid.value;
         rkWebUtil.wipeDiv( this.provtagdiv );
         rkWebUtil.elemaker( "p", this.provtagdiv, { "text": "Loading provenance tag " + provtag + "...",
-                                                    "classes": [ "warning", "bold", "italic" ] } );
+                                                    "classes": [ "loading" ] } );
         this.context.connector.sendHttpRequest( "provtaginfo/" + provtag, {},
                                                 (data) => { self.actually_show_provtag(data) } );
     };
@@ -84,7 +74,7 @@ seechange.ProvenanceTags = class
         let self = this;
         rkWebUtil.wipeDiv( this.provinfodiv );
         rkWebUtil.elemaker( "p", this.provinfodiv, { "text": "Loading provenance " + provid + "...",
-                                                     "classes": [ "warning", "bold", "italic" ] } );
+                                                     "classes": [ "loading" ] } );
         this.context.connector.sendHttpRequest( "/provenanceinfo/" + provid, {},
                                                 (data) => { self.actually_show_prov(data) } );
     };

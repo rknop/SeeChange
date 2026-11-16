@@ -825,6 +825,28 @@ class ObjectPosition( Base, UUIDMixin, SpatiallyIndexed ):
     ra_dec_cov = sa.Column( sa.REAL, nullable=True, doc="Covariance on RA/Dec if available" )
 
 
+class ObjectActivePeriod(Base, UUIDMixin):
+    """Manually (?) curated table of active periods for objects.
+
+    TODO : decide if this is something that should have a provenance.
+    If we are ever automatically populating it, then it should.
+
+    """
+
+    __tablename__ = "object_active_periods"
+
+    object_id = sa.Column(
+        sa.ForeignKey( 'objects._id', ondelete='CASCADE', name='object_active_period_object_id_fkey' ),
+        nullable=False,
+        index=True,
+        doc=( "ID of the object for which this is declared an active period" )
+    )
+
+    mjd0 = sa.Column( sa.REAL, nullable=False, doc="Beginning of active period." )
+    mjd1 = sa.Column( sa.REAL, nullable=False, doc="End of active period." )
+
+
+
 class ObjectCatalogMatch:
     """A mixin for tables that match to an external catalog and store an arcsec radius object_match_config.
 
@@ -1306,7 +1328,8 @@ class ObjectGaiaMatch( Base, ObjectCatalogMatch ):
                 maxdec = 90.
 
             gaiacat, fpath, _ = download_gaia_dr3( minra, maxra, mindec, maxdec, padding=0., minmag=None, maxmag=None )
-            gaiacat.filepath = fpath
+            # File is in tempdir so won't be "valid"
+            gaiacat.set_filepath( fpath, must_be_valid=False )
 
         sourceids = gaiacat.data[ 'GAIA_DR3_ID' ]
         starprobs = gaiacat.data[ 'STARPROB' ]

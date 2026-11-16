@@ -69,7 +69,7 @@
 # The base target defines the base system that all other images
 #   will be built on top of.
 
-FROM debian:trixie-20260518 AS base
+FROM debian:trixie-20261104 AS base
 
 LABEL maintainer="Rob Knop <raknop@lbl.gov>"
 
@@ -157,6 +157,7 @@ ENV PYTHONPATH=""
 
 # Some final setups for sanity
 ENV LESS=-XLRi
+ENV PAGER="less -XLRi"
 
 # ======================================================================
 # Use a multistage Docker file so that we can install the packages

@@ -20,38 +20,42 @@ seechange.DiaForcedPhotSearch = class
         let self = this;
         let hbox, box, vbox, p;
 
-        hbox = rkWebUtil.elemaker( "div", this.div, { "classes": [ "hbox", "padex", "xmargin", "mostlyborder",
-                                                                   "nogrow" ] } );
+        vbox = rkWebUtil.elemaker( "div", this.div, { "classes": [ "vbox", "padex", "xmargin",
+                                                                   "mostlyborder", "grow0" ] } );
+
+        this.provtagwid = new seechange.ProvTagWid( this.context, "diaforcedphot", { "parent": vbox } );
+
+        hbox = rkWebUtil.elemaker( "div", vbox, { "classes": [ "hbox", "grow0" ] } );
 
         vbox = rkWebUtil.elemaker( "div", hbox, { "classes": [ "vbox", "padex", "xmargin", "mostlyborder" ] } );
-        rkWebUtil.elemaker( "p", vbox, { "text": "Show lightcurve for object:" } );
-        p = rkWebUtil.elemaker( "p", vbox )
+        p = rkWebUtil.elemaker( "p", vbox, { "text": "Show lightcurve for object:" } );
+        rkWebUtil.elemaker( "br", p );
         this.ltcvid = rkWebUtil.elemaker( "input", p, { "id": "diaforcedphot_ltcvid",
                                                         "attributes": { "type": "text", "size": 36} } );
-        p = rkWebUtil.elemaker( "p", vbox )
+        rkWebUtil.elemaker( "br", p );
         rkWebUtil.button( p, "Show Object", () => { self.show_lightcurve_for_widget_object(); } );
 
         vbox = rkWebUtil.elemaker( "div", hbox, { "classes": [ "vbox", "padex", "xmargin", "mostlyborder" ] } );
         rkWebUtil.elemaker( "p", vbox, { "text": "(Searching not implemented yet; for now:)" } );
         rkWebUtil.button( vbox, "Show Them All!!!!!1!11!!1one11!!", (e) => { self.list_all_objs() } );
-        
+
         this.ltcv_parent_div = rkWebUtil.elemaker( "div", this.div, { "classes": [ "vbox", "grow1" ] } );
     }
 
     list_all_objs() {
         let self = this;
-        let provtag = this.context.provtag_wid.value;
+        let provtag = this.provtagwid.value;
         let promise = this.context.connector.httpPromise( "objswithdiaforcedphot/" + provtag );
         promise.then( (data) => { self.list_objects(data, provtag) } );
     }
 
     list_objects( data, provtag ) {
         let self = this;
-        
+
         rkWebUtil.wipeDiv( this.ltcv_parent_div );
         rkWebUtil.elemaker( "h3", this.ltcv_parent_div, ( "All objects in provtag " + provtag
                                                           + " with dia_forced_photometry" ) );
-        let tab = rkWebUtil.elemaker( "table", this.ltcv_parent_div, { "classes": [ "borderedcells", "selfstart" ] } );
+        let tab = rkWebUtil.elemaker( "table", this.ltcv_parent_div, { "classes": [ "selfstart" ] } );
         let tr = rkWebUtil.elemaker( "tr", tab );
         rkWebUtil.elemaker( "th", tr, "Name" );
         rkWebUtil.elemaker( "th", tr, "RA" );
@@ -66,8 +70,8 @@ seechange.DiaForcedPhotSearch = class
             rkWebUtil.elemaker( "td", tr, data.dec[i].toFixed(4) );
         }
     }
-        
-    
+
+
     show_lightcurve_for_widget_object()
     {
         let objid = this.ltcvid.value.trim();
@@ -75,13 +79,13 @@ seechange.DiaForcedPhotSearch = class
     }
 
     show_lightcurve_for_object( objid )
-    {        
+    {
         // TODO checkif we already have this in ltcv_divs
         let self = this;
-        let provtag = this.context.provtag_wid.value;
+        let provtag = this.provtagwid.value;
         rkWebUtil.wipeDiv( this.ltcv_parent_div );
         rkWebUtil.elemaker( "h3", this.ltcv_parent_div, { "text": "Loading...",
-                                                          "classes": [ "warning", "italic" ] } );
+                                                          "classes": [ "loading" ] } );
         this.context.connector.sendHttpRequest( "diaforcedphotforobj/" + objid + "/" + provtag, {},
                                                 (data) => { self.actually_show_lightcurve( data ); } );
     }
@@ -102,6 +106,8 @@ seechange.DiaForcedPhotSearch = class
 
 seechange.DiaForcedPhot = class
 {
+    static _n_diaforcedphots = 0;
+
     constructor( context, data, params )
     {
         this.context = context;
@@ -128,6 +134,8 @@ seechange.DiaForcedPhot = class
         this.clips_photid = null;
         this.imviewcache = {};
         this.imagepromise = {};
+        this.ordinal = seechange.DiaForcedPhot._n_diaforcedphots;
+        seechange.DiaForcedPhot._n_diaforcedphots += 1;
     }
 
     render()
@@ -160,7 +168,7 @@ seechange.DiaForcedPhot = class
         this.ltcvdiv.appendChild( this.svgplot.topdiv );
 
         this.apervspsf = rkWebUtil.elemaker( "select", this.svgplot.buttonbox,
-                                             { "change": (e) => { self.select_aper_vs_psf(); } } );
+                                             { "change": (e) => { self.update_datasets(); } } );
         rkWebUtil.elemaker( "option", this.apervspsf, { "text": "PSF photometry",
                                                         "attributes": { "value": "psf", "selected": 1 } } );
         rkWebUtil.elemaker( "option", this.apervspsf, { "text": "Aperture Photometry",
@@ -184,7 +192,8 @@ seechange.DiaForcedPhot = class
             }
         }
 
-        this.filters = []
+        this.filters = [];
+        this.filtercheckboxes = {};
         this.psfphotids = {};
         this.aperphotids = {};
         this.psfphotdexen = {};
@@ -208,21 +217,23 @@ seechange.DiaForcedPhot = class
                 let psf_pointdata = [];
                 let aper_pointdata = [];
                 for ( let i in this.data.mjd ) {
-                    if ( ! this.data.psfflags[i] ) {
-                        psf_x.push( this.data.mjd[i] );
-                        psf_y.push( this.data.flux_psf[i] );
-                        psf_dy.push( this.data.flux_psf_err[i] );
-                        this.psfphotids[filt].push( this.data.diaforcedphotid[i] );
-                        this.psfphotdexen[filt].push( i );
-                        psf_pointdata.push( { 'id': this.data.diaforcedphotid[i], 'dex': i } );
-                    }
-                    if ( ! this.data.aperflags_0[i] ) {
-                        aper_x.push( this.data.mjd[i] );
-                        aper_y.push( this.data.flux_aper_0[i] );
-                        aper_dy.push( this.data.flux_aper_0_err[i] );
-                        this.aperphotids[filt].push( this.data.diaforcedphotid[i] );
-                        this.aperphotdexen[filt].push( i );
-                        aper_pointdata.push( { 'id': this.data.diaforcedphotid[i], 'dex': i } );
+                    if ( this.data.filter[i] == filt ) {
+                        if ( ! this.data.psfflags[i] ) {
+                            psf_x.push( this.data.mjd[i] );
+                            psf_y.push( this.data.flux_psf[i] );
+                            psf_dy.push( this.data.flux_psf_err[i] );
+                            this.psfphotids[filt].push( this.data.diaforcedphotid[i] );
+                            this.psfphotdexen[filt].push( i );
+                            psf_pointdata.push( { 'id': this.data.diaforcedphotid[i], 'dex': i } );
+                        }
+                        if ( ! this.data.aperflags_0[i] ) {
+                            aper_x.push( this.data.mjd[i] );
+                            aper_y.push( this.data.flux_aper_0[i] );
+                            aper_dy.push( this.data.flux_aper_0_err[i] );
+                            this.aperphotids[filt].push( this.data.diaforcedphotid[i] );
+                            this.aperphotdexen[filt].push( i );
+                            aper_pointdata.push( { 'id': this.data.diaforcedphotid[i], 'dex': i } );
+                        }
                     }
                 }
                 this.psfsets[filt] = new SVGPlot.Dataset( { 'x': psf_x, 'y': psf_y, 'dy': psf_dy,
@@ -232,6 +243,17 @@ seechange.DiaForcedPhot = class
                                                              'pointdata': aper_pointdata, linewid: 0,
                                                              'color': filtercolors[filt] } );
                 this.svgplot.addDataset( this.psfsets[filt] );
+
+                rkWebUtil.elemaker( "span", this.svgplot.buttonbox, { "text": "   " } );
+                let checkboxid = "diaforcedphot-" + this.ordinal + "-checkbox-" + filt;
+                this.filtercheckboxes[filt] = rkWebUtil.checkbox( this.svgplot.buttonbox,
+                                                                  { "attributes": { "checked": 1 },
+                                                                    "change": (e) => { self.update_datasets() },
+                                                                    "id": checkboxid,
+                                                                    "text": filt,
+                                                                    "classes": [ "bold" ],
+                                                                    "style": { "color": filtercolors[filt] }
+                                                                  } );
             }
         }
 
@@ -248,7 +270,8 @@ seechange.DiaForcedPhot = class
             let tr = rkWebUtil.elemaker( "tr", tab, { "classes": [ "vcenter" ] } );
             rkWebUtil.elemaker( "th", tr, { "text": which } );
             let td = rkWebUtil.elemaker( "td", tr );
-            this.clipboxes[which] = rkWebUtil.elemaker( "div", td, { "classes": [ "mostlyborder", "padex" ] } );
+            this.clipboxes[which] = rkWebUtil.elemaker( "div", td, { "classes": [ "mostlyborder", "padex",
+                                                                                  "content-box" ] } );
             this.clipboxes[which].style.poition = "relative";
             this.clipboxes[which].style.width = dispsize.toString() + "px";
             this.clipboxes[which].style.height = dispsize.toString() + "px";
@@ -266,11 +289,18 @@ seechange.DiaForcedPhot = class
         tab = rkWebUtil.elemaker( "table", this.cutoutsdiv, { "classes": [ "borderless", "margintopem",
                                                                            "font75" ] } );
         this.cliptabcells = {};
+        let tr;
         for ( let prop of [ "mjd", "filter", "flux_psf", "flux_aper_0", "flux_aper_n", "psfflags", "x", "y" ] ) {
-            let tr = rkWebUtil.elemaker( "tr", tab );
+            tr = rkWebUtil.elemaker( "tr", tab );
             rkWebUtil.elemaker( "th", tr, { "classes": [ "right" ], "text": prop + ": " } );
             this.cliptabcells[prop] = rkWebUtil.elemaker( "td", tr );
         }
+        tr = rkWebUtil.elemaker( "tr", tab );
+        // Hurm... looks like font size % is relative to what it would have been
+        //   if there were no font-size already specified... so doing font75 here
+        //   will make it .75 * .75 = 56.25%
+        this.cliptabcells['id'] = rkWebUtil.elemaker( "td", tr, { "attributes": { "colspan": 2 },
+                                                                  "classes": [ "font75" ] } );
 
         // ****************************************
         // image div
@@ -288,32 +318,19 @@ seechange.DiaForcedPhot = class
                                   } );
     }
 
-    select_aper_vs_psf()
+    update_datasets()
     {
-        let which = this.apervspsf.value;
-        if ( which == this.phottype ) return;
-
-        if ( this.phottype == "psf" ) {
-            for ( let filt in this.psfsets ) {
-                this.svgplot.removeDataset( this.psfsets[filt] );
-            }
-        } else {
-            for ( let filt in this.apersets ) {
-                this.svgplot.removeDataset( this.apersets[filt] );
-            }
+        this.photttype = this.apervspsf.value;
+        let sets = ( this.photttype == "psf" ) ? this.psfsets : this.apersets;
+        let filts = [];
+        for ( let filt of Object.keys(this.filtercheckboxes) ) {
+            if ( this.filtercheckboxes[filt].checked ) filts.push( filt );
         }
 
-        this.phottype = which;
-        if ( this.phottype == "psf" ) {
-            for ( let filt of this.filters ) {
-                this.svgplot.addDataset( this.psfsets[filt] );
-            }
-        } else {
-            for ( let filt of this.filters ) {
-                this.svgplot.addDataset( this.apersets[filt] );
-            }
+        this.svgplot.clear( false );
+        for ( let filt of filts ) {
+            this.svgplot.addDataset( sets[filt] );
         }
-
         this.svgplot.redraw();
     }
 
@@ -355,12 +372,12 @@ seechange.DiaForcedPhot = class
                                                            "x": [ this.data.x[dex] ],
                                                            "y": [ this.data.y[dex] ]
                                                          } );
-                this.imview.render_image_and_regions();
+                this.imview.render_image();
             }
         }
         else {
             this.imview.set_current_image( group, which, true );
-            this.imview.render_image_and_regions();
+            this.imview.render_image();
         }
     }
 
@@ -441,6 +458,7 @@ seechange.DiaForcedPhot = class
         this.cliptabcells["psfflags"].innerHTML = "0x" + this.data.psfflags[i].toString(16);
         this.cliptabcells["x"].innerHTML = this.data.x[i].toFixed( 2 );
         this.cliptabcells["y"].innerHTML = this.data.y[i].toFixed( 2 );
+        this.cliptabcells["id"].innerHTML = photid;
     }
 
     receive_thumbnails( data, photid, clipsize )
