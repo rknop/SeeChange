@@ -1,5 +1,6 @@
 import { rkWebUtil } from "./rkwebutil.js";
 import { seechange } from "./seechange_ns.js";
+import "./exposure.js";
 
 
 // **********************************************************************
@@ -10,9 +11,11 @@ seechange.Conductor = class
     constructor( context )
     {
         this.context = context;
-        this.div = rkWebUtil.elemaker( "div", null, { 'id': 'conductordiv' } );
+        this.div = rkWebUtil.elemaker( "div", null, { 'id': 'conductordiv', "classes": [ "maindiv" ] } );
         this.connector = this.context.connector;
         this.hide_exposure_details_checkbox = null;
+        this.exposure_displays = [];
+        this.n_cache_exposure_displays = 10;
     };
 
     // **********************************************************************
@@ -24,50 +27,30 @@ seechange.Conductor = class
         let p, h3, span, hbox, vbox, subhbox, table, tr, td, metatable, metatr, metatd;
 
         rkWebUtil.wipeDiv( this.div );
-        this.frontpagediv = rkWebUtil.elemaker( "div", this.div );
 
-        this.pipelineworkers = new seechange.PipelineWorkers( this.context, this );
+        hbox = rkWebUtil.elemaker( "div", this.div, { "classes": [ "hbox", "grow0", "shrink0" ],
+                                                      "id": "conductortop" } );
 
-        hbox = rkWebUtil.elemaker( "div", this.frontpagediv, { "classes": [ "hbox" ] } );
-        this.pollingdiv = rkWebUtil.elemaker( "div", hbox, { "classes": [ "conductorconfig" ] } );
+        this.searchdiv = rkWebUtil.elemaker( "div", hbox, { "classes": [ "vbox", "grow1" ] } )
+        this.provtagwid = new seechange.ProvTagWid( this.context, "conductor", { "parent": this.searchdiv } );
 
-        vbox = rkWebUtil.elemaker( "div", hbox, { "classes": [ "vbox", "conductorconfig" ] } );
-        h3 = rkWebUtil.elemaker( "h3", vbox, { "text": "Pipeline Config  " } );
-        rkWebUtil.button( h3, "Refresh", () => { self.show_config_status() } );
-        p = rkWebUtil.elemaker( "p", vbox, { "text": "Run through step " } )
-        // NEED TO ADD A CALLBACK TO THIS NEXT ONE
-        // ALSO NEED TO PULL ITS STATE FROM THE SERVER!!!!!!
-        this.throughstep_select = rkWebUtil.elemaker( "select", p );
-        for ( let step of seechange.Conductor.ALL_STEPS ) {
-            rkWebUtil.elemaker( "option", this.throughstep_select,
-                                { "text": step,
-                                  "attributes": { "value": step,
-                                                  "id": "throughstep_select",
-                                                  "name": "throughstep_select",
-                                                  "selected": ( step=='alerting' ) ? 1 : 0 } } );
-        }
-
-        hbox.appendChild( this.pipelineworkers.div );
-
-        this.contentdiv = rkWebUtil.elemaker( "div", this.frontpagediv );
-
-        rkWebUtil.elemaker( "hr", this.contentdiv );
-
-        p = rkWebUtil.elemaker( "p", this.contentdiv );
+        p = rkWebUtil.elemaker( "p", this.searchdiv );
         rkWebUtil.button( p, "Search", () => { self.update_known_exposures(); } );
         p.appendChild( document.createTextNode( " known exposures taken from " ) );
         this.knownexp_mintwid = rkWebUtil.elemaker( "input", p, { "attributes": { "size": 20 } } );
         this.knownexp_mintwid.addEventListener( "blur", function(e) {
-            rkWebUtil.validateWidgetDateUTC( self.knownexp_mintwid )
+            rkWebUtil.validateWidgetDate( self.knownexp_mintwid )
         } );
         p.appendChild( document.createTextNode( " to " ) );
         this.knownexp_maxtwid = rkWebUtil.elemaker( "input", p, { "attributes": { "size": 20 } } );
         this.knownexp_maxtwid.addEventListener( "blur", function(e) {
-            rkWebUtil.validateWidgetDateUTC( self.knownexp_maxtwid )
+            rkWebUtil.validateWidgetDate( self.knownexp_maxtwid )
         } );
-        p.appendChild( document.createTextNode( " UTC (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)" ) );
+        rkWebUtil.text( p, "UTC" );
+        rkWebUtil.elemaker( "br", p );
+        p.appendChild( document.createTextNode( "(YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)" ) );
 
-        p = rkWebUtil.elemaker( "p", this.contentdiv );
+        p = rkWebUtil.elemaker( "p", this.searchdiv );
         this.search_criteria_shown = false;
         this.show_hide_search_criteria = rkWebUtil.button( p, "Show Additional Search Criteria",
                                                            (e) => {
@@ -112,7 +95,7 @@ seechange.Conductor = class
         this.search_dec = rkWebUtil.elemaker( "input", td, { "attributes": { "size": 8 } } )
         rkWebUtil.elemaker( "text", td, { "text": " Radius: " } )
         this.search_radius = rkWebUtil.elemaker( "input", td, { "attributes": { "size": 6 } } );
-        rkWebUtil.elemaker( "text", { "text": "°" } )
+        rkWebUtil.elemaker( "text", td, { "text": "°" } )
         tr = rkWebUtil.elemaker( "tr", table );
         td = rkWebUtil.elemaker( "td", tr, { "classes": [ "right" ], "text": "filter:" } );
         td = rkWebUtil.elemaker( "td", tr );
@@ -140,7 +123,7 @@ seechange.Conductor = class
         td = rkWebUtil.elemaker( "td", tr );
         this.max_claim_time = rkWebUtil.elemaker( "input", td, { "attributes": { "size": 20 } } );
         this.max_claim_time.addEventListener( "blur",
-                                              (e) => { rkWebUtil.validateWidgetDateUTC( self.max_claim_time ) } );
+                                              (e) => { rkWebUtil.validateWidgetDate( self.max_claim_time ) } );
 
         metatd = rkWebUtil.elemaker( "td", metatr );
         table = rkWebUtil.elemaker( "table", metatd );
@@ -158,11 +141,57 @@ seechange.Conductor = class
                               );
         }
 
-        this.knownexp_notification_div = rkWebUtil.elemaker( "div", this.contentdiv );
-        this.knownexpdiv = rkWebUtil.elemaker( "div", this.contentdiv );
-
+        this.pollingdiv = rkWebUtil.elemaker( "div", hbox, { "classes": [ "conductorconfig", "shrink0" ] } );
+        vbox = rkWebUtil.elemaker( "div", hbox, { "classes": [ "vbox", "conductorconfig", "shrink0" ] } );
+        h3 = rkWebUtil.elemaker( "h3", vbox, { "text": "Pipeline Config  " } );
+        rkWebUtil.button( h3, "Refresh", () => { self.show_config_status() } );
+        p = rkWebUtil.elemaker( "p", vbox, { "text": "Run through step " } )
+        // NEED TO ADD A CALLBACK TO THIS NEXT ONE
+        // ALSO NEED TO PULL ITS STATE FROM THE SERVER!!!!!!
+        this.throughstep_select = rkWebUtil.elemaker( "select", p );
+        for ( let step of seechange.Conductor.ALL_STEPS ) {
+            rkWebUtil.elemaker( "option", this.throughstep_select,
+                                { "text": step,
+                                  "attributes": { "value": step,
+                                                  "id": "throughstep_select",
+                                                  "name": "throughstep_select",
+                                                  "selected": ( step=='alerting' ) ? 1 : 0 } } );
+        }
         this.show_config_status();
+
+        this.pipelineworkers = new seechange.PipelineWorkers( this.context, this );
+        hbox.appendChild( this.pipelineworkers.div );
         this.pipelineworkers.render();
+
+        this.contenttabs = new rkWebUtil.Tabbed( this.div );
+        this.contenttabs.div.id = "conductor_tabbed";
+
+        this.conductordiv = rkWebUtil.elemaker( "div", null, { "id": "conductor_tab",
+                                                               "classes": [ "vbox", "grow1" ] } );
+        this.knownexp_notification_div = rkWebUtil.elemaker( "div", this.conductordiv, { "classes": [ "grow0" ] } );
+        this.knownexpdiv = rkWebUtil.elemaker( "div", this.conductordiv, { "classes": [ "vbox", "grow1" ] } );
+        this.contenttabs.addTab( "conductor", "Conductor", this.conductordiv );
+        this.contenttabs.selectTab( "conductor" )
+
+        // Dictionary of tabname : title
+        //   tabname will be referred to elsewhere in the code
+        //   so is painful to change.  Title only shows up here
+        //   so should be painless to change.
+        let tabstoadd = { "exposure": "Exposure Info",
+                          "imagedetail": "Image Details",
+                          "sources": "Detections",
+                          "reports": "Reports",
+                          "fakes": "Fakes"
+                        };
+        this.emptiabledivs = {};
+        for ( let tab in tabstoadd ) {
+            this.emptiabledivs[ tab ] = new rkWebUtil.EmptiableDiv( "div", null,
+                                                                    { "id": "conductor_tab_" + tab,
+                                                                      "classes": [ "vbox", "grow1" ],
+                                                                      "text": "(Nothing loaded)",
+                                                                      "textclasses": [ "loading" ] } );
+            this.contenttabs.addTab( tab, tabstoadd[tab], this.emptiabledivs[tab].div );
+        }
     }
 
     // **********************************************************************
@@ -174,9 +203,7 @@ seechange.Conductor = class
         let p;
 
         rkWebUtil.wipeDiv( this.pollingdiv )
-        rkWebUtil.elemaker( "p", this.pollingdiv,
-                            { "text": "Loading status...",
-                              "classes": [ "warning", "bold", "italic" ] } )
+        rkWebUtil.elemaker( "p", this.pollingdiv, { "text": "Loading status...", "classes": [ "loading" ] } );
 
         if ( edit )
             this.connector.sendHttpRequest( "conductor/status", {}, (data) => { self.edit_config_status(data) } );
@@ -191,16 +218,17 @@ seechange.Conductor = class
     {
         let self = this;
 
-        let table, tr, th, td, p;
+        let table, tr, th, td, hbox;
 
         rkWebUtil.wipeDiv( this.pollingdiv );
         rkWebUtil.elemaker( "h3", this.pollingdiv,
                             { "text": "Conductor polling config" } );
 
-        p = rkWebUtil.elemaker( "p", this.pollingdiv );
-        rkWebUtil.button( p, "Refresh", () => { self.show_config_status() } );
-        p.appendChild( document.createTextNode( "  " ) );
-        rkWebUtil.button( p, "Modify", () => { self.show_config_status( true ) } );
+        hbox = rkWebUtil.elemaker( "div", this.pollingdiv, { "classes": [ "hbox" ] } );
+        rkWebUtil.button( hbox, "Refresh", () => { self.show_config_status() } );
+        rkWebUtil.button( hbox, "Modify", () => { self.show_config_status( true ) } );
+        this.forceconductorpoll_p = rkWebUtil.elemaker( "span", hbox );
+        rkWebUtil.button( this.forceconductorpoll_p, "Force Poll", () => { self.force_conductor_poll(); } );
 
         if ( data.pause )
             rkWebUtil.elemaker( "p", this.pollingdiv, { "text": "Automatic updating is paused." } )
@@ -219,25 +247,22 @@ seechange.Conductor = class
             projects = data.updateargs.hasOwnProperty( "projects" ) ? data.updateargs.projects.join(",") : projects;
         }
 
-        table = rkWebUtil.elemaker( "table", this.pollingdiv );
+        table = rkWebUtil.elemaker( "table", this.pollingdiv, { "classes": [ "borderless" ] } );
         tr = rkWebUtil.elemaker( "tr", table );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "Instrument" } );
+        th = rkWebUtil.elemaker( "th", tr, { "text": "Instr." } );
         td = rkWebUtil.elemaker( "td", tr, { "text": data.instrument } );
         tr = rkWebUtil.elemaker( "tr", table );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "Min MJD" } );
+        th = rkWebUtil.elemaker( "th", tr, { "text": "Min MJD" } );
         td = rkWebUtil.elemaker( "td", tr, { "text": minmjd } );
         tr = rkWebUtil.elemaker( "tr", table );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "Max MJD" } );
+        th = rkWebUtil.elemaker( "th", tr, { "text": "Max MJD" } );
         td = rkWebUtil.elemaker( "td", tr, { "text": maxmjd } );
         tr = rkWebUtil.elemaker( "tr", table );
-        th = rkWebUtil.elemaker( "th", tr, { "text": "Min Exp. Time" } );
+        th = rkWebUtil.elemaker( "th", tr, { "text": "Min texp" } );
         td = rkWebUtil.elemaker( "td", tr, { "text": minexptime } );
         tr = rkWebUtil.elemaker( "tr", table );
         th = rkWebUtil.elemaker( "th", tr, { "text": "Projects" } );
         td = rkWebUtil.elemaker( "td", tr, { "text": projects } );
-
-        this.forceconductorpoll_p = rkWebUtil.elemaker( "p", this.pollingdiv );
-        rkWebUtil.button( this.forceconductorpoll_p, "Force Conductor Poll", () => { self.force_conductor_poll(); } );
 
         this.throughstep_select.value = data.throughstep;
         this.partial_pickup_checkbox = ( data.pickuppartial ? 1 : 0 );
@@ -342,7 +367,7 @@ seechange.Conductor = class
             minmjd = parseFloat( minmjd );
         else {
             try {
-                minmjd = rkWebUtil.mjdOfDate( rkWebUtil.parseDateAsUTC( minmjd ) );
+                minmjd = rkWebUtil.mjdOfDate( date );
             } catch (e) {
                 window.alert( e );
                 return;
@@ -356,7 +381,7 @@ seechange.Conductor = class
             maxmjd = parseFloat( maxmjd );
         else {
             try {
-                maxmjd = rkWebUtil.mjdOfDate( rkWebUtil.parseDateAsUTC( maxmjd ) );
+                maxmjd = rkWebUtil.mjdOfDate( maxmjd );
             } catch (e) {
                 window.alert( e );
                 return;
@@ -398,8 +423,8 @@ seechange.Conductor = class
 
         rkWebUtil.wipeDiv( this.forceconductorpoll_p );
         rkWebUtil.elemaker( "span", this.forceconductorpoll_p,
-                            { "text": "...forcing conductor poll...",
-                              "classes": [ "warning", "bold", "italic" ] } );
+                            { "text": "...forcng poll...",
+                              "classes": [ "loading" ] } );
         this.connector.sendHttpRequest( "conductor/forceupdate", {}, () => self.did_force_conductor_poll() );
     }
 
@@ -409,7 +434,7 @@ seechange.Conductor = class
     {
         let self = this;
         rkWebUtil.wipeDiv( this.forceconductorpoll_p );
-        rkWebUtil.button( this.forceconductorpoll_p, "Force Conductor Poll", () => { self.force_conductor_poll(); } );
+        rkWebUtil.button( this.forceconductorpoll_p, "Force Poll", () => { self.force_conductor_poll(); } );
         this.update_known_exposures();
     }
 
@@ -423,16 +448,16 @@ seechange.Conductor = class
         rkWebUtil.wipeDiv( this.knownexpdiv );
         let p = rkWebUtil.elemaker( "p", this.knownexpdiv,
                                     { "text": "Loading known exposures...",
-                                      "classes": [ "warning", "bold", "italic" ] } );
+                                      "classes": [ "loading" ] } );
         let url = "conductor/getknownexposures/provtag=";
-        url += encodeURIComponent( this.context.provtag_wid.value );
+        url += encodeURIComponent( this.provtagwid.value );
 
         if ( this.knownexp_mintwid.value.trim().length > 0 ) {
-            let minmjd = rkWebUtil.mjdOfDate( rkWebUtil.parseDateAsUTC( this.knownexp_mintwid.value ) );
+            let minmjd = rkWebUtil.mjdOfDate( this.knownexp_mintwid.value );
             url += "/minmjd=" + encodeURIComponent( minmjd.toString() );
         }
         if ( this.knownexp_maxtwid.value.trim().length > 0 ) {
-            let maxmjd = rkWebUtil.mjdOfDate( rkWebUtil.parseDateAsUTC( this.knownexp_maxtwid.value ) );
+            let maxmjd = rkWebUtil.mjdOfDate( this.knownexp_maxtwid.value );
             url += "/maxmjd=" + encodeURIComponent( maxmjd.toString() );
         }
 
@@ -440,13 +465,13 @@ seechange.Conductor = class
                            'target': 'search_target',
                            'filter': 'search_filter',
                            'project': 'search_project',
-                           'minexptime': 'min_exp_time',
-                           'maxclaimtime': 'max_claim"time',
+                           'minexp_time': 'min_exp_time',
+                           'maxclaim_time': 'max_claim_time',
                            'ra': 'search_ra',
                            'dec': 'search_dec',
                            'radius': 'search_radius'
                          }
-        for ( let cond in conditions ): {
+        for ( let cond in conditions ) {
             let wid = conditions[ cond ];
             if ( this[wid].value.trim().length > 0 ) {
                 url += "/" + cond + "=" + encodeURIComponent( this[wid].value.trim() )
@@ -495,7 +520,7 @@ seechange.Conductor = class
 
         rkWebUtil.wipeDiv( this.knownexpdiv );
 
-        p = rkWebUtil.elemaker( "p", this.knownexpdiv );
+        p = rkWebUtil.elemaker( "p", this.knownexpdiv, { "classes": [ "vbox", "grow1" ] } );
 
         // Uncomment this (...or move it somewhere) when it's actually properly implemented
         // if ( this.hide_exposure_details_checkbox == null ) {
@@ -586,21 +611,16 @@ seechange.Conductor = class
             ttspan.innerHTML = "node: " + ke.node_id + "<br>machine: " + ke.machine_id;
             td = rkWebUtil.elemaker( "td", tr,
                                      { "text": ( ke.claim_time == null ) ?
-                                       "" : rkWebUtil.dateUTCFormat(rkWebUtil.parseDateAsUTC(ke.claim_time)) } );
+                                       "" : rkWebUtil.dateFormat( ke.claim_time, true, true ) } );
             td = rkWebUtil.elemaker( "td", tr,
                                      { "text": ( ke.release_time == null ) ?
-                                       "" : rkWebUtil.dateUTCFormat(rkWebUtil.parseDateAsUTC(ke.release_time)) } );
+                                       "" : rkWebUtil.dateFormat( ke.release_time, true, true ) } );
             td = rkWebUtil.elemaker( "td", tr );
             if ( ke.exp_filename != null ) {
                 let a = rkWebUtil.elemaker( "a", td,
                                             { 'classes': [ "link" ],
                                               'text': ke.exp_filename,
-                                              'click': (e) => {
-                                                  self.context.frontpagetabs.selectTab("exposuresearch");
-                                                  let el = self.context.exposuresearch.exposurelist;
-                                                  el.show_exposure( ke.exposure_id,
-                                                                    self.context.provtag_wid.value );
-                                              }
+                                              'click': (e) => { self.show_exposure( ke.exposure_id ); }
                                             } );
             }
             td = rkWebUtil.elemaker( "td", tr, { "text": ( ke.nimg == null ) ? 0 : ke.nimg } );
@@ -639,14 +659,16 @@ seechange.Conductor = class
                          'nsub': 'nsub',
                          'ndets': 'ndet'
                        };
+        let div = rkWebUtil.elemaker( "div", this.knownexpdiv, { 'classes': [ "scrolltablewrapper" ] } );
         let tab = new rkWebUtil.SortableTable( this.known_exposures, fields, rowrenderer,
                                                { 'hdrs': fieldmap,
                                                  'dictoflists': false,
                                                  'nosortfields': nosortfields,
                                                  'initsort': [ '+mjd' ],
                                                  'colorclasses': [ 'bgfade', 'bgwhite' ],
+                                                 'headerrowclasses': [ 'scrolltableheader' ],
                                                  'colorlength': 3 } );
-        this.knownexpdiv.appendChild( tab.table );
+        div.appendChild( tab.table );
     }
 
     // **********************************************************************
@@ -663,7 +685,7 @@ seechange.Conductor = class
         rkWebUtil.wipeDiv( this.knownexp_notification_div );
         rkWebUtil.elemaker( "span", this.knownexp_notification_div,
                             { "text": "Updating state of some known exposures...",
-                              "classes": [ "bold", "italic", "warning" ] } );
+                              "classes": [ "loading" ] } );
         if ( kexps.length > 0 ) {
             this.connector.sendHttpRequest( "conductor/setknownexposurestate",
                                             { "state": state, "knownexposure_ids": kexps },
@@ -746,13 +768,64 @@ seechange.Conductor = class
                 rkWebUtil.wipeDiv( this.knownexposidv );
                 rkWebUtil.elemaker( "p", this.knownexpdiv,
                                     { "text": "Loading known exposures...",
-                                      "classes": [ "warning", "bold", "italic" ] } );
+                                      "classes": [ "loading" ] } );
                 this.connector.sendHttpRequest( "/conductor/fullyclearclusterclaim",
                                                 { 'knownexposure_ids': toclear },
                                                 (data) => { self.update_known_exposures() } );
             }
         }
     }
+
+    // **********************************************************************
+
+    show_exposure( exposure_id )
+    {
+        let self = this;
+        let provtag = this.provtagwid.value;
+        let mtdiv = this.emptiabledivs[ 'exposure' ];
+        mtdiv.reset( { "text": "Loading...", "classes": [ "loading" ] } );
+
+        // See if we already have a display for this exposure
+        for ( let i in this.exposure_displasy ) {
+            let exp = this.exposure_displays[i];
+            if ( exp.id == exposure_id ) {
+                mtdiv.reset( { "empty": true } );
+                mtdiv.div.appendChild( exp.div );
+                // Push this exposure to the back of the list since
+                //   it's the most recently accessed one
+                this.exposure_displays.splice( i, 1 );
+                this.exposure_displays.push( exp );
+                // We're done!
+                return;
+            }
+        }
+
+        // Didn't have a cached seechange.Exposure, so make a new one by
+        //   asking the web server for info.
+        this.connector.sendHttpRequest( "exposure_images/" + exposure_id + "/" + provtag, null,
+                                        (data) => { self.actually_show_exposure(data); } );
+    }
+
+    // **********************************************************************
+
+    actually_show_exposure( data )
+    {
+        let exp = new seechange.Exposure( this.context, this.contenttabs, data,
+                                          { 'imagedetailstab': 'imagedetail',
+                                            'detectionstab': 'sources',
+                                            'reportstab': 'reports',
+                                            'fakestab': 'fakes' } );
+        this.emptiabledivs.exposure.reset( { 'empty': true } )
+        this.emptiabledivs.exposure.div.appendChild( exp.div );
+        this.contenttabs.selectTab( "exposure" );
+        exp.render_page();
+
+        this.exposure_displays.push( exp );
+        // Only cache a finite amount of exposure displays.  Memory use vs. network traffic.
+        if ( this.exposure_displays.length > this.n_cache_exposure_displays )
+            this.exposure_displays.shift;
+    }
+
 }
 
 
@@ -767,7 +840,7 @@ seechange.PipelineWorkers = class
         this.conductor = conductor;
         this.connector = this.context.connector;
         this.div = rkWebUtil.elemaker( "div", null, { 'id': 'conductorworkers-div',
-                                                      'classes': [ 'conductorworkers' ] } )
+                                                      'classes': [ 'conductorconfig', 'shrink1', 'scrolly' ] } )
     };
 
     // **********************************************************************
@@ -778,7 +851,7 @@ seechange.PipelineWorkers = class
 
         rkWebUtil.wipeDiv( this.div );
         let hbox = rkWebUtil.elemaker( "div", this.div, { "classes": [ "hbox" ] } );
-        this.workersdiv = rkWebUtil.elemaker( "div", hbox, {} );
+        this.workersdiv = rkWebUtil.elemaker( "div", hbox, { "classes": [ "maxheight20em", "scrolly" ] } );
         this.update_workers();
     };
 
@@ -802,7 +875,7 @@ seechange.PipelineWorkers = class
         h3 = rkWebUtil.elemaker( "h3", this.workersdiv, { "text": "Known Pipeline Workers  " } );
         rkWebUtil.button( h3, "Refresh", () => { self.update_workers(); } );
 
-        table = rkWebUtil.elemaker( "table", this.workersdiv, { "classes": [ "borderedcells" ] } );
+        table = rkWebUtil.elemaker( "table", this.workersdiv );
         tr = rkWebUtil.elemaker( "tr", table );
         th = rkWebUtil.elemaker( "th", tr, { "text": "cluster_id" } );
         th = rkWebUtil.elemaker( "th", tr, { "text": "node_id" } );
@@ -817,12 +890,10 @@ seechange.PipelineWorkers = class
             }
             coln -= 1;
             tr = rkWebUtil.elemaker( "tr", table );
-            if ( grey ) tr.classList.add( "greybg" );
+            if ( grey ) tr.classList.add( "bgfade" );
             td = rkWebUtil.elemaker( "td", tr, { "text": worker.cluster_id } );
             td = rkWebUtil.elemaker( "td", tr, { "text": worker.node_id } );
-            td = rkWebUtil.elemaker( "td", tr,
-                                     { "text": rkWebUtil.dateUTCFormat(
-                                         rkWebUtil.parseDateAsUTC( worker.lastheartbeat ) ) } );
+            td = rkWebUtil.elemaker( "td", tr, { "text": rkWebUtil.dateFormat( worker.lastheartbeat, true, true ) } );
         }
     }
 

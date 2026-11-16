@@ -13,7 +13,7 @@ seechange.Image = class extends( rkWebUtil.listener )
         super();
         let default_params = { 'nomeas_cutouts': false,
                                'provtag': null,
-                               'oversample': 5,
+                               'oversample': 3,
                                'show_detections': false,
                                'detections_box_size': 10,
                                'detections_box_color': '#008000'
@@ -40,7 +40,7 @@ seechange.Image = class extends( rkWebUtil.listener )
         this.infopromises = {};
         this.image_promises = {};
 
-        this.detections_wrapper = rkWebUtil.elemaker( 'div', null );
+        this.detections_wrapper = rkWebUtil.elemaker( 'div', null, { "classes": [ "vbox", "grow1" ] } );
         this.detections_shown = 'neither';
         this.detectionsdiv_sans = null;
         this.detectionsdiv_avec = null;
@@ -124,18 +124,25 @@ seechange.Image = class extends( rkWebUtil.listener )
 
         if ( ( this._imagediv !== null ) && ( ! remake ) ) return;
 
-        this._imagediv = rkWebUtil.elemaker( "div", null, { "id": "_image_div_" + Image.n_images,
-                                                            "classes": [ "vbox", "grow1" ] } );
-        Image.n_images += 1;
+        this._imagediv = rkWebUtil.elemaker( "div", null, { "id": "_image_div_" + seechange.Image._n_images,
+                                                            "classes": [ "vbox", "grow1", "height100p" ] } );
+        seechange.Image._n_images += 1;
 
         this.filename_h2 = rkWebUtil.elemaker( "h2", this._imagediv,
                                                { "text": "Image: " + this.filename + "( " + this.info._id + " )" } );
 
-        let hbox = rkWebUtil.elemaker( "div", this._imagediv, { "classes": [ "hbox", "width100p", "grow1" ] } );
+        let hbox = rkWebUtil.elemaker( "div", this._imagediv, { "classes": [ "hbox", "grow1" ] } );
 
         this.imview_div = rkWebUtil.elemaker( "div", hbox, { "classes": [ "vbox", "marginrightem",
                                                                           "grow1", "selfstretch" ] } );
-        this.info_div = rkWebUtil.elemaker( "div", hbox, { "classes": [ "imageinfodiv" ] } );
+
+        this.info_div = rkWebUtil.elemaker( "div", hbox, { "classes": [ "grow0", "shrink0",
+                                                                        "marginleftem", "marginrightem" ] } );
+        // THIS IS TERRIBLE.
+        // But.  If the info div size changes when you flip between new/ref/sub, it's very annoying.
+        // So, going to hardcode a width, and just let the filename wrap.
+        this.info_div.style.width = "48ex";
+
         this.thumbnails_div = rkWebUtil.elemaker( "div", hbox );
 
         this.shown_imview = null;
@@ -198,7 +205,7 @@ seechange.Image = class extends( rkWebUtil.listener )
             }
             rkWebUtil.wipeDiv( this.info_div );
             rkWebUtil.elemaker( "p", this.info_div, { "text": "Loading image info...",
-                                                      "classes": [ "warning", "bold", "italic" ] } );
+                                                      "classes": [ "loading" ] } );
             this.infopromises[which].then( (info) => { self.show_info_view( info, which ); } );
         }
     }
@@ -219,6 +226,9 @@ seechange.Image = class extends( rkWebUtil.listener )
             rkWebUtil.elemaker( "h3", this.info_div, { "text": "Something has gone wrong." } );
         }
 
+        let fncomps = info.filepath.match( /\/?([^\/]+)$/ );
+        let filename = (fncomps === null) ? "????" : fncomps[1];
+
         let propvalues = { 'mjd': seechange.nullorfixed( info['mjd'], 5),
                            'ra': seechange.nullorfixed( info['ra'], 5 ),
                            'dec': seechange.nullorfixed( info['dec'], 5 ),
@@ -233,7 +243,7 @@ seechange.Image = class extends( rkWebUtil.listener )
                            'bkg': seechange.nullorexpo( info['bkg_mean_estimate'], 4 ),
                            'σ_bkg': seechange.nullorexpo( info['bkg_rms_esitmate'], 4 ),
                            'provid': info['provenance_id'],
-                           'filename': this.filename,
+                           'filename': filename,
                            'id': info['_id'],
                          }
         let table = rkWebUtil.elemaker( "table", this.info_div );
@@ -242,12 +252,19 @@ seechange.Image = class extends( rkWebUtil.listener )
             let td = rkWebUtil.elemaker( "td", tr, { "text": prop, "classes": [ "bold", "alignright" ] } );
             if ( prop == 'filename' ) {
                 td = rkWebUtil.elemaker( "td", tr, { "text": propvalues[prop], "classes": [ "alignleft",
-                                                                                            "tooltipsource" ] } );
+                                                                                            "tooltipsource",
+                                                                                            "font75" ] } );
                 rkWebUtil.elemaker( "span", td, { "text": this.info.filepath, "classes": [ "tooltiptext" ] } );
             } else {
                 td = rkWebUtil.elemaker( "td", tr, { "text": propvalues[prop], "classes": [ "alignleft" ] } );
+                if ( prop == 'id' ) td.classList.add( "font75" );
             }
         }
+        // HACK ALERT
+        // Work around a bug in imview I can't find where the resize observer callback
+        //   isn't called by the size changes that happen from the rendering
+        //   in load_info_view and here
+        window.dispatchEvent( new Event( 'resize' ) );
     }
 
     load_cutouts( callback=null )
@@ -404,7 +421,7 @@ seechange.Image = class extends( rkWebUtil.listener )
 
         rkWebUtil.wipeDiv( this.detections_wrapper );
         rkWebUtil.elemaker( 'h3', this.detections_wrapper, { "text": "Loading detections...",
-                                                             "classes": [ "warning", "bold", "italic" ] } );
+                                                             "classes": [ "loading" ] } );
 
         let self = this;
 

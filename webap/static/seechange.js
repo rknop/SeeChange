@@ -40,15 +40,29 @@ import "./conductor.js";
 // **********************************************************************
 // **********************************************************************
 // **********************************************************************
-// The global context
+// The global context.  Supposed to be a singleton.
 
 seechange.Context = class
 {
+    static _instance = null;
+
+    static context()
+    {
+        return seechange.Context._instance;
+    }
+
     constructor()
     {
+        if ( seechange.Context._instance != null ) {
+            window.alert( "More than one SeeChange instance; I am surprised." );
+            // Error out?
+        }
+
+        seechange.Context._instance = this;
+
         this.authdiv = document.getElementById( "authdiv" );
         this.maindiv = document.getElementById( "pagebody" );
-        this.frontpagediv = null;
+        this.rendered = false;
 
         // TODO : make this configurable?  Or at least remember how to
         //   detect in javascript what the URL you're running from is.  (In
@@ -73,87 +87,52 @@ seechange.Context = class
         var self = this;
         let p, span, button;
 
-        if ( this.frontpagediv == null ) {
+        if ( this.rendered ) console.log( "WARNING: seechange.Context.render_page called more than once." );
 
-            rkWebUtil.wipeDiv( this.authdiv );
-            p = rkWebUtil.elemaker( "span", this.authdiv,
-                                    { "text": "Logged in as " + this.auth.username
-                                      + " (" + this.auth.userdisplayname + ") — ",
-                                      "classes": [ "italic" ] } );
-            span = rkWebUtil.elemaker( "span", p,
-                                       { "classes": [ "link" ],
-                                         "text": "Log Out",
-                                         "click": () => { self.auth.logout( () => { window.location.reload(); } ) }
-                                       } );
+        rkWebUtil.wipeDiv( this.authdiv );
+        p = rkWebUtil.elemaker( "span", this.authdiv,
+                                { "text": "Logged in as " + this.auth.username
+                                  + " (" + this.auth.userdisplayname + ") — ",
+                                  "classes": [ "italic" ] } );
+        span = rkWebUtil.elemaker( "span", p,
+                                   { "classes": [ "link" ],
+                                     "text": "Log Out",
+                                     "click": () => { self.auth.logout( () => { window.location.reload(); } ) }
+                                   } );
 
-            this.frontpagediv = rkWebUtil.elemaker( "div", this.maindiv, { 'id': 'frontpagediv',
-                                                                           'classes': [ 'maindiv' ] } );
+        this.frontpagetabs = new rkWebUtil.Tabbed( this.maindiv );
+        this.frontpagetabs.div.setAttribute( 'id', 'frontpagetabs' );
 
-            p = rkWebUtil.elemaker( "p", this.frontpagediv, { "text": "Use provenance tag: " } );
-            this.provtag_wid = rkWebUtil.elemaker( "select", p, { 'id': 'provtag_wid' } );
-            button = rkWebUtil.button( p, "Refresh Tags", null, [ "marginleftem" ] );
-            this.loading_provtags = rkWebUtil.elemaker( "span", p, { "classes": [ "warning", "bold",
-                                                                                  "italic", "marginleftem" ] } );
-            let callback = (e) => {
-                self.loading_provtags.innerHTML = "Loading provtags...";
-                self.connector.sendHttpRequest( "provtags", {}, (data) => { self.populate_provtag_wid(data) } )
-            };
-            button.addEventListener( "click", callback );
-            callback( null );
-
-            this.frontpagetabs = new rkWebUtil.Tabbed( this.frontpagediv );
-            this.frontpagetabs.div.setAttribute( 'id', 'frontpagetabs' );
-
-            if ( this.auth.usergroups.includes( 'admin' ) || this.auth.usergroups.includes( 'root' ) ) {
-                this.conductor = new seechange.Conductor( this );
-                this.conductor.render();
-                this.frontpagetabs.addTab( "conductor", "Conductor", this.conductor.div );
-            }
-
-            this.exposuresearch = new seechange.ExposureSearch( this );
-            this.exposuresearch.render();
-            this.frontpagetabs.addTab( "exposuresearch", "Exposure/Image Search", this.exposuresearch.div );
-
-            this.diaforcedphot = new seechange.DiaForcedPhotSearch( this );
-            this.diaforcedphot.render();
-            this.frontpagetabs.addTab( "diaforcedphot", "DIA Forced Photometry", this.diaforcedphot.div );
-
-            this.provenancetags = new seechange.ProvenanceTags( this );
-            this.provenancetags.render();
-            this.frontpagetabs.addTab( "provtags", "Provenance Tags", this.provenancetags.div );
-
-
-            let div = rkWebUtil.elemaker( "div", null );
-            rkWebUtil.elemaker( "p", div, { "text": "42" } );
-            this.frontpagetabs.addTab( "gratuitous", "Answer", div );
-
-            this.frontpagetabs.selectTab( "exposuresearch" );
-
-            // This next element is used in our tests as a way of quickly figuring
-            //   out that this function has finished.
-            rkWebUtil.elemaker( "input", this.frontpagediv, { "id": "seechange_context_render_page_complete",
-                                                              "attributes": { "type": "hidden" } } );
+        if ( this.auth.usergroups.includes( 'admin' ) || this.auth.usergroups.includes( 'root' ) ) {
+            this.conductor = new seechange.Conductor( this );
+            this.conductor.render();
+            this.frontpagetabs.addTab( "conductor", "Conductor", this.conductor.div );
         }
-        else {
-            alert( "Reinstalling frontpagediv" );
-            rkWebUtil.wipeDiv( this.maindiv );
-            this.maindiv.appendChild( this.frontpagediv );
-        }
-    };
+
+        this.exposuresearch = new seechange.ExposureSearch( this );
+        this.exposuresearch.render();
+        this.frontpagetabs.addTab( "exposuresearch", "Exposure/Image Search", this.exposuresearch.div );
+
+        this.diaforcedphot = new seechange.DiaForcedPhotSearch( this );
+        this.diaforcedphot.render();
+        this.frontpagetabs.addTab( "diaforcedphot", "DIA Forced Photometry", this.diaforcedphot.div );
+
+        this.provenancetags = new seechange.ProvenanceTags( this );
+        this.provenancetags.render();
+        this.frontpagetabs.addTab( "provtags", "Provenance Tags", this.provenancetags.div );
 
 
-    populate_provtag_wid( data )
-    {
-        this.loading_provtags.innerHTML = "";
-        let cursel = this.provtag_wid.value;
-        rkWebUtil.wipeDiv( this.provtag_wid );
-        for ( let provtag of data.provenance_tags ) {
-            let option = rkWebUtil.elemaker( "option", this.provtag_wid,
-                                             { "text": provtag, "attributes": { "value": provtag } } );
-            if ( provtag == cursel )
-                option.setAttribute( "selected", "1" );
-        }
-    };
+        let div = rkWebUtil.elemaker( "div", null );
+        rkWebUtil.elemaker( "p", div, { "text": "42" } );
+        this.frontpagetabs.addTab( "gratuitous", "Answer", div );
+
+        this.frontpagetabs.selectTab( "exposuresearch" );
+
+        // This next element is used in our tests as a way of quickly figuring
+        //   out that this function has finished.
+        rkWebUtil.elemaker( "input", this.frontpagediv, { "id": "seechange_context_render_page_complete",
+                                                          "attributes": { "type": "hidden" } } );
+    }
 
     _image_data_getter( url )
     {
@@ -171,6 +150,109 @@ seechange.Context = class
     }
 
 }
+
+// **********************************************************************
+
+seechange.prov_tag_wids = {};
+
+seechange.ProvTagWid = class
+{
+    constructor( context=null, idtag=null, inprops={} )
+    {
+        let self = this;
+        this.context = context;
+
+        let props = { 'introtext': 'Use provenance tag: ',
+                      'container': null,
+                      'parent': null };
+        rkWebUtil.paramParser( props, inprops, this );
+
+        if ( idtag == null ) idtag = seechange.prov_tag_wids.length.toString();
+        if ( seechange.prov_tag_wids.hasOwnProperty( idtag ) ) {
+            window.alert( "Internal error making provenance tag widget.  Rob needs to fix this." );
+            return;
+        }
+        this.idtag = idtag;
+        seechange.prov_tag_wids[ idtag ] = this;
+
+        if ( this.container == null ) {
+            if ( this.parent == null ) {
+                window.alert( "Error, seechange.ProvTagWid parent can't be null" );
+                return;
+            }
+            this.container = rkWebUtil.elemaker( "p", this.parent, { "text": this.introtext } );
+        } else {
+            if ( this.container.parentNode == null ) {
+                window.alert( "Error, seechange.ProvTagWid container parentNode can't be null" );
+                return;
+            }
+        }
+
+        this.provtag_select = rkWebUtil.elemaker( "select", this.container, { 'id': 'provtag_select_' + idtag } );
+        rkWebUtil.button( this.container, "Refresh Tags",
+                          (e) => { self.refresh_all_provtag_selects(); },
+                          [ "marginleftem" ] )
+        this.loading_provtags = rkWebUtil.elemaker( "span", this.container, { "classes": [ "warning", "bold" ] } );
+        this.loading_provtags.innerHTML = "Loading provtags...";
+
+        this.observer = new MutationObserver( (mutlist, obs) => { self.check_mutation(mutlist, obs); } );
+        this.observer.observe( this.container.parentNode, { 'childList': true } );
+
+        this.context.connector.sendHttpRequest( "provtags", {}, (data) => { self.update_provtag_select(data) } );
+    }
+
+    get value()
+    {
+        return this.provtag_select.value;
+    }
+
+    refresh_all_provtag_selects()
+    {
+        let self = this;
+        for ( let idtag of Object.keys( seechange.prov_tag_wids ) ) {
+            seechange.prov_tag_wids[ idtag ].loading_provtags.innerHTML = "Loading provtags...";
+        }
+        this.context.connector.sendHttpRequest( "provtags", {}, (data) => { self.update_all_provtag_selects(data) } );
+    }
+
+    update_all_provtag_selects( data )
+    {
+        for ( let idtag of Object.keys( seechange.prov_tag_wids ) ) {
+            seechange.prov_tag_wids[ idtag ].update_provtag_select( data );
+        }
+    }
+
+    update_provtag_select( data )
+    {
+        this.loading_provtags.innerHTML = "";
+        let cursel = this.provtag_select.value;
+        rkWebUtil.wipeDiv( this.provtag_select );
+        for ( let provtag of data.provenance_tags) {
+            let option = rkWebUtil.elemaker( "option", this.provtag_select,
+                                             { "text": provtag,
+                                               "attributes": { "values": provtag } } );
+            if ( provtag == cursel )
+                option.setAttribute( "selected", "1" );
+        }
+    }
+
+    check_mutation( mutlist, obs )
+    {
+        for ( let mutrec of mutlist ) {
+            if ( mutrec.removedNodes.length > 0 ) {
+                if ( ! this.container.parentNode ) {
+                    rkWebUtil.wipeDiv( this.container );
+                    this.observer.disconnect();
+                    delete seechange.prov_tag_wids( this.idtag );
+                    // We're done.  (Done for.)  (Toast.)
+                    return;
+                }
+            }
+        }
+    }
+
+}
+
 
 
 // **********************************************************************

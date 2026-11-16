@@ -3,11 +3,11 @@ preloads:
 
 pipeline:
   through_step: preprocessing
-  provenance_tag: justzero_20261105a
+  provenance_tag: justzero_20261109a
 
 preprocessing:
   steps_required: [ 'overscan', 'zero' ]
-  zero_provtag: proc20260901
+  zero_provtag: zero20261109
   # flat_provtag here because it was in included things, and
   #    we want it to stay the same for provenance reasons;
-  flat_provtag: proc20260901
+  flat_provtag: flat20261109

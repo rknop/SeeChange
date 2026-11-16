@@ -222,7 +222,7 @@ def download_gaia_dr3( minra, maxra, mindec, maxdec, padding=0.1, minmag=18., ma
     df = None
 
     if cfg.value( 'catalog_gaiadr3.use_server' ):
-        SCLogger.debug( f"Trying to query {cfg.value('catalog_gaiad43.server_url')} for gaia catalog info..." )
+        SCLogger.debug( f"Trying to query {cfg.value('catalog_gaiadr3.server_url')} for gaia catalog info..." )
         dodownload = functools.partial( _download_gaia_dr3_custom_server,
                                         ralow, rahigh, declow, dechigh, minmag, maxmag )
         df = retry_with_sleep( dodownload, sleepmin=0.1, sleept=1.0, sleepfac=2., sleepfuzz=0.1, sleepmax=64,
@@ -230,7 +230,7 @@ def download_gaia_dr3( minra, maxra, mindec, maxdec, padding=0.1, minmag=18., ma
                                              f"mag=({minmag}:{maxmag}) from custom gaia server" ),
                                exception_on_fail=False, retval_on_fail=None )
         if df is None:
-            SCLogger.warning( f"Failed to download gaia stars from {cfg.value('catalog_gaiad43.server_url')}"
+            SCLogger.warning( f"Failed to download gaia stars from {cfg.value('catalog_gaiadr3.server_url')}"
                               f"{', falling back to NOIRLab' if cfg.value('catalog_gaiadr3.fallback_datalab') else ''} "
                              )
 
