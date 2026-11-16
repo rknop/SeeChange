@@ -411,9 +411,9 @@ class GetKnownExposures( ConductorBaseView ):
                                               "target": None,
                                               "filter": None,
                                               "project": None,
-                                              "minexptime": None,
+                                              "minexp_time": None,
                                               "state": None,
-                                              "maxclaimtime": None,
+                                              "maxclaim_time": None,
                                               "provtag": None,
                                               "types": None,
                                               "ra": None,
@@ -526,7 +526,7 @@ class GetKnownExposures( ConductorBaseView ):
 
         _and = sql.SQL( "WHERE" )
 
-        for minarg in [ 'mjd', 'exptime' ]:
+        for minarg in [ 'mjd', 'exp_time' ]:
             if args[f'min{minarg}'] is not None:
                 q += sql.SQL( "{_and} ke.{field} >= {val}\n"
                              ).format( _and=_and, field=sql.Identifier(minarg), val=args[f'min{minarg}'] )
@@ -540,8 +540,8 @@ class GetKnownExposures( ConductorBaseView ):
         if args['maxmjd'] is not None:
             q += sql.SQL( "{_and} ke.mjd <= {maxmjd}\n" ).format( _and=_and, maxmjd=float(args['maxmjd']) )
             _and = sql.SQL( "  AND" )
-        if args['maxclaimtime'] is not None:
-            claimtime = datetime.datetime.fromisoformat( args['maxclaimtime'] )
+        if args['maxclaim_time'] is not None:
+            claimtime = datetime.datetime.fromisoformat( args['maxclaim_time'] )
             if claimtime.tzinfo is None:
                 claimtime = pytz.utc.localize( claimtime )
             q += sql.SQL( "{_and} ke.claim_time <= {t}\n" ).format( _and=_and, t=claimtime )

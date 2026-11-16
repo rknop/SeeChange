@@ -465,8 +465,8 @@ seechange.Conductor = class
                            'target': 'search_target',
                            'filter': 'search_filter',
                            'project': 'search_project',
-                           'minexptime': 'min_exp_time',
-                           'maxclaimtime': 'max_claim_time',
+                           'minexp_time': 'min_exp_time',
+                           'maxclaim_time': 'max_claim_time',
                            'ra': 'search_ra',
                            'dec': 'search_dec',
                            'radius': 'search_radius'
