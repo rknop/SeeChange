@@ -2,12 +2,13 @@ import io
 import copy
 import collections
 import traceback
+import itertools
 
 from psycopg import sql
 
 from models.base import PGDB, UUIDMixin, HasProvenance
-from models.provenance import Provenance, CodeVersion
-from util.config import NotDefined
+from models.provenance import ProvenanceTag, Provenance, CodeVersion
+from util.util import NotDefined, NoValue
 from util.logger import SCLogger
 
 from pipeline.processobject import ProcessObject
@@ -38,13 +39,14 @@ class Pipeline( ProcessObject ):
     # This is the subclass of Parameters that holds the parameters
     #   for this pipeline.  (This is actually defined originally
     #   in ProcessObject, the superclass of this class, and also
-    #   the superclass of all process classes.)
-    _pars_class = None
+    #   the superclass of all process classes.)  Make it NoValue
+    #   if the pipeline doesn't have any parameters of its own.
+    _pars_class = NoValue
 
     # This is the default name for this process.  Config will use this
     #   as the top-level key to get the base configuration for this
     #   process.  (Configuration is complicated, ROB WRITE MORE.)
-    _process_name = None
+    _process_name = "unknown_pipeline"
 
     # A list of strings; all the steps (process names) of this pipeline
     # in the order they will normally be run.
@@ -338,6 +340,10 @@ class Pipeline( ProcessObject ):
         self.product_processes = { c: NotDefined for c in self.product_classes.keys() }
         self.product_provenance_processes = ( { c: NotDefined for c in self.product_classes.keys() }
                                               | self.product_provenance_processes )
+        self.product_upstreams = ( { c: NotDefined for c in self.starting_products.keys() }
+                                   | self.product_upstreams )
+        self.product_upstream_keys = ( { c: NotDefined for c in self.starting_products.keys() }
+                                       | self.product_upstream_keys )
         for process, mess in self.process_products.items():
             for tup in mess:
                 islist = tup[0] is list
@@ -353,8 +359,8 @@ class Pipeline( ProcessObject ):
                 else:
                     self.product_classes[ product ] = cls
 
-                if cls not in self.product_provenance_processes:
-                    if isinstance( cls, HasProvenance ):
+                if product not in self.product_provenance_processes:
+                    if issubclass( cls, HasProvenance ):
                         self.product_provenance_processes[product] = process
                     else:
                         self.product_provenance_processes[product] = None
@@ -363,13 +369,14 @@ class Pipeline( ProcessObject ):
         for prod, upprods in self.product_upstreams.items():
             if prod not in self.product_upstream_keys:
                 self.product_upstream_keys[prod] = {}
-            for upprod in upprods:
-                if upprod not in self.product_upstream_keys[prod]:
-                    self.product_upstream_keys[prod][upprod] = f'{upprod}_id'
+            if upprods != NotDefined:
+                for upprod in upprods:
+                    if upprod not in self.product_upstream_keys[prod]:
+                        self.product_upstream_keys[prod][upprod] = f'{upprod}_id'
 
         # Make sure all our dicts of products to stuff all have the same keys
         prodprockeys = set( self.product_processes.keys() )
-        prodclskeys= set( self.product_classes.keys() )
+        prodclskeys = set( self.product_classes.keys() )
         produpkeys = set( self.product_upstreams.keys() )
         produpkeykeys = set( self.product_upstream_keys.keys() )
         prodprovprockeys =set( self.product_provenance_processes.keys() )
@@ -396,7 +403,7 @@ class Pipeline( ProcessObject ):
 
         self.recursed_upstreams = { k: _get_recursed_upstreams(k) for k in self.product_upstreams.keys() }
 
-        # Initialize our internal tracking of provenaces (values are all Provenance)
+        # Initialize our internal tracking of provenances (values are all Provenance)
         # This is preliminary... we're later going to validate this against the provtag
         # and/or the provenances of all the process objects.
         self.provenances = { k: Provenance.get(v, pgdb=_pgdb) for k, v in _preset_provenances }
@@ -406,25 +413,36 @@ class Pipeline( ProcessObject ):
         for k, cls in self.product_classes.items():
             if k in kwargs:
                 obj = UUIDMixin.get_object( kwargs[k], cls, no_none=True, pgdb=_pgdb )
-                if ( k in self.provenances ) and ( obj.provenance_id != self.provenances[k].id ):
-                    raise ValueError( f"Passed {k} has provenance_id {obj.provenance_id}, which doesn't match "
-                                      f"already-determined provenance of {self.provenances[k].id}" )
-                self.provenances[ k ] = Provenance.get( obj.provenance_id, pgdb=_pgdb )
+                provproc = self.product_provenance_processes[ k ]
+                if provproc is not None:
+                    if ( provproc in self.provenances ) and ( obj.provenance_id != self.provenances[provproc].id ):
+                        raise ValueError( f"Passed {k} has provenance_id {obj.provenance_id}, which doesn't match "
+                                          f"already-determined provenance of {self.provenances[provproc].id}" )
+                    prov = Provenance.get( obj.provenance_id, pgdb=_pgdb )
+                    if provproc == NotDefined:
+                        self.provenances[ prov.process ] = prov
+                        self.product_provenance_processes[ k ] = prov.process
+                    else:
+                        self.provenances[ provproc ] = prov
+
                 self.products[ k ] = obj
                 del kwargs[ k ]
 
         # Make sure we got enough to go on
         self.starting_prov = {}
         if starting_prov is None:
-            gotallstarts = all( k in self.products for k in self.starting_products.keys() )
-            gotonederived = any( ( k in self.products ) and ( k not in self.starting_products.keys() )
+            gotallstarts = all( ( k in self.products ) and ( self.products[k] is not None ) and
+                                ( self.products[k] != NotDefined )
+                                for k in self.starting_products.keys() )
+            gotonederived = any( ( k in self.products ) and ( k not in self.starting_products.keys() ) and
+                                 ( self.products[k] is not None ) and ( self.products[k] != NotDefined )
                                  for k in self.product_classes.keys() )
             if gotallstarts:
-                if any( (prod in self.product_upstreams) and (self.product_upstrams[prod] != NotDefined)
+                if any( (prod in self.product_upstreams) and (self.product_upstreams[prod] != NotDefined)
                         for prod in self.starting_products.keys() ):
                     raise RuntimeError( "Something bad has happened." )
 
-                self.starting_prov = { k: Provenance.get( getattr( self, k ).provenance_id,
+                self.starting_prov = { k: Provenance.get( self.products[k].provenance_id,
                                                           must_exist=True, pgdb=_pgdb )
                                        for k in self.starting_products }
 
@@ -457,11 +475,26 @@ class Pipeline( ProcessObject ):
                     if len( given - needed ) > 0:
                         strio.write( f"  Unknown: {given-needed}" )
                     raise ValueError( strio.getvalue() )
-                self.starting_prov = { k: v if isinstance( v, Provenance )
-                                       else Provenance.get(v, must_exist=True, pgdb=_pgdb)
-                                       for k, v in starting_prov.items() }
 
-        # Read existing provenancs and do a consistency check.
+                for prod, prov in starting_prov.items():
+                    prov = Provenance.get( prov, must_exist=True, pgdb=_pgdb )
+                    proc = self.product_provenance_processes[ k ]
+                    if proc != prov.process:
+                        raise ValueError( f"Mismatch; have a provenance for {prod} with process {prov.process} "
+                                          f"but expected the process to be {proc}" )
+                    if ( self.products[prod] != NotDefined ):
+                        if self.products[prod] is None:
+                            raise ValueError( f"self.products[{prod}] is None" )
+                        if self.products[prod].provenance_id != prov.provenance_id:
+                            raise ValueError( f"Mismatch; starting product {prod} has provenance_id "
+                                              f"{self.products[prod].provenance_id}, but process "
+                                              f"{proc} has provenance with id {prov.id}" )
+                    self.starting_prov[ prod ] = prov
+
+        self.product_provenance_processes.update( { k: v.process for k, v in self.starting_prov.items() } )
+        self.provenances.update( { v.process: v for v in self.starting_prov.values() } )
+
+        # Read existing provenances and do a consistency check.
         existingprovs = None
         if provtag is not None:
             existingprovs = self.read_existing_provenances( provtag,
@@ -471,7 +504,7 @@ class Pipeline( ProcessObject ):
                                                             handle_unexpected_processes=handle_unexpected_processes,
                                                             pgdb=pgdb )
             mismatches = {}
-            for process, prov in self.provenances:
+            for process, prov in self.provenances.items():
                 if ( process in existingprovs ) and ( self.provenances[process].id !=
                                                       existingprovs[process].id ):
                     mismatches[process] = ( self.provenancnes[process].id, existingprovs[process].id )
@@ -501,20 +534,25 @@ class Pipeline( ProcessObject ):
                 if not needed.issubset( readpars ):
                     raise RuntimeError( f"Failed to read provenances for processes: {needed-readpars}" )
 
-        # We are finally ready to call our superclass
-        super(ProcessObject, self).__init__( pipeline=None, ignore_missing_config_values=True, **pars )
+        # We are finally ready to call our superclass.
+        super().__init__( pipeline=None, ignore_missing_config_values=True, **pars )
 
         # Make process objects
         self.process_objects = { process: cls( pipeline=self, process_name=process )
-                                 for process, cls in self.process_classes }
+                                 for process, cls in self.process_classes.items() }
 
         # Create provenances, make sure they're consistent with anything we already have
         mismatches = []
         failedcreations = []
         for process, procobj in self.process_objects.items():
             try:
-                pars = procobj.get_critical_parameters()
-                upstreams = [ self.provenances[k] for k in self.product_upstreams[process] ]
+                products = [ p[1] for p in self.process_products[ process ] ]
+                upprods = set( itertools.chain( *[ self.product_upstreams[p] for p in products ] ) )
+                upprocs = set( self.product_provenance_processes[p] for p in upprods
+                               if ( ( self.product_processes[p] != process ) and
+                                    ( self.product_provenance_processes[p] is not None ) ) )
+                upstreams = [ self.provenances[u] for u in upprocs ]
+                pars = procobj.pars.get_critical_pars()
                 cvid = None
                 if ( read_pars_from_prov and ( process in self.provenances ) ):
                     # Special case: if we read parameters from existing provenances,
@@ -525,12 +563,13 @@ class Pipeline( ProcessObject ):
                 if process in self.provenances:
                     if prov.id != self.provenances[process].id:
                         mismatches.append( ( process, prov.id ) )
-                    else:
-                        self.provenances[ process ] = prov
+                else:
+                    self.provenances[ process ] = prov
             except Exception as ex:
                 SCLogger.exception( f"Exception creating provenance for {process}" )
                 failedcreations.append( ( process, ex ) )
 
+        # Make sure nothing went awry
         if ( len(mismatches) > 0 ) or ( len(failedcreations) > 0 ):
             nlsp = "\n    "
             strio = io.StringIO()
@@ -542,6 +581,16 @@ class Pipeline( ProcessObject ):
                 strio.write( f"  Mismatches:{nlsp}{nlsp.join(mess)}\n" )
             SCLogger.error( strio.getvalue() )
             raise RuntimeError( strio.getvalue() )
+
+        # Save any created provenances to database and tag them
+        if ( not read_pars_from_prov ) and ( not self.never_execute ):
+            with PGDB( _pgdb ) as pgdb:
+                provs = list( self.provenances.values() )
+                for prov in provs:
+                    prov.insert_if_needed( pgdb=pgdb, nocommit=True )
+                pgdb.commit()
+                if provtag is not None:
+                    ProvenanceTag.addtag( provtag, provs, pgdb=pgdb )
 
         # ... are we done?  I think we're done.  That was brobdingnagian.
 
@@ -816,6 +865,9 @@ class Pipeline( ProcessObject ):
         Returns True if the pipeline ran without (new) exceptions, False otherwise.
 
         """
+
+        if self.never_execute:
+            raise RuntimeError( "self.never_execute is True, you aren't supposed to call run()" )
 
         if len( self.exceptions ) > 0:
             nl = "\n   "

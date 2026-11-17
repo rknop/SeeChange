@@ -11,7 +11,7 @@ from models.base import SmartSession
 from models.image import Image
 
 from pipeline.parameters import Parameters
-from pipeline.data_store import DataStore, ProvenanceTree
+# from pipeline.data_store import DataStore, ProvenanceTree
 
 
 class ParsFakeInjector(Parameters):

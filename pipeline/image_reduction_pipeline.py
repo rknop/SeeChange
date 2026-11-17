@@ -1,5 +1,5 @@
 from models.exposure import Exposure
-from models.CalibratorSet import CalibratorSet
+from models.calibrator_set import CalibratorSet
 from models.image import Image
 from models.source_list import SourceList
 from models.background import Background
@@ -8,12 +8,12 @@ from models.world_coordinates import WorldCoordinates
 from models.zero_point import ZeroPoint
 
 from pipeline.pipeline import Pipeline
-from pipeline.exposure_splitter import ExposureSplitter
+from pipeline.split_exposure import ExposureSplitter
 from pipeline.secure_calibrator import CalibratorSecurer
 from pipeline.preprocessing import Preprocessor
 from pipeline.detection import Detector
-from pipeline.astrocal import AstroCalibrator
-from pipeline.photocal import PhotCalibrator
+from pipeline.astro_cal import AstroCalibrator
+from pipeline.photo_cal import PhotCalibrator
 
 
 class ImageReductionPipeline( Pipeline ):

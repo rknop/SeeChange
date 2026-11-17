@@ -6,7 +6,8 @@ from astropy.io import fits
 import sep
 
 from pipeline.parameters import Parameters
-from pipeline.data_store import DataStore
+from pipeline.processobject import ProcessObject
+# from pipeline.data_store import DataStore
 
 from models.background import Background
 from improc.sextrsky import sextrsky
@@ -77,9 +78,12 @@ class ParsBackgrounder(Parameters):
         return 'backgrounding'
 
 
-class Backgrounder:
+class Backgrounder( ProcessObject ):
+    _pars_class = ParsBackgrounder
+    _process_name = "backgrounding"
+
     def __init__(self, **kwargs):
-        self.pars = ParsBackgrounder(**kwargs)
+        super().__init__( **kwargs )
 
         # this is useful for tests, where we can know if
         # the object did any work or just loaded from DB or datastore

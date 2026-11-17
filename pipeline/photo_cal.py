@@ -7,7 +7,8 @@ from models.zero_point import ZeroPoint
 
 import pipeline.catalog_tools
 from pipeline.parameters import Parameters
-from pipeline.data_store import DataStore
+from pipeline.processobject import ProcessObject
+# from pipeline.data_store import DataStore
 
 from util.exceptions import BadMatchException
 from util.logger import SCLogger
@@ -105,9 +106,12 @@ class ParsPhotCalibrator(Parameters):
         return 'photocal'
 
 
-class PhotCalibrator:
+class PhotCalibrator( ProcessObject ):
+    _pars_class = ParsPhotCalibrator
+    _process_name = 'photocal'
+
     def __init__(self, **kwargs):
-        self.pars = ParsPhotCalibrator(**kwargs)
+        super().__init__( **kwargs )
 
         # this is useful for tests, where we can know if
         # the object did any work or just loaded from DB or datastore

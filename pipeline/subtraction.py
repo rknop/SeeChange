@@ -13,7 +13,7 @@ import astropy.coordinates
 import astropy.units as units
 
 from pipeline.parameters import Parameters
-from pipeline.data_store import DataStore
+# from pipeline.data_store import DataStore
 
 from models.base import FileOnDiskMixin, PGDB
 from models.image import Image

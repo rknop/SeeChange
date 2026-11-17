@@ -49,7 +49,7 @@ class Report(Base, UUIDMixin):
 
     process_steps = sa.Column(
         sa.ARRAY( sa.Text ),
-        nulalble = False,
+        nullable = False,
         index = False,
         server_default = "[]::text[]",
         doc = "Steps of the pipeline."

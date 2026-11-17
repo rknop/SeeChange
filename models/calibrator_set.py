@@ -63,6 +63,13 @@ class CalibratorSet( Base, UUIDMixin, HasProvenance ):
         raise RuntimeError( "You cannot set the id of a CalibratorSet" )
 
 
+    provenance_id = sa.Column(
+        sa.ForeignKey( 'provenances._id', ondelete="CASCADE", name='calibrator_set_provenance_id_fkey' ),
+        nullable=False,
+        index=True,
+        doc="Provenance id for this object"
+    )
+
     zero_id = sa.Column(
         sqlUUID,
         sa.ForeignKey( 'datafile_or_image_id', ondelete='RESTRICT', name='calibrator_set_zero_fkey' ),

@@ -17,7 +17,8 @@ from util.logger import SCLogger
 from util.config import Config
 
 from pipeline.parameters import Parameters
-from pipeline.data_store import DataStore
+from pipeline.processobject import ProcessObject
+# from pipeline.data_store import DataStore
 from pipeline.backgrounding import Backgrounder
 
 from models.base import FileOnDiskMixin
@@ -311,7 +312,7 @@ class ParsDetector(Parameters):
         return 'detection'
 
 
-class Detector:
+class Detector( ProcessObject ):
     """Extract sources (and possibly a psf) from images or subtraction images.
 
     There are a few different ways to get the sources from an image.
@@ -346,10 +347,13 @@ class Detector:
 
     """
 
+    _pars_class = ParsDetector
+    _process_name = "extraction"
+
     def __init__(self, **kwargs):
         """Initialize Detector."""
 
-        self.pars = ParsDetector(**kwargs)
+        super().__init__( **kwargs )
 
         # this is useful for tests, where we can know if
         # the object did any work or just loaded from DB or datastore

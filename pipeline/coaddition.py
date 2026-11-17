@@ -18,7 +18,7 @@ from models.image import Image
 from models.world_coordinates import WorldCoordinates
 
 from pipeline.parameters import Parameters
-from pipeline.data_store import DataStore
+# from pipeline.data_store import DataStore
 from pipeline.detection import Detector
 from pipeline.astro_cal import AstroCalibrator
 from pipeline.photo_cal import PhotCalibrator

@@ -19,7 +19,8 @@ from models.world_coordinates import WorldCoordinates
 from models.base import FileOnDiskMixin
 
 from pipeline.parameters import Parameters
-from pipeline.data_store import DataStore
+from pipeline.processobject import ProcessObject
+# from pipeline.data_store import DataStore
 from pipeline.catalog_tools import fetch_gaia_dr3_excerpt
 
 
@@ -252,9 +253,12 @@ class ParsAstroCalibrator(Parameters):
         return 'astrocal'
 
 
-class AstroCalibrator:
+class AstroCalibrator( ProcessObject ):
+    _pars_class = ParsAstroCalibrator
+    _process_name = "astrocal"
+
     def __init__(self, **kwargs):
-        self.pars = ParsAstroCalibrator(**kwargs)
+        super().__init__( **kwargs )
 
         # this is useful for tests, where we can know if
         # the object did any work or just loaded from DB or datastore

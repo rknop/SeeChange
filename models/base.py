@@ -2537,7 +2537,7 @@ class HasProvenance:
     # provenance_id = sa.Column(
     #     sa.ForeignKey( 'provenances._id', ondelete="CASCADE", name='OMG_I_DONT_KNOW_WHAT_TO_DO' ),
     #     nullable=False,
-    #     inddex=True,
+    #     index=True,
     #     doc="Provenance id for this object"
     # )
 

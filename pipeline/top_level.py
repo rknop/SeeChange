@@ -3,7 +3,7 @@ import time
 import warnings
 
 from pipeline.parameters import Parameters
-from pipeline.data_store import DataStore
+# from pipeline.data_store import DataStore
 from pipeline.preprocessing import Preprocessor
 from pipeline.astro_cal import AstroCalibrator
 from pipeline.photo_cal import PhotCalibrator

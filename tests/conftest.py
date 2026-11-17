@@ -46,7 +46,7 @@ from util.retrydownload import retry_download
 from util.logger import SCLogger
 import util.ldac
 
-from pipeline.data_store import DataStore, ProvenanceTree
+# from pipeline.data_store import DataStore, ProvenanceTree
 
 # Set this to False to avoid errors about things left over in the database and archive
 #   at the end of tests.  In general, we want this to be True, so we can make sure
@@ -58,6 +58,7 @@ verify_archive_database_empty = False
 
 pytest_plugins = [
     'tests.fixtures.simulated',
+    'tests.fixtures.ls4cam',
     'tests.fixtures.decam',
     'tests.fixtures.ztf',
     'tests.fixtures.ptf',

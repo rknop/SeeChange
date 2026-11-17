@@ -1,3 +1,6 @@
+from util.util import NoValue
+
+
 class ProcessObject:
 
     _pars_class = None
@@ -46,14 +49,20 @@ class ProcessObject:
 
         # Avoid circular imports
         from pipeline.pipeline import Pipeline
-        if not isinstance( pipeline, ( Pipeline, None ) ):
+        if ( pipeline is not None ) and ( not isinstance( pipeline, Pipeline ) ):
             raise TypeError( f"pipeline must be None or a Pipeline object, not a {type(pipeline)}" )
 
-        self.pars = self._pars_class()
-        after = [ self.process_name, kwargs ]
-        if ( pipeline is not None ) and hasattr( pipeline.pars, self.process_name ):
-            after.insert( 1, getattr( pipeline.pars, self.process_name ) )
-        self.pars.merge_configs( after=after, ignore_missing_config_values=ignore_missing_config_values )
+        if self._pars_class != NoValue:
+            self.pars = self._pars_class()
+            after = [ self.process_name, kwargs ]
+            if ( ( pipeline is not None ) and
+                 hasattr( pipeline, 'pars' ) and
+                 hasattr( pipeline.pars, self.process_name )
+                ):
+                after.insert( 1, getattr( pipeline.pars, self.process_name ) )
+            self.pars.merge_configs( after=after, ignore_missing_config_values=ignore_missing_config_values )
+        elif len(kwargs) > 0:
+            raise RuntimeError( f"Unknown arguments: {', '.join(k for k in kwargs.keys())}" )
 
 
     def __call__( self, *args, **kwargs ):

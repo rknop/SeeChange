@@ -1,7 +1,5 @@
 import pathlib
 import copy
-import random
-import warnings
 
 import pyarrow.parquet
 import healpy
@@ -614,7 +612,7 @@ class Parameters:
         everything.extend( after )
 
         for i in range(len(everything)):
-            if not isinstance( everything[i], ( dict, Parameters, None ) ):
+            if ( everything[i] is not None ) and ( not isinstance( everything[i], ( dict, Parameters ) ) ):
                 if not isinstance( everything[i], str ):
                     raise TypeError( "Must pass either strings or dicts in each element of before and after." )
                 if cfg is None:
@@ -628,7 +626,9 @@ class Parameters:
                 else:
                     if not isinstance( d, dict ):
                         raise TypeError( f"Config for {everything[i]} is not a dict." )
-                everything[i] = cfg.value( everything[i] )
+
+                if everything[i] is not None:
+                    everything[i] = cfg.value( everything[i] )
 
         result = {}
         for item in everything:
@@ -1080,35 +1080,6 @@ class Parameters:
         s = f"= {value} % {desc}{extra}"
 
         return s
-
-    def get_process_name(self):
-        """Get the name of the process (pipeline phase) that is relevant for this Parameter object.
-
-        Should be implemented in each subclass.
-        """
-        raise NotImplementedError("Must be implemented in subclass.")
-
-    def do_warning_exception_hangup_injection_here(self):
-        """When called, will check if any of the inject_ parameters are set to non-zero value.
-
-        If they are, will raise a warning, exception or hangup, depending on the value.
-        If any of the values is a float between 0 and 1, will compare it to a uniform random number,
-        and if that random number is lower than the value, will inject the warning, exception or hangup.
-        Note that if an exception occurs, it will override the hangup (it would not be reached).
-
-        """
-        if self.inject_warnings > 0:
-            if random.uniform(0, 1) <= self.inject_warnings:
-                warnings.warn(f"Warning injected by pipeline parameters in process '{self.get_process_name()}'.")
-
-        if self.inject_exceptions > 0:
-            if random.uniform(0, 1) <= self.inject_exceptions:
-                raise RuntimeError(f"Exception injected by pipeline parameters in process '{self.get_process_name()}'.")
-
-        if self.inject_hangups > 0:
-            if random.uniform(0, 1) <= self.inject_hangups:
-                while True:
-                    pass
 
 
 class ParsDemoSubclass(Parameters):

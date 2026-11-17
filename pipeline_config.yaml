@@ -247,19 +247,19 @@ pipeline:
 
 preprocessing:
   steps_required: [ 'overscan', 'linearity', 'flat', 'fringe' ]
-  calibset: externally_supplied
+  # calibset: externally_supplied
   overscan_method: median
   overscan_kwargs: {}
-  zero_provtag: null
-  flattype: externally_supplied
-  flat_provtag: null
-  fringe_provtag: null
+  # zero_provtag: null
+  # flattype: externally_supplied
+  # flat_provtag: null
+  # fringe_provtag: null
   use_base_mask: true
   use_zero_mask: true
   use_flat_mask: true
   masked_pixels_to_replace: []
   masked_pixel_replacement: {}
-
+  
 
 # ======================================================================
 # Extraction, Backgrounding, and PSF are done in one step.

@@ -10,7 +10,7 @@ from models.measurements import MeasurementSet
 from models.object import Object
 
 from pipeline.parameters import Parameters
-from pipeline.data_store import DataStore
+# from pipeline.data_store import DataStore
 from pipeline.catalog_tools import fetch_gaia_dr3_excerpt
 
 from util.logger import SCLogger

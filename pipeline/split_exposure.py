@@ -22,7 +22,7 @@ class ParsExposureSplitter( Parameters ):
             # Should we make this critical?  Probably not... but going to, so that if it turns
             #   out there is some subtle bug that crops up from doing deep vs. shallow
             #   copies, we can test it by running different provenances.
-            critical = True
+            critical = False
         )
 
         self.keep_status = self.add_par(
@@ -30,7 +30,7 @@ class ParsExposureSplitter( Parameters ):
             default = True,
             par_types = bool,
             docstring = "When passing multiple section_ids, keep the existing status properties.",
-            critical = True
+            critical = False
         )
 
         self.keep_products = self.add_par(
@@ -38,7 +38,7 @@ class ParsExposureSplitter( Parameters ):
             default = True,
             par_types = bool,
             docstring = "When passing multiple section_ids, keep existing data products.",
-            critical = True
+            critical = False
         )
 
         self.deep_copy_products = self.add_par(
@@ -48,7 +48,7 @@ class ParsExposureSplitter( Parameters ):
             docstring = ( "When passing multiple section_ids, make deep copies of the products dictionary? "
                           "Otherwise, copy the dictionary, but don't allocate new memory for all the objects. "
                           "True currently errors out." ),
-            critical = True
+            critical = False
         )
 
         self._enforce_new_new_attrs = True
@@ -61,11 +61,15 @@ class ParsExposureSplitter( Parameters ):
 class ExposureSplitter( ProcessObject ):
     """Extract raw images from an exposure (usually raw, anyway).
 
-    Can either add to the image property of the passed pipeline, or
-    return a whole bunch of new pipelines that each have a different
-    image property for a different sensor section.
+    Either sets the 'image' or 'raw_image' entry in the products
+    dictionary of the pipeine (if a single section_id is passed), or
+    returns a bunch of pipelines that are a copy with the appropriate
+    entry in pipeline.products.
 
     """
+
+    _pars_class = ParsExposureSplitter
+    _process_name = 'split_exposure'
 
     def __init__( self, **kwargs ):
         super().__init__( **kwargs )
@@ -113,9 +117,9 @@ class ExposureSplitter( ProcessObject ):
         improp = 'raw_image' if raw else 'image'
 
         if util.util.is_actual_iterable( section_id ):
-            SCLogger.info( f"Exposure splitter exctrating {len(section_id)} images." )
+            SCLogger.info( f"Exposure splitter extracting {len(section_id)} images." )
             pips = [ pipeline.copy( deep=self.pars.deep_copy,
-                                    keep_status =self.pars.keep_status,
+                                    keep_status=self.pars.keep_status,
                                     keep_products=self.pars.keep_products,
                                     deep_copy_products=self.pars.deep_copy_procuts )
                      for i in section_id ]
@@ -130,8 +134,8 @@ class ExposureSplitter( ProcessObject ):
                     raise ValueError( f"Ran ExposureSplitter with section_id={section_id} on a pipeline "
                                       f"that already had an image with sectoin_id "
                                       f"{pipeline.products[improp].section_id}" )
-                return pipeline.image
+                return pipeline.products[ improp ]
             else:
                 SCLogger.info( f"Exposure splitter exracting section {section_id}")
-                pipeline.products[improp] = Image.from_exposure( pipeline.exposure, secid )
-                return pipeline.image
+                pipeline.products[ improp ] = Image.from_exposure( pipeline.exposure, secid )
+                return pipeline.products[ improp ]
