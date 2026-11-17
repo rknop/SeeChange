@@ -400,18 +400,6 @@ class KnownExposureStateConverter( EnumConverter ):
     _dict_inverse = None
 
 
-class CalibratorSetIsImageBits( BitFieldConverter ):
-    _nbits = 16
-    _dict = { 0: 'zero',
-              1: 'dark',
-              2: 'flat',
-              3: 'linearity',
-              4: 'fringe',
-              5: 'illumination'
-             }
-
-
-
 def bitflag_to_string(value, dictionary):
     """Convert 64-bit bitflag into a comma separated string.
 

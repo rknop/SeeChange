@@ -7,6 +7,7 @@ import shutil
 import pathlib
 import math
 import random
+import hashlib
 import textwrap
 import subprocess
 import json
@@ -34,6 +35,7 @@ from models.provenance import Provenance
 from models.catalog_excerpt import CatalogExcerpt
 from models.user import AuthUser, AuthGroup
 from models.image import Image
+from models.datafile import DataFile
 from models.source_list import SourceList
 from models.psf import PSFExPSF
 from models.background import Background
@@ -895,12 +897,33 @@ def browser():
 # Fake objects for testing stuff
 
 @pytest.fixture
+def bogus_datafile_factory( provenance_base ):
+    def load_bogus_datafile( _id, filepath, provenance_id=None ):
+        provenance_id = provenance_base.id if provenance_id is None else provenance_id
+        barf = random.randbytes( 256 )
+        md5 = hashlib.md5()
+        md5.update( barf )
+        with open( filepath, "w" ) as ofp:
+            ofp.write( barf )
+        df = DataFile( _id=_id,
+                       provenance_id=provenance_id,
+                       filepath=filepath,
+                       md5sum=uuid.UUID( md5.hexdigest() )
+                      )
+        df.insert()
+        return df
+
+    return load_bogus_datafile
+
+
+@pytest.fixture
 def bogus_image_factory( provenance_base ):
-    def load_bogus_image( _id, filepath ):
+    def load_bogus_image( _id, filepath, provenance_id=None ):
+        provenance_id = provenance_base.id if provenance_id is None else provenance_id
         img = Image( _id=_id,
                      format='fits',
                      type='Sci',
-                     provenance_id=provenance_base.id,
+                     provenance_id=provenance_id,
                      mjd=60000.,
                      end_mjd=60000.00052,
                      exp_time=45.,

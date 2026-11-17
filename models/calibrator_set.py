@@ -8,9 +8,11 @@ from sqlalchemy.dialects.postgresql import UUID as sqlUUID
 from sqlalchemy.ext.declarative import declared_attr
 
 from models.base import PGDB, Base, UUIDMixin, HasProvenance, SeeChangeBase
-from models.enums_and_bitflags import CalibratorSetIsImageBits
-from sqlalchemy.ext.hybrid import hybrid_property
-
+from models.provenance import Provenance
+from models.image import Image
+from models.datafile import DataFile
+from util.util import asUUID
+from util.logger import SCLogger
 
 datafile_or_image_id = sa.Table(
     'datafile_or_image_id',
@@ -35,10 +37,24 @@ datafile_or_image_id = sa.Table(
 class CalibratorSet( Base, UUIDMixin, HasProvenance ):
     """Represents a collection of datafiles and/or images used in preprocessing.
 
-    Outside this class, only ever set the x_datafile_id, and x_image_id
-    fields, where x is one of zero, dark, flat, linarity, fringe, or
-    illumination.  Only ever get those fields, and id.  Otherwise,
-    things will break, horribly.
+    You can't set fields of this object after creation.
+
+    Properties available include:
+       id
+       provenance_id
+       *_id
+       *_image_id
+       *_datafile_id
+       *_image
+       *_datafile
+
+    where * is any of (zero, dark, flat, linearity, fringe, illumination)
+
+    *_id points to the datafile_or_image_id table, and is probably not
+     useful to you.
+
+    The only method of general use is insert(), which puts the
+    CalibratorSet into the database.
 
     """
 
@@ -48,7 +64,7 @@ class CalibratorSet( Base, UUIDMixin, HasProvenance ):
     def __table_args__( cls ): # noqa: N805
         return (
             sa.UniqueConstraint( 'provenance_id', 'dark_id', 'zero_id', 'flat_id',
-                                 'linearity_id', 'fringe_id', 'illumination_id', '_is_image' ),
+                                 'linearity_id', 'fringe_id', 'illumination_id' ),
         )
 
     calibitems = ( 'zero', 'dark', 'flat', 'linearity', 'fringe', 'illumination' )
@@ -112,295 +128,481 @@ class CalibratorSet( Base, UUIDMixin, HasProvenance ):
         index=True
     )
 
-    _is_image = sa.Column(
-        sa.SmallInteger,
-        nullable=False,
-        server_default='0',
-        index=False
-    )
+    @staticmethod
+    def create( create_uudify=True, _id=None, id=None, provenance_id=None, **kwargs ):
+        """Make a CalibratorSet.
 
-    def _get_datafile_or_image_id( self, field ):
-        dfid = getattr( self, f"_{field}_id" )
-        if dfid is None:
+        calibitems is ( 'zero', 'dark', 'flat', 'linearity', 'fringe', 'illumination' )
+
+        Parameters
+        ----------
+          create_uudify : bool, default True
+            Pass id and/or _id through asUUID?
+
+          id, _id: str, UUID; optional
+            Set the id of the new CalibratorSet.  If both id and _id are
+            given, id is ignored (with a warning).
+
+          provenance_id: Provenance or str; optional
+            If given, set the provenance id of the new CalibratorSet
+            from this.
+
+          *_id: str or UUID; optional
+            * can be any of calibitems.  Directly set the field.  This
+            should probably only be used internally.  If you include
+            any of these, you cannot include any *_image or *_datafile.
+
+          *_image: Image, str, or UUID; optional
+            * can be any of calibitems.  Sets the Image for this
+            calibitem to the passed image, or passed image id.
+
+          *_datafile: Datafile, str, or UUID; optional
+            * can be any of calibitems.  Sets the DataFile for this
+            calibitem to the passed datafile, or passed datafile id.
+            Can't give both *_image and *_datafile for the same
+            calibitem.
+
+        Returns
+        -------
+          CalibratorSet
+
+        """
+
+        createargs = { 'create_uudify': create_uudify }
+        createassociates = {}
+
+        if id is not None:
+            if _id is not None:
+                SCLogger.warning( "Gave both _id and id to CalibratorSet.create; ignoring id" )
+            else:
+                createargs[ '_id' ] = asUUID( id )
+
+        if _id is not None:
+            createargs[ '_id' ] = asUUID( _id )
+
+        if provenance_id is not None:
+            if isinstance( provenance_id, Provenance ):
+                createargs[ 'provenance_id' ] = provenance_id.id
+            else:
+                createargs[ 'provenance_id' ] = str( provenance_id )
+
+        for attr in CalibratorSet.calibitems:
+            if f'{attr}_id' in kwargs:
+                if kwargs[f'{attr}_id'] is not None:
+                    createargs[ f'{attr}_id' ] = asUUID( kwargs[ f'{attr}_id' ] )
+                del kwargs[ f'{attr}_id' ]
+
+            if f'{attr}_image' in kwargs:
+                if kwargs[f'{attr}_image'] is not None:
+                    if f'{attr}_id' in createargs:
+                        raise RuntimeError( f"Can't give both {attr}_id and {attr}_image to CalibratorSet.create" )
+                    if isinstance( kwargs[f'{attr}_image'], Image ):
+                        createassociates[ f'{attr}_image_id' ] = kwargs[ f'{attr}_image' ].id
+                    else:
+                        createassociates[ f'{attr}_image_id' ] = asUUID( kwargs[ f'{attr}_image' ] )
+                del kwargs[ f'{attr}_image' ]
+
+            if f'{attr}_datafile' in kwargs:
+                if kwargs[f'{attr}_datafile'] is not None:
+                    if f'{attr}_id' in createargs:
+                        raise RuntimeError( f"Can't give both {attr}_id and {attr}_datafile to CalibratorSet.create" )
+                    if f'{attr}_image_id' in createassociates:
+                        raise RuntimeError( f"Can't specify both {attr}_image and {attr}_datafile" )
+                    if isinstance( kwargs[f'{attr}_datafile'], DataFile ):
+                        createassociates[ f'{attr}_datafile_id' ] = kwargs[ f'{attr}_datafile' ].id
+                    else:
+                        createassociates[ f'{attr}_datafile_id' ] = asUUID( kwargs[ f'{attr}_datafile' ] )
+                del kwargs[ f'{attr}_datafile' ]
+
+        for prop in ( 'created_at', 'modified' ):
+            if prop in kwargs:
+                createargs[ prop ] = kwargs[ prop ]
+                del kwargs[ prop ]
+
+        if len(kwargs) > 0:
+            raise ValueError( f"Unknown parameters passed to CalibratorSet.create: {list(kwargs.keys())}" )
+
+        return CalibratorSet( ok_to_instantiate=True, _createassociates=createassociates, **createargs )
+
+
+    def __getattribute__( self, attr ):
+        """Handle getting *_image_id, *_image, *_datafile_id, and *_datafile."""
+
+        if not isinstance( attr, str ):
+            raise TypeError( "attr must be a str" )
+
+        cache = object.__getattribute__( self, '_file_cache' )
+
+        if attr in cache:
+            return cache[ attr ]
+
+        elif ( len(attr) > 3 ) and ( attr[-3:] == "_id" ):
+            if ( len(attr) > 9 ) and ( attr[-9:] == "_image_id" ):
+                attrbase = attr[:-9]
+                if attrbase in CalibratorSet.calibitems:
+                    isimage, imageid = self._get_datafile_or_image_id( attrbase )
+                    if not isimage:
+                        return None
+                    else:
+                        return imageid
+            elif ( len(attr) > 12 ) and ( attr[-12:] == "_datafile_id" ):
+                attrbase = attr[:-12]
+                if attrbase in CalibratorSet.calibitems:
+                    isimage, datafileid = self._get_datafile_or_image_id( attrbase )
+                    if ( isimage is None ) or isimage:
+                        return None
+                    else:
+                        return datafileid
+
+            else:
+                return object.__getattribute__( self, attr )
+
+        elif ( len(attr) > 6 ) and ( attr[-6:] == "_image" ):
+            attrbase = attr[:-6]
+            if attrbase in CalibratorSet.calibitems:
+                with PGDB() as pgdb:
+                    isimage, imageid = self._get_datafile_or_image_id( attrbase, pgdb=pgdb )
+                    if not isimage:
+                        return None
+                    else:
+                        img = Image.get_by_id( imageid, pgdb=pgdb )
+                        cache[ attr ] = img
+                        return img
+
+            else:
+                return object.__getattribute__( self, attr )
+
+        elif ( len(attr) > 9 ) and ( attr[-9:] == "_datafile" ):
+            attrbase = attr[:-9]
+            if attrbase in CalibratorSet.calibitems:
+                with PGDB() as pgdb:
+                    isimage, datafileid = self._get_datafile_or_image_id( attrbase, pgdb=pgdb )
+                    if ( isimage is None ) or isimage:
+                        return None
+                    else:
+                        df = DataFile.get_by_id( datafileid, pgdb=pgdb )
+                        cache[ attr ] = df
+                        return df
+
+            else:
+                return object.__getattribute__( self, attr )
+
+        else:
+            return object.__getattribute__( self, attr )
+
+    def __setattr__( self, attr, value ):
+        if ( ( ( len(attr) > 9 ) and ( attr[-9:] == "_image_id" ) ) or
+             ( ( len(attr) > 12 ) and ( attr[-12:] == "_datafile_id" ) )
+             ( ( len(attr) > 6 ) and ( attr[-6:] == "_image" ) ) or
+             ( ( len(attr) > 9 ) and ( attr[-9:] == "_datafile" ) )
+            ):
+            raise RuntimeError( "You can't set a CalibratorSet *_image[_id] or *_datafile[_id] "
+                                "outside of the constructor." )
+        else:
+            object.__setattr__( self, attr, value )
+
+
+    def _get_datafile_or_image_id( self, field, pgdb=None ):
+        cache = object.__getattribute__( self, '_file_cache' )
+
+        # TODO : consistency check?
+        if f'{field}_image_id' in cache:
+            return True, cache[ f'{field}_image_id' ]
+        elif  f'{field}_image' in cache:
+            return True, cache[ f'{field}_image' ].id
+        elif f'{field}_datafile_id' in cache:
+            return False, cache[ f'{field}_datafile_id' ]
+        elif f'{field}_datafile' in cache:
+            return False, cache[ f'{field}_datafile' ].id
+
+        else:
+            dfid = object.__getattribute__( self, f"_{field}_id" )
+            if dfid is None:
+                return None, None
+
+            with PGDB( dictcursor=True, pgdb=pgdb ) as pgdb:
+                rows = pgdb.execute( sql.SQL( textwrap.dedent(
+                    """\
+                    SELECT datafile_id, image_id, _id
+                    FROM datafile_or_image_id
+                    WHERE _id={dfid}
+                    """
+                ) ).format( dfid=dfid ) )
+                if len(rows) > 1:
+                    raise RuntimeError( "Database corruption in datafile_or_image_id, this should not happen." )
+                elif len(rows) == 0:
+                    raise RuntimeError( f"Failed to get datafile_or_image_id {dfid} from database" )
+                else:
+                    if ( rows[0][0] is None ) and ( rows[0][1] is None ):
+                        raise RuntimeError( f"There is a datafile_or_image_id row ({rows[0][3]}) with "
+                                            f"both image_id and datafile_id NULL.  This is bad." )
+                    if rows[0][0] is None:
+                        return True, rows[0][1]
+
+                    else:
+                        return False, rows[0][0]
+
+    def __init__( self, _ok_to_instantiate=False, _createassociates=None, **kwargs ):
+        """Do not call the constructor, call CalibratorSet.create()"""
+
+        if not _ok_to_instantiate:
+            raise RuntimeError( "Don't instantiate CalibratorSet directly, call Calibratorset.create" )
+
+        if any( f'{field}_id' in kwargs for field in CalibratorSet.calibitems ):
+            if ( _createassociates is not None ) and ( len( _createassociates ) > 0 ):
+                raise RuntimeError( "CalibratorSet constructor got both *_id fields and _createassociates" )
+
+            object.__setattr__( self, '_createassociates', None )
+            for field in CalibratorSet.calibitems:
+                if f'{field}_id' in kwargs:
+                    object.__setattr__( self, f'{field}_id', kwargs[f'{field}_id'] )
+                    del kwargs[ f'{field}_id' ]
+
+            self._file_cache = {}
+
+        else:
+            object.__setattr__( self._file_cache, _createassociates )
+
+        SeeChangeBase.init( self, **kwargs )
+        self._file_cache = {}
+
+
+    def generate_provenance( self, process='secure_calibrators', pgdb=None, nocommit=False, set_provenance_id=True ):
+        # This is a weird object, in that the object can generate the provenance,
+        #   rather than the process that produces it.  (Almost.)
+        upstreams = []
+        with PGDB.pgdb( pgdb ) as pgdb:
+            for attr in CalibratorSet.calibitems:
+                img = getattr( self, f'{attr}_image' )
+                df = getattr( self, f'{attr}_datafile' )
+                if ( img is not None ) and ( df is not None ):
+                    raise RuntimeError( f"Calibrator set has both a {attr}_image and {attr}_datafile; this is bad." )
+                if img is not None:
+                    if img.provenance_id is None:
+                        return None
+                    upstreams.append( Provenance.get( img.provenance_id, must_exist=True, pgdb=pgdb ) )
+                elif df is not None:
+                    if df.provenance_id is None:
+                        return None
+                    upstreams.append( Provenance.get( df.provenance_id, must_exist=True, pgdb=pgdb ) )
+
+            prov = Provenance( process=process, upstreams=upstreams, pgdb=pgdb )
+            if set_provenance_id:
+                self.provenance_id = prov.id
+            if not nocommit:
+                prov.insert_if_neeed( pgdb=pgdb )
+
+        return prov
+
+
+    def existing_entry( self, pgdb=None ):
+        # This is more complicated than you'd think because there may
+        #   exist datafile_or_image_id entries that we don't know about.
+        #   If we have a non-None, _createassociates attribute, that
+        #   means we know the relevant image and datafile ids, but not
+        #   the {attr}_id fields that point to datafile_or_image_id.  In
+        #   that case, gotta do a bunch of joins to find the
+        #   datafile_or_image_id values *if* those already exists.
+
+        # ...of course, if we have no provenance, then we can't exist.
+        #   (Take that, Descartes!)
+        if object.__getattribute__( self, 'provenance_id' ) is None:
             return None
 
-        isimage = CalibratorSetIsImageBits.to_bitmask( field ) & self._is_image
-
-        with PGDB( dictcursor=True ) as pgdb:
-            rows = pgdb.execute( sql.SQL( textwrap.dedent(
+        # If any of the {attr}_id fields is set, then they should all be set.
+        # (They only get set on insert or loading from the database.)
+        if any( object.__getattribute__( self, f'{i}_id' ) is not None for i in CalibratorSet.calibitems ):
+            q = sql.SQL( textwrap.dedent(
                 """\
-                SELECT datafile_id, image_id
-                FROM datafile_or_image_id
-                WHERE _id={dfid}
+                SELECT c._id FROM calibrator_sets
+                WHERE provenance_id={provid}
                 """
-            ) ).format( dfid=dfid ) )
-            if len(rows) > 1:
-                raise RuntimeError( "Database corruption in datafile_or_image_id, this should not happen." )
-            elif len(rows) == 0:
-                raise RuntimeError( "Failed to get datafile_or_image_id from database" )
-            else:
-                if ( ( ( rows[0][1] is None ) and ( not isimage ) ) or
-                     ( ( rows[0][0] is None ) and isimage )
+            ) ).format( isimage=self._isimage, provid=self.provenance_id )
+            for field in CalibratorSet.calibitems:
+                val = object.__getattribute__( self, f'{field}_id' )
+                if val is None:
+                    q += sql.SQL( "  AND {field}_id IS NULL\n" ).format( field=sql.SQL(field) )
+                else:
+                    q += sql.SQL( "  AND {field}_id=val\n" ).format( field=sql.SQL(field), val=val )
+
+        else:
+            # In this case, we don't actually know the {attr}_id fields so we can't
+            #   just search the calibrator_set table.  Instead, we have to
+            #   do ten million joins.
+            cache = object.__getattribute__( self, '_file_cache' )
+            selectq = sql.SQL( "SELECT c._id" )
+            joinq = sql.SQL( "" )
+            where = sql.SQL( "WHERE c.provenance_id={provid}\n" ).format( provid=self.provenance_id )
+
+            for field in CalibratorSet.calibitems:
+                if ( ( f'{field}_image_id' in cache ) or
+                     ( f'{field}_datafile_id' in cache )
                     ):
-                    raise ValueError( f"Iconsistency error; {field} is{'' if isimage else ' not'} "
-                                      f"supposed to be an image but is{' not' if isimage else ''}" )
+                    if ( ( f'{field}_image_id' in cache ) and
+                         ( f'{field}_datafile_id' in cache )
+                        ):
+                        raise ValueError( f"CalibratorSet _cache has both "
+                                          f"{field}_image_id and {field}_datafile_id " )
 
-                return isimage, rows[0][1] if isimage else rows[0][0]
+                    joinq += sql.SQL( textwrap.dedent(
+                        """\
+                        INNER JOIN datafile_or_image_id {field}_join ON c.{field}_id={field}_join._id
+                        """
+                    ) ).format( field=field )
+
+                    if f'{field}_image_id' in cache:
+                        selectq += sql.SQL( ", {c}.{field}_id AS {field}_image_id" ).format( field=field )
+                        where += sql.SQL( "  AND {field}_join.image_id={imid}\n"
+                                         ).format( field=sql.SQL(field),
+                                                   imid=cache[f'{field}_image_id'] )
+                    else:
+                        selectq += sql.SQL( ", {field}_join.datafile_id AS {field}_datafile_id" ).format( field=field )
+                        where += sql.SQL( "  AND {field}_join.datafile_id={dfid}\n"
+                                         ).format( field=sql.SQL(field),
+                                                   imid=cache[f'{field}_datafile_id'] )
+
+            q = sql.SQL( "{selectq}\nFROM calibrator_sets\n{joinq}\n{where}"
+                        ).format( selectq=selectq, joinq=joinq, where=where )
 
 
-    @property
-    def zero_image_id( self ):
-        if self._zero_image_id is None:
-            isimage, fileid = self._get_datafile_or_image( 'zero' )
-            if not isimage:
+        with PGDB( pgdb, dictcursor=True ) as pgdb:
+            rows = pgdb.execute( q )
+            if len(rows) > 1:
+                raise RuntimeError( f"Got multiple rows for query:\n{q.as_string()}" )
+            if len(rows) == 1:
+                return rows[0]
+            else:
                 return None
-            self._zero_image_id = fileid
-        return self._zero_image_id
-
-    @zero_image_id.setter
-    def zero_image_id( self, val ):
-        self.zero_image_id = val
-        self._is_image |= CalibratorSetIsImageBits.to_bitmask( 'zero' )
-
-    @property
-    def zero_datafile_id( self ):
-        if self._zero_datafile_id is None:
-            isimage, fileid = self._get_datafile_or_image( 'zero' )
-            if isimage:
-                return None
-            self._zero_datafile_id = fileid
-        return self._zero_datafile_id
-
-    @zero_datafile_id.setter
-    def zero_datafile_id( self, val ):
-        self.zero_datafile_id = val
-        self._is_image &= 0xffffffff - CalibratorSetIsImageBits.to_bitmask( 'zero' )
-
-    @property
-    def dark_image_id( self ):
-        if self._dark_image_id is None:
-            isimage, fileid = self._get_datafile_or_image( 'dark' )
-            if not isimage:
-                return None
-            self._dark_image_id = fileid
-        return self._dark_image_id
-
-    @dark_image_id.setter
-    def dark_image_id( self, val ):
-        self.dark_image_id = val
-        self._is_image |= CalibratorSetIsImageBits.to_bitmask( 'dark' )
-
-    @property
-    def dark_datafile_id( self ):
-        if self._dark_datafile_id is None:
-            isimage, fileid = self._get_datafile_or_image( 'dark' )
-            if isimage:
-                return None
-            self._dark_datafile_id = fileid
-        return self._dark_datafile_id
-
-    @dark_datafile_id.setter
-    def dark_datafile_id( self, val ):
-        self.dark_datafile_id = val
-        self._is_image &= 0xffffffff - CalibratorSetIsImageBits.to_bitmask( 'dark' )
-
-    @property
-    def flat_image_id( self ):
-        if self._flat_image_id is None:
-            isimage, fileid = self._get_datafile_or_image( 'flat' )
-            if not isimage:
-                return None
-            self._flat_image_id = fileid
-        return self._flat_image_id
-
-    @flat_image_id.setter
-    def flat_image_id( self, val ):
-        self.flat_image_id = val
-        self._is_image |= CalibratorSetIsImageBits.to_bitmask( 'flat' )
-
-    @property
-    def flat_datafile_id( self ):
-        if self._flat_datafile_id is None:
-            isimage, fileid = self._get_datafile_or_image( 'flat' )
-            if isimage:
-                return None
-            self._flat_datafile_id = fileid
-        return self._flat_datafile_id
-
-    @flat_datafile_id.setter
-    def flat_datafile_id( self, val ):
-        self.flat_datafile_id = val
-        self._is_image &= 0xffffffff - CalibratorSetIsImageBits.to_bitmask( 'flat' )
-
-    @property
-    def fringe_image_id( self ):
-        if self._fringe_image_id is None:
-            isimage, fileid = self._get_datafile_or_image( 'fringe' )
-            if not isimage:
-                return None
-            self._fringe_image_id = fileid
-        return self._fringe_image_id
-
-    @fringe_image_id.setter
-    def fringe_image_id( self, val ):
-        self.fringe_image_id = val
-        self._is_image |= CalibratorSetIsImageBits.to_bitmask( 'fringe' )
-
-    @property
-    def fringe_datafile_id( self ):
-        if self._fringe_datafile_id is None:
-            isimage, fileid = self._get_datafile_or_image( 'fringe' )
-            if isimage:
-                return None
-            self._fringe_datafile_id = fileid
-        return self._fringe_datafile_id
-
-    @fringe_datafile_id.setter
-    def fringe_datafile_id( self, val ):
-        self.fringe_datafile_id = val
-        self._is_image &= 0xffffffff - CalibratorSetIsImageBits.to_bitmask( 'fringe' )
-
-    @property
-    def linearity_image_id( self ):
-        if self._linearity_image_id is None:
-            isimage, fileid = self._get_datafile_or_image( 'linearity' )
-            if not isimage:
-                return None
-            self._linearity_image_id = fileid
-        return self._linearity_image_id
-
-    @linearity_image_id.setter
-    def linearity_image_id( self, val ):
-        self.linearity_image_id = val
-        self._is_image |= CalibratorSetIsImageBits.to_bitmask( 'linearity' )
-
-    @property
-    def linearity_datafile_id( self ):
-        if self._linearity_datafile_id is None:
-            isimage, fileid = self._get_datafile_or_image( 'linearity' )
-            if isimage:
-                return None
-            self._linearity_datafile_id = fileid
-        return self._linearity_datafile_id
-
-    @linearity_datafile_id.setter
-    def linearity_datafile_id( self, val ):
-        self.linearity_datafile_id = val
-        self._is_image &= 0xffffffff - CalibratorSetIsImageBits.to_bitmask( 'linearity' )
-
-    @property
-    def illumination_image_id( self ):
-        if self._illumination_image_id is None:
-            isimage, fileid = self._get_datafile_or_image( 'illumination' )
-            if not isimage:
-                return None
-            self._illumination_image_id = fileid
-        return self._illumination_image_id
-
-    @illumination_image_id.setter
-    def illumination_image_id( self, val ):
-        self.illumination_image_id = val
-        self._is_image |= CalibratorSetIsImageBits.to_bitmask( 'illumination' )
-
-    @property
-    def illumination_datafile_id( self ):
-        if self._illumination_datafile_id is None:
-            isimage, fileid = self._get_datafile_or_image( 'illumination' )
-            if isimage:
-                return None
-            self._illumination_datafile_id = fileid
-        return self._illumination_datafile_id
-
-    @illumination_datafile_id.setter
-    def illumination_datafile_id( self, val ):
-        self.illumination_datafile_id = val
-        self._is_image &= 0xffffffff - CalibratorSetIsImageBits.to_bitmask( 'illumination' )
-
-    @hybrid_property
-    def is_image( self ):
-        return CalibratorSetIsImageBits.bitmask_to_strings( self._is_image )
-
-    @is_image.inplace.setter
-    def is_image( self, value ):
-        self._is_image = CalibratorSetIsImageBits.to_bitmask( value )
-
-    def is_calibrator_image( self, which ):
-        return bool( self._is_image & CalibratorSetIsImageBits.to_bitmask( which ) )
 
 
-    def __init__( self ):
-        SeeChangeBase.init( self )
+    def insert( self, exist_ok=False, pgdb=None ):
+        """Insert the CalibratorSet into the database.
 
-        for calibitem in self.calibitems:
-            setattr( self, f"_{calibitem}_image_id", None )
-            setattr( self, f"_{calibitem}_datafile_id", None )
+        If exist_ok is True and the entry already exists, update the
+        object's id to the existing one, and also update the *_id fields
+        if appropriate.
 
+        Parameters
+        ----------
+          exist_ok : bool, default False
+            If True, and a CalibratorSet already exists that's the same
+            as this one, then just update the id (and, if appropriate,
+            other fields).  If False, raise an exception.
 
-    def get_or_insert( self, pgdb=None ):
-        """Either load the object id, or create all the necessary database tables.
-
-        With all of x_image_id and x_datafile_id set (where for any par
-        of x, at least one is None), and with self._is_image consistent
-        with all that, put query the database to see if this is all
-        already defined.  If so, set our _id field to the right thing.
-        If not, insert all the necessary rows.
+          pgdb: PGDB or None
+            Database connection.  If not given, a new one will be opened
+            and closed.
 
         """
 
         with PGDB( pgdb ) as pgdb:
-            try:
-                pgdb.execute( "LOCK TABLE datafile_or_image_id" )
-                pgdb.execute( "LOCK TABLE calibrator_sets" )
+            if self.provenance_id is None:
+                self.generate_provenance( pgdb=pgdb )
 
-                for calibitem in self.calibitems:
-                    if CalibratorSetIsImageBits.to_bitmask( calibitem ) & self._is_image:
-                        col = 'image_id'
-                        fileid = getattr( self, "_{calibitem}_image_id" )
-                    else:
-                        col = 'datafile_id'
-                        fileid = getattr( self, "_{calibitem}_datafile_id" )
-
-                    if fileid is not None:
-                        q = sql.SQL( "SELECT _id, datafile_id, image_id FROM datafile_or_image_id "
-                                     "WHERE {col}={itemid}"
-                                    ).format( col=col, itemid=fileid )
-                        rows = pgdb.execute( q )
-                        if len(rows) > 1:
-                            raise RuntimeError( "Database corruption in datafile_or_image_id, this should not happen." )
-                        elif len(rows) == 1:
-                            setattr( self, f"{calibitem}_id", rows[0][0] )
-                        else:
-                            myid = uuid.uuid4()
-                            insq = sql.SQL( "INSERT INTO datafile_id(_id,{col}) VALUES({myid},{fileid})"
-                                           ).format( col=col, myid=myid, fileid=fileid )
-                            pgdb.execute( insq )
-                            setattr( self, f"{calibitem}_id", fileid )
-
-                q = sql.SQL( "SELECT _id FROM calibrator_sets" )
-                where = " WHERE"
-                for calibitem in self.calibitems:
-                    itemid = getattr( self, f"{calibitem}_id" )
-                    if itemid  is None:
-                        q += sql.SQL( "{where} {col} IS NULL" ).format( where=sql.SQL(where),
-                                                                        col=sql.Identifier(f'{calibitem}_id') )
-                    else:
-                        q += sql.SQL( "{where} {col}={val}"
-                                     ).format( where.sql.SQL(where), col=sql.Identifier(f'{calibitem}_id'),
-                                               val=itemid )
-                    where = " AND"
-
-                rows = pgdb.execute( q )
-                if len(rows) > 1:
-                    # Unique constraint should stop this.
-                    raise RuntimeError( "This should never happen" )
-                if len(rows) == 0:
-                    self._id = uuid.uuid4()
-                    self.super().insert( pgdb=pgdb, nocommit=True )
+            existing_entry = self.existing_entry( pgdb=pgdb )
+            # Rollback to free any shared locks we may have picked up;
+            # Otherwise, we'll get deadlocks below.
+            pgdb.rollback()
+            if existing_entry is not None:
+                if not exist_ok:
+                    raise RuntimeError( "CalibSet already exists." )
                 else:
-                    self._id = rows[0][0]
+                    setattr( self, '_id', existing_entry["_id"] )
+                    for attr in CalibratorSet.calibitems:
+                        field = f'{attr}_id'
+                        if field in existing_entry:
+                            object.__setattr__( self, field, existing_entry[field] )
 
-                pgdb.commit()
+            else:
+                myid = uuid.uuid4()
+                insertfields = sql.SQL( "_id" )
+                insertvalues = sql.SQL( "{myid}" ).format( myid=myid )
+                setvalues = { '_id': myid }
+                searchattrs = []
+                searchqs = []
+                insertqs = []
+                cache = object.__getattribute__( self, '_file_cache' )
+                for attr in CalibratorSet.items:
+                    if ( f'{attr}_image_id' in cache ) or ( f'{attr}_datafile_id' in cache ):
+                        if ( ( f'{attr}_image_id' in cache ) and
+                             ( f'{attr}_datafile_id' in cache )
+                            ):
+                            raise RuntimeError( f"Error, CalibratorSet cache has both "
+                                                f"{attr}_image_id and {attr}_datafile_id" )
+                        thisid = uuid.uuid4()
+                        insertfields += sql.SQL( ",{attr}" ).format( attr=sql.Identifier(f'{attr}_id' ) )
+                        setvalues[ f'{attr}_id' ] = thisid
+                        searchattrs.append( attr )
 
-            finally:
-                # Make sure we don't hold the lock
-                pgdb.rollback()
+                        if f'{attr}_image_id' in cache:
+                            searchqs.append( sql.SQL( textwrap.dedent(
+                                """\
+                                SELECT _id FROM datafile_or_image_id
+                                WHERE image_id={imid} AND datafile_id IS NULL
+                                """
+                            ) ).format( imid=f'{attr}_image_id' ) )
+                            insertqs.append( sql.SQL( textwrap.dedent(
+                                """\
+                                INSERT INTO datafile_or_image_id( _id, datafile_id, image_id )
+                                VALUES({uuid}, NULL, {imid})
+                                """
+                            ) ).format( uuid=thisid, imid=cache[f'{attr}_image_id'] ) )
+                        else:
+                            searchqs.append( sql.SQL( textwrap.dedent(
+                                """\
+                                SELECT _id FROM datafile_or_image_id
+                                WHE
+                                RE image_id IS NULL AND datafile_id={dfid}
+                                """
+                            ) ).format( dfid=f'{attr}_datafile_id' ) )
+                            insertqs.append( sql.SQL( textwrap.dedent(
+                                """\
+                                INSERT INTO datafile_or_image_id( _id, datafile_id, image_id )
+                                VALUES({uuid}, {dfid}, NULL)
+                                """
+                            ) ).format( uuid=thisid, dfid=cache[f'{attr}_datafile_id'] ) )
+
+                try:
+                    # To avoid race conditions, lock the tables table and search again
+                    pgdb.execute_nofetch( "LOCK TABLE calibrator_sets" )
+                    pgdb.execute_nofetch( "LOCK TABLE datafile_or_image_id" )
+                    existing_entry = self.existing_entry( pgdb=pgdb )
+                    if existing_entry is not None:
+                        pgdb.rollback()
+                        if not exist_ok:
+                            raise RuntimeError( "CalibSet already exists." )
+                        else:
+                            setattr( self, '_id', existing_entry["_id"] )
+                            for attr in CalibratorSet.calibitems:
+                                field = f'{attr}_id'
+                                if field in existing_entry:
+                                    object.__setattr__( self, field, existing_entry[field] )
+                            setattr( self, '_cache', None )
+
+                    else:
+                        # Insert while we hold our lock
+                        for searchq, insertq, attr in zip( searchqs, insertqs, searchattrs ):
+                            rows, _cols = pgdb.execute( searchq )
+                            if len(rows) == 0:
+                                pgdb.execute_nofetch( insertq )
+                            else:
+                                setvalues[ f'{attr}_id' ] = rows[0][0]
+                        insertvalues += sql.SQL(",").join( setvalues[ f'{attr}_id' ] for attr in searchattrs )
+                        q = sql.SQL( "INSERT INTO calibrator_sets({fields}} VALUES({values})"
+                                    ).format( fields=insertfields, values=insertvalues )
+                        pgdb.execute_nofetch( q )
+                        pgdb.commit()
+                        for attr, val in setvalues:
+                            object.__setattr__( self, attr, val )
+                finally:
+                    # Really make sure locks are released
+                    pgdb.rollback()
+
+
+    def delete_from_disk_and_database( self, remove_folder=False, remove_downstreams=False, archive=False, pgdb=None ):
+        if remove_downstreams:
+            raise NotImplementedError( "Removing downstreams of a CalibratorSet not implemented." )
+
+        with PGDB( pgdb ) as pgdb:
+            pgdb.execute( sql.SQL( "DELETE FROM calibrator_sets WHERE _id={uuid}" ).format( uuid=self.id ) )
+            pgdb.commit()
