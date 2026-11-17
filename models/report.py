@@ -51,7 +51,7 @@ class Report(Base, UUIDMixin):
         sa.ARRAY( sa.Text ),
         nullable = False,
         index = False,
-        server_default = "[]::text[]",
+        server_default = "{}",
         doc = "Steps of the pipeline."
     )
 

@@ -1,8 +1,5 @@
-import pytest
 import uuid
 import random
-
-from psycopg import sql
 
 from models.base import PGDB
 from models.calibrator_set import CalibratorSet
@@ -20,76 +17,66 @@ def test_calibrator_set_create( bogus_image_factory, bogus_datafile_factory ):
         linearity = bogus_datafile_factory( uuid.uuid4(), f'{barf}_linearity.dat' )
         nukes.append( linearity )
 
-        with pytest.raises( RuntimeError, match=( "Don't instantiate Calibratorset directly, "
-                                                  "call Calibratorset.create" ) ):
-            _ = CalibratorSet( flat_image=flat, zero_image=zero, linearity_datafile=linearity )
-
-        cset = CalibratorSet.create( flat_image=flat, zero_image=zero, linearity_datafile=linearity )
+        cset = CalibratorSet( flat_image=flat, zero_image=zero, linearity_datafile=linearity )
 
         cset_prov = cset.generate_provenance()
         nukes.append( cset_prov )
         assert cset.provenance_id == cset_prov.id
 
-        for attr in CalibratorSet.calibitems:
-            assert getattr( cset, f'{attr}_id' ) is None
+        assert set( cset.images.keys() ) == { 'flat', 'zero' }
+        assert set( cset.datafiles.keys() ) == { 'linearity' }
+        assert cset.image( 'flat' ) == flat
+        assert cset.image( 'zero' ) == zero
+        assert cset.image( 'linearity' ) is None
+        assert cset.image( 'foo' ) is None
+        assert cset.datafile( 'linearity' ) == linearity
+        assert cset.datafile( 'flat' ) is None
+        assert cset.datafile( 'zero' ) is None
+        assert cset.datafile( 'foo' ) is None
 
-        assert set( cset._file_cache.keys() ) == { 'flat_image_id', 'zero_image_id', 'linearity_datafile_id' }
-        assert cset._file_cache[ 'flat_image_id' ] == flat.id
-        assert cset._file_cache[ 'zero_image_id' ] == zero.id
-        assert cset._file_cache[ 'linearity_datafile_id' ] == linearity.id
+        assert set( cset.image_ids.keys() ) == { 'flat', 'zero' }
+        assert cset.image_ids[ 'flat' ] == flat.id
+        assert cset.image_ids[ 'zero' ] == zero.id
+        assert set( cset.datafile_ids.keys() ) == { 'linearity' }
+        assert cset.datafile_ids[ 'linearity' ] == linearity.id
 
-        assert cset.flat_image == flat
-        assert cset.flat_image_id == flat.id
-        assert cset.zero_image == zero
-        assert cset.zero_image_id == zero.id
-        assert cset.linearity_datafile == linearity
-        assert cset.linearity_datafile_id == linearity.id
-        assert cset.flat_datafile is None
-        assert cset.zero_datafile is None
-        assert cset.linearity_image is None
-        for suffix in ( 'image', 'image_id', 'datafile', 'datafile_id' ):
-            assert all( getattr( cset, f'{i}_{suffix}' ) is None
-                        for i in CalibratorSet.calibitems
-                        if i not in ( 'flat', 'zero', 'linearity' ) )
+        # Make sure it can lazy load
+        cset._images = {}
+        cset._datafiles = {}
+        assert cset.image( 'flat' ).id == flat.id
+        assert cset.image( 'zero' ).id == zero.id
+        assert cset.image( 'linearity' ) is None
+        assert cset.image( 'foo' ) is None
+        assert cset.datafile( 'linearity' ).id == linearity.id
+        assert cset.datafile( 'flat' ) is None
+        assert cset.datafile( 'zero' ) is None
+        assert cset.datafile( 'foo' ) is None
 
         cset.insert()
+        nukes.append( cset )
 
-        assert all( getattr( cset, f'{attr}_id' ) is not None for attr in ( 'flat', 'zero', 'linearity' ) )
-        assert all( getattr( cset, f'{attr}_id' ) is None
-                    for attr in CalibratorSet.calibitems
-                    if attr not in ( 'flat', 'zero', 'linearity' ) )
+        newcset = CalibratorSet.get_by_id( cset.id )
+        assert newcset.id == cset.id
+        assert newcset.provenance_id == cset.provenance_id
+        assert newcset._images == {}
+        assert newcset._datafiles == {}
+        assert set( newcset.image_ids.keys() ) == { 'flat', 'zero' }
+        assert set( newcset.datafile_ids.keys() ) == { 'linearity' }
+        assert newcset.image_ids[ 'flat' ] == cset.image_ids[ 'flat']
+        assert newcset.image_ids[ 'zero' ] == cset.image_ids[ 'zero']
+        assert newcset.datafile_ids[ 'linearity' ] == cset.datafile_ids[ 'linearity']
 
-        # Verify cache reloading works
-
-        cset._file_cache = {}
-        assert cset.flat_image == flat
-        assert cset.flat_image_id == flat.id
-        assert cset.zero_image == zero
-        assert cset.zero_image_id == zero.id
-        assert cset.linearity_datafile == linearity
-        assert cset.linearity_datafile_id == linearity.id
-        assert cset.flat_datafile is None
-        assert cset.zero_datafile is None
-        assert cset.linearity_image is None
-        for suffix in ( 'image', 'image_id', 'datafile', 'datafile_id' ):
-            assert all( getattr( cset, f'{i}_{suffix}' ) is None
-                        for i in CalibratorSet.calibitems
-                        if i not in ( 'flat', 'zero', 'linearity' ) )
-
-        oldid = cset.id
-        cset._id = None
-        with pytest.raises( RuntimeError, match=r"CalibSet already exists." ):
-            cset.insert()
-        cset.insert( exist_ok=True )
-        assert cset.id == oldid
+        assert newcset.image( 'flat' ).id == cset.image( 'flat' ).id
+        assert newcset.image( 'zero' ).id == cset.image( 'zero' ).id
+        assert newcset.datafile( 'linearity' ).id == cset.datafile( 'linearity' ).id
+        assert newcset.image( 'linearity' ) is None
+        assert newcset.image( 'foo' ) is None
+        assert newcset.datafile( 'flat' ) is None
+        assert newcset.datafile( 'zero' ) is None
+        assert newcset.datafile( 'foo' ) is None
 
     finally:
         with PGDB() as pgdb:
-            if cset is not None:
-                cset.delete_from_disk_and_database( pgdb=pgdb )
-                pgdb.execute( sql.SQL( "DELETE FROM datafile_or_image_id WHERE _id=ANY(ARRAY[{ids}])"
-                                      ).format( ids=sql.SQL(",").join( [ cset.flat_id, cset.zero_id,
-                                                                         cset.linearity_id ] ) ) )
-                pgdb.commit()
+            nukes.reverse()
             for nuke in nukes:
                 nuke.delete_from_disk_and_database( pgdb=pgdb )

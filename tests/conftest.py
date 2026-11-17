@@ -903,13 +903,12 @@ def bogus_datafile_factory( provenance_base ):
         barf = random.randbytes( 256 )
         md5 = hashlib.md5()
         md5.update( barf )
-        with open( filepath, "w" ) as ofp:
-            ofp.write( barf )
         df = DataFile( _id=_id,
                        provenance_id=provenance_id,
                        filepath=filepath,
                        md5sum=uuid.UUID( md5.hexdigest() )
                       )
+        df.save( barf )
         df.insert()
         return df
 
