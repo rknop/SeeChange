@@ -206,6 +206,18 @@ def realize_column_uuids( obj ):
             setattr( obj, col.key, asUUID( getattr( obj, col.key ) ) )
 
 
+def is_in_cache( cls, cache_dir, filepath ):
+    """Returns True if a JSON file is in the cache.
+
+    Not perfect, because it doesn't verify that all associate files are there.
+
+    """
+    filepath = pathlib.Path( filepath )
+    cache_dir = pathlib.Path( cache_dir ).resolve()
+
+    return ROB YOU WERE HERE
+            
+
 def copy_from_cache( cls, cache_dir, filepath, add_to_dict=None, symlink=False ):
     """Copy and reconstruct an object from the cache directory.
 

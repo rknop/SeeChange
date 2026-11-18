@@ -7,6 +7,11 @@ from util.retrydownload import retry_download
 
 
 @pytest.fixture( scope='session' )
+def ls4_skyflats( download_url, cache_dir ):
+    
+
+
+@pytest.fixture( scope='session' )
 def loaded_ls4_singleamp_exposure( download_url, cache_dir ):
     expobj = None
     try:
