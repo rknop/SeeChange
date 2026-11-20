@@ -8,6 +8,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID as sqlUUID
 
 from models.base import PGDB, Base, UUIDMixin, HasProvenance, SeeChangeBase
+from models.enums_and_bitflags import CalibratorSetTypeConverter
 from models.provenance import Provenance
 from models.image import Image
 from models.datafile import DataFile
@@ -22,6 +23,10 @@ calibset_datafile_or_image_id = sa.Table(
                sa.ForeignKey( 'calibrator_sets._id', ondelete='CASCADE', name='cset_datafile_or_image_calibset_fkey' ),
                nullable=False,
                index=True ),
+    sa.Column( 'set_type',
+               sa.Integer,
+               nullable=False,
+               index=False ),
     sa.Column( 'field',
                sa.Text,
                nullable=False,
@@ -52,6 +57,7 @@ class CalibratorSet( Base, UUIDMixin, HasProvenance ):
     Properties available include:
        id
        provenance_id
+       set_type
        *_id
        *_image_id
        *_datafile_id
@@ -63,6 +69,12 @@ class CalibratorSet( Base, UUIDMixin, HasProvenance ):
     *_id points to the calibset_datafile_or_image_id table, and is probably not
      useful to you.
 
+    provenance_id will be None until you call generate_provenance().  This
+    happens automatically if you call insert().
+    
+    set_type is one of the integers from 
+    enums_and_bitflags.py::CalibratorSetTypeConverter
+    
     The only method of general use is insert(), which puts the
     CalibratorSet into the database.
 
@@ -91,7 +103,8 @@ class CalibratorSet( Base, UUIDMixin, HasProvenance ):
         doc="Provenance id for this object"
     )
 
-    def __init__( self, id=None, _id=None, provenance_id=None, created_at=None, modified=None, **kwargs ):
+    def __init__( self, id=None, _id=None, set_type=None,
+                  created_at=None, modified=None, **kwargs ):
         """Make a CalibratorSet.
 
         Parameters
@@ -104,10 +117,10 @@ class CalibratorSet( Base, UUIDMixin, HasProvenance ):
             Set the id of the new CalibratorSet.  If both id and _id are
             given, id is ignored.
 
-          provenance_id: Provenance or str; optional
-            If given, set the provenance id of the new CalibratorSet
-            from this.
-
+          set_type: str or int, required
+            The type of calibrator set; one of the values from
+            enums_and_bitflags.py::CalibratorSetTypeConverter
+        
           created_at, modified: timezone-aware datetime.datetime or None
             Timestamps... don't set these, the database will.  I think.
 
@@ -129,9 +142,13 @@ class CalibratorSet( Base, UUIDMixin, HasProvenance ):
         self.datafile_ids = {}
 
         self._id = asUUID(_id) if _id is not None else asUUID(id) if id is not None else None
-        self.provenance_id = provenance_id
         self.created_at = created_at
         self.modified = modified
+        self.provenance_id = None
+
+        if set_type is None:
+            raise ValueError( "set_type can't be None, must be something from CalibratorSetTypeConverter" )
+        set_type = CalibratorSetTypeConverter.to_int( set_type )
 
         nukes = set()
         for key, value in kwargs.items():
@@ -399,6 +416,35 @@ class CalibratorSet( Base, UUIDMixin, HasProvenance ):
 
         return CalibratorSet( **kwargs )
 
+
+    @classmethod
+    def get_for_image_set( self, provenance_id, pgdb=None, many_ok=False, **kwargs ):
+        with PGDB( pgdb, dictcursor=True ) as pgdb:
+            q = sql.SQL( "SELECT c._id FROM calibrator_sets c\n" )
+            dex = 0
+            for kwarg, fid in kwargs:
+                if kwarg[-6:] == 'image':
+                    base = kwarg[:-6]
+                    q += sql.SQL( "INNER JOIN calibset_datafile_or_image_id t{dex}\n"
+                                  "  ON t{dex}.calibrator_set_id=c._id AND t{dex}.image_id={imid}\n"
+                                 ).format( dex=str(dex), imid=fid )
+                elif kwarg[-9:] == 'datafile':
+                    base = kwarg[:-9]
+                    q += sql.SQL( "INNER JOIN calibset_datafile_or_image_id t{dex}\n"
+                                  "  ON t{dex}.calibrator_set_id=c._id AND t{dex}.datafile_id={dfid}\n"
+                                 ).format( dex=str(dex), dfid=fid )
+            rows = pgdb.execute( q )
+            if len(rows) > 1:
+                if many_ok:
+                    return [ CalibratorSet.get_by_id( row['_id'], pgdb=pgdb ) for row in rows ]
+                else:
+                    raise RuntimeError( "More than one CalibratorSet match." )
+            elif len(rows) == 1:
+                cset = CalibratorSet.get_by_id( rows[0]['_id'], pgdb=pgdb )
+                return [ cset ] if many_ok else cset
+            elif len(rows) == 0:
+                return None
+    
 
     def delete_from_disk_and_database( self, remove_folder=False, remove_downstreams=False, archive=False, pgdb=None ):
         if remove_downstreams:

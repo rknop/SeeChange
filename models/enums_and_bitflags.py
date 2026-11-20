@@ -315,7 +315,7 @@ class CalibratorTypeConverter( EnumConverter ):
     _dict_inverse = None
 
 
-class CalibratorSetConverter( EnumConverter ):
+class CalibratorSetTypeConverter( EnumConverter ):
     _dict = {
         0: 'unknown',
         1: 'externally_supplied',

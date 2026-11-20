@@ -75,6 +75,31 @@ def test_calibrator_set_create( bogus_image_factory, bogus_datafile_factory ):
         assert newcset.datafile( 'zero' ) is None
         assert newcset.datafile( 'foo' ) is None
 
+        # Test get_for_image_set
+
+        newcset = Calibratorset.get_for_image_set( cset.provenace_id, zero_image=zero.id, flat_image=flat.id,
+                                                   linearity_datafile=linearity.id )
+        assert newcset.id == cset.id
+        assert newcset.provenance_id == cset.provenance_id
+        assert newcset._images == {}
+        assert newcset._datafiles == {}
+        assert set( newcset.image_ids.keys() ) == { 'flat', 'zero' }
+        assert set( newcset.datafile_ids.keys() ) == { 'linearity' }
+        assert newcset.image_ids[ 'flat' ] == cset.image_ids[ 'flat']
+        assert newcset.image_ids[ 'zero' ] == cset.image_ids[ 'zero']
+        assert newcset.datafile_ids[ 'linearity' ] == cset.datafile_ids[ 'linearity']
+
+        assert newcset.image( 'flat' ).id == cset.image( 'flat' ).id
+        assert newcset.image( 'zero' ).id == cset.image( 'zero' ).id
+        assert newcset.datafile( 'linearity' ).id == cset.datafile( 'linearity' ).id
+        assert newcset.image( 'linearity' ) is None
+        assert newcset.image( 'foo' ) is None
+        assert newcset.datafile( 'flat' ) is None
+        assert newcset.datafile( 'zero' ) is None
+        assert newcset.datafile( 'foo' ) is None
+        
+        # TODO test get_for_image_set with many_ok = True
+        
     finally:
         with PGDB() as pgdb:
             nukes.reverse()

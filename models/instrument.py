@@ -19,7 +19,7 @@ from astropy.coordinates import SkyCoord, Distance
 
 from models.base import Base, SmartSession, UUIDMixin, PsycopgConnection
 from models.provenance import Provenance
-from models.enums_and_bitflags import CalibratorSetConverter, CalibratorTypeConverter, FlatTypeConverter
+from models.enums_and_bitflags import CalibratorSetTypeConverter, CalibratorTypeConverter, FlatTypeConverter
 
 from pipeline.catalog_tools import Bandpass
 from util.fits import read_fits_image
@@ -1568,7 +1568,8 @@ class Instrument:
         return None
 
     def preprocessing_calibrator_files( self, calibset, flattype, section, filter, mjd,
-                                        zero_provid=None, flat_provid=None, linearity_provid=None, fringe_provid=None,
+                                        zero_provid=None, dark_provid=None, flat_provid=None,
+                                        linearity_provid=None, fringe_provid=None, illumination_provid=None,
                                         nofetch=False ):
         """Get a dictionary of calibrator images/datafiles for a given mjd and sensor section.
 
@@ -1591,7 +1592,7 @@ class Instrument:
         Parameters
         ----------
         calibset: str
-          The calibrator set, one of the values in the CalibratorSetConverter enum
+          The calibrator set, one of the values in the CalibratorSetTypeConverter enum
 
         flattype: str
           The flatfield type, one of the values in the FlatTypeConverter
@@ -1676,7 +1677,7 @@ class Instrument:
                               "  AND c.sensor_section={sec}\n"
                               "  AND ( c.validity_start IS NULL OR c.validity_start <= {expdatetime} )\n"
                               "  AND ( c.validity_end IS NULL OR c.validity_end >= {expdatetime} )\n"
-                             ).format( calibset=CalibratorSetConverter.to_int(calibset),
+                             ).format( calibset=CalibratorSetTypeConverter.to_int(calibset),
                                        calibtype=CalibratorTypeConverter.to_int(calibtype),
                                        instr=self.name,
                                        sec=section,
@@ -1712,7 +1713,7 @@ class Instrument:
                     matchedrow = rows[0]
 
             if ( ( matchedrow is None ) and
-                 ( CalibratorSetConverter.to_string( calibset ) == 'externally_supplied' ) and
+                 ( CalibratorSetTypeConverter.to_string( calibset ) == 'externally_supplied' ) and
                  ( not nofetch )
                 ):
                 calib = self._get_default_calibrator( mjd, section, calibtype=calibtype, filter=filter )
